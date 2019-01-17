@@ -11,6 +11,8 @@ PLUGIN_COMMON_OBJS :=				\
 	bitcoin/pullpush.o			\
 	bitcoin/script.o			\
 	bitcoin/shadouble.o			\
+	bitcoin/groestl.o                       \
+	bitcoin/sph_groestl.o                   \
 	bitcoin/short_channel_id.o		\
 	bitcoin/signature.o			\
 	bitcoin/tx.o				\
