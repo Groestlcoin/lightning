@@ -99,18 +99,6 @@ open a channel:
 
 `lightningd` will register the funds once the transaction is confirmed.
 
-If you don't have any testcoins you can get a few from a faucet such as
-[Kiwi's testnet faucet][kiw].
-You can send it directly to the `lightningd` address.
-
-You may need to generate a p2sh-segwit address if the faucet does not support
-bech32:
-
-    # Return a p2sh-segwit address
-    cli/lightning-cli newaddr p2sh-segwit
-
-[kiw]: https://testnet.manu.backend.hamburg/faucet
-
 Confirm `lightningd` got funds by:
 
     # Returns an array of on-chain funds.
