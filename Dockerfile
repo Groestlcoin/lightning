@@ -19,14 +19,12 @@ RUN mkdir /opt/groestlcoin && cd /opt/groestlcoin \
 ENV LIGHTNINGD_VERSION=master
 
 WORKDIR /opt/lightningd
+COPY . /tmp/lightning
+RUN git clone --recursive /tmp/lightning . && \
+    git checkout $(git --work-tree=/tmp/lightning --git-dir=/tmp/lightning/.git rev-parse HEAD)
 
 ARG DEVELOPER=0
-RUN git clone https://github.com/Groestlcoin/lightning.git /opt/lightningd \
-    && cd /opt/lightningd \
-    && git checkout $LIGHTNINGD_VERSION \
-    && DEVELOPER=$DEVELOPER ./configure \
-    && make -j3 DEVELOPER=${DEVELOPER} \
-    && cp lightningd/lightning* cli/lightning-cli /usr/bin/
+RUN ./configure && make -j3 DEVELOPER=${DEVELOPER} && cp lightningd/lightning* cli/lightning-cli /usr/bin/
 
 FROM debian:stretch-slim
 

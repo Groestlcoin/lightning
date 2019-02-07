@@ -127,8 +127,7 @@ $ lightningd --network=testnet
 To Build on macOS
 ---------------------
 
-Assume you have Xcode and HomeBrew installed on your Mac.
-Get dependencies:
+Assuming you have Xcode and Homebrew installed. Install dependencies:
 
     $ brew install autoconf automake libtool python3 gmp gnu-sed
 
@@ -204,7 +203,7 @@ To cross-compile for Raspberry Pi
 --------------------
 
 Obtain the [official Raspberry Pi toolchains](https://github.com/raspberrypi/tools).
-This document assumes compilation will occur towards the Raspberry Pi 3 
+This document assumes compilation will occur towards the Raspberry Pi 3
 (arm-linux-gnueabihf as of Mar. 2018).
 
 Depending on your toolchain location and target arch, source env variables
@@ -249,7 +248,7 @@ Download and build sqlite3:
 Download and build gmp:
 
     wget https://gmplib.org/download/gmp/gmp-6.1.2.tar.xz
-    tar xvf gmp-6.1.2.tar.xz 
+    tar xvf gmp-6.1.2.tar.xz
     cd gmp-6.1.2
     ./configure --disable-assembly --prefix=$QEMU_LD_PREFIX
     make
