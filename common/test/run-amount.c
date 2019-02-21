@@ -48,20 +48,20 @@ int main(void)
 	PASS_MSAT(&msat, "2100000000000000sat", 2100000000000000000ULL);
 	FAIL_MSAT(&msat, "-1sat");
 
-	PASS_MSAT(&msat, "0.00000000btc", 0);
-	PASS_MSAT(&msat, "0.00000000000btc", 0);
-	PASS_MSAT(&msat, "0.00000001btc", 1000);
-	PASS_MSAT(&msat, "0.00000000001btc", 1);
-	PASS_MSAT(&msat, "1.23456789btc", 123456789000);
-	PASS_MSAT(&msat, "1.23456789012btc", 123456789012);
-	FAIL_MSAT(&msat, "1btc");
-	FAIL_MSAT(&msat, "1.0000000btc");
-	FAIL_MSAT(&msat, "1.000000000btc");
-	FAIL_MSAT(&msat, "-1.23456789btc");
-	FAIL_MSAT(&msat, "-1.23456789012btc");
+	PASS_MSAT(&msat, "0.00000000grs", 0);
+	PASS_MSAT(&msat, "0.00000000000grs", 0);
+	PASS_MSAT(&msat, "0.00000001grs", 1000);
+	PASS_MSAT(&msat, "0.00000000001grs", 1);
+	PASS_MSAT(&msat, "1.23456789grs", 123456789000);
+	PASS_MSAT(&msat, "1.23456789012grs", 123456789012);
+	FAIL_MSAT(&msat, "1grs");
+	FAIL_MSAT(&msat, "1.0000000grs");
+	FAIL_MSAT(&msat, "1.000000000grs");
+	FAIL_MSAT(&msat, "-1.23456789grs");
+	FAIL_MSAT(&msat, "-1.23456789012grs");
 
 	/* Overflowingly big. */
-	FAIL_MSAT(&msat, "21000000000000000000000000.00000000btc");
+	FAIL_MSAT(&msat, "105000000000000000000000000.00000000");
 
 	/* Grossly malformed */
 	FAIL_SAT(&sat, "x");
@@ -90,19 +90,19 @@ int main(void)
 	FAIL_SAT(&sat, "2000000000000000999msat");
 	FAIL_SAT(&sat, "-1000msat");
 
-	PASS_SAT(&sat, "0.00000000btc", 0);
-	FAIL_SAT(&sat, "0.00000000000btc");
-	PASS_SAT(&sat, "0.00000001btc", 1);
-	FAIL_SAT(&sat, "0.00000000001btc");
-	PASS_SAT(&sat, "1.23456789btc", 123456789);
-	FAIL_SAT(&sat, "1.23456789012btc");
-	FAIL_SAT(&sat, "1btc");
-	FAIL_SAT(&sat, "1.0000000btc");
-	FAIL_SAT(&sat, "1.000000000btc");
-	FAIL_SAT(&sat, "-1.23456789btc");
+	PASS_SAT(&sat, "0.00000000grs", 0);
+	FAIL_SAT(&sat, "0.00000000000grs");
+	PASS_SAT(&sat, "0.00000001grs", 1);
+	FAIL_SAT(&sat, "0.00000000001grs");
+	PASS_SAT(&sat, "1.23456789grs", 123456789);
+	FAIL_SAT(&sat, "1.23456789012grs");
+	FAIL_SAT(&sat, "1grs");
+	FAIL_SAT(&sat, "1.0000000grs");
+	FAIL_SAT(&sat, "1.000000000grs");
+	FAIL_SAT(&sat, "-1.23456789grs");
 
 	/* Overflowingly big. */
-	FAIL_SAT(&sat, "21000000000000000000000000.00000000btc");
+	FAIL_SAT(&sat, "21000000000000000000000000.00000000grs");
 
 	/* Test fmt_amount_msat_btc, fmt_amount_msat */
 	for (u64 i = 0; i <= UINT64_MAX / 10; i = i ? i * 10 : 1) {
@@ -111,7 +111,7 @@ int main(void)
 		msat.millisatoshis = i;
 		with = fmt_amount_msat_btc(tmpctx, &msat, true);
 		without = fmt_amount_msat_btc(tmpctx, &msat, false);
-		assert(strends(with, "btc"));
+		assert(strends(with, "grs"));
 		assert(strlen(with) == strlen(without) + 3);
 		assert(strncmp(with, without, strlen(without)) == 0);
 		/* Make sure it overwrites. */
@@ -137,7 +137,7 @@ int main(void)
 		sat.satoshis = i;
 		with = fmt_amount_sat_btc(tmpctx, &sat, true);
 		without = fmt_amount_sat_btc(tmpctx, &sat, false);
-		assert(strends(with, "btc"));
+		assert(strends(with, "grs"));
 		assert(strlen(with) == strlen(without) + 3);
 		assert(strncmp(with, without, strlen(without)) == 0);
 		/* Make sure it overwrites. */

@@ -24,7 +24,7 @@ struct amount_sat amount_msat_to_sat_round_down(struct amount_msat msat)
 	return sat;
 }
 
-/* Different formatting by amounts: btc, sat and msat */
+/* Different formatting by amounts: grs, sat and msat */
 const char *fmt_amount_msat_btc(const tal_t *ctx,
 				const struct amount_msat *msat,
 				bool append_unit)
@@ -32,7 +32,7 @@ const char *fmt_amount_msat_btc(const tal_t *ctx,
 	return tal_fmt(ctx, "%"PRIu64".%011"PRIu64"%s",
 		       msat->millisatoshis / MSAT_PER_BTC,
 		       msat->millisatoshis % MSAT_PER_BTC,
-		       append_unit ? "btc" : "");
+		       append_unit ? "grs" : "");
 }
 
 const char *fmt_amount_msat(const tal_t *ctx, const struct amount_msat *msat)
@@ -48,7 +48,7 @@ const char *fmt_amount_sat_btc(const tal_t *ctx,
 	return tal_fmt(ctx, "%"PRIu64".%08"PRIu64"%s",
 		       sat->satoshis / SAT_PER_BTC,
 		       sat->satoshis % SAT_PER_BTC,
-		       append_unit ? "btc" : "");
+		       append_unit ? "grs" : "");
 }
 
 const char *fmt_amount_sat(const tal_t *ctx, const struct amount_sat *sat)
@@ -144,8 +144,8 @@ static bool from_numbers(u64 *res,
  *  [0-9]+ => millisatoshi.
  *  [0-9]+msat => millisatoshi.
  *  [0-9]+sat => *1000 -> millisatopshi.
- *  [0-9]+.[0-9]{8}btc => *1000 -> millisatoshi.
- *  [0-9]+.[0-9]{11}btc => millisatoshi.
+ *  [0-9]+.[0-9]{8}grs => *1000 -> millisatoshi.
+ *  [0-9]+.[0-9]{11}grs => millisatoshi.
  */
 bool parse_amount_msat(struct amount_msat *msat, const char *s, size_t slen)
 {
@@ -165,14 +165,14 @@ bool parse_amount_msat(struct amount_msat *msat, const char *s, size_t slen)
 		return from_number(&msat->millisatoshis, s, whole_number_len,
 				   MSAT_PER_SAT);
 	if (post_decimal_ptr && post_decimal_len == 8
-	    && memeqstr(suffix_ptr, suffix_len, "btc"))
+	    && memeqstr(suffix_ptr, suffix_len, "grs"))
 		return from_numbers(&msat->millisatoshis,
 				    s, whole_number_len,
 				    MSAT_PER_BTC,
 				    post_decimal_ptr, post_decimal_len,
 				    MSAT_PER_SAT);
 	if (post_decimal_ptr && post_decimal_len == 11
-	    && memeqstr(suffix_ptr, suffix_len, "btc"))
+	    && memeqstr(suffix_ptr, suffix_len, "grs"))
 		return from_numbers(&msat->millisatoshis,
 				    s, whole_number_len,
 				    MSAT_PER_BTC,
@@ -184,7 +184,7 @@ bool parse_amount_msat(struct amount_msat *msat, const char *s, size_t slen)
  *  [0-9]+ => satoshi.
  *  [0-9]+sat => satoshi.
  *  [0-9]+000msat => satoshi.
- *  [0-9]+.[0-9]{8}btc => satoshi.
+ *  [0-9]+.[0-9]{8}grs => satoshi.
  */
 bool parse_amount_sat(struct amount_sat *sat, const char *s, size_t slen)
 {
@@ -206,7 +206,7 @@ bool parse_amount_sat(struct amount_sat *sat, const char *s, size_t slen)
 		return from_number(&sat->satoshis, s, whole_number_len - 3, 1);
 	}
 	if (post_decimal_ptr && post_decimal_len == 8
-	    && memeqstr(suffix_ptr, suffix_len, "btc"))
+	    && memeqstr(suffix_ptr, suffix_len, "grs"))
 		return from_numbers(&sat->satoshis,
 				    s, whole_number_len,
 				    SAT_PER_BTC,

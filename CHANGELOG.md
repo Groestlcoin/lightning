@@ -14,10 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - protocol: `pay` will now use routehints in invoices if it needs to.
 - lightning-cli: `help <cmd>` finds man pages even if `make install` not run.
 - JSON API: `getroute`, `invoice`, `sendpay` and `pay` commands `msatoshi`
-  parameter can have suffixes `msat`, `sat` (optionally with 3 decimals) or `btc`
+  parameter can have suffixes `msat`, `sat` (optionally with 3 decimals) or `grs`
   (with 8 or 11 decimals).
 - JSON API: `fundchannel` and `withdraw` commands `satoshi`
-  parameter can have suffixes `msat` (must end in `000`), `sat` or `btc`
+  parameter can have suffixes `msat` (must end in `000`), `sat` or `grs`
   (with 8 decimals).
 - JSON API: `decodepay`, `getroute`, `sendpay`, `pay`, `listpeers`, `listfunds`, `listchannels` and
   all invoice commands now return an `amount_msat` field which has an `msat` suffix.

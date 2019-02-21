@@ -23,14 +23,14 @@ class Millisatoshi:
     """
     def __init__(self, v):
         """
-        Takes either a string ending in 'msat', 'sat', 'btc' or an integer.
+        Takes either a string ending in 'msat', 'sat', 'grs' or an integer.
         """
         if isinstance(v, str):
             if v.endswith("msat"):
                 self.millisatoshis = int(v[0:-4])
             elif v.endswith("sat"):
                 self.millisatoshis = Decimal(v[0:-3]) * 1000
-            elif v.endswith("btc"):
+            elif v.endswith("grs"):
                 self.millisatoshis = Decimal(v[0:-3]) * 1000 * 10**8
             if self.millisatoshis != int(self.millisatoshis):
                 raise ValueError("Millisatoshi must be a whole number")
@@ -39,7 +39,7 @@ class Millisatoshi:
         elif int(v) == v:
             self.millisatoshis = v
         else:
-            raise TypeError("Millisatoshi must be string with msat/sat/btc suffix or int")
+            raise TypeError("Millisatoshi must be string with msat/sat/grs suffix or int")
 
         if self.millisatoshis < 0:
             raise ValueError("Millisatoshi must be >= 0")
@@ -73,12 +73,12 @@ class Millisatoshi:
 
     def to_btc_str(self):
         """
-        Return a string of form 12.34567890btc or 12.34567890123btc.
+        Return a string of form 12.34567890grs or 12.34567890123grs.
         """
         if self.millisatoshis % 1000:
-            return '{:.8f}btc'.format(self.to_btc())
+            return '{:.8f}grs'.format(self.to_btc())
         else:
-            return '{:.11f}btc'.format(self.to_btc())
+            return '{:.11f}grs'.format(self.to_btc())
 
     def to_json(self):
         return self.__repr__()
