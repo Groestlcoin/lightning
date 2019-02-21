@@ -15,7 +15,7 @@ ENV GROESTLCOIN_PGP_KEY 287AE4CA1187C68C08B49CB2D11BD4F33F1DB499
 
 RUN mkdir /opt/groestlcoin && cd /opt/groestlcoin \
     && wget -qO groestlcoin.tar.gz "$GROESTLCOIN_URL" \
-    && gpg --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys "$GROESTLCOIN_PGP_KEY" \
+    && gpg --batch --keyserver keyserver.ubuntu.com --recv-keys "$GROESTLCOIN_PGP_KEY" \
     && wget -qO groestlcoin.asc "$GROESTLCOIN_ASC_URL" \
     && gpg --verify groestlcoin.asc \
     && grep $GROESTLCOIN_TARBALL groestlcoin.asc | tee SHA256SUMS.asc \
