@@ -4,24 +4,24 @@ LIGHTNING-LISTFUNDS(7)
 
 NAME
 ----
-lightning-listfunds - Command showing all funds currently managed by 
+lightning-listfunds - Command showing all funds currently managed by
 the c-lightning node.
 
 SYNOPSIS
 --------
-*listfunds* 
+*listfunds*
 
 DESCRIPTION
 -----------
-The *listfunds* RPC command displays all funds available, either in 
-unspent outputs (UTXOs) in the internal wallet or funds locked in 
+The *listfunds* RPC command displays all funds available, either in
+unspent outputs (UTXOs) in the internal wallet or funds locked in
 currently open channels.
 
 RETURN VALUE
 ------------
-On success two arrays will be returned: 'outputs' with funds 
-currently locked onchain in UTXOs and 'channels' with funds 
-readily spendable in channels. 
+On success two arrays will be returned: 'outputs' with funds
+currently locked onchain in UTXOs and 'channels' with funds
+readily spendable in channels.
 
 Each entry in 'outputs' will include:
 
@@ -33,20 +33,25 @@ Each entry in 'outputs' will include:
 
 - 'value'
 
+- 'amount_sat' (the same as 'value' with 'sat' appended)
+
 - 'status'
 
-Each entry in 'channels' will include: 
+Each entry in 'channels' will include:
 
 - 'peer_id' - the peer with which the channel is opened.
 
 - 'short_channel_id' - as per BOLT 7 (representing the block, transaction
 number and output index of the channel funding transaction).
 
-- 'channel_sat' - available gro's on our node's end of the channel 
-(values rounded to the nearest gro as internal storage is in milligro).
+- 'channel_sat' - available satoshis on our node's end of the channel
+(values rounded down to satoshis as internal storage is in millisatoshi).
 
-- 'channel_total_gro' -channel value in gro 
-(values rounded to the nearest gro's as internal storage is in milligro). 
+- 'our_amount_sat' - same as above, but with 'sat' appended.
+
+- 'channel_total_sat' - total channel value in satoshi
+
+- 'amount_sat' - same as above, but with 'sat' appended.
 
 - 'funding_txid' - funding transaction id.
 

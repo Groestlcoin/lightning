@@ -16,6 +16,7 @@ http://lightning.network.
 [![Build Status][travis-ci]][travis-ci-link]
 [![Pull Requests Welcome][prs]][prs-link]
 [![Irc][IRC]][IRC-link]
+[![Documentation Status](https://readthedocs.org/projects/lightning/badge/?version=docs)](https://lightning.readthedocs.io/)
 
 [travis-ci]: https://travis-ci.org/ElementsProject/lightning.svg?branch=master
 [travis-ci-link]: https://travis-ci.org/ElementsProject/lightning
@@ -58,7 +59,7 @@ For the impatient here's the gist of it for Ubuntu and Debian:
     sudo apt-get update
     sudo apt-get install -y \
       autoconf automake build-essential git libtool libgmp-dev \
-      libsqlite3-dev python python3 net-tools zlib1g-dev
+      libsqlite3-dev python python3 net-tools zlib1g-dev libsodium-dev
     git clone https://github.com/Groestlcoin/lightning.git
     cd lightning
     ./configure

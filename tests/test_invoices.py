@@ -53,7 +53,7 @@ def test_invoice(node_factory):
     assert 'warning_capacity' in inv
 
     # Make sure no wumbo invoices
-    with pytest.raises(RpcError, match=r'msatoshi cannot exceed 4294967295 millisatoshis'):
+    with pytest.raises(RpcError, match=r'msatoshi cannot exceed 4294967295msat'):
         l2.rpc.invoice(4294967295 + 1, 'inv3', '?')
     l2.rpc.invoice(4294967295, 'inv3', '?')
 
@@ -172,6 +172,7 @@ def test_invoice_routeboost(node_factory, bitcoind):
     assert 'warning_offline' not in inv
 
 
+@unittest.skipIf(not DEVELOPER, "gossip without DEVELOPER=1 is slow")
 def test_invoice_routeboost_private(node_factory, bitcoind):
     """Test routeboost 'r' hint in bolt11 invoice for private channels
     """

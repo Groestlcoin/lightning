@@ -81,8 +81,6 @@ struct plugins {
 	struct lightningd *ld;
 };
 
-/* Simple storage for plugin options inbetween registering them on the
- * command line and passing them off to the plugin */
 struct plugin_opt {
 	struct list_node list;
 	const char *name;
@@ -463,9 +461,7 @@ static struct io_plan *plugin_stdout_conn_init(struct io_conn *conn,
 			       plugin_read_json, plugin);
 }
 
-/* Callback called when parsing options. It just stores the value in
- * the plugin_opt */
-static char *plugin_opt_set(const char *arg, struct plugin_opt *popt)
+char *plugin_opt_set(const char *arg, struct plugin_opt *popt)
 {
 	tal_free(popt->value);
 	popt->value = tal_strdup(popt, arg);
@@ -620,7 +616,8 @@ static struct command_result *plugin_rpcmethod_dispatch(struct command *cmd,
 	idtok = json_get_member(buffer, toks, "id");
 	assert(idtok != NULL);
 
-	req = jsonrpc_request_start(plugin, NULL, plugin_rpcmethod_cb, cmd);
+	req = jsonrpc_request_start(plugin, NULL, plugin->log,
+				    plugin_rpcmethod_cb, cmd);
 	snprintf(id, ARRAY_SIZE(id), "%"PRIu64, req->id);
 
 	json_stream_forward_change_id(req->stream, buffer, toks, idtok, id);
@@ -932,7 +929,8 @@ void plugins_init(struct plugins *plugins, const char *dev_plugin_debug)
 		 * write-only on p->stdout */
 		io_new_conn(p, stdout, plugin_stdout_conn_init, p);
 		io_new_conn(p, stdin, plugin_stdin_conn_init, p);
-		req = jsonrpc_request_start(p, "getmanifest", plugin_manifest_cb, p);
+		req = jsonrpc_request_start(p, "getmanifest", p->log,
+					    plugin_manifest_cb, p);
 		jsonrpc_request_end(req);
 		plugin_request_send(p, req);
 
@@ -975,7 +973,8 @@ static void plugin_config(struct plugin *plugin)
 	const char *name;
 	struct jsonrpc_request *req;
 	struct lightningd *ld = plugin->plugins->ld;
-	req = jsonrpc_request_start(plugin, "init", plugin_config_cb, plugin);
+	req = jsonrpc_request_start(plugin, "init", plugin->log,
+				    plugin_config_cb, plugin);
 
 	/* Add .params.options */
 	json_object_start(req->stream, "options");

@@ -1,4 +1,6 @@
-# Table of Contents
+Install
+=======
+
 1. [Library Requirements](#library-requirements)
 2. [Ubuntu](#to-build-on-ubuntu)
 3. [Fedora](#to-build-on-fedora)
@@ -36,7 +38,7 @@ Get dependencies:
     sudo apt-get update
     sudo apt-get install -y \
       autoconf automake build-essential git libtool libgmp-dev \
-      libsqlite3-dev python python3 net-tools zlib1g-dev libsodium \
+      libsqlite3-dev python python3 net-tools zlib1g-dev libsodium-dev \
 	  libbase58-dev
 
 If you don't have Groestlcoin installed locally you'll need to install that
@@ -252,7 +254,7 @@ Download and build gmp:
     wget https://gmplib.org/download/gmp/gmp-6.1.2.tar.xz
     tar xvf gmp-6.1.2.tar.xz
     cd gmp-6.1.2
-    ./configure --disable-assembly --prefix=$QEMU_LD_PREFIX
+    ./configure --disable-assembly --host=$target_host --prefix=$QEMU_LD_PREFIX
     make
     make install
 

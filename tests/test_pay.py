@@ -1,5 +1,5 @@
 from fixtures import *  # noqa: F401,F403
-from lightning import RpcError
+from lightning import RpcError, Millisatoshi
 from utils import DEVELOPER, wait_for, only_one, sync_blockheight, SLOW_MACHINE
 
 
@@ -59,6 +59,22 @@ def test_pay(node_factory):
     assert len(payments) == 1 and payments[0]['payment_preimage'] == preimage
 
 
+def test_pay_amounts(node_factory):
+    l1, l2 = node_factory.line_graph(2)
+    inv = l2.rpc.invoice(Millisatoshi("123sat"), 'test_pay_amounts', 'description')['bolt11']
+
+    invoice = only_one(l2.rpc.listinvoices('test_pay_amounts')['invoices'])
+
+    assert isinstance(invoice['amount_msat'], Millisatoshi)
+    assert invoice['amount_msat'] == Millisatoshi(123000)
+
+    l1.rpc.pay(inv)
+
+    invoice = only_one(l2.rpc.listinvoices('test_pay_amounts')['invoices'])
+    assert isinstance(invoice['amount_received_msat'], Millisatoshi)
+    assert invoice['amount_received_msat'] >= Millisatoshi(123000)
+
+
 def test_pay_limits(node_factory):
     """Test that we enforce fee max percentage and max delay"""
     l1, l2, l3 = node_factory.line_graph(3, wait_for_announce=True)
@@ -69,7 +85,7 @@ def test_pay_limits(node_factory):
     inv = l3.rpc.invoice("any", "any", 'description')
 
     # Fee too high.
-    with pytest.raises(RpcError, match=r'Route wanted fee of .* msatoshis') as err:
+    with pytest.raises(RpcError, match=r'Route wanted fee of .*msat') as err:
         l1.rpc.call('pay', {'bolt11': inv['bolt11'], 'msatoshi': 100000, 'maxfeepercent': 0.0001, 'exemptfee': 0})
 
     assert err.value.error['code'] == PAY_ROUTE_TOO_EXPENSIVE
@@ -754,9 +770,9 @@ def test_forward_different_fees_and_cltv(node_factory, bitcoind):
 
     # We add one to the blockcount for a bit of fuzz (FIXME: Shadowroute would fix this!)
     shadow_route = 1
-    l1.daemon.wait_for_log("Adding HTLC 0 msat=5010198 cltv={} gave CHANNEL_ERR_ADD_OK"
+    l1.daemon.wait_for_log("Adding HTLC 0 amount=5010198msat cltv={} gave CHANNEL_ERR_ADD_OK"
                            .format(bitcoind.rpc.getblockcount() + 20 + 9 + shadow_route))
-    l2.daemon.wait_for_log("Adding HTLC 0 msat=4999999 cltv={} gave CHANNEL_ERR_ADD_OK"
+    l2.daemon.wait_for_log("Adding HTLC 0 amount=4999999msat cltv={} gave CHANNEL_ERR_ADD_OK"
                            .format(bitcoind.rpc.getblockcount() + 9 + shadow_route))
     l3.daemon.wait_for_log("test_forward_different_fees_and_cltv: Actual amount 4999999msat, HTLC expiry {}"
                            .format(bitcoind.rpc.getblockcount() + 9 + shadow_route))
@@ -812,8 +828,10 @@ def test_forward_pad_fees_and_cltv(node_factory, bitcoind):
 
     # Modify so we overpay, overdo the cltv.
     route[0]['msatoshi'] += 2000
+    route[0]['amount_msat'] = Millisatoshi(route[0]['msatoshi'])
     route[0]['delay'] += 20
     route[1]['msatoshi'] += 1000
+    route[1]['amount_msat'] = Millisatoshi(route[1]['msatoshi'])
     route[1]['delay'] += 10
 
     # This should work.
@@ -970,6 +988,7 @@ def test_pay_variants(node_factory):
     l1.rpc.pay(b11)
 
 
+@unittest.skipIf(not DEVELOPER, "gossip without DEVELOPER=1 is slow")
 def test_pay_retry(node_factory, bitcoind):
     """Make sure pay command retries properly. """
     def exhaust_channel(funder, fundee, scid, already_spent=0):
@@ -1063,6 +1082,7 @@ def test_pay_routeboost(node_factory, bitcoind):
     status = l1.rpc.call('paystatus', [inv['bolt11']])
     assert only_one(status['pay'])['bolt11'] == inv['bolt11']
     assert only_one(status['pay'])['msatoshi'] == 10**5
+    assert only_one(status['pay'])['amount_msat'] == Millisatoshi(10**5)
     assert only_one(status['pay'])['destination'] == l4.info['id']
     assert 'description' not in only_one(status['pay'])
     assert 'routehint_modifications' not in only_one(status['pay'])
@@ -1080,12 +1100,14 @@ def test_pay_routeboost(node_factory, bitcoind):
     assert attempts[1]['duration_in_seconds'] <= end - start
     assert only_one(attempts[1]['routehint'])
     assert only_one(attempts[1]['routehint'])['id'] == l3.info['id']
-    assert only_one(attempts[1]['routehint'])['msatoshi'] == 10**5 + 1 + 10**5 // 100000
-    assert only_one(attempts[1]['routehint'])['delay'] == 5 + 6
+    scid34 = only_one(l3.rpc.listpeers(l4.info['id'])['peers'])['channels'][0]['short_channel_id']
+    assert only_one(attempts[1]['routehint'])['channel'] == scid34
+    assert only_one(attempts[1]['routehint'])['fee_base_msat'] == 1
+    assert only_one(attempts[1]['routehint'])['fee_proportional_millionths'] == 10
+    assert only_one(attempts[1]['routehint'])['cltv_expiry_delta'] == 6
 
     # With dev-route option we can test longer routehints.
     if DEVELOPER:
-        scid34 = only_one(l3.rpc.listpeers(l4.info['id'])['peers'])['channels'][0]['short_channel_id']
         scid45 = only_one(l4.rpc.listpeers(l5.info['id'])['peers'])['channels'][0]['short_channel_id']
         routel3l4l5 = [{'id': l3.info['id'],
                         'short_channel_id': scid34,
@@ -1144,6 +1166,7 @@ def test_pay_routeboost(node_factory, bitcoind):
         assert [h['channel'] for h in attempts[2]['routehint']] == [r['short_channel_id'] for r in routel3l5]
 
 
+@unittest.skipIf(not DEVELOPER, "gossip without DEVELOPER=1 is slow")
 def test_pay_direct(node_factory, bitcoind):
     """Check that we prefer the direct route.
     """
@@ -1175,6 +1198,9 @@ def test_pay_direct(node_factory, bitcoind):
     # Let channels lock in.
     bitcoind.generate_block(5)
 
+    # Make l1 sees it, so it doesn't produce bad CLTVs.
+    sync_blockheight(bitcoind, [l1])
+
     # Make sure l0 knows the l2->l3 channel.
     # Without DEVELOPER, channel lockin can take 30 seconds to detect,
     # and gossip 2 minutes to propagate
@@ -1186,7 +1212,7 @@ def test_pay_direct(node_factory, bitcoind):
     # Try multiple times to ensure that route randomization
     # will not override our preference for direct route.
     for i in range(8):
-        inv = l3.rpc.invoice(15000000, 'pay{}'.format(i), 'desc')['bolt11']
+        inv = l3.rpc.invoice(20000000, 'pay{}'.format(i), 'desc')['bolt11']
 
         l0.rpc.pay(inv)
 
