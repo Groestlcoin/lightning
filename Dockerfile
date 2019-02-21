@@ -17,8 +17,8 @@ RUN mkdir /opt/groestlcoin && cd /opt/groestlcoin \
     && gpg --batch --keyserver keyserver.ubuntu.com --recv-keys "$GROESTLCOIN_PGP_KEY" \
     && wget -qO groestlcoin.asc "$GROESTLCOIN_ASC_URL" \
     && gpg --verify groestlcoin.asc \
-  # && grep $GROESTLCOIN_TARBALL groestlcoin.asc | tee SHA256SUMS.asc \
-  # && sha256sum -c SHA256SUMS.asc \
+    && grep $GROESTLCOIN_TARBALL groestlcoin.asc | tee SHA256SUMS.asc \
+    && sha256sum -c SHA256SUMS.asc \
     && BD=groestlcoin-$GROESTLCOIN_VERSION/bin \
     && tar -xzvf $GROESTLCOIN_TARBALL $BD/groestlcoin-cli --strip-components=1 \
     && rm $GROESTLCOIN_TARBALL
