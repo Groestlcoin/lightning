@@ -6,27 +6,33 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /opt
 
-ENV GROESTLCOIN_VERSION 2.16.3
-ENV GROESTLCOIN_URL https://github.com/Groestlcoin/groestlcoin/releases/download/v2.16.3/groestlcoin-2.16.3-x86_64-linux-gnu.tar.gz
-ENV GROESTLCOIN_SHA256 f15bd5e38b25a103821f1563cd0e1b2cf7146ec9f9835493a30bd57313d3b86f
+ENV GROESTLCOIN_VERSION 2.17.2
+ENV GROESTLCOIN_TARBALL groestlcoin-${GROESTLCOIN_VERSION}-x86_64-linux-gnu.tar.gz
+ENV GROESTLCOIN_URL https://github.com/Groestlcoin/groestlcoin/releases/download/v$GROESTLCOIN_VERSION/$GROESTLCOIN_TARBALL
+ENV GROESTLCOIN_SHA256 0eed1a10f8dbb5a361bf74ee201acc47a124abb8916f66a263c95b8f9d1173b0
+ENV GROESTLCOIN_ASC_URL https://github.com/Groestlcoin/groestlcoin/releases/download/v$GROESTLCOIN_VERSION/SHA256SUMS.asc
+ENV GROESTLCOIN_PGP_KEY 287AE4CA1187C68C08B49CB2D11BD4F33F1DB499
 
 RUN mkdir /opt/groestlcoin && cd /opt/groestlcoin \
     && wget -qO groestlcoin.tar.gz "$GROESTLCOIN_URL" \
-    && echo "$GROESTLCOIN_SHA256  groestlcoin.tar.gz" | sha256sum -c - \
-    && tar -xzvf groestlcoin.tar.gz groestlcoin-cli --exclude=*-qt \
-    && rm groestlcoin.tar.gz
+    && gpg --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys "$GROESTLCOIN_PGP_KEY" \
+    && wget -qO groestlcoin.asc "$GROESTLCOIN_ASC_URL" \
+    && gpg --verify groestlcoin.asc \
+    && grep $GROESTLCOIN_TARBALL groestlcoin.asc | tee SHA256SUMS.asc \
+    && sha256sum -c SHA256SUMS.asc \
+    && BD=groestlcoin-$GROESTLCOIN_VERSION/bin \
+    && tar -xzvf $GROESTLCOIN_TARBALL $BD/groestlcoin-cli --strip-components=1 \
+    && rm $GROESTLCOIN_TARBALL
 
 ENV LIGHTNINGD_VERSION=master
 
 WORKDIR /opt/lightningd
+COPY . /tmp/lightning
+RUN git clone --recursive /tmp/lightning . && \
+    git checkout $(git --work-tree=/tmp/lightning --git-dir=/tmp/lightning/.git rev-parse HEAD)
 
 ARG DEVELOPER=0
-RUN git clone https://github.com/Groestlcoin/lightning.git /opt/lightningd \
-    && cd /opt/lightningd \
-    && git checkout $LIGHTNINGD_VERSION \
-    && DEVELOPER=$DEVELOPER ./configure \
-    && make -j3 DEVELOPER=${DEVELOPER} \
-    && cp lightningd/lightning* cli/lightning-cli /usr/bin/
+RUN ./configure && make -j3 DEVELOPER=${DEVELOPER} && cp lightningd/lightning* cli/lightning-cli /usr/bin/
 
 FROM debian:stretch-slim
 
