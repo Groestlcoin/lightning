@@ -14,7 +14,7 @@ ENV GROESTLCOIN_ASC_URL https://github.com/Groestlcoin/groestlcoin/releases/down
 ENV GROESTLCOIN_PGP_KEY 287AE4CA1187C68C08B49CB2D11BD4F33F1DB499
 
 RUN mkdir /opt/groestlcoin && cd /opt/groestlcoin \
-    && wget -qO groestlcoin.tar.gz "$GROESTLCOIN_URL" \
+    && wget -qO $GROESTLCOIN_TARBALL "$GROESTLCOIN_URL" \
     && gpg --batch --keyserver keyserver.ubuntu.com --recv-keys "$GROESTLCOIN_PGP_KEY" \
     && wget -qO groestlcoin.asc "$GROESTLCOIN_ASC_URL" \
     && gpg --verify groestlcoin.asc \
