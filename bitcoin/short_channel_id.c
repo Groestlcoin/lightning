@@ -1,5 +1,6 @@
 #include <bitcoin/short_channel_id.h>
 #include <ccan/tal/str/str.h>
+#include <common/type_to_string.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -36,7 +37,8 @@ bool mk_short_channel_id(struct short_channel_id *scid,
 }
 
 bool short_channel_id_from_str(const char *str, size_t strlen,
-			       struct short_channel_id *dst)
+			       struct short_channel_id *dst,
+			       bool may_be_deprecated_form)
 {
 	u32 blocknum, txnum;
 	u16 outnum;
@@ -48,7 +50,7 @@ bool short_channel_id_from_str(const char *str, size_t strlen,
 
 #ifdef COMPAT_V062
 	/* Pre-adelaide format vs. post-adelaide format */
-	if (strchr(buf, ':'))
+	if (may_be_deprecated_form && strchr(buf, ':'))
 		matches = sscanf(buf, "%u:%u:%hu", &blocknum, &txnum, &outnum);
 	else
 		matches = sscanf(buf, "%ux%ux%hu", &blocknum, &txnum, &outnum);
@@ -68,12 +70,14 @@ char *short_channel_id_to_str(const tal_t *ctx, const struct short_channel_id *s
 }
 
 bool short_channel_id_dir_from_str(const char *str, size_t strlen,
-				   struct short_channel_id_dir *scidd)
+				   struct short_channel_id_dir *scidd,
+				   bool may_be_deprecated_form)
 {
 	const char *slash = memchr(str, '/', strlen);
 	if (!slash || slash + 2 != str + strlen)
 		return false;
-	if (!short_channel_id_from_str(str, slash - str, &scidd->scid))
+	if (!short_channel_id_from_str(str, slash - str, &scidd->scid,
+				       may_be_deprecated_form))
 		return false;
 	if (slash[1] == '0')
 		scidd->dir = 0;
@@ -92,3 +96,7 @@ char *short_channel_id_dir_to_str(const tal_t *ctx,
 	tal_free(scidstr);
 	return str;
 }
+
+REGISTER_TYPE_TO_STRING(short_channel_id, short_channel_id_to_str);
+REGISTER_TYPE_TO_STRING(short_channel_id_dir, short_channel_id_dir_to_str);
+

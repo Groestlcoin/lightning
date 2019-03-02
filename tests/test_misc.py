@@ -198,7 +198,7 @@ def test_htlc_sig_persistence(node_factory, bitcoind, executor):
     time.sleep(3)
     bitcoind.generate_block(1)
     l1.daemon.wait_for_logs([
-        r'Owning output . (\d+) .SEGWIT. txid',
+        r'Owning output . (\d+)sat .SEGWIT. txid',
     ])
 
     # We should now have a) the change from funding, b) the
@@ -471,11 +471,11 @@ def test_withdraw(node_factory, bitcoind):
     assert l1.db_query('SELECT COUNT(*) as c FROM outputs WHERE status=0')[0]['c'] == 6
 
     # Test withdrawal to self.
-    l1.rpc.withdraw(l1.rpc.newaddr('bech32')['address'], 'all')
+    l1.rpc.withdraw(l1.rpc.newaddr('bech32')['address'], 'all', minconf=0)
     bitcoind.generate_block(1)
     assert l1.db_query('SELECT COUNT(*) as c FROM outputs WHERE status=0')[0]['c'] == 1
 
-    l1.rpc.withdraw(waddr, 'all')
+    l1.rpc.withdraw(waddr, 'all', minconf=0)
     assert l1.db_query('SELECT COUNT(*) as c FROM outputs WHERE status=0')[0]['c'] == 0
 
     # This should fail, can't even afford fee.
@@ -731,7 +731,7 @@ def test_cli(node_factory):
                                    '-J',
                                    'help', 'command=help']).decode('utf-8')
     j, _ = json.JSONDecoder().raw_decode(out)
-    assert 'help [command]' in j['verbose']
+    assert 'help [command]' in j['help'][0]['verbose']
 
     # Test keyword input (forced)
     out = subprocess.check_output(['cli/lightning-cli',
@@ -740,7 +740,7 @@ def test_cli(node_factory):
                                    '-J', '-k',
                                    'help', 'command=help']).decode('utf-8')
     j, _ = json.JSONDecoder().raw_decode(out)
-    assert 'help [command]' in j['verbose']
+    assert 'help [command]' in j['help'][0]['verbose']
 
     # Test ordered input (autodetect)
     out = subprocess.check_output(['cli/lightning-cli',
@@ -749,7 +749,7 @@ def test_cli(node_factory):
                                    '-J',
                                    'help', 'help']).decode('utf-8')
     j, _ = json.JSONDecoder().raw_decode(out)
-    assert 'help [command]' in j['verbose']
+    assert 'help [command]' in j['help'][0]['verbose']
 
     # Test ordered input (forced)
     out = subprocess.check_output(['cli/lightning-cli',
@@ -758,7 +758,7 @@ def test_cli(node_factory):
                                    '-J', '-o',
                                    'help', 'help']).decode('utf-8')
     j, _ = json.JSONDecoder().raw_decode(out)
-    assert 'help [command]' in j['verbose']
+    assert 'help [command]' in j['help'][0]['verbose']
 
     # Test missing parameters.
     try:
@@ -771,6 +771,31 @@ def test_cli(node_factory):
                                        'sendpay']).decode('utf-8')
     except Exception:
         pass
+
+
+def test_daemon_option(node_factory):
+    """
+    Make sure --daemon at least vaguely works!
+    """
+    # Lazy way to set up command line and env, plus do VALGRIND checks
+    l1 = node_factory.get_node()
+    l1.stop()
+
+    os.unlink(l1.rpc.socket_path)
+    subprocess.run(l1.daemon.cmd_line + ['--daemon', '--log-file={}/log-daemon'.format(l1.daemon.lightning_dir)], env=l1.daemon.env,
+                   check=True)
+
+    # Test some known output (wait for rpc to be ready)
+    wait_for(lambda: os.path.exists(l1.rpc.socket_path))
+    out = subprocess.check_output(['cli/lightning-cli',
+                                   '--lightning-dir={}'
+                                   .format(l1.daemon.lightning_dir),
+                                   'help']).decode('utf-8')
+    assert 'help [command]\n    List available commands, or give verbose help on one {command}' in out
+
+    subprocess.run(['cli/lightning-cli',
+                    '--lightning-dir={}'.format(l1.daemon.lightning_dir),
+                    'stop'], check=True)
 
 
 @flaky

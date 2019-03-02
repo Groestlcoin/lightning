@@ -207,7 +207,7 @@ static struct lightningd *new_lightningd(const tal_t *ctx)
 	 *  lightningd needs to have something to put those in. This
 	 *  is that :-)
 	 */
-	ld->jsonrpc = jsonrpc_new(ld, ld);
+	jsonrpc_setup(ld);
 
 	/*~ We run a number of plugins (subprocesses that we talk JSON-RPC with)
 	 *alongside this process. This allows us to have an easy way for users
@@ -215,7 +215,7 @@ static struct lightningd *new_lightningd(const tal_t *ctx)
 	 *code. Here we initialize the context that will keep track and control
 	 *the plugins.
 	 */
-	ld->plugins = plugins_new(ld, ld->log_book, ld->jsonrpc, ld);
+	ld->plugins = plugins_new(ld, ld->log_book, ld);
 
 	return ld;
 }
@@ -764,6 +764,11 @@ int main(int argc, char *argv[])
 	 * can start talking to us. */
 	plugins_config(ld->plugins);
 
+	/*~ Setting this (global) activates the crash log: we don't usually need
+	 * a backtrace if we fail during startup.  We do this before daemonize,
+	 * in case that runs into trouble. */
+	crashlog = ld->log;
+
 	/*~ We defer --daemon until we've completed most initialization: that
 	 *  way we'll exit with an error rather than silently exiting 0, then
 	 *  realizing we can't start and forcing the confused user to read the
@@ -794,6 +799,7 @@ int main(int argc, char *argv[])
 	 * log.  And tal_hex() is a helper from utils which returns a hex string;
 	 * it's assumed that the argument was allocated with tal or tal_arr
 	 * so it can use tal_bytelen() to get the length. */
+	log_info(ld->log, "--------------------------------------------------");
 	log_info(ld->log, "Server started with public key %s, alias %s (color #%s) and lightningd %s",
 		 type_to_string(tmpctx, struct pubkey, &ld->id),
 		 json_escape(tmpctx, (const char *)ld->alias)->s,
@@ -807,10 +813,6 @@ int main(int argc, char *argv[])
 	/*~ Now that all the notifications for transactions are in place, we
 	 *  can start the poll loop which queries groestlcoind for new blocks. */
 	begin_topology(ld->topology);
-
-	/*~ Setting this (global) activates the crash log: we don't usually need
-	 * a backtrace if we fail during startup. */
-	crashlog = ld->log;
 
 	/*~ The root of every backtrace (almost).  This is our main event
 	 *  loop. */

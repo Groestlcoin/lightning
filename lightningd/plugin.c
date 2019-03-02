@@ -19,6 +19,7 @@
 #include <lightningd/json.h>
 #include <lightningd/lightningd.h>
 #include <lightningd/notification.h>
+#include <lightningd/options.h>
 #include <lightningd/plugin_hook.h>
 #include <signal.h>
 #include <sys/stat.h>
@@ -76,15 +77,10 @@ struct plugins {
 	struct log *log;
 	struct log_book *log_book;
 
-	/* RPC interface to bind JSON-RPC methods to */
-	struct jsonrpc *rpc;
-
 	struct timers timers;
 	struct lightningd *ld;
 };
 
-/* Simple storage for plugin options inbetween registering them on the
- * command line and passing them off to the plugin */
 struct plugin_opt {
 	struct list_node list;
 	const char *name;
@@ -93,14 +89,13 @@ struct plugin_opt {
 };
 
 struct plugins *plugins_new(const tal_t *ctx, struct log_book *log_book,
-			    struct jsonrpc *rpc, struct lightningd *ld)
+			    struct lightningd *ld)
 {
 	struct plugins *p;
 	p = tal(ctx, struct plugins);
 	list_head_init(&p->plugins);
 	p->log_book = log_book;
 	p->log = new_log(p, log_book, "plugin-manager");
-	p->rpc = rpc;
 	timers_init(&p->timers, time_mono());
 	p->ld = ld;
 	return p;
@@ -466,9 +461,7 @@ static struct io_plan *plugin_stdout_conn_init(struct io_conn *conn,
 			       plugin_read_json, plugin);
 }
 
-/* Callback called when parsing options. It just stores the value in
- * the plugin_opt */
-static char *plugin_opt_set(const char *arg, struct plugin_opt *popt)
+char *plugin_opt_set(const char *arg, struct plugin_opt *popt)
 {
 	tal_free(popt->value);
 	popt->value = tal_strdup(popt, arg);
@@ -547,12 +540,6 @@ static bool plugin_opts_add(struct plugin *plugin,
 	return true;
 }
 
-static void plugin_rpcmethod_destroy(struct json_command *cmd,
-				     struct jsonrpc *rpc)
-{
-	jsonrpc_command_remove(rpc, cmd->name);
-}
-
 static void json_stream_forward_change_id(struct json_stream *stream,
 					  const char *buffer,
 					  const jsmntok_t *toks,
@@ -620,11 +607,8 @@ static struct command_result *plugin_rpcmethod_dispatch(struct command *cmd,
 	struct jsonrpc_request *req;
 	char id[STR_MAX_CHARS(u64)];
 
-	if (cmd->mode == CMD_USAGE || cmd->mode == CMD_CHECK) {
-		/* FIXME! */
-		cmd->usage = "[params]";
+	if (cmd->mode == CMD_CHECK)
 		return command_param_failed();
-	}
 
 	plugin = find_plugin_for_command(cmd);
 
@@ -632,7 +616,8 @@ static struct command_result *plugin_rpcmethod_dispatch(struct command *cmd,
 	idtok = json_get_member(buffer, toks, "id");
 	assert(idtok != NULL);
 
-	req = jsonrpc_request_start(plugin, NULL, plugin_rpcmethod_cb, cmd);
+	req = jsonrpc_request_start(plugin, NULL, plugin->log,
+				    plugin_rpcmethod_cb, cmd);
 	snprintf(id, ARRAY_SIZE(id), "%"PRIu64, req->id);
 
 	json_stream_forward_change_id(req->stream, buffer, toks, idtok, id);
@@ -646,12 +631,14 @@ static bool plugin_rpcmethod_add(struct plugin *plugin,
 				 const char *buffer,
 				 const jsmntok_t *meth)
 {
-	const jsmntok_t *nametok, *desctok, *longdesctok;
+	const jsmntok_t *nametok, *desctok, *longdesctok, *usagetok;
 	struct json_command *cmd;
+	const char *usage;
 
 	nametok = json_get_member(buffer, meth, "name");
 	desctok = json_get_member(buffer, meth, "description");
 	longdesctok = json_get_member(buffer, meth, "long_description");
+	usagetok = json_get_member(buffer, meth, "usage");
 
 	if (!nametok || nametok->type != JSMN_STRING) {
 		plugin_kill(plugin,
@@ -675,6 +662,13 @@ static bool plugin_rpcmethod_add(struct plugin *plugin,
 		return false;
 	}
 
+	if (usagetok && usagetok->type != JSMN_STRING) {
+		plugin_kill(plugin,
+			    "\"usage\" is not a string: %.*s",
+			    meth->end - meth->start, buffer + meth->start);
+		return false;
+	}
+
 	cmd = notleak(tal(plugin, struct json_command));
 	cmd->name = json_strdup(cmd, buffer, nametok);
 	cmd->description = json_strdup(cmd, buffer, desctok);
@@ -682,11 +676,18 @@ static bool plugin_rpcmethod_add(struct plugin *plugin,
 		cmd->verbose = json_strdup(cmd, buffer, longdesctok);
 	else
 		cmd->verbose = cmd->description;
+	if (usagetok)
+		usage = json_strdup(tmpctx, buffer, usagetok);
+	else if (!deprecated_apis) {
+		plugin_kill(plugin,
+			    "\"usage\" not provided by plugin");
+		return false;
+	} else
+		usage = "[params]";
 
 	cmd->deprecated = false;
 	cmd->dispatch = plugin_rpcmethod_dispatch;
-	tal_add_destructor2(cmd, plugin_rpcmethod_destroy, plugin->plugins->rpc);
-	if (!jsonrpc_command_add(plugin->plugins->rpc, cmd)) {
+	if (!jsonrpc_command_add(plugin->plugins->ld->jsonrpc, cmd, usage)) {
 		log_broken(plugin->log,
 			   "Could not register method \"%s\", a method with "
 			   "that name is already registered",
@@ -809,7 +810,9 @@ static void plugin_manifest_cb(const char *buffer,
 	resulttok = json_get_member(buffer, toks, "result");
 	if (!resulttok || resulttok->type != JSMN_OBJECT) {
 		plugin_kill(plugin,
-			    "\"getmanifest\" result is not an object");
+			    "\"getmanifest\" result is not an object: %.*s",
+			    toks[0].end - toks[0].start,
+			    buffer + toks[0].start);
 		return;
 	}
 
@@ -928,7 +931,8 @@ void plugins_init(struct plugins *plugins, const char *dev_plugin_debug)
 		 * write-only on p->stdout */
 		io_new_conn(p, stdout, plugin_stdout_conn_init, p);
 		io_new_conn(p, stdin, plugin_stdin_conn_init, p);
-		req = jsonrpc_request_start(p, "getmanifest", plugin_manifest_cb, p);
+		req = jsonrpc_request_start(p, "getmanifest", p->log,
+					    plugin_manifest_cb, p);
 		jsonrpc_request_end(req);
 		plugin_request_send(p, req);
 
@@ -971,7 +975,8 @@ static void plugin_config(struct plugin *plugin)
 	const char *name;
 	struct jsonrpc_request *req;
 	struct lightningd *ld = plugin->plugins->ld;
-	req = jsonrpc_request_start(plugin, "init", plugin_config_cb, plugin);
+	req = jsonrpc_request_start(plugin, "init", plugin->log,
+				    plugin_config_cb, plugin);
 
 	/* Add .params.options */
 	json_object_start(req->stream, "options");

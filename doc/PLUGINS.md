@@ -70,10 +70,12 @@ this example:
 	"rpcmethods": [
 		{
 			"name": "hello",
+			"usage": "[name]",
 			"description": "Returns a personalized greeting for {greeting} (set via options)."
 		},
 		{
 			"name": "gettime",
+			"usage": "",
 			"description": "Returns the current time in {timezone}",
 			"long_description": "Returns the current time in the timezone that is given as the only parameter.\nThis description may be quite long and is allowed to span multiple lines."
 		}
@@ -93,9 +95,10 @@ currently only string options are supported.*
 The `rpcmethods` are methods that will be exposed via `lightningd`'s
 JSON-RPC over Unix-Socket interface, just like the builtin
 commands. Any parameters given to the JSON-RPC calls will be passed
-through verbatim. Notice that the `name` and the `description` fields
+through verbatim. Notice that the `name`, `description` and `usage` fields
 are mandatory, while the `long_description` can be omitted (it'll be
-set to `description` if it was not provided).
+set to `description` if it was not provided). `usage` should surround optional
+parameter names in `[]`.
 
 Plugins are free to register any `name` for their `rpcmethod` as long
 as the name was not previously registered. This includes both built-in
@@ -149,11 +152,13 @@ called `hello` and `gettime`:
 	"rpcmethods": [
 		{
 			"name": "hello",
+			"usage": "[name]",
 			"description": "Returns a personalized greeting for {greeting} (set via options)."
 		},
 		{
 			"name": "gettime",
 			"description": "Returns the current time in {timezone}",
+			"usage": "",
 			"long_description": "Returns the current time in the timezone that is given as the only parameter.\nThis description may be quite long and is allowed to span multiple lines."
 		}
 	],
@@ -217,8 +222,53 @@ to a peer was lost.
 ```
 ## Hooks
 
-*TBD*
+Hooks allow a plugin to define custom behavior for `lightningd`
+without having to modify the c-lightning source code itself. A plugin
+declares that it'd like to consulted on what to do next for certain
+events in the daemon. A hook can then decide how `lightningd` should
+react to the given event.
 
+Hooks and notifications sounds very similar, however there are a few
+key differences:
+
+ - Notifications are asynchronous, i.e., `lightningd` will send the
+   notifications but not wait for the plugin to process them. Hooks on
+   the other hand are synchronous, `lightningd` cannot finish
+   processing the event until the plugin has returned.
+ - Any number of plugins can subscribe to a notification topic,
+   however only one plugin may register for any hook topic at any
+   point in time (we cannot disambiguate between multiple plugins
+   returning contradictory results from a hook callback).
+
+Hooks are considered to be an advanced feature due to the fact that
+`lightningd` relies on the plugin to tell it what to do next. Use them
+carefully, and make sure your plugins always return a valid response
+to any hook invocation.
+
+### Hook Types
+
+#### `peer_connected`
+
+This hook is called whenever a peer has connected and successfully completed
+the cryptographic handshake. The parameters have the following structure if there is a channel with the peer:
+
+```json
+{
+  "peer": {
+	"id": "03864ef025fde8fb587d989186ce6a4a186895ee44a926bfc370e2c366597a3f8f",
+	"addr": "34.239.230.56:9735",
+	"globalfeatures": "",
+	"localfeatures": ""
+  }
+}
+```
+
+The hook is sparse on purpose, since the plugin can use the JSON-RPC
+`listpeers` command to get additional details should they be required. The
+`addr` field shows the address that we are connected to ourselves, not the
+gossiped list of known addresses. In particular this means that the port for
+incoming connections is an ephemeral port, that may not be available for
+reconnections.
 
 [jsonrpc-spec]: https://www.jsonrpc.org/specification
 [jsonrpc-notification-spec]: https://www.jsonrpc.org/specification#notification

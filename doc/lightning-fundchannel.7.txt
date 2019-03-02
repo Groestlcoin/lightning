@@ -22,12 +22,14 @@ for the channel.
 
 'id' is the peer id obtained from *connect*.
 
-'gro' is the amount in gro's taken from the internal wallet to fund the channel.
-The string 'all' can be used to specify all available funds (or 16777215 gro if more is available).
+'satoshi' is the amount in satoshis taken from the internal wallet to fund the channel.
+The string 'all' can be used to specify all available funds (or 16777215 satoshi if more is available).
+Otherwise, it is in satoshi precision; it can be a whole number, a whole number ending in 'sat', a whole number ending in '000msat', or a number with 1 to 8 decimal places ending in 'grs'.
 The value cannot be less than the dust limit, currently set to 546, nor more
 than 16777215 gro.
 
-'feerate' is an optional feerate to use.  It can be one of the strings
+'feerate' is an optional feerate used for the opening transaction and as initial feerate for
+commitment and HTLC transactions.  It can be one of the strings
 'urgent', 'normal' or 'slow' to use lightningd's internal estimates:
 'normal' is the default.
 
@@ -53,6 +55,8 @@ The following error codes may occur:
 * 301. There are not enough funds in the internal wallet (including fees) to
        create the transaction.
 * 302. The output amount is too small, and would be considered dust.
+* 303. Broadcasting of the funding transaction failed, the internal call to
+       bitcoin-cli returned with an error.
 
 Failure may also occur if *lightningd* and the peer cannot agree on channel
 parameters (funding limits, channel reserves, fees, etc.).

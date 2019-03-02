@@ -24,6 +24,12 @@ VG=valgrind -q --error-exitcode=7
 VG_TEST_ARGS = --track-origins=yes --leak-check=full --show-reachable=yes --errors-for-leak-kinds=all
 endif
 
+ifneq ($(ASAN),0)
+SANITIZER_FLAGS=-fsanitize=address
+else
+SANITIZER_FLAGS=
+endif
+
 ifeq ($(DEVELOPER),1)
 DEV_CFLAGS=-DCCAN_TAKE_DEBUG=1 -DCCAN_TAL_DEBUG=1
 else
@@ -46,7 +52,7 @@ endif
 
 # Timeout shortly before the 600 second travis silence timeout
 # (method=thread to support xdist)
-PYTEST_OPTS := -v --timeout=550 --timeout_method=thread
+PYTEST_OPTS := -v --timeout=550 --timeout_method=thread -p no:logging
 
 # This is where we add new features as bitcoin adds them.
 FEATURES :=
@@ -90,6 +96,7 @@ CCAN_OBJS :=					\
 	ccan-str-base32.o			\
 	ccan-str-hex.o				\
 	ccan-str.o				\
+	ccan-strmap.o				\
 	ccan-take.o				\
 	ccan-tal-grab_file.o			\
 	ccan-tal-link.o				\
@@ -179,13 +186,13 @@ ALL_PROGRAMS =
 
 CPPFLAGS = -DBINTOPKGLIBEXECDIR='"'$(shell sh tools/rel.sh $(bindir) $(pkglibexecdir))'"'
 CWARNFLAGS := -Werror -Wall -Wundef -Wmissing-prototypes -Wmissing-declarations -Wstrict-prototypes -Wold-style-definition
-CDEBUGFLAGS := -std=gnu11 -g -fstack-protector
+CDEBUGFLAGS := -std=gnu11 -g -fstack-protector $(SANITIZER_FLAGS)
 CFLAGS = $(CPPFLAGS) $(CWARNFLAGS) $(CDEBUGFLAGS) -I $(CCANDIR) $(EXTERNAL_INCLUDE_FLAGS) -I . -I/usr/local/include $(FEATURES) $(COVFLAGS) $(DEV_CFLAGS) -DSHACHAIN_BITS=48 -DJSMN_PARENT_LINKS $(PIE_CFLAGS) $(COMPAT_CFLAGS)
 
 # We can get configurator to run a different compile cmd to cross-configure.
 CONFIGURATOR_CC := $(CC)
 
-LDFLAGS = $(PIE_LDFLAGS)
+LDFLAGS = $(PIE_LDFLAGS) $(SANITIZER_FLAGS)
 ifeq ($(STATIC),1)
 LDLIBS = -L/usr/local/lib -Wl,-dn -lgmp -lsqlite3 -lz -Wl,-dy -lm -lpthread -ldl $(COVFLAGS)
 else
@@ -295,6 +302,8 @@ check-python:
 	@# W503: line break before binary operator
 	@flake8 --ignore=E501,E731,W503 --exclude=contrib/pylightning/lightning/__init__.py ${PYSRC}
 
+	PYTHONPATH=contrib/pylightning:$$PYTHONPATH $(PYTEST) contrib/pylightning/
+
 check-includes:
 	@tools/check-includes.sh
 
@@ -303,7 +312,7 @@ check-includes:
 	@git ls-files -- "*.c" "*.h" | grep -vE '^ccan/' | xargs grep -n 'list_for_each' | sed 's/\([^:]*:.*\):.*/uninitvar:\1/' > $@
 
 check-cppcheck: .cppcheck-suppress
-	@trap 'rm -f .cppcheck-suppress' 0; git ls-files -- "*.c" "*.h" | grep -vE '^ccan/' | xargs cppcheck -q --language=c --std=c11 --error-exitcode=1 --suppressions-list=.cppcheck-suppress
+	@trap 'rm -f .cppcheck-suppress' 0; git ls-files -- "*.c" "*.h" | grep -vE '^ccan/' | xargs cppcheck -q --language=c --std=c11 --error-exitcode=1 --suppressions-list=.cppcheck-suppress --inline-suppr
 
 check-shellcheck:
 	@git ls-files -- "*.sh" | xargs shellcheck
@@ -317,7 +326,13 @@ check-tmpctx:
 check-discouraged-functions:
 	@if git grep -E "[^a-z_/](fgets|fputs|gets|scanf|sprintf)\(" -- "*.c" "*.h" ":(exclude)ccan/"; then exit 1; fi
 
-check-source: check-makefile check-source-bolt check-whitespace check-markdown check-spelling check-python check-includes check-cppcheck check-shellcheck check-setup_locale check-tmpctx check-discouraged-functions
+# Don't access amount_msat and amount_sat members directly without a good reason
+# since it risks overflow.
+check-amount-access:
+	@! (git grep -nE "(->|\.)(milli)?satoshis" -- "*.c" "*.h" ":(exclude)common/amount.*" ":(exclude)*/test/*" | grep -v '/* Raw:')
+	@! git grep -nE "\\(struct amount_(m)?sat\\)" -- "*.c" "*.h" ":(exclude)common/amount.*" ":(exclude)*/test/*"
+
+check-source: check-makefile check-source-bolt check-whitespace check-markdown check-spelling check-python check-includes check-cppcheck check-shellcheck check-setup_locale check-tmpctx check-discouraged-functions check-amount-access
 
 full-check: check check-source
 
@@ -421,13 +436,12 @@ unittest/%: %
 	$(VG) $(VG_TEST_ARGS) $* > /dev/null
 
 # Installation directories
-prefix = /usr/local
-exec_prefix = $(prefix)
+exec_prefix = $(PREFIX)
 bindir = $(exec_prefix)/bin
 libexecdir = $(exec_prefix)/libexec
 pkglibexecdir = $(libexecdir)/$(PKGNAME)
 plugindir = $(pkglibexecdir)/plugins
-datadir = $(prefix)/share
+datadir = $(PREFIX)/share
 docdir = $(datadir)/doc/$(PKGNAME)
 mandir = $(datadir)/man
 man1dir = $(mandir)/man1
@@ -475,7 +489,7 @@ PKGLIBEXEC_PROGRAMS = \
 	       lightningd/lightning_openingd
 PLUGINS=plugins/pay
 
-install-program: installdirs $(BIN_PROGRAMS) $(PKGLIBEXEC_PROGRAMS)
+install-program: installdirs $(BIN_PROGRAMS) $(PKGLIBEXEC_PROGRAMS) $(PLUGINS)
 	@$(NORMAL_INSTALL)
 	$(INSTALL_PROGRAM) $(BIN_PROGRAMS) $(DESTDIR)$(bindir)
 	$(INSTALL_PROGRAM) $(PKGLIBEXEC_PROGRAMS) $(DESTDIR)$(pkglibexecdir)

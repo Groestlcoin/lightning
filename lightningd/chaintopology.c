@@ -60,7 +60,7 @@ static bool we_broadcast(const struct chain_topology *topo,
 static void filter_block_txs(struct chain_topology *topo, struct block *b)
 {
 	size_t i;
-	u64 satoshi_owned;
+	struct amount_sat owned;
 
 	/* Now we see if any of those txs are interesting. */
 	for (i = 0; i < tal_count(b->full_txs); i++) {
@@ -83,17 +83,17 @@ static void filter_block_txs(struct chain_topology *topo, struct block *b)
 			}
 		}
 
-		satoshi_owned = 0;
+		owned = AMOUNT_SAT(0);
 		if (txfilter_match(topo->bitcoind->ld->owned_txfilter, tx)) {
 			wallet_extract_owned_outputs(topo->bitcoind->ld->wallet,
 						     tx, &b->height,
-						     &satoshi_owned);
+						     &owned);
 		}
 
 		/* We did spends first, in case that tells us to watch tx. */
 		bitcoin_txid(tx, &txid);
 		if (watching_txid(topo, &txid) || we_broadcast(topo, &txid) ||
-		    satoshi_owned != 0) {
+		    !amount_sat_eq(owned, AMOUNT_SAT(0))) {
 			wallet_transaction_add(topo->ld->wallet,
 					       tx, b->height, i);
 		}
@@ -200,8 +200,8 @@ static void broadcast_done(struct bitcoind *bitcoind,
 	/* No longer needs to be disconnected if channel dies. */
 	tal_del_destructor2(otx->channel, clear_otx_channel, otx);
 
-	if (otx->failed && exitstatus != 0) {
-		otx->failed(otx->channel, exitstatus, msg);
+	if (otx->failed_or_success) {
+		otx->failed_or_success(otx->channel, exitstatus, msg);
 		tal_free(otx);
 	} else {
 		/* For continual rebroadcasting, until channel freed. */
@@ -213,7 +213,7 @@ static void broadcast_done(struct bitcoind *bitcoind,
 
 void broadcast_tx(struct chain_topology *topo,
 		  struct channel *channel, const struct bitcoin_tx *tx,
-		  void (*failed)(struct channel *channel,
+		  void (*failed_or_success)(struct channel *channel,
 				 int exitstatus, const char *err))
 {
 	/* Channel might vanish: topo owns it to start with. */
@@ -223,7 +223,7 @@ void broadcast_tx(struct chain_topology *topo,
 	otx->channel = channel;
 	bitcoin_txid(tx, &otx->txid);
 	otx->hextx = tal_hex(otx, rawtx);
-	otx->failed = failed;
+	otx->failed_or_success = failed_or_success;
 	tal_free(rawtx);
 	tal_add_destructor2(channel, clear_otx_channel, otx);
 

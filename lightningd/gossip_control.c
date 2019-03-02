@@ -10,6 +10,7 @@
 #include <ccan/fdpass/fdpass.h>
 #include <ccan/take/take.h>
 #include <ccan/tal/str/str.h>
+#include <common/amount.h>
 #include <common/features.h>
 #include <common/json_command.h>
 #include <common/json_escaped.h>
@@ -41,20 +42,20 @@ static void got_txout(struct bitcoind *bitcoind,
 		      struct short_channel_id *scid)
 {
 	const u8 *script;
-	u64 satoshis;
+	struct amount_sat sat;
 
 	/* output will be NULL if it wasn't found */
 	if (output) {
 		script = output->script;
-		satoshis = output->amount;
+		sat = output->amount;
 	} else {
 		script = NULL;
-		satoshis = 0;
+		sat = AMOUNT_SAT(0);
 	}
 
 	subd_send_msg(
 	    bitcoind->ld->gossip,
-	    towire_gossip_get_txout_reply(scid, scid, satoshis, script));
+	    towire_gossip_get_txout_reply(scid, scid, sat, script));
 	tal_free(scid);
 }
 
@@ -77,7 +78,7 @@ static void get_txout(struct subd *gossip, const u8 *msg)
 	if (op) {
 		subd_send_msg(gossip,
 			      towire_gossip_get_txout_reply(
-				  scid, scid, op->satoshis, op->scriptpubkey));
+				  scid, scid, op->sat, op->scriptpubkey));
 		tal_free(scid);
 	} else if (blockheight >= topo->min_blockheight &&
 		   blockheight <= topo->max_blockheight) {
@@ -86,7 +87,7 @@ static void get_txout(struct subd *gossip, const u8 *msg)
 		 * this is either a spent outpoint or an invalid one. Return a
 		 * failure. */
 		subd_send_msg(gossip, take(towire_gossip_get_txout_reply(
-					  NULL, scid, 0, NULL)));
+						   NULL, scid, AMOUNT_SAT(0), NULL)));
 		tal_free(scid);
 	} else {
 		bitcoind_getoutput(topo->bitcoind,
@@ -111,8 +112,7 @@ static unsigned gossip_msg(struct subd *gossip, const u8 *msg, const int *fds)
 	case WIRE_GOSSIP_GET_CHANNEL_PEER:
 	case WIRE_GOSSIP_GET_TXOUT_REPLY:
 	case WIRE_GOSSIP_OUTPOINT_SPENT:
-	case WIRE_GOSSIP_ROUTING_FAILURE:
-	case WIRE_GOSSIP_MARK_CHANNEL_UNROUTABLE:
+	case WIRE_GOSSIP_PAYMENT_FAILURE:
 	case WIRE_GOSSIP_QUERY_SCIDS:
 	case WIRE_GOSSIP_QUERY_CHANNEL_RANGE:
 	case WIRE_GOSSIP_SEND_TIMESTAMP_FILTER:
@@ -301,7 +301,7 @@ static struct command_result *json_getroute(struct command *cmd,
 	struct pubkey *destination;
 	struct pubkey *source;
 	const jsmntok_t *excludetok;
-	u64 *msatoshi;
+	struct amount_msat *msat;
 	unsigned *cltv;
 	double *riskfactor;
 	struct short_channel_id_dir *excluded;
@@ -316,7 +316,7 @@ static struct command_result *json_getroute(struct command *cmd,
 
 	if (!param(cmd, buffer, params,
 		   p_req("id", param_pubkey, &destination),
-		   p_req("msatoshi", param_u64, &msatoshi),
+		   p_req("msatoshi", param_msat, &msat),
 		   p_req("riskfactor", param_double, &riskfactor),
 		   p_opt_def("cltv", param_number, &cltv, 9),
 		   p_opt_def("fromid", param_pubkey, &source, ld->id),
@@ -340,7 +340,8 @@ static struct command_result *json_getroute(struct command *cmd,
 		json_for_each_arr(i, t, excludetok) {
 			if (!short_channel_id_dir_from_str(buffer + t->start,
 							   t->end - t->start,
-							   &excluded[i])) {
+							   &excluded[i],
+							   deprecated_apis)) {
 				return command_fail(cmd, JSONRPC2_INVALID_PARAMS,
 						    "%.*s is not a valid"
 						    " short_channel_id/direction",
@@ -353,7 +354,8 @@ static struct command_result *json_getroute(struct command *cmd,
 	}
 
 	u8 *req = towire_gossip_getroute_request(cmd, source, destination,
-						 *msatoshi, *riskfactor * 1000,
+						 *msat,
+						 *riskfactor * 1000000.0,
 						 *cltv, fuzz,
 						 excluded,
 						 *max_hops);
@@ -397,7 +399,8 @@ static void json_listchannels_reply(struct subd *gossip UNUSED, const u8 *reply,
 				type_to_string(reply, struct short_channel_id,
 					       &entries[i].short_channel_id));
 		json_add_bool(response, "public", entries[i].public);
-		json_add_u64(response, "satoshis", entries[i].satoshis);
+		json_add_amount_sat(response, entries[i].sat,
+				    "satoshis", "amount_msat");
 		json_add_num(response, "message_flags", entries[i].message_flags);
 		json_add_num(response, "channel_flags", entries[i].channel_flags);
 		/* Prior to spec v0891374d47ddffa64c5a2e6ad151247e3d6b7a59, these two were a single u16 field */
@@ -497,7 +500,8 @@ static struct command_result *json_dev_query_scids(struct command *cmd,
 
 	scids = tal_arr(cmd, struct short_channel_id, scidstok->size);
 	json_for_each_arr(i, t, scidstok) {
-		if (!json_to_short_channel_id(buffer, t, &scids[i])) {
+		if (!json_to_short_channel_id(buffer, t, &scids[i],
+					      deprecated_apis)) {
 			return command_fail(cmd, JSONRPC2_INVALID_PARAMS,
 					    "scid %zu '%.*s' is not an scid",
 					    i, json_tok_full_len(t),

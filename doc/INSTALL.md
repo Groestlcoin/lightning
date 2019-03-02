@@ -1,4 +1,6 @@
-# Table of Contents
+Install
+=======
+
 1. [Library Requirements](#library-requirements)
 2. [Ubuntu](#to-build-on-ubuntu)
 3. [Fedora](#to-build-on-fedora)
@@ -36,7 +38,8 @@ Get dependencies:
     sudo apt-get update
     sudo apt-get install -y \
       autoconf automake build-essential git libtool libgmp-dev \
-      libsqlite3-dev python python3 net-tools zlib1g-dev
+      libsqlite3-dev python python3 net-tools zlib1g-dev libsodium-dev \
+	  libbase58-dev
 
 If you don't have Groestlcoin installed locally you'll need to install that
 as well:
@@ -93,7 +96,8 @@ $ sudo dnf update -y && \
                 net-tools \
                 valgrind \
                 wget \
-                zlib-devel && \
+                zlib-devel \
+				libsodium-devel && \
         sudo dnf clean all
 ```
 
@@ -127,8 +131,7 @@ $ lightningd --network=testnet
 To Build on macOS
 ---------------------
 
-Assume you have Xcode and HomeBrew installed on your Mac.
-Get dependencies:
+Assuming you have Xcode and Homebrew installed. Install dependencies:
 
     $ brew install autoconf automake libtool python3 gmp gnu-sed
 
@@ -204,7 +207,7 @@ To cross-compile for Raspberry Pi
 --------------------
 
 Obtain the [official Raspberry Pi toolchains](https://github.com/raspberrypi/tools).
-This document assumes compilation will occur towards the Raspberry Pi 3 
+This document assumes compilation will occur towards the Raspberry Pi 3
 (arm-linux-gnueabihf as of Mar. 2018).
 
 Depending on your toolchain location and target arch, source env variables
@@ -249,9 +252,9 @@ Download and build sqlite3:
 Download and build gmp:
 
     wget https://gmplib.org/download/gmp/gmp-6.1.2.tar.xz
-    tar xvf gmp-6.1.2.tar.xz 
+    tar xvf gmp-6.1.2.tar.xz
     cd gmp-6.1.2
-    ./configure --disable-assembly --prefix=$QEMU_LD_PREFIX
+    ./configure --disable-assembly --host=$target_host --prefix=$QEMU_LD_PREFIX
     make
     make install
 

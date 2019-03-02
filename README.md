@@ -16,6 +16,7 @@ http://lightning.network.
 [![Build Status][travis-ci]][travis-ci-link]
 [![Pull Requests Welcome][prs]][prs-link]
 [![Irc][IRC]][IRC-link]
+[![Documentation Status](https://readthedocs.org/projects/lightning/badge/?version=docs)](https://lightning.readthedocs.io/)
 
 [travis-ci]: https://travis-ci.org/ElementsProject/lightning.svg?branch=master
 [travis-ci-link]: https://travis-ci.org/ElementsProject/lightning
@@ -58,7 +59,7 @@ For the impatient here's the gist of it for Ubuntu and Debian:
     sudo apt-get update
     sudo apt-get install -y \
       autoconf automake build-essential git libtool libgmp-dev \
-      libsqlite3-dev python python3 net-tools zlib1g-dev
+      libsqlite3-dev python python3 net-tools zlib1g-dev libsodium-dev
     git clone https://github.com/Groestlcoin/lightning.git
     cd lightning
     ./configure
@@ -98,18 +99,6 @@ open a channel:
     groestlcoin-cli -testnet sendtoaddress <address> <amount_in_groestlcoins>
 
 `lightningd` will register the funds once the transaction is confirmed.
-
-If you don't have any testcoins you can get a few from a faucet such as
-[Kiwi's testnet faucet][kiw].
-You can send it directly to the `lightningd` address.
-
-You may need to generate a p2sh-segwit address if the faucet does not support
-bech32:
-
-    # Return a p2sh-segwit address
-    cli/lightning-cli newaddr p2sh-segwit
-
-[kiw]: https://testnet.manu.backend.hamburg/faucet
 
 Confirm `lightningd` got funds by:
 
@@ -225,7 +214,7 @@ JSON-RPC interface is documented in the following manual pages:
 * [getroute](doc/lightning-getroute.7.txt)
 * [sendpay](doc/lightning-sendpay.7.txt)
 * [pay](doc/lightning-pay.7.txt)
-* [listpayments](doc/lightning-listpayments.7.txt)
+* [listpays](doc/lightning-listpays.7.txt)
 * [decodepay](doc/lightning-decodepay.7.txt)
 
 For simple access to the JSON-RPC interface you can use the

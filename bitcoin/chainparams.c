@@ -10,16 +10,16 @@ const struct chainparams networks[] = {
      .rpc_port = 1441,
      .cli = "groestlcoin-cli",
      .cli_args = NULL,
-     .dust_limit = 546,
+     .dust_limit = { 546 },
      /* BOLT #2:
       *
       * The sending node:
       *...
       *   - MUST set `funding_satoshis` to less than 2^24 satoshi.
       */
-     .max_funding_satoshi = (1 << 24) - 1,
-     .max_payment_msat = 0xFFFFFFFFULL,
-     /* "Lightning Charge Powers Developers" */
+     .max_funding = AMOUNT_SAT_INIT((1 << 24) - 1),
+     .max_payment = AMOUNT_MSAT_INIT(0xFFFFFFFFULL),
+     /* "Lightning Charge Powers Developers & Blockstream Store" */
      .when_lightning_became_cool = 504500,
      .testnet = false},
     {.network_name = "regtest",
@@ -28,9 +28,9 @@ const struct chainparams networks[] = {
      .rpc_port = 18443,
      .cli = "groestlcoin-cli",
      .cli_args = "-regtest",
-     .dust_limit = 546,
-     .max_funding_satoshi = (1 << 24) - 1,
-     .max_payment_msat = 0xFFFFFFFFULL,
+     .dust_limit = { 546 },
+     .max_funding = AMOUNT_SAT_INIT((1 << 24) - 1),
+     .max_payment = AMOUNT_MSAT_INIT(0xFFFFFFFFULL),
      .when_lightning_became_cool = 1,
      .testnet = true},
     {.network_name = "testnet",
@@ -39,11 +39,11 @@ const struct chainparams networks[] = {
      .rpc_port = 17766,
      .cli = "groestlcoin-cli",
      .cli_args = "-testnet",
-     .dust_limit = 546,
-     .max_funding_satoshi = (1 << 24) - 1,
-     .max_payment_msat = 0xFFFFFFFFULL,
+     .dust_limit = { 546 },
+     .max_funding = AMOUNT_SAT_INIT((1 << 24) - 1),
+     .max_payment = AMOUNT_MSAT_INIT(0xFFFFFFFFULL),
      .when_lightning_became_cool = 1,
-     .testnet = true}    
+     .testnet = true}
 };
 
 const struct chainparams *chainparams_for_network(const char *network_name)
