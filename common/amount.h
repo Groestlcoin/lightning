@@ -29,6 +29,13 @@ struct amount_msat {
 #define AMOUNT_MUST_BE_CONST(c) 0
 #endif
 
+/* GCC 4.8.5 (Centos 7.6!) thinks struct casts are not constants, so we
+ * need to not use a cast for static initializations. */
+#define AMOUNT_MSAT_INIT(msat)		\
+	{ .millisatoshis = (msat) }
+#define AMOUNT_SAT_INIT(sat)		\
+	{ .satoshis = (sat) }
+
 #define AMOUNT_MSAT(constant)						\
 	((struct amount_msat){(constant) + AMOUNT_MUST_BE_CONST(constant)})
 
@@ -124,8 +131,7 @@ const char *fmt_amount_sat(const tal_t *ctx, const struct amount_sat *sat);
  *  [0-9]+ => millisatoshi.
  *  [0-9]+msat => millisatoshi.
  *  [0-9]+sat => *1000 -> millisatopshi.
- *  [0-9]+.[0-9]{8}btc => *1000 -> millisatoshi.
- *  [0-9]+.[0-9]{11}btc => millisatoshi.
+ *  [0-9]+.[0-9]{1,11}btc => millisatoshi.
  */
 bool parse_amount_msat(struct amount_msat *msat, const char *s, size_t slen);
 
@@ -133,7 +139,7 @@ bool parse_amount_msat(struct amount_msat *msat, const char *s, size_t slen);
  *  [0-9]+ => satoshi.
  *  [0-9]+sat => satoshi.
  *  [0-9]+000msat => satoshi.
- *  [0-9]+.[0-9]{8}btc => satoshi.
+ *  [0-9]+.[0-9]{1,8}btc => satoshi.
  */
 bool parse_amount_sat(struct amount_sat *sat, const char *s, size_t slen);
 

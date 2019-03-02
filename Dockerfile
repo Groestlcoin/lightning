@@ -55,7 +55,8 @@ VOLUME [ "/root/.lightning" ]
 
 COPY --from=builder /opt/lightningd/cli/lightning-cli /usr/bin
 COPY --from=builder /opt/lightningd/lightningd/lightning* /usr/bin/
-COPY --from=builder /opt/groestlcoin /usr/bin
+COPY --from=builder /opt/lightningd/plugins/pay /usr/libexec/c-lightning/plugins/
+COPY --from=builder /opt/groestlcoin/bin /usr/bin
 COPY tools/docker-entrypoint.sh entrypoint.sh
 
 EXPOSE 9735 9835
