@@ -23,6 +23,8 @@ changes.
 
 ### Fixed
 
+- `--bind-addr=<path>` fixed for nodes using local sockets (eg. testing).
+
 ### Security
 
 ## [0.7.0] - 2019-02-28: "Actually an Altcoin"
@@ -57,6 +59,7 @@ This release named by Mark Beckwith @wythe.
 - JSON API: `listpayments` is now `listsendpays`.
 - lightning-cli: `help <cmd>` finds man pages even if `make install` not run.
 - pylightning: New class 'Millisatoshi' can be used for JSON API, and new '_msat' fields are turned into this on reading.
+- JSON API: New command `setchannelfee` sets channel specific routing fees.
 
 ### Changed
 
@@ -100,6 +103,9 @@ provide appropriate suffixes for JSON input fields.
 - You can no longer make giant unpayable "wumbo" invoices.
 - CLTV of total route now correctly evaluated when finding best route.
 - `riskfactor` arguments to `pay` and `getroute` now have an effect.
+- Fixed the version of bip32 private_key to BIP32_VER_MAIN_PRIVATE: we used
+  BIP32_VER_MAIN_PRIVATE for bitcoin/litecoin mainnet, and BIP32_VER_TEST_PRIVATE
+  for others. (PR #2436)
 
 ### Security
 

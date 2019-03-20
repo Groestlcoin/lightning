@@ -1339,6 +1339,168 @@ static const struct json_command getinfo_command = {
 };
 AUTODATA(json_command, &getinfo_command);
 
+static struct command_result *param_channel_or_all(struct command *cmd,
+					     const char *name,
+					     const char *buffer,
+					     const jsmntok_t *tok,
+					     struct channel **channel)
+{
+	struct command_result *res;
+	struct peer *peer;
+
+	/* early return the easy case */
+	if (json_tok_streq(buffer, tok, "all")) {
+		*channel = NULL;
+		return NULL;
+	}
+
+	/* Find channel by peer_id */
+	peer = peer_from_json(cmd->ld, buffer, tok);
+	if (peer) {
+		*channel = peer_active_channel(peer);
+		if (!*channel)
+			return command_fail(cmd, LIGHTNINGD,
+					"Could not find active channel of peer with that id");
+		return NULL;
+
+	/* Find channel by id or scid */
+	} else {
+		res = command_find_channel(cmd, buffer, tok, channel);
+		if (res)
+			return res;
+		/* check channel is found and in valid state */
+		if (!*channel)
+			return command_fail(cmd, LIGHTNINGD,
+					"Could not find channel with that id");
+		return NULL;
+	}
+}
+
+/* Fee base is a u32, but it's convenient to let them specify it using
+ * msat etc. suffix. */
+static struct command_result *param_msat_u32(struct command *cmd,
+					     const char *name,
+					     const char *buffer,
+					     const jsmntok_t *tok,
+					     u32 **num)
+{
+	struct amount_msat *msat;
+	struct command_result *res;
+
+	/* Parse just like an msat. */
+	res = param_msat(cmd, name, buffer, tok, &msat);
+	if (res)
+		return res;
+
+	*num = tal(cmd, u32);
+	if (!amount_msat_to_u32(*msat, *num)) {
+		return command_fail(cmd, JSONRPC2_INVALID_PARAMS,
+				    "'%s' value '%s' exceeds u32 max",
+				    name,
+				    type_to_string(tmpctx, struct amount_msat,
+						   msat));
+	}
+
+	return NULL;
+}
+
+static void set_channel_fees(struct command *cmd, struct channel *channel,
+		u32 base, u32 ppm, struct json_stream *response)
+{
+	struct channel_id cid;
+
+	/* set new values */
+	channel->feerate_base = base;
+	channel->feerate_ppm = ppm;
+
+	/* tell channeld to make a send_channel_update */
+	if (channel->owner && streq(channel->owner->name, "lightning_channeld"))
+		subd_send_msg(channel->owner,
+				take(towire_channel_specific_feerates(NULL, base, ppm)));
+
+	/* save values to database */
+	wallet_channel_save(cmd->ld->wallet, channel);
+
+	/* write JSON response entry */
+	derive_channel_id(&cid, &channel->funding_txid, channel->funding_outnum);
+	json_object_start(response, NULL);
+	json_add_pubkey(response, "peer_id", &channel->peer->id);
+	json_add_string(response, "channel_id",
+			type_to_string(tmpctx, struct channel_id, &cid));
+	if (channel->scid)
+		json_add_short_channel_id(response, "short_channel_id", channel->scid);
+	json_object_end(response);
+}
+
+static struct command_result *json_setchannelfee(struct command *cmd,
+					 const char *buffer,
+					 const jsmntok_t *obj UNNEEDED,
+					 const jsmntok_t *params)
+{
+	struct json_stream *response;
+	struct peer *peer;
+	struct channel *channel;
+	u32 *base, *ppm;
+
+	/* Parse the JSON command */
+	if (!param(cmd, buffer, params,
+		   p_req("id", param_channel_or_all, &channel),
+		   p_opt_def("base", param_msat_u32,
+			     &base, cmd->ld->config.fee_base),
+		   p_opt_def("ppm", param_number, &ppm,
+			     cmd->ld->config.fee_per_satoshi),
+		   NULL))
+		return command_param_failed();
+
+	/* Open JSON response object for later iteration */
+	response = json_stream_success(cmd);
+	json_object_start(response, NULL);
+	json_add_num(response, "base", *base);
+	json_add_num(response, "ppm", *ppm);
+	json_array_start(response, "channels");
+
+	/* If the users requested 'all' channels we need to iterate */
+	if (channel == NULL) {
+		list_for_each(&cmd->ld->peers, peer, list) {
+			list_for_each(&peer->channels, channel, list) {
+				channel = peer_active_channel(peer);
+				if (!channel)
+					continue;
+				if (channel->state != CHANNELD_NORMAL &&
+					channel->state != CHANNELD_AWAITING_LOCKIN)
+					continue;
+				set_channel_fees(cmd, channel, *base, *ppm, response);
+			}
+		}
+
+	/* single channel should be updated */
+	} else {
+		if (channel->state != CHANNELD_NORMAL &&
+			channel->state != CHANNELD_AWAITING_LOCKIN)
+			return command_fail(cmd, LIGHTNINGD,
+					"Channel is in state %s", channel_state_name(channel));
+		set_channel_fees(cmd, channel, *base, *ppm, response);
+	}
+
+	/* Close and return response */
+	json_array_end(response);
+	json_object_end(response);
+	return command_success(cmd, response);
+}
+
+static const struct json_command setchannelfee_command = {
+	"setchannelfee",
+	json_setchannelfee,
+	"Sets specific routing fees for channel with {id} "
+	"(either peer ID, channel ID, short channel ID or 'all'). "
+	"Routing fees are defined by a fixed {base} (msat) "
+	"and a {ppm} (proportional per millionth) value. "
+	"If values for {base} or {ppm} are left out, defaults will be used. "
+	"{base} can also be defined in other units, for example '1sat'. "
+	"If {id} is 'all', the fees will be applied for all channels. "
+};
+AUTODATA(json_command, &setchannelfee_command);
+
 #if DEVELOPER
 static struct command_result *json_sign_last_tx(struct command *cmd,
 						const char *buffer,

@@ -57,4 +57,4 @@ COPY --from=builder /opt/groestlcoin/bin /usr/bin
 COPY tools/docker-entrypoint.sh entrypoint.sh
 
 EXPOSE 9735 9835
-ENTRYPOINT  [ "./entrypoint.sh" ]
+ENTRYPOINT  [ "/sbin/tini", "-g", "--", "./entrypoint.sh" ]

@@ -14,15 +14,31 @@ RUN set -ex \
 
 WORKDIR /opt
 
-ENV GROESTLCOIN_VERSION 2.16.3
-ENV GROESTLCOIN_URL https://github.com/Groestlcoin/groestlcoin/releases/download/v2.16.3/groestlcoin-2.16.3-x86_64-linux-gnu.tar.gz
-ENV GROESTLCOIN_SHA256 f15bd5e38b25a103821f1563cd0e1b2cf7146ec9f9835493a30bd57313d3b86f
+RUN wget -qO /opt/tini "https://github.com/krallin/tini/releases/download/v0.18.0/tini-armhf" \
+    && echo "01b54b934d5f5deb32aa4eb4b0f71d0e76324f4f0237cc262d59376bf2bdc269 /opt/tini" | sha256sum -c - \
+    && chmod +x /opt/tini
+
+ENV GROESTLCOIN_VERSION 2.17.2
+ENV GROESTLCOIN_TARBALL groestlcoin-${GROESTLCOIN_VERSION}-x86_64-linux-gnu.tar.gz
+ENV GROESTLCOIN_URL https://github.com/Groestlcoin/groestlcoin/releases/download/v$GROESTLCOIN_VERSION/$GROESTLCOIN_TARBALL
+ENV GROESTLCOIN_ASC_URL https://github.com/Groestlcoin/groestlcoin/releases/download/v$GROESTLCOIN_VERSION/SHA256SUMS.asc
 
 RUN mkdir /opt/groestlcoin && cd /opt/groestlcoin \
-		&& wget -qO groestlcoin.tar.gz "$GROESTLCOIN_URL" \
-		&& echo "$GROESTLCOIN_SHA256  groestlcoin.tar.gz" | sha256sum -c - \
-		&& tar -xzvf groestlcoin.tar.gz groestlcoin-cli --exclude=*-qt \
-		&& rm groestlcoin.tar.gz
+    && wget -qO $GROESTLCOIN_TARBALL "$GROESTLCOIN_URL" \
+    && for server in $(shuf -e ha.pool.sks-keyservers.net \
+                             hkp://p80.pool.sks-keyservers.net:80 \
+                             keyserver.ubuntu.com \
+                             hkp://keyserver.ubuntu.com:80 \
+                             pgp.mit.edu) ; do \
+         gpg --batch --keyserver "$server" --recv-keys "$GROESTLCOIN_PGP_KEY" && break || : ; \
+       done \
+    && wget -qO groestlcoin.asc "$GROESTLCOIN_ASC_URL" \
+    && gpg --verify groestlcoin.asc \
+    && grep $GROESTLCOIN_TARBALL groestlcoin.asc | tee SHA256SUMS.asc \
+    && sha256sum -c SHA256SUMS.asc \
+    && BD=groestlcoin-$GROESTLCOIN_VERSION/bin \
+    && tar -xzvf $GROESTLCOIN_TARBALL $BD/groestlcoin-cli --strip-components=1 \
+    && rm $GROESTLCOIN_TARBALL
 
 FROM debian:stretch-slim as builder
 
@@ -74,6 +90,7 @@ RUN ./configure --prefix=/tmp/lightning_install --enable-static && make -j3 DEVE
 
 FROM arm32v7/debian:stretch-slim as final
 COPY --from=downloader /usr/bin/qemu-arm-static /usr/bin/qemu-arm-static
+COPY --from=downloader /opt/tini /usr/bin/tini
 RUN apt-get update && apt-get install -y --no-install-recommends socat inotify-tools \
     && rm -rf /var/lib/apt/lists/*
 
@@ -88,4 +105,4 @@ COPY --from=downloader /opt/groestlcoin/bin /usr/bin
 COPY tools/docker-entrypoint.sh entrypoint.sh
 
 EXPOSE 9735 9835
-ENTRYPOINT  [ "./entrypoint.sh" ]
+ENTRYPOINT  [ "/usr/bin/tini", "-g", "--", "./entrypoint.sh" ]

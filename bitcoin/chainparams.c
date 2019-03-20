@@ -3,6 +3,13 @@
 #include <ccan/str/str.h>
 #include <string.h>
 
+/* Version codes for BIP32 extended keys in libwally-core.
+ * Stolen from wally_bip32.h in libwally-core*/
+#define BIP32_VER_MAIN_PUBLIC  0x0488B21E
+#define BIP32_VER_MAIN_PRIVATE 0x0488ADE4
+#define BIP32_VER_TEST_PUBLIC  0x043587CF
+#define BIP32_VER_TEST_PRIVATE 0x04358394
+
 const struct chainparams networks[] = {
     {.network_name = "groestlcoin",
      .bip173_name = "grs",
@@ -21,7 +28,8 @@ const struct chainparams networks[] = {
      .max_payment = AMOUNT_MSAT_INIT(0xFFFFFFFFULL),
      /* "Lightning Charge Powers Developers & Blockstream Store" */
      .when_lightning_became_cool = 504500,
-     .testnet = false},
+     .testnet = false,
+     .bip32_key_version = {.bip32_pubkey_version = BIP32_VER_MAIN_PUBLIC, .bip32_privkey_version = BIP32_VER_MAIN_PRIVATE}},
     {.network_name = "regtest",
      .bip173_name = "grsrt",
      .genesis_blockhash = {{{.u.u8 = {0x36, 0xcd, 0xf2, 0xdc, 0xb7, 0x55, 0x62, 0x87, 0x28, 0x2a, 0x05, 0xc0, 0x64, 0x01, 0x23, 0x23, 0xba, 0xe6, 0x63, 0xc1, 0x6e, 0xd3, 0xcd, 0x98, 0x98, 0xfc, 0x50, 0xbb, 0xff, 0x00, 0x00, 0x00}}}},
@@ -32,7 +40,8 @@ const struct chainparams networks[] = {
      .max_funding = AMOUNT_SAT_INIT((1 << 24) - 1),
      .max_payment = AMOUNT_MSAT_INIT(0xFFFFFFFFULL),
      .when_lightning_became_cool = 1,
-     .testnet = true},
+     .testnet = true,
+     .bip32_key_version = {.bip32_pubkey_version = BIP32_VER_TEST_PUBLIC, .bip32_privkey_version = BIP32_VER_TEST_PRIVATE}},
     {.network_name = "testnet",
      .bip173_name = "tgrs",
      .genesis_blockhash = {{{.u.u8 = {0x36, 0xcd, 0xf2, 0xdc, 0xb7, 0x55, 0x62, 0x87, 0x28, 0x2a, 0x05, 0xc0, 0x64, 0x01, 0x23, 0x23, 0xba, 0xe6, 0x63, 0xc1, 0x6e, 0xd3, 0xcd, 0x98, 0x98, 0xfc, 0x50, 0xbb, 0xff, 0x00, 0x00, 0x00}}}},
@@ -43,7 +52,8 @@ const struct chainparams networks[] = {
      .max_funding = AMOUNT_SAT_INIT((1 << 24) - 1),
      .max_payment = AMOUNT_MSAT_INIT(0xFFFFFFFFULL),
      .when_lightning_became_cool = 1,
-     .testnet = true}
+     .testnet = true,
+     .bip32_key_version = {.bip32_pubkey_version = BIP32_VER_TEST_PUBLIC, .bip32_privkey_version = BIP32_VER_TEST_PRIVATE}}
 };
 
 const struct chainparams *chainparams_for_network(const char *network_name)
