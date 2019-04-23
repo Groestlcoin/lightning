@@ -214,7 +214,7 @@ def test_pay_get_error_with_update(node_factory):
     l1.daemon.wait_for_log(r'Extracted channel_update 0102.*from onionreply 10070088[0-9a-fA-F]{88}')
 
     # And now monitor for l1 to apply the channel_update we just extracted
-    l1.daemon.wait_for_log(r'Received channel_update for channel {}/. now DISABLED was ACTIVE \(from error\)'.format(chanid2))
+    l1.daemon.wait_for_log(r'Received channel_update for channel {}/. now DISABLED \(from error\)'.format(chanid2))
 
 
 def test_pay_optional_args(node_factory):
@@ -775,8 +775,7 @@ def test_forward_different_fees_and_cltv(node_factory, bitcoind):
                            .format(bitcoind.rpc.getblockcount() + 20 + 9 + shadow_route))
     l2.daemon.wait_for_log("Adding HTLC 0 amount=4999999msat cltv={} gave CHANNEL_ERR_ADD_OK"
                            .format(bitcoind.rpc.getblockcount() + 9 + shadow_route))
-    l3.daemon.wait_for_log("test_forward_different_fees_and_cltv: Actual amount 4999999msat, HTLC expiry {}"
-                           .format(bitcoind.rpc.getblockcount() + 9 + shadow_route))
+    l3.daemon.wait_for_log("Resolved invoice 'test_forward_different_fees_and_cltv' with amount 4999999msat")
     assert only_one(l3.rpc.listinvoices('test_forward_different_fees_and_cltv')['invoices'])['status'] == 'paid'
 
     # Check that we see all the channels
@@ -848,7 +847,7 @@ def test_forward_stats(node_factory, bitcoind):
 
     We wire up the network to have l1 as payment initiator, l2 as
     forwarded (the one we check) and l3-l5 as payment recipients. l3
-    accepts correctly, l4 refects (because it doesn't know the payment
+    accepts correctly, l4 rejects (because it doesn't know the payment
     hash) and l5 will keep the HTLC dangling by disconnecting.
 
     """
@@ -915,6 +914,9 @@ def test_forward_stats(node_factory, bitcoind):
     assert l2.rpc.getinfo()['msatoshi_fees_collected'] == 1 + amount // 100000
     assert l1.rpc.getinfo()['msatoshi_fees_collected'] == 0
     assert l3.rpc.getinfo()['msatoshi_fees_collected'] == 0
+    assert stats['forwards'][0]['received_time'] <= stats['forwards'][0]['resolved_time']
+    assert stats['forwards'][1]['received_time'] <= stats['forwards'][1]['resolved_time']
+    assert 'received_time' in stats['forwards'][2] and 'resolved_time' not in stats['forwards'][2]
 
 
 @unittest.skipIf(not DEVELOPER or SLOW_MACHINE, "needs DEVELOPER=1 for dev_ignore_htlcs, and temporarily disabled on Travis")

@@ -10,6 +10,7 @@
 #include <ccan/mem/mem.h>
 #include <ccan/tal/tal.h>
 #include <common/amount.h>
+#include <common/node_id.h>
 #include <common/utils.h>
 
 void towire(u8 **pptr, const void *data, size_t len)
@@ -54,9 +55,25 @@ void towire_bool(u8 **pptr, bool v)
 	towire(pptr, &val, sizeof(val));
 }
 
+void towire_var_int(u8 **pptr, const u64 val)
+{
+	if (val < 0xfd) {
+		towire_u8(pptr, (u8)val);
+	} else if (val <= 0xffff) {
+		towire_u8(pptr, 0xfd);
+		towire_u16(pptr, (u16)val);
+	} else if (val <= 0xffffffff) {
+		towire_u8(pptr, 0xfe);
+		towire_u32(pptr, (u32)val);
+	} else {
+		towire_u8(pptr, 0xff);
+		towire_u64(pptr, val);
+	}
+}
+
 void towire_pubkey(u8 **pptr, const struct pubkey *pubkey)
 {
-	u8 output[PUBKEY_DER_LEN];
+	u8 output[PUBKEY_CMPR_LEN];
 	size_t outputlen = sizeof(output);
 
 	secp256k1_ec_pubkey_serialize(secp256k1_ctx, output, &outputlen,
@@ -64,6 +81,13 @@ void towire_pubkey(u8 **pptr, const struct pubkey *pubkey)
 				      SECP256K1_EC_COMPRESSED);
 
 	towire(pptr, output, outputlen);
+}
+
+void towire_node_id(u8 **pptr, const struct node_id *id)
+{
+	/* Cheap sanity check */
+	assert(id->k[0] == 0x2 || id->k[0] == 0x3);
+	towire(pptr, id->k, sizeof(id->k));
 }
 
 void towire_secret(u8 **pptr, const struct secret *secret)

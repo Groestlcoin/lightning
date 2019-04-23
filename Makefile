@@ -15,12 +15,12 @@ CCANDIR := ccan
 
 # Where we keep the BOLT RFCs
 BOLTDIR := ../lightning-rfc/
-BOLTVERSION := 3fef98d10695462edecc63cba05e4a96374f4664
+BOLTVERSION := da71867c840abe057d7a68f358dd9493e0e79110
 
 -include config.vars
 
 ifneq ($(VALGRIND),0)
-VG=valgrind -q --error-exitcode=7
+VG=VALGRIND=1 valgrind -q --error-exitcode=7
 VG_TEST_ARGS = --track-origins=yes --leak-check=full --show-reachable=yes --errors-for-leak-kinds=all
 endif
 
@@ -47,7 +47,7 @@ endif
 
 ifeq ($(COMPAT),1)
 # We support compatibility with pre-0.6.
-COMPAT_CFLAGS=-DCOMPAT_V052=1 -DCOMPAT_V060=1 -DCOMPAT_V061=1 -DCOMPAT_V062=1
+COMPAT_CFLAGS=-DCOMPAT_V052=1 -DCOMPAT_V060=1 -DCOMPAT_V061=1 -DCOMPAT_V062=1 -DCOMPAT_V070=1
 endif
 
 # Timeout shortly before the 600 second travis silence timeout

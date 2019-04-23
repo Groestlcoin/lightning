@@ -26,6 +26,7 @@ struct channel *new_full_channel(const tal_t *ctx,
 				 const struct bitcoin_blkid *chain_hash,
 				 const struct bitcoin_txid *funding_txid,
 				 unsigned int funding_txout,
+				 u32 minimum_depth,
 				 struct amount_sat funding,
 				 struct amount_msat local_msat,
 				 const u32 feerate_per_kw[NUM_SIDES],
@@ -41,6 +42,7 @@ struct channel *new_full_channel(const tal_t *ctx,
 						      chain_hash,
 						      funding_txid,
 						      funding_txout,
+						      minimum_depth,
 						      funding,
 						      local_msat,
 						      feerate_per_kw[LOCAL],
@@ -379,8 +381,8 @@ static enum channel_add_err add_htlc(struct channel *channel,
 
 	/* BOLT #2:
 	 *
-	 *   - if a sending node adds more than its `max_accepted_htlcs` HTLCs to
-	 *     its local commitment transaction...
+	 *   - if a sending node adds more than receiver `max_accepted_htlcs`
+	 *     HTLCs to its local commitment transaction...
 	 *     - SHOULD fail the channel.
 	 */
 	if (tal_count(committed) - tal_count(removing) + tal_count(adding)
@@ -406,7 +408,7 @@ static enum channel_add_err add_htlc(struct channel *channel,
 
 	/* BOLT #2:
 	 *
-	 *   - if a sending node... adds more than its
+	 *   - if a sending node... adds more than receiver
 	 *     `max_htlc_value_in_flight_msat` worth of offered HTLCs to its
 	 *     local commitment transaction:
 	 *     - SHOULD fail the channel.

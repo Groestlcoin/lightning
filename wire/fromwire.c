@@ -10,6 +10,7 @@
 #include <ccan/mem/mem.h>
 #include <ccan/tal/str/str.h>
 #include <common/amount.h>
+#include <common/node_id.h>
 #include <common/type_to_string.h>
 #include <common/utils.h>
 
@@ -101,15 +102,36 @@ bool fromwire_bool(const u8 **cursor, size_t *max)
 	return ret;
 }
 
+u64 fromwire_var_int(const u8 **cursor, size_t *max)
+{
+	u8 flag = fromwire_u8(cursor, max);
+
+	switch(flag) {
+	case 0xff:
+		return fromwire_u64(cursor, max);
+	case 0xfe:
+		return (u64)fromwire_u32(cursor, max);
+	case 0xfd:
+		return (u64)fromwire_u16(cursor, max);
+	default:
+		return (u64)flag;
+	}
+}
+
 void fromwire_pubkey(const u8 **cursor, size_t *max, struct pubkey *pubkey)
 {
-	u8 der[PUBKEY_DER_LEN];
+	u8 der[PUBKEY_CMPR_LEN];
 
 	if (!fromwire(cursor, max, der, sizeof(der)))
 		return;
 
 	if (!pubkey_from_der(der, sizeof(der), pubkey))
 		fromwire_fail(cursor, max);
+}
+
+void fromwire_node_id(const u8 **cursor, size_t *max, struct node_id *id)
+{
+	fromwire(cursor, max, &id->k, sizeof(id->k));
 }
 
 void fromwire_secret(const u8 **cursor, size_t *max, struct secret *secret)

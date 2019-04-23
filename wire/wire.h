@@ -24,6 +24,7 @@ STRUCTEQ_DEF(channel_id, 0, id);
 struct bitcoin_blkid;
 struct bitcoin_signature;
 struct bitcoin_txid;
+struct node_id;
 struct preimage;
 struct ripemd160;
 struct siphash_seed;
@@ -40,6 +41,7 @@ const void *fromwire_fail(const u8 **cursor, size_t *max);
 
 void towire(u8 **pptr, const void *data, size_t len);
 void towire_pubkey(u8 **pptr, const struct pubkey *pubkey);
+void towire_node_id(u8 **pptr, const struct node_id *id);
 void towire_privkey(u8 **pptr, const struct privkey *privkey);
 void towire_secret(u8 **pptr, const struct secret *secret);
 void towire_secp256k1_ecdsa_signature(u8 **pptr,
@@ -67,6 +69,7 @@ void towire_u64(u8 **pptr, u64 v);
 void towire_double(u8 **pptr, const double *v);
 void towire_pad(u8 **pptr, size_t num);
 void towire_bool(u8 **pptr, bool v);
+void towire_var_int(u8 **pptr, const u64 val);
 
 void towire_u8_array(u8 **pptr, const u8 *arr, size_t num);
 
@@ -83,9 +86,11 @@ u32 fromwire_u32(const u8 **cursor, size_t *max);
 u64 fromwire_u64(const u8 **cursor, size_t *max);
 void fromwire_double(const u8 **cursor, size_t *max, double *v);
 bool fromwire_bool(const u8 **cursor, size_t *max);
+u64 fromwire_var_int(const u8 **cursor, size_t *max);
 void fromwire_secret(const u8 **cursor, size_t *max, struct secret *secret);
 void fromwire_privkey(const u8 **cursor, size_t *max, struct privkey *privkey);
 void fromwire_pubkey(const u8 **cursor, size_t *max, struct pubkey *pubkey);
+void fromwire_node_id(const u8 **cursor, size_t *max, struct node_id *id);
 void fromwire_secp256k1_ecdsa_signature(const u8 **cursor, size_t *max,
 					secp256k1_ecdsa_signature *signature);
 void fromwire_secp256k1_ecdsa_recoverable_signature(const u8 **cursor,
