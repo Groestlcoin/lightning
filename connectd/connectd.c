@@ -905,6 +905,7 @@ static bool handle_wireaddr_listen(struct daemon *daemon,
 		return false;
 	case ADDR_TYPE_TOR_V2:
 	case ADDR_TYPE_TOR_V3:
+		return false;
 		break;
 	}
 	status_failed(STATUS_FAIL_INTERNAL_ERROR,
