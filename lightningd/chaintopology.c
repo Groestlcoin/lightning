@@ -683,7 +683,7 @@ static void remove_tip(struct chain_topology *topo)
 	b = topo->tip;
 	log_debug(topo->log, "Removing stale block %u: %s",
 			  topo->tip->height,
-			  type_to_string(tmpctx, struct bitcoin_blkid, &b->blkid);
+			  type_to_string(tmpctx, struct bitcoin_blkid, &b->blkid));
 
 	/* Move tip back one. */
 	topo->tip = b->prev;
