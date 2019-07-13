@@ -54,8 +54,13 @@ def directory(request, test_base_dir, test_name):
     yield directory
 
     # This uses the status set in conftest.pytest_runtest_makereport to
-    # determine whether we succeeded or failed.
-    if not request.node.has_errors and request.node.rep_call.outcome == 'passed':
+    # determine whether we succeeded or failed. Outcome can be None if the
+    # failure occurs during the setup phase, hence the use to getattr instead
+    # of accessing it directly.
+    outcome = getattr(request.node, 'rep_call', None)
+    failed = not outcome or request.node.has_errors or outcome != 'passed'
+
+    if not failed:
         shutil.rmtree(directory)
     else:
         logging.debug("Test execution failed, leaving the test directory {} intact.".format(directory))
@@ -132,8 +137,8 @@ def node_factory(request, directory, test_name, bitcoind, executor):
     check_errors(request, err_count, "{} nodes had unexpected reconnections")
 
     for node in nf.nodes:
-        err_count += checkBadGossipOrder(node)
-    check_errors(request, err_count, "{} nodes had bad gossip order")
+        err_count += checkBadGossip(node)
+    check_errors(request, err_count, "{} nodes had bad gossip messages")
 
     for node in nf.nodes:
         err_count += checkBadReestablish(node)
@@ -204,8 +209,17 @@ def checkReconnect(node):
     return 0
 
 
-def checkBadGossipOrder(node):
-    if node.daemon.is_in_log('Bad gossip order from (?!error)') and not node.daemon.is_in_log('Deleting channel'):
+def checkBadGossip(node):
+    # We can get bad gossip order from inside error msgs.
+    if node.daemon.is_in_log('Bad gossip order from (?!error)'):
+        # This can happen if a node sees a node_announce after a channel
+        # is deleted, however.
+        if node.daemon.is_in_log('Deleting channel'):
+            return 0
+        return 1
+
+    # Other 'Bad' messages shouldn't happen.
+    if node.daemon.is_in_log(r'gossipd.*Bad (?!gossip order from error)'):
         return 1
     return 0
 

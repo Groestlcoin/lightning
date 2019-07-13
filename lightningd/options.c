@@ -1,6 +1,7 @@
 #include <bitcoin/chainparams.h>
 #include <ccan/array_size/array_size.h>
 #include <ccan/err/err.h>
+#include <ccan/json_escape/json_escape.h>
 #include <ccan/mem/mem.h>
 #include <ccan/opt/opt.h>
 #include <ccan/opt/private.h>
@@ -11,7 +12,6 @@
 #include <ccan/tal/str/str.h>
 #include <common/configdir.h>
 #include <common/json_command.h>
-#include <common/json_escaped.h>
 #include <common/jsonrpc_errors.h>
 #include <common/memleak.h>
 #include <common/param.h>
@@ -407,14 +407,6 @@ static void config_register_opts(struct lightningd *ld)
 			       opt_set_bool_arg, opt_show_bool,
 			       &deprecated_apis,
 			       "Enable deprecated options, JSONRPC commands, fields, etc.");
-	opt_register_arg("--autocleaninvoice-cycle",
-			 opt_set_u64, opt_show_u64,
-			 &ld->ini_autocleaninvoice_cycle,
-			 "Perform cleanup of expired invoices every given seconds, or do not autoclean if 0");
-	opt_register_arg("--autocleaninvoice-expired-by",
-			 opt_set_u64, opt_show_u64,
-			 &ld->ini_autocleaninvoice_expiredby,
-			 "If expired invoice autoclean enabled, invoices that have expired for at least this given seconds are cleaned");
 	opt_register_arg("--proxy", opt_add_proxy_addr, NULL,
 			ld,"Set a socks v5 proxy IP address and port");
 	opt_register_arg("--tor-service-password", opt_set_talstr, NULL,
@@ -444,15 +436,6 @@ static char *opt_subprocess_debug(const char *optarg, struct lightningd *ld)
 {
 	ld->dev_debug_subprocess = optarg;
 	return NULL;
-}
-
-static char *opt_set_dev_unknown_channel_satoshis(const char *optarg,
-						  struct lightningd *ld)
-{
-	tal_free(ld->dev_unknown_channel_satoshis);
-	ld->dev_unknown_channel_satoshis = tal(ld, struct amount_sat);
-	return opt_set_u64(optarg,
-			   &ld->dev_unknown_channel_satoshis->satoshis); /* Raw: dev code */
 }
 
 static void dev_register_opts(struct lightningd *ld)
@@ -491,10 +474,7 @@ static void dev_register_opts(struct lightningd *ld)
 	opt_register_arg("--dev-gossip-time", opt_set_u32, opt_show_u32,
 			 &ld->dev_gossip_time,
 			 "UNIX time to override gossipd to use.");
-	opt_register_arg("--dev-unknown-channel-satoshis",
-			 opt_set_dev_unknown_channel_satoshis, NULL, ld,
-			 "Amount to pretend is in channels which we can't find funding tx for.");
-}
+ }
 #endif
 
 
@@ -549,8 +529,8 @@ static const struct config testnet_config = {
 
 	.use_dns = false,
 
-	/* Sets min_effective_htlc_capacity - at 1000$/BTC this is 1ct */
-	.min_capacity_sat = 1000,
+	/* Sets min_effective_htlc_capacity - at 1000$/BTC this is 10ct */
+	.min_capacity_sat = 10000,
 };
 
 /* aka. "Dude, where's my coins?" */
@@ -615,8 +595,8 @@ static const struct config mainnet_config = {
 
 	.use_dns = false,
 
-	/* Sets min_effective_htlc_capacity - at 1000$/BTC this is 1ct */
-	.min_capacity_sat = 1000,
+	/* Sets min_effective_htlc_capacity - at 1000$/BTC this is 10ct */
+	.min_capacity_sat = 10000,
 };
 
 
@@ -1068,7 +1048,7 @@ static void add_config(struct lightningd *ld,
 	}
 
 	if (answer) {
-		struct json_escaped *esc = json_escape(NULL, answer);
+		struct json_escape *esc = json_escape(NULL, answer);
 		json_add_escaped_string(response, name0, take(esc));
 	}
 	tal_free(name0);
@@ -1090,7 +1070,6 @@ static struct command_result *json_listconfigs(struct command *cmd,
 
 	if (!configtok) {
 		response = json_stream_success(cmd);
-		json_object_start(response, NULL);
 		json_add_string(response, "# version", version());
 	}
 
@@ -1115,10 +1094,8 @@ static struct command_result *json_listconfigs(struct command *cmd,
 				      name + 1, len - 1))
 				continue;
 
-			if (!response) {
+			if (!response)
 				response = json_stream_success(cmd);
-				json_object_start(response, NULL);
-			}
 			add_config(cmd->ld, response, &opt_table[i],
 				   name+1, len-1);
 		}
@@ -1130,15 +1107,14 @@ static struct command_result *json_listconfigs(struct command *cmd,
 				    json_tok_full_len(configtok),
 				    json_tok_full(buffer, configtok));
 	}
-	json_object_end(response);
 	return command_success(cmd, response);
 }
 
 static const struct json_command listconfigs_command = {
 	"listconfigs",
+	"utility",
 	json_listconfigs,
 	"List all configuration options, or with [config], just that one.",
-
 	.verbose = "listconfigs [config]\n"
 	"Outputs an object, with each field a config options\n"
 	"(Option names which start with # are comments)\n"

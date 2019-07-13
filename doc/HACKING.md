@@ -40,7 +40,6 @@ Here's a list of parts, with notes:
   - libwally-core - bitcoin helper library
   - secp256k1 - bitcoin curve encryption library within libwally-core
   - jsmn - tiny JSON parsing helper
-  - libbase58 - base58 address encoding/decoding library.
 
 * tools/ - tools for building
   - check-bolt.c: check the source code contains correct BOLT quotes
@@ -244,6 +243,17 @@ parts of the code:
   `struct list_node`.
   This has to be the *first* field of the structure, or else `dev-memleak`
   command will think your structure has leaked.
+
+
+Protocol Modifications
+----------------------
+
+The source tree contains CSV files extracted from the v1.0 BOLT
+specifications (wire/extracted_peer_wire_csv and
+wire/extracted_onion_wire_csv).  You can regenerate these by setting
+`BOLTDIR` and `BOLTVERSION` appropriately, and running `make
+extract-bolt-csv`.
+
 
 Further Information
 -------------------

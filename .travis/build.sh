@@ -8,6 +8,12 @@ export DEVELOPER=${DEVELOPER:-1}
 export SOURCE_CHECK_ONLY=${SOURCE_CHECK_ONLY:-"false"}
 export COMPAT=${COMPAT:-1}
 export PATH=$CWD/dependencies/bin:"$HOME"/.local/bin:"$PATH"
+export TIMEOUT=180
+export PYTEST_PAR=2
+# If we're not in developer mode, tests spend a lot of time waiting for gossip!
+if [ "$DEVELOPER" = 0 ]; then
+    PYTEST_PAR=4
+fi
 
 mkdir -p dependencies/bin || true
 
@@ -40,5 +46,8 @@ if [ "$SOURCE_CHECK_ONLY" == "false" ]; then
     echo -en 'travis_fold:end:script.3\\r'
 else
     git clone https://github.com/lightningnetwork/lightning-rfc.git
+    echo -en 'travis_fold:start:script.2\\r'
+    make -j3 > /dev/null
+    echo -en 'travis_fold:end:script.2\\r'
     make check-source BOLTDIR=lightning-rfc
 fi

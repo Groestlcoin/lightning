@@ -34,8 +34,12 @@ bool json_to_short_channel_id(const char *buffer UNNEEDED, const jsmntok_t *tok 
 			      struct short_channel_id *scid UNNEEDED,
 			      bool may_be_deprecated_form UNNEEDED)
 { fprintf(stderr, "json_to_short_channel_id called!\n"); abort(); }
+/* Generated stub for json_to_txid */
+bool json_to_txid(const char *buffer UNNEEDED, const jsmntok_t *tok UNNEEDED,
+		  struct bitcoin_txid *txid UNNEEDED)
+{ fprintf(stderr, "json_to_txid called!\n"); abort(); }
 /* Generated stub for log_ */
-void log_(struct log *log UNNEEDED, enum log_level level UNNEEDED, const char *fmt UNNEEDED, ...)
+void log_(struct log *log UNNEEDED, enum log_level level UNNEEDED, bool call_notifier UNNEEDED, const char *fmt UNNEEDED, ...)
 
 { fprintf(stderr, "log_ called!\n"); abort(); }
 /* Generated stub for log_io */
@@ -94,6 +98,7 @@ static int test_json_filter(void)
 	int i;
 	char *badstr = tal_arr(result, char, 256);
 	const char *str;
+	size_t len;
 
 	/* Fill with junk, and nul-terminate (256 -> 0) */
 	for (i = 1; i < 257; i++)
@@ -104,8 +109,8 @@ static int test_json_filter(void)
 	json_object_end(result);
 
 	/* Parse back in, make sure nothing crazy. */
-	str = tal_strndup(result, membuf_elems(&result->outbuf),
-			  membuf_num_elems(&result->outbuf));
+	str = json_out_contents(result->jout, &len);
+	str = tal_strndup(result, str, len);
 
 	toks = json_parse_input(str, str, strlen(str), &valid);
 	assert(valid);
@@ -134,7 +139,7 @@ static void test_json_escape(void)
 	for (i = 1; i < 256; i++) {
 		char badstr[2];
 		struct json_stream *result = new_json_stream(NULL, NULL, NULL);
-		struct json_escaped *esc;
+		struct json_escape *esc;
 
 		badstr[0] = i;
 		badstr[1] = 0;
@@ -144,8 +149,9 @@ static void test_json_escape(void)
 		json_add_escaped_string(result, "x", take(esc));
 		json_object_end(result);
 
-		const char *str = tal_strndup(result, membuf_elems(&result->outbuf),
-					      membuf_num_elems(&result->outbuf));
+		size_t len;
+		const char *str = json_out_contents(result->jout, &len);
+		str = tal_strndup(result, str, len);
 		if (i == '\\' || i == '"'
 		    || i == '\n' || i == '\r' || i == '\b'
 		    || i == '\t' || i == '\f')

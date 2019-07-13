@@ -14,7 +14,6 @@
 
 #include "../routing.c"
 #include "../gossip_store.c"
-#include "../broadcast.c"
 
 void status_fmt(enum log_level level UNUSED, const char *fmt, ...)
 {
@@ -36,30 +35,27 @@ bool fromwire_channel_update(const void *p UNNEEDED, secp256k1_ecdsa_signature *
 /* Generated stub for fromwire_channel_update_option_channel_htlc_max */
 bool fromwire_channel_update_option_channel_htlc_max(const void *p UNNEEDED, secp256k1_ecdsa_signature *signature UNNEEDED, struct bitcoin_blkid *chain_hash UNNEEDED, struct short_channel_id *short_channel_id UNNEEDED, u32 *timestamp UNNEEDED, u8 *message_flags UNNEEDED, u8 *channel_flags UNNEEDED, u16 *cltv_expiry_delta UNNEEDED, struct amount_msat *htlc_minimum_msat UNNEEDED, u32 *fee_base_msat UNNEEDED, u32 *fee_proportional_millionths UNNEEDED, struct amount_msat *htlc_maximum_msat UNNEEDED)
 { fprintf(stderr, "fromwire_channel_update_option_channel_htlc_max called!\n"); abort(); }
+/* Generated stub for fromwire_fail */
+const void *fromwire_fail(const u8 **cursor UNNEEDED, size_t *max UNNEEDED)
+{ fprintf(stderr, "fromwire_fail called!\n"); abort(); }
 /* Generated stub for fromwire_gossipd_local_add_channel */
 bool fromwire_gossipd_local_add_channel(const void *p UNNEEDED, struct short_channel_id *short_channel_id UNNEEDED, struct node_id *remote_node_id UNNEEDED, struct amount_sat *satoshis UNNEEDED)
 { fprintf(stderr, "fromwire_gossipd_local_add_channel called!\n"); abort(); }
-/* Generated stub for fromwire_gossip_store_channel_announcement */
-bool fromwire_gossip_store_channel_announcement(const tal_t *ctx UNNEEDED, const void *p UNNEEDED, u8 **announcement UNNEEDED, struct amount_sat *satoshis UNNEEDED)
-{ fprintf(stderr, "fromwire_gossip_store_channel_announcement called!\n"); abort(); }
-/* Generated stub for fromwire_gossip_store_channel_delete */
-bool fromwire_gossip_store_channel_delete(const void *p UNNEEDED, struct short_channel_id *short_channel_id UNNEEDED)
-{ fprintf(stderr, "fromwire_gossip_store_channel_delete called!\n"); abort(); }
-/* Generated stub for fromwire_gossip_store_channel_update */
-bool fromwire_gossip_store_channel_update(const tal_t *ctx UNNEEDED, const void *p UNNEEDED, u8 **update UNNEEDED)
-{ fprintf(stderr, "fromwire_gossip_store_channel_update called!\n"); abort(); }
-/* Generated stub for fromwire_gossip_store_local_add_channel */
-bool fromwire_gossip_store_local_add_channel(const tal_t *ctx UNNEEDED, const void *p UNNEEDED, u8 **local_add UNNEEDED)
-{ fprintf(stderr, "fromwire_gossip_store_local_add_channel called!\n"); abort(); }
-/* Generated stub for fromwire_gossip_store_node_announcement */
-bool fromwire_gossip_store_node_announcement(const tal_t *ctx UNNEEDED, const void *p UNNEEDED, u8 **announcement UNNEEDED)
-{ fprintf(stderr, "fromwire_gossip_store_node_announcement called!\n"); abort(); }
+/* Generated stub for fromwire_gossip_store_channel_amount */
+bool fromwire_gossip_store_channel_amount(const void *p UNNEEDED, struct amount_sat *satoshis UNNEEDED)
+{ fprintf(stderr, "fromwire_gossip_store_channel_amount called!\n"); abort(); }
+/* Generated stub for fromwire_gossip_store_private_update */
+bool fromwire_gossip_store_private_update(const tal_t *ctx UNNEEDED, const void *p UNNEEDED, u8 **update UNNEEDED)
+{ fprintf(stderr, "fromwire_gossip_store_private_update called!\n"); abort(); }
 /* Generated stub for fromwire_node_announcement */
 bool fromwire_node_announcement(const tal_t *ctx UNNEEDED, const void *p UNNEEDED, secp256k1_ecdsa_signature *signature UNNEEDED, u8 **features UNNEEDED, u32 *timestamp UNNEEDED, struct node_id *node_id UNNEEDED, u8 rgb_color[3] UNNEEDED, u8 alias[32] UNNEEDED, u8 **addresses UNNEEDED)
 { fprintf(stderr, "fromwire_node_announcement called!\n"); abort(); }
 /* Generated stub for fromwire_peektype */
 int fromwire_peektype(const u8 *cursor UNNEEDED)
 { fprintf(stderr, "fromwire_peektype called!\n"); abort(); }
+/* Generated stub for fromwire_u16 */
+u16 fromwire_u16(const u8 **cursor UNNEEDED, size_t *max UNNEEDED)
+{ fprintf(stderr, "fromwire_u16 called!\n"); abort(); }
 /* Generated stub for fromwire_wireaddr */
 bool fromwire_wireaddr(const u8 **cursor UNNEEDED, size_t *max UNNEEDED, struct wireaddr *addr UNNEEDED)
 { fprintf(stderr, "fromwire_wireaddr called!\n"); abort(); }
@@ -79,24 +75,12 @@ u8 *towire_errorfmt(const tal_t *ctx UNNEEDED,
 		    const struct channel_id *channel UNNEEDED,
 		    const char *fmt UNNEEDED, ...)
 { fprintf(stderr, "towire_errorfmt called!\n"); abort(); }
-/* Generated stub for towire_gossipd_local_add_channel */
-u8 *towire_gossipd_local_add_channel(const tal_t *ctx UNNEEDED, const struct short_channel_id *short_channel_id UNNEEDED, const struct node_id *remote_node_id UNNEEDED, struct amount_sat satoshis UNNEEDED)
-{ fprintf(stderr, "towire_gossipd_local_add_channel called!\n"); abort(); }
-/* Generated stub for towire_gossip_store_channel_announcement */
-u8 *towire_gossip_store_channel_announcement(const tal_t *ctx UNNEEDED, const u8 *announcement UNNEEDED, struct amount_sat satoshis UNNEEDED)
-{ fprintf(stderr, "towire_gossip_store_channel_announcement called!\n"); abort(); }
-/* Generated stub for towire_gossip_store_channel_delete */
-u8 *towire_gossip_store_channel_delete(const tal_t *ctx UNNEEDED, const struct short_channel_id *short_channel_id UNNEEDED)
-{ fprintf(stderr, "towire_gossip_store_channel_delete called!\n"); abort(); }
-/* Generated stub for towire_gossip_store_channel_update */
-u8 *towire_gossip_store_channel_update(const tal_t *ctx UNNEEDED, const u8 *update UNNEEDED)
-{ fprintf(stderr, "towire_gossip_store_channel_update called!\n"); abort(); }
-/* Generated stub for towire_gossip_store_local_add_channel */
-u8 *towire_gossip_store_local_add_channel(const tal_t *ctx UNNEEDED, const u8 *local_add UNNEEDED)
-{ fprintf(stderr, "towire_gossip_store_local_add_channel called!\n"); abort(); }
-/* Generated stub for towire_gossip_store_node_announcement */
-u8 *towire_gossip_store_node_announcement(const tal_t *ctx UNNEEDED, const u8 *announcement UNNEEDED)
-{ fprintf(stderr, "towire_gossip_store_node_announcement called!\n"); abort(); }
+/* Generated stub for towire_gossip_store_channel_amount */
+u8 *towire_gossip_store_channel_amount(const tal_t *ctx UNNEEDED, struct amount_sat satoshis UNNEEDED)
+{ fprintf(stderr, "towire_gossip_store_channel_amount called!\n"); abort(); }
+/* Generated stub for towire_gossip_store_private_update */
+u8 *towire_gossip_store_private_update(const tal_t *ctx UNNEEDED, const u8 *update UNNEEDED)
+{ fprintf(stderr, "towire_gossip_store_private_update called!\n"); abort(); }
 /* Generated stub for update_peers_broadcast_index */
 void update_peers_broadcast_index(struct list_head *peers UNNEEDED, u32 offset UNNEEDED)
 { fprintf(stderr, "update_peers_broadcast_index called!\n"); abort(); }
@@ -131,9 +115,10 @@ static void add_connection(struct routing_state *rstate,
 	memcpy((char *)&scid + (!idx) * sizeof(to), &to, sizeof(to));
 
 	chan = get_channel(rstate, &scid);
-	if (!chan)
+	if (!chan) {
 		chan = new_chan(rstate, &scid, &nodes[from], &nodes[to],
 				AMOUNT_SAT(1000000));
+	}
 
 	c = &chan->half[idx];
 	c->base_fee = base_fee;
@@ -171,12 +156,12 @@ static void populate_random_node(struct routing_state *rstate,
 		u32 randnode = pseudorand(n);
 
 		add_connection(rstate, nodes, n, randnode,
-			       pseudorand(100),
-			       pseudorand(100),
+			       pseudorand(1000),
+			       pseudorand(1000),
 			       pseudorand(144));
 		add_connection(rstate, nodes, randnode, n,
-			       pseudorand(100),
-			       pseudorand(100),
+			       pseudorand(1000),
+			       pseudorand(1000),
 			       pseudorand(144));
 	}
 }
@@ -205,7 +190,7 @@ int main(int argc, char *argv[])
 	struct routing_state *rstate;
 	size_t num_nodes = 100, num_runs = 1;
 	struct timemono start, end;
-	size_t num_success;
+	size_t route_lengths[ROUTING_MAX_HOPS+1];
 	struct node_id me;
 	struct node_id *nodes;
 	bool perfme = false;
@@ -217,7 +202,7 @@ int main(int argc, char *argv[])
 	setup_tmpctx();
 
 	me = nodeid(0);
-	rstate = new_routing_state(tmpctx, NULL, &me, 0, NULL, NULL, NULL);
+	rstate = new_routing_state(tmpctx, NULL, &me, 0, NULL, NULL);
 	opt_register_noarg("--perfme", opt_set_bool, &perfme,
 			   "Run perfme-start and perfme-stop around benchmark");
 
@@ -230,10 +215,12 @@ int main(int argc, char *argv[])
 	if (argc > 3)
 		opt_usage_and_exit("[num_nodes [num_runs]]");
 
+	printf("Creating nodes...\n");
 	nodes = tal_arr(rstate, struct node_id, num_nodes);
 	for (size_t i = 0; i < num_nodes; i++)
 		nodes[i] = nodeid(i);
 
+	printf("Populating nodes...\n");
 	memset(&base_seed, 0, sizeof(base_seed));
 	for (size_t i = 0; i < num_nodes; i++)
 		populate_random_node(rstate, nodes, i);
@@ -241,13 +228,15 @@ int main(int argc, char *argv[])
 	if (perfme)
 		run("perfme-start");
 
+	printf("Starting...\n");
+	memset(route_lengths, 0, sizeof(route_lengths));
 	start = time_mono();
-	num_success = 0;
 	for (size_t i = 0; i < num_runs; i++) {
 		const struct node_id *from = &nodes[pseudorand(num_nodes)];
 		const struct node_id *to = &nodes[pseudorand(num_nodes)];
 		struct amount_msat fee;
 		struct chan **route;
+		size_t num_hops;
 
 		route = find_route(tmpctx, rstate, from, to,
 				   (struct amount_msat){pseudorand(100000)},
@@ -255,7 +244,9 @@ int main(int argc, char *argv[])
 				   0.75, &base_seed,
 				   ROUTING_MAX_HOPS,
 				   &fee);
-		num_success += (route != NULL);
+		num_hops = tal_count(route);
+		assert(num_hops < ARRAY_SIZE(route_lengths));
+		route_lengths[num_hops]++;
 		tal_free(route);
 	}
 	end = time_mono();
@@ -263,10 +254,13 @@ int main(int argc, char *argv[])
 	if (perfme)
 		run("perfme-stop");
 
-	printf("%zu (%zu succeeded) routes in %zu nodes in %"PRIu64" msec (%"PRIu64" nanoseconds per route)",
-	       num_runs, num_success, num_nodes,
+	printf("%zu (%zu succeeded) routes in %zu nodes in %"PRIu64" msec (%"PRIu64" nanoseconds per route)\n",
+	       num_runs, num_runs - route_lengths[0], num_nodes,
 	       time_to_msec(timemono_between(end, start)),
 	       time_to_nsec(time_divide(timemono_between(end, start), num_runs)));
+	for (size_t i = 0; i < ARRAY_SIZE(route_lengths); i++)
+		if (route_lengths[i])
+			printf(" Length %zu: %zu\n", i, route_lengths[i]);
 
 	tal_free(tmpctx);
 	secp256k1_context_destroy(secp256k1_ctx);

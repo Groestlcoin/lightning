@@ -14,6 +14,7 @@
 #include <common/wire_error.h>
 #include <common/wireaddr.h>
 #include <gossipd/gen_gossip_peerd_wire.h>
+#include <gossipd/gen_gossip_store.h>
 #include <gossipd/gen_gossip_wire.h>
 #include <inttypes.h>
 #include <wire/gen_peer_wire.h>
@@ -25,36 +26,13 @@
 /* 365.25 * 24 * 60  Groestlcoin */
 #define BLOCKS_PER_YEAR 525960
 
-/* We've unpacked and checked its signatures, now we wait for master to tell
- * us the txout to check */
-struct pending_cannouncement {
-	/* Off routing_state->pending_cannouncement */
-	struct list_node list;
-
-	/* Unpacked fields here */
-	struct short_channel_id short_channel_id;
-	struct node_id node_id_1;
-	struct node_id node_id_2;
-	struct pubkey bitcoin_key_1;
-	struct pubkey bitcoin_key_2;
-
-	/* The raw bits */
-	const u8 *announce;
-
-	/* Deferred updates, if we received them while waiting for
-	 * this (one for each direction) */
-	const u8 *updates[2];
-
-	/* Only ever replace with newer updates */
-	u32 update_timestamps[2];
-};
-
 struct pending_node_announce {
 	struct routing_state *rstate;
 	struct node_id nodeid;
 	size_t refcount;
 	u8 *node_announcement;
 	u32 timestamp;
+	u32 index;
 };
 
 static const struct node_id *
@@ -103,7 +81,7 @@ static void destroy_unupdated_channel(struct unupdated_channel *uc,
 	uintmap_del(&rstate->unupdated_chanmap, uc->scid.u64);
 }
 
-static struct node_map *empty_node_map(const tal_t *ctx)
+static struct node_map *new_node_map(const tal_t *ctx)
 {
 	struct node_map *map = tal(ctx, struct node_map);
 	node_map_init(map);
@@ -177,23 +155,33 @@ struct chan *next_chan(const struct node *node, struct chan_map_iter *i)
 	return chan_map_next(&node->chans.map, i);
 }
 
+static void destroy_routing_state(struct routing_state *rstate)
+{
+	/* Since we omitted destructors on these, clean up manually */
+	u64 idx;
+	for (struct chan *chan = uintmap_first(&rstate->chanmap, &idx);
+	     chan;
+	     chan = uintmap_after(&rstate->chanmap, &idx))
+		free_chan(rstate, chan);
+}
+
 struct routing_state *new_routing_state(const tal_t *ctx,
 					const struct chainparams *chainparams,
 					const struct node_id *local_id,
 					u32 prune_timeout,
 					struct list_head *peers,
-					const u32 *dev_gossip_time,
-					const struct amount_sat *dev_unknown_channel_satoshis)
+					const u32 *dev_gossip_time)
 {
 	struct routing_state *rstate = tal(ctx, struct routing_state);
-	rstate->nodes = empty_node_map(rstate);
-	rstate->broadcasts
-		= new_broadcast_state(rstate, gossip_store_new(rstate), peers);
+	rstate->nodes = new_node_map(rstate);
+	rstate->gs = gossip_store_new(rstate, peers);
 	rstate->chainparams = chainparams;
 	rstate->local_id = *local_id;
 	rstate->prune_timeout = prune_timeout;
 	rstate->local_channel_announced = false;
-	list_head_init(&rstate->pending_cannouncement);
+
+	pending_cannouncement_map_init(&rstate->pending_cannouncements);
+
 	uintmap_init(&rstate->chanmap);
 	uintmap_init(&rstate->unupdated_chanmap);
 	chan_map_init(&rstate->local_disabled_map);
@@ -209,8 +197,8 @@ struct routing_state *new_routing_state(const tal_t *ctx,
 		rstate->gossip_time->ts.tv_nsec = 0;
 	} else
 		rstate->gossip_time = NULL;
-	rstate->dev_unknown_channel_satoshis = dev_unknown_channel_satoshis;
 #endif
+	tal_add_destructor(rstate, destroy_routing_state);
 
 	return rstate;
 }
@@ -238,12 +226,9 @@ static void destroy_node(struct node *node, struct routing_state *rstate)
 	struct chan *c;
 	node_map_del(rstate->nodes, node);
 
-	/* Safe even if never placed in broadcast map */
-	broadcast_del(rstate->broadcasts, &node->bcast);
-
 	/* These remove themselves from chans[]. */
 	while ((c = first_chan(node, &i)) != NULL)
-		tal_free(c);
+		free_chan(rstate, c);
 
 	/* Free htable if we need. */
 	if (node_uses_chan_map(node))
@@ -341,6 +326,9 @@ static void remove_chan_from_node(struct routing_state *rstate,
 
 	/* Last channel?  Simply delete node (and associated announce) */
 	if (num_chans == 0) {
+		gossip_store_delete(rstate->gs,
+				    &node->bcast,
+				    WIRE_NODE_ANNOUNCEMENT);
 		tal_free(node);
 		return;
 	}
@@ -350,36 +338,41 @@ static void remove_chan_from_node(struct routing_state *rstate,
 
 	/* Removed only public channel?  Remove node announcement. */
 	if (!node_has_broadcastable_channels(node)) {
-		broadcast_del(rstate->broadcasts, &node->bcast);
+		gossip_store_delete(rstate->gs,
+				    &node->bcast,
+				    WIRE_NODE_ANNOUNCEMENT);
 	} else if (node_announce_predates_channels(node)) {
 		const u8 *announce;
 
-		announce = gossip_store_get(tmpctx, rstate->broadcasts->gs,
+		announce = gossip_store_get(tmpctx, rstate->gs,
 					    node->bcast.index);
 
 		/* node announcement predates all channel announcements?
 		 * Move to end (we could, in theory, move to just past next
 		 * channel_announce, but we don't care that much about spurious
 		 * retransmissions in this corner case */
-		broadcast_del(rstate->broadcasts, &node->bcast);
-		insert_broadcast(&rstate->broadcasts, announce, &node->bcast);
+		gossip_store_delete(rstate->gs,
+				    &node->bcast,
+				    WIRE_NODE_ANNOUNCEMENT);
+		node->bcast.index = gossip_store_add(rstate->gs,
+						     announce,
+						     node->bcast.timestamp,
+						     NULL);
 	}
 }
 
-static void destroy_chan(struct chan *chan, struct routing_state *rstate)
+/* We used to make this a tal_add_destructor2, but that costs 40 bytes per
+ * chan, and we only ever explicitly free it anyway. */
+void free_chan(struct routing_state *rstate, struct chan *chan)
 {
 	remove_chan_from_node(rstate, chan->nodes[0], chan);
 	remove_chan_from_node(rstate, chan->nodes[1], chan);
-
-	/* Safe even if never placed in map */
-	broadcast_del(rstate->broadcasts, &chan->bcast);
-	broadcast_del(rstate->broadcasts, &chan->half[0].bcast);
-	broadcast_del(rstate->broadcasts, &chan->half[1].bcast);
 
 	uintmap_del(&rstate->chanmap, chan->scid.u64);
 
 	/* Remove from local_disabled_map if it's there. */
 	chan_map_del(&rstate->local_disabled_map, chan);
+	tal_free(chan);
 }
 
 static void init_half_chan(struct routing_state *rstate,
@@ -428,6 +421,8 @@ struct chan *new_chan(struct routing_state *rstate,
 	chan->nodes[n1idx] = n1;
 	chan->nodes[!n1idx] = n2;
 	broadcastable_init(&chan->bcast);
+	/* This is how we indicate it's not public yet. */
+	chan->bcast.timestamp = 0;
 	chan->sat = satoshis;
 
 	add_chan(n2, chan);
@@ -438,38 +433,44 @@ struct chan *new_chan(struct routing_state *rstate,
 	init_half_chan(rstate, chan, !n1idx);
 
 	uintmap_add(&rstate->chanmap, scid->u64, chan);
-
-	tal_add_destructor2(chan, destroy_chan, rstate);
 	return chan;
 }
 
 /* Too big to reach, but don't overflow if added. */
 #define INFINITE AMOUNT_MSAT(0x3FFFFFFFFFFFFFFFULL)
 
-static void clear_bfg(struct node_map *nodes)
-{
-	struct node *n;
-	struct node_map_iter it;
+/* We hack a multimap into a uintmap to implement a minheap by cost.
+ * This is relatively inefficient, containing an array for each cost
+ * value, assuming there aren't too many at same cost.
+ *
+ * We further optimize by never freeing or shrinking these entries,
+ * but delete by replacing with NULL.  This means that we cache the
+ * lowest index which actually contains something, since others may
+ * contain empty arrays. */
+struct unvisited {
+	u64 min_index;
+	UINTMAP(struct node **) map;
+};
 
-	for (n = node_map_first(nodes, &it); n; n = node_map_next(nodes, &it)) {
-		size_t i;
-		for (i = 0; i < ARRAY_SIZE(n->bfg); i++) {
-			n->bfg[i].total = INFINITE;
-			n->bfg[i].risk = AMOUNT_MSAT(0);
-		}
-	}
-}
 
-/* Risk of passing through this channel.  We insert a tiny constant here
- * in order to prefer shorter routes, all things equal. */
+/* Risk of passing through this channel.
+ *
+ * There are two ways this function is used:
+ *
+ * 1. Normally, riskbias = 1.  A tiny bias here in order to prefer
+ *    shorter routes, all things equal.
+ * 2. Trying to find a shorter route, riskbias > 1.  By adding an extra
+ *    cost to every hop, we're trying to bias against overlength routes.
+ */
 static WARN_UNUSED_RESULT bool risk_add_fee(struct amount_msat *risk,
 					    struct amount_msat msat,
-					    u32 delay, double riskfactor)
+					    u32 delay, double riskfactor,
+					    u64 riskbias)
 {
 	double r;
 
 	/* Won't overflow on add, just lose precision */
-	r = 1.0 + riskfactor * delay * msat.millisatoshis + risk->millisatoshis; /* Raw: to double */
+	r = (double)riskbias + riskfactor * delay * msat.millisatoshis + risk->millisatoshis; /* Raw: to double */
 	if (r > UINT64_MAX)
 		return false;
 	risk->millisatoshis = r; /* Raw: from double */
@@ -487,97 +488,132 @@ static bool hc_can_carry(const struct half_chan *hc,
 }
 
 /* Theoretically, this could overflow. */
-static bool fuzz_fee(u64 *fee, double fee_scale)
+static bool fuzz_fee(u64 *fee,
+		     const struct short_channel_id *scid,
+		     double fuzz, const struct siphash_seed *base_seed)
 {
-	u64 fuzzed_fee = *fee * fee_scale;
+	u64 fuzzed_fee, h;
+ 	double fee_scale;
+
+	if (fuzz == 0.0)
+		return true;
+
+	h = siphash24(base_seed, scid, sizeof(*scid));
+
+	/* Scale fees for this channel */
+	/* rand = (h / UINT64_MAX)  random number between 0.0 -> 1.0
+	 * 2*fuzz*rand              random number between 0.0 -> 2*fuzz
+	 * 2*fuzz*rand - fuzz       random number between -fuzz -> +fuzz
+	 */
+	fee_scale = 1.0 + (2.0 * fuzz * h / UINT64_MAX) - fuzz;
+	fuzzed_fee = *fee * fee_scale;
 	if (fee_scale > 1.0 && fuzzed_fee < *fee)
 		return false;
 	*fee = fuzzed_fee;
 	return true;
 }
 
-/* We track totals, rather than costs.  That's because the fee depends
- * on the current amount passing through. */
-static void bfg_one_edge(struct node *node,
-			 struct chan *chan, int idx,
-			 double riskfactor,
-			 double fuzz, const struct siphash_seed *base_seed,
-			 size_t max_hops)
+/* Can we carry this amount across the channel?  If so, returns true and
+ * sets newtotal and newrisk */
+static bool can_reach(const struct half_chan *c,
+		      const struct short_channel_id *scid,
+		      bool no_charge,
+		      struct amount_msat total,
+		      struct amount_msat risk,
+		      double riskfactor,
+		      u64 riskbias,
+		      double fuzz, const struct siphash_seed *base_seed,
+		      struct amount_msat *newtotal, struct amount_msat *newrisk)
 {
-	size_t h;
-	double fee_scale = 1.0;
-	const struct half_chan *c = &chan->half[idx];
+	/* FIXME: Bias against smaller channels. */
+	struct amount_msat fee;
 
-	if (fuzz != 0.0) {
-		u64 h =	siphash24(base_seed, &chan->scid, sizeof(chan->scid));
+	if (!amount_msat_fee(&fee, total, c->base_fee, c->proportional_fee))
+		return false;
 
-		/* Scale fees for this channel */
-		/* rand = (h / UINT64_MAX)  random number between 0.0 -> 1.0
-		 * 2*fuzz*rand              random number between 0.0 -> 2*fuzz
-		 * 2*fuzz*rand - fuzz       random number between -fuzz -> +fuzz
-		 */
-		fee_scale = 1.0 + (2.0 * fuzz * h / UINT64_MAX) - fuzz;
+  	if (!fuzz_fee(&fee.millisatoshis, scid, fuzz, base_seed)) /* Raw: double manipulation */
+		return false;
+
+	if (no_charge) {
+		*newtotal = total;
+
+		/* We still want to consider the "charge", since it's indicative
+		 * of a bias (we discounted one channel for a reason), but we
+		 * don't pay it.  So we count it as additional risk. */
+		if (!amount_msat_add(newrisk, risk, fee))
+			return false;
+	} else {
+		*newrisk = risk;
+
+		if (!amount_msat_add(newtotal, total, fee))
+			return false;
 	}
 
-	for (h = 0; h < max_hops; h++) {
-		struct node *src;
-		/* FIXME: Bias against smaller channels. */
-		struct amount_msat fee, risk, requiredcap,
-			this_total, curr_total;
+	/* Skip a channel if it indicated that it won't route the
+	 * requested amount. */
+	if (!hc_can_carry(c, *newtotal))
+		return false;
 
-		if (!amount_msat_fee(&fee, node->bfg[h].total,
-				     c->base_fee, c->proportional_fee))
-			continue;
+	if (!risk_add_fee(newrisk, *newtotal, c->delay, riskfactor, riskbias))
+		return false;
 
-		if (!fuzz_fee(&fee.millisatoshis, fee_scale)) /* Raw: double manipulation */
-			continue;
+	return true;
+}
 
-		if (!amount_msat_add(&requiredcap, node->bfg[h].total, fee))
-			continue;
+/* Returns false on overflow (shouldn't happen!) */
+typedef bool WARN_UNUSED_RESULT costfn_t(struct amount_msat *,
+					 struct amount_msat,
+					 struct amount_msat);
 
-		risk = node->bfg[h].risk;
-		if (!risk_add_fee(&risk, requiredcap, c->delay, riskfactor))
-			continue;
+static WARN_UNUSED_RESULT bool
+normal_cost_function(struct amount_msat *cost,
+		     struct amount_msat total, struct amount_msat risk)
+{
+	if (amount_msat_add(cost, total, risk))
+		return true;
 
-		if (!hc_can_carry(c, requiredcap)) {
-			/* Skip a channel if it indicated that it won't route
-			 * the requested amount. */
-			continue;
-		}
+	status_broken("Can't add cost of node %s + %s",
+		      type_to_string(tmpctx, struct amount_msat, &total),
+		      type_to_string(tmpctx, struct amount_msat, &risk));
+	return false;
+}
 
-		if (!amount_msat_add(&this_total, requiredcap, risk))
-			continue;
+static WARN_UNUSED_RESULT bool
+shortest_cost_function(struct amount_msat *cost,
+		       struct amount_msat total, struct amount_msat risk)
+{
+	/* We add 1, so cost is never 0, for our hacky uintmap-as-minheap. */
+	if (amount_msat_add(cost, risk, AMOUNT_MSAT(1)))
+		return true;
 
-		/* nodes[0] is src for connections[0] */
-		src = chan->nodes[idx];
+	status_broken("Can't add 1 to risk of node %s",
+		      type_to_string(tmpctx, struct amount_msat, &risk));
+	return false;
+}
 
-		if (!amount_msat_add(&curr_total,
-				     src->bfg[h + 1].total,
-				     src->bfg[h + 1].risk)) {
-			/* We just calculated this: shouldn't happen! */
-			status_broken("Overflow: total %s + risk %s",
-				      type_to_string(tmpctx, struct amount_msat,
-						     &src->bfg[h + 1].total),
-				      type_to_string(tmpctx, struct amount_msat,
-						     &src->bfg[h + 1].risk));
-			continue;
-		}
+/* Does totala+riska add up to less than totalb+riskb?
+ * Saves sums if you want them.
+ */
+static bool costs_less(struct amount_msat totala,
+		       struct amount_msat riska,
+		       struct amount_msat *costa,
+		       struct amount_msat totalb,
+		       struct amount_msat riskb,
+		       struct amount_msat *costb,
+		       costfn_t *costfn)
+{
+	struct amount_msat suma, sumb;
 
-		if (amount_msat_less(this_total, curr_total)) {
-			SUPERVERBOSE("...%s can reach here hoplen %zu"
-				     " total %s risk %s",
-				     type_to_string(tmpctx, struct node_id,
-						    &src->id),
-				     h,
-				     type_to_string(tmpctx, struct amount_msat,
-						    &requiredcap),
-				     type_to_string(tmpctx, struct amount_msat,
-						    &risk));
-			src->bfg[h+1].total = requiredcap;
-			src->bfg[h+1].risk = risk;
-			src->bfg[h+1].prev = chan;
-		}
-	}
+	if (!costfn(&suma, totala, riska))
+		return false;
+	if (!costfn(&sumb, totalb, riskb))
+		return false;
+
+	if (costa)
+		*costa = suma;
+	if (costb)
+		*costb = sumb;
+	return amount_msat_less(suma, sumb);
 }
 
 /* Determine if the given half_chan is routable */
@@ -586,6 +622,502 @@ static bool hc_is_routable(struct routing_state *rstate,
 {
 	return is_halfchan_enabled(&chan->half[idx])
 		&& !is_chan_local_disabled(rstate, chan);
+}
+
+static void unvisited_add(struct unvisited *unvisited, struct amount_msat cost,
+			  struct node **arr)
+{
+	u64 idx = cost.millisatoshis; /* Raw: uintmap needs u64 index */
+	if (idx < unvisited->min_index) {
+		assert(idx); /* We don't allow sending 0 satoshis */
+		unvisited->min_index = idx - 1;
+	}
+	uintmap_add(&unvisited->map, idx, arr);
+}
+
+static struct node **unvisited_get(const struct unvisited *unvisited,
+				   struct amount_msat cost)
+{
+	return uintmap_get(&unvisited->map, cost.millisatoshis); /* Raw: uintmap */
+}
+
+static struct node **unvisited_del(struct unvisited *unvisited,
+				   struct amount_msat cost)
+{
+	return uintmap_del(&unvisited->map, cost.millisatoshis); /* Raw: uintmap */
+}
+
+static bool is_unvisited(const struct node *node,
+			 const struct unvisited *unvisited,
+			 costfn_t *costfn)
+{
+	struct node **arr;
+	struct amount_msat cost;
+
+	/* If it's infinite, definitely unvisited */
+	if (amount_msat_eq(node->dijkstra.total, INFINITE))
+		return true;
+
+	/* Shouldn't happen! */
+	if (!costfn(&cost, node->dijkstra.total, node->dijkstra.risk))
+		return false;
+
+	arr = unvisited_get(unvisited, cost);
+	for (size_t i = 0; i < tal_count(arr); i++) {
+		if (arr[i] == node)
+			return true;
+	}
+	return false;
+}
+
+static void unvisited_del_node(struct unvisited *unvisited,
+			       struct amount_msat cost,
+			       const struct node *node)
+{
+	struct node **arr;
+
+	arr = unvisited_get(unvisited, cost);
+	for (size_t i = 0; i < tal_count(arr); i++) {
+		if (arr[i] == node) {
+			arr[i] = NULL;
+			return;
+		}
+	}
+	abort();
+}
+
+static void adjust_unvisited(struct node *node,
+			     struct unvisited *unvisited,
+			     struct amount_msat cost_before,
+			     struct amount_msat total,
+			     struct amount_msat risk,
+			     struct amount_msat cost_after)
+{
+	struct node **arr;
+
+	/* If it was in unvisited map, remove it. */
+	if (!amount_msat_eq(node->dijkstra.total, INFINITE))
+		unvisited_del_node(unvisited, cost_before, node);
+
+	/* Update node */
+	node->dijkstra.total = total;
+	node->dijkstra.risk = risk;
+
+	SUPERVERBOSE("%s now cost %s",
+		     type_to_string(tmpctx, struct node_id, &node->id),
+		     type_to_string(tmpctx, struct amount_msat, &cost_after));
+
+	/* Update map of unvisited nodes */
+	arr = unvisited_get(unvisited, cost_after);
+	if (arr) {
+		struct node **old_arr;
+		/* Try for empty slot */
+		for (size_t i = 0; i < tal_count(arr); i++) {
+			if (arr[i] == NULL) {
+				arr[i] = node;
+				return;
+			}
+		}
+		/* Nope, expand */
+		old_arr = arr;
+		tal_arr_expand(&arr, node);
+		if (arr == old_arr)
+			return;
+
+		/* Realloc moved it; del and add again. */
+		unvisited_del(unvisited, cost_after);
+	} else {
+		arr = tal_arr(unvisited, struct node *, 1);
+		arr[0] = node;
+	}
+
+	unvisited_add(unvisited, cost_after, arr);
+}
+
+static void remove_unvisited(struct node *node, struct unvisited *unvisited,
+			     costfn_t *costfn)
+{
+	struct amount_msat cost;
+
+	/* Shouldn't happen! */
+	if (!costfn(&cost, node->dijkstra.total, node->dijkstra.risk))
+		return;
+
+	unvisited_del_node(unvisited, cost, node);
+}
+
+static void update_unvisited_neighbors(struct routing_state *rstate,
+				       struct node *cur,
+				       const struct node *me,
+				       double riskfactor,
+				       u64 riskbias,
+				       double fuzz,
+				       const struct siphash_seed *base_seed,
+				       struct unvisited *unvisited,
+				       costfn_t *costfn)
+{
+	struct chan_map_iter i;
+	struct chan *chan;
+
+	/* Consider all neighbors */
+	for (chan = first_chan(cur, &i); chan; chan = next_chan(cur, &i)) {
+		struct amount_msat total, risk, cost_before, cost_after;
+		int idx = half_chan_to(cur, chan);
+		struct node *peer = chan->nodes[idx];
+
+		SUPERVERBOSE("CONSIDERING: %s -> %s (%s/%s)",
+			     type_to_string(tmpctx, struct node_id,
+					    &cur->id),
+			     type_to_string(tmpctx, struct node_id,
+					    &peer->id),
+			     type_to_string(tmpctx, struct amount_msat,
+					    &peer->dijkstra.total),
+			     type_to_string(tmpctx, struct amount_msat,
+					    &peer->dijkstra.risk));
+
+		if (!hc_is_routable(rstate, chan, idx)) {
+			SUPERVERBOSE("... not routable");
+			continue;
+		}
+
+		if (!is_unvisited(peer, unvisited, costfn)) {
+			SUPERVERBOSE("... already visited");
+			continue;
+		}
+
+		/* We're looking at channels *backwards*, so peer == me
+		 * is the right test here for whether we don't charge fees. */
+		if (!can_reach(&chan->half[idx], &chan->scid, peer == me,
+			       cur->dijkstra.total, cur->dijkstra.risk,
+			       riskfactor, riskbias, fuzz, base_seed,
+			       &total, &risk)) {
+			SUPERVERBOSE("... can't reach");
+			continue;
+		}
+
+		/* This effectively adds it to the map if it was infinite */
+		if (costs_less(total, risk, &cost_after,
+			       peer->dijkstra.total, peer->dijkstra.risk,
+			       &cost_before,
+			       costfn)) {
+			SUPERVERBOSE("...%s can reach %s"
+				     " total %s risk %s",
+				     type_to_string(tmpctx, struct node_id,
+						    &cur->id),
+				     type_to_string(tmpctx, struct node_id,
+						    &peer->id),
+				     type_to_string(tmpctx, struct amount_msat,
+						    &total),
+				     type_to_string(tmpctx, struct amount_msat,
+						    &risk));
+			adjust_unvisited(peer, unvisited,
+					 cost_before, total, risk, cost_after);
+		}
+	}
+}
+
+static struct node *first_unvisited(struct unvisited *unvisited)
+{
+	struct node **arr;
+
+	while ((arr = uintmap_after(&unvisited->map, &unvisited->min_index))) {
+		for (size_t i = 0; i < tal_count(arr); i++) {
+			if (arr[i]) {
+				unvisited->min_index--;
+				return arr[i];
+			}
+		}
+	}
+
+	return NULL;
+}
+
+static void dijkstra(struct routing_state *rstate,
+		     const struct node *dst,
+		     const struct node *me,
+		     double riskfactor,
+		     u64 riskbias,
+		     double fuzz, const struct siphash_seed *base_seed,
+		     struct unvisited *unvisited,
+		     costfn_t *costfn)
+{
+	struct node *cur;
+
+	while ((cur = first_unvisited(unvisited)) != NULL) {
+		update_unvisited_neighbors(rstate, cur, me,
+					   riskfactor, riskbias,
+					   fuzz, base_seed, unvisited, costfn);
+		remove_unvisited(cur, unvisited, costfn);
+		if (cur == dst)
+			return;
+	}
+}
+
+/* Note that we calculated route *backwards*, for fees.  So "from"
+ * here has a high cost, "to" has a cost of exact amount sent. */
+static struct chan **build_route(const tal_t *ctx,
+				 struct routing_state *rstate,
+				 const struct node *from,
+				 const struct node *to,
+				 const struct node *me,
+				 double riskfactor,
+				 u64 riskbias,
+				 double fuzz,
+				 const struct siphash_seed *base_seed,
+				 struct amount_msat *fee)
+{
+	const struct node *i;
+	struct chan **route, *chan;
+
+	SUPERVERBOSE("Building route from %s (%s) -> %s (%s)",
+		     type_to_string(tmpctx, struct node_id, &from->id),
+		     type_to_string(tmpctx, struct amount_msat,
+				    &from->dijkstra.total),
+		     type_to_string(tmpctx, struct node_id, &to->id),
+		     type_to_string(tmpctx, struct amount_msat,
+				    &to->dijkstra.total));
+	/* Never reached? */
+	if (amount_msat_eq(from->dijkstra.total, INFINITE))
+		return NULL;
+
+	/* Walk to find which neighbors we used */
+	route = tal_arr(ctx, struct chan *, 0);
+	for (i = from; i != to; i = other_node(i, chan)) {
+		struct chan_map_iter it;
+
+		/* Consider all neighbors */
+		for (chan = first_chan(i, &it); chan; chan = next_chan(i, &it)) {
+			struct node *peer = other_node(i, chan);
+			struct half_chan *hc = half_chan_from(i, chan);
+			struct amount_msat total, risk;
+
+			SUPERVERBOSE("CONSIDER: %s -> %s (%s/%s)",
+				     type_to_string(tmpctx, struct node_id,
+						    &i->id),
+				     type_to_string(tmpctx, struct node_id,
+						    &peer->id),
+				     type_to_string(tmpctx, struct amount_msat,
+						    &peer->dijkstra.total),
+				     type_to_string(tmpctx, struct amount_msat,
+						    &peer->dijkstra.risk));
+
+			/* If traversing this wasn't possible, ignore */
+			if (!hc_is_routable(rstate, chan, !half_chan_to(i, chan))) {
+				continue;
+			}
+
+			if (!can_reach(hc, &chan->scid, i == me,
+				       peer->dijkstra.total, peer->dijkstra.risk,
+				       riskfactor,
+				       riskbias,
+				       fuzz, base_seed,
+				       &total, &risk))
+				continue;
+
+			/* If this was the path we took, we're done (if there are
+			 * two identical ones, it doesn't matter which) */
+			if (amount_msat_eq(total, i->dijkstra.total)
+			    && amount_msat_eq(risk, i->dijkstra.risk))
+				break;
+		}
+
+		if (!chan) {
+			status_broken("Could not find hop to %s",
+				      type_to_string(tmpctx, struct node_id,
+						     &i->id));
+			return tal_free(route);
+		}
+		tal_arr_expand(&route, chan);
+	}
+
+	/* We don't charge ourselves fees, so skip first hop */
+	if (!amount_msat_sub(fee,
+			     other_node(from, route[0])->dijkstra.total,
+			     to->dijkstra.total)) {
+		status_broken("Could not subtract %s - %s for fee",
+			      type_to_string(tmpctx, struct amount_msat,
+					     &other_node(from, route[0])
+					     ->dijkstra.total),
+			      type_to_string(tmpctx, struct amount_msat,
+					     &to->dijkstra.total));
+		return tal_free(route);
+	}
+
+	return route;
+}
+
+static struct unvisited *dijkstra_prepare(const tal_t *ctx,
+					  struct routing_state *rstate,
+					  struct node *src,
+					  struct amount_msat msat,
+					  costfn_t *costfn)
+{
+	struct node_map_iter it;
+	struct unvisited *unvisited;
+	struct node *n;
+	struct node **arr;
+	struct amount_msat cost;
+
+	unvisited = tal(tmpctx, struct unvisited);
+	uintmap_init(&unvisited->map);
+	unvisited->min_index = UINT64_MAX;
+
+	/* Reset all the information. */
+	for (n = node_map_first(rstate->nodes, &it);
+	     n;
+	     n = node_map_next(rstate->nodes, &it)) {
+		if (n == src)
+			continue;
+		n->dijkstra.total = INFINITE;
+		n->dijkstra.risk = INFINITE;
+	}
+
+	/* Mark start cost: place in unvisited map. */
+	src->dijkstra.total = msat;
+	src->dijkstra.risk = AMOUNT_MSAT(0);
+	arr = tal_arr(unvisited, struct node *, 1);
+	arr[0] = src;
+	/* Adding 0 can never fail */
+	if (!costfn(&cost, src->dijkstra.total, src->dijkstra.risk))
+		abort();
+	unvisited_add(unvisited, cost, arr);
+
+	return unvisited;
+}
+
+static void dijkstra_cleanup(struct unvisited *unvisited)
+{
+	struct node **arr;
+	u64 idx;
+
+	/* uintmap uses malloc, so manual cleaning needed */
+	while ((arr = uintmap_first(&unvisited->map, &idx)) != NULL) {
+		tal_free(arr);
+		uintmap_del(&unvisited->map, idx);
+	}
+	tal_free(unvisited);
+}
+
+/* We need to start biassing against long routes. */
+static struct chan **
+find_shorter_route(const tal_t *ctx, struct routing_state *rstate,
+		   struct node *src, struct node *dst,
+		   const struct node *me,
+		   struct amount_msat msat,
+		   size_t max_hops,
+		   double fuzz, const struct siphash_seed *base_seed,
+		   struct chan **long_route,
+		   struct amount_msat *fee)
+{
+	struct unvisited *unvisited;
+	struct chan **short_route = NULL;
+	struct amount_msat long_cost, short_cost, cost_diff;
+	u64 min_bias, max_bias;
+	double riskfactor;
+
+	/* We traverse backwards, so dst has largest total */
+	if (!amount_msat_sub(&long_cost,
+			     dst->dijkstra.total, src->dijkstra.total))
+		goto bad_total;
+	tal_free(long_route);
+
+	/* FIXME: It's hard to juggle both the riskfactor and riskbias here,
+	 * so we set our riskfactor to rougly equate to 1 millisatoshi
+	 * per block delay, which is close enough to zero to not break
+	 * this algorithm, but still provide some bias towards
+	 * low-delay routes. */
+	riskfactor = (double)1.0 / msat.millisatoshis; /* Raw: inversion */
+
+	/* First, figure out if a short route is even possible.
+	 * We set the cost function to ignore total, riskbias 1 and riskfactor
+	 * ~0 so risk simply operates as a simple hop counter. */
+	unvisited = dijkstra_prepare(tmpctx, rstate, src, msat,
+				     shortest_cost_function);
+	SUPERVERBOSE("Running shortest path from %s -> %s",
+		     type_to_string(tmpctx, struct node_id, &dst->id),
+		     type_to_string(tmpctx, struct node_id, &src->id));
+	dijkstra(rstate, dst, NULL, riskfactor, 1, fuzz, base_seed,
+		 unvisited, shortest_cost_function);
+	dijkstra_cleanup(unvisited);
+
+	/* This must succeed, since we found a route before */
+	short_route = build_route(ctx, rstate, dst, src, me, riskfactor, 1,
+				  fuzz, base_seed, fee);
+	assert(short_route);
+	if (!amount_msat_sub(&short_cost,
+			     dst->dijkstra.total, src->dijkstra.total))
+		goto bad_total;
+
+	/* Still too long?  Oh well. */
+	if (tal_count(short_route) > max_hops) {
+		status_info("Minimal possible route %s->%s is %zu",
+			    type_to_string(tmpctx, struct node_id, &dst->id),
+			    type_to_string(tmpctx, struct node_id, &src->id),
+			    tal_count(short_route));
+		goto out;
+	}
+
+	/* OK, so it's possible, just more expensive. */
+	min_bias = 0;
+
+	if (!amount_msat_sub(&cost_diff, short_cost, long_cost)) {
+		status_broken("Short cost %s < long cost %s?",
+			      type_to_string(tmpctx, struct amount_msat,
+					     &short_cost),
+			      type_to_string(tmpctx, struct amount_msat,
+					     &long_cost));
+		goto out;
+	}
+
+	/* This is a gross overestimate, but it works. */
+	max_bias = cost_diff.millisatoshis; /* Raw: bias calc */
+
+	SUPERVERBOSE("maxbias %"PRIu64" gave rlen %zu",
+		     max_bias, tal_count(short_route));
+
+	/* Now, binary search */
+	while (min_bias < max_bias) {
+		struct chan **route;
+		struct amount_msat this_fee;
+		u64 riskbias = (min_bias + max_bias) / 2;
+
+		unvisited = dijkstra_prepare(tmpctx, rstate, src, msat,
+					     normal_cost_function);
+		dijkstra(rstate, dst, me, riskfactor, riskbias, fuzz, base_seed,
+			 unvisited, normal_cost_function);
+		dijkstra_cleanup(unvisited);
+
+		route = build_route(ctx, rstate, dst, src, me,
+				    riskfactor, riskbias,
+				    fuzz, base_seed, &this_fee);
+
+		SUPERVERBOSE("riskbias %"PRIu64" rlen %zu",
+			     riskbias, tal_count(route));
+		/* Too long still?  This is our new min_bias */
+		if (tal_count(route) > max_hops) {
+			tal_free(route);
+			min_bias = riskbias + 1;
+		} else {
+			/* This route is acceptable. */
+			tal_free(short_route);
+			short_route = route;
+			/* Save this fee in case we exit loop */
+			*fee = this_fee;
+			max_bias = riskbias;
+		}
+	}
+
+	return short_route;
+
+bad_total:
+	status_broken("dst total %s < src total %s?",
+		      type_to_string(tmpctx, struct amount_msat,
+				     &dst->dijkstra.total),
+		      type_to_string(tmpctx, struct amount_msat,
+				     &src->dijkstra.total));
+out:
+	tal_free(short_route);
+	return NULL;
 }
 
 /* riskfactor is already scaled to per-block amount */
@@ -598,23 +1130,29 @@ find_route(const tal_t *ctx, struct routing_state *rstate,
 	   size_t max_hops,
 	   struct amount_msat *fee)
 {
+	struct node *src, *dst;
+	const struct node *me;
+	struct unvisited *unvisited;
 	struct chan **route;
-	struct node *n, *src, *dst;
-	struct node_map_iter it;
-	struct amount_msat best_total;
-	int runs, i, best;
 
 	/* Note: we map backwards, since we know the amount of satoshi we want
 	 * at the end, and need to derive how much we need to send. */
-	dst = get_node(rstate, from);
 	src = get_node(rstate, to);
+
+	/* If from is NULL, that's means it's us. */
+	if (!from)
+		me = dst = get_node(rstate, &rstate->local_id);
+	else {
+		dst = get_node(rstate, from);
+		me = NULL;
+	}
 
 	if (!src) {
 		status_info("find_route: cannot find %s",
 			    type_to_string(tmpctx, struct node_id, to));
 		return NULL;
 	} else if (!dst) {
-		status_info("find_route: cannot find myself (%s)",
+		status_info("find_route: cannot find source (%s)",
 			    type_to_string(tmpctx, struct node_id, to));
 		return NULL;
 	} else if (dst == src) {
@@ -623,103 +1161,20 @@ find_route(const tal_t *ctx, struct routing_state *rstate,
 		return NULL;
 	}
 
-	if (max_hops > ROUTING_MAX_HOPS) {
-		status_info("find_route: max_hops huge amount %zu > %u",
-			    max_hops, ROUTING_MAX_HOPS);
-		return NULL;
-	}
+	unvisited = dijkstra_prepare(tmpctx, rstate, src, msat,
+				     normal_cost_function);
+	dijkstra(rstate, dst, me, riskfactor, 1, fuzz, base_seed,
+		 unvisited, normal_cost_function);
+	dijkstra_cleanup(unvisited);
 
-	/* Reset all the information. */
-	clear_bfg(rstate->nodes);
+	route = build_route(ctx, rstate, dst, src, me, riskfactor, 1,
+			    fuzz, base_seed, fee);
+	if (tal_count(route) <= max_hops)
+		return route;
 
-	/* Bellman-Ford-Gibson: like Bellman-Ford, but keep values for
-	 * every path length. */
-	src->bfg[0].total = msat;
-	src->bfg[0].risk = AMOUNT_MSAT(0);
-
-	for (runs = 0; runs < max_hops; runs++) {
-		SUPERVERBOSE("Run %i", runs);
-		/* Run through every edge. */
-		for (n = node_map_first(rstate->nodes, &it);
-		     n;
-		     n = node_map_next(rstate->nodes, &it)) {
-			struct chan_map_iter i;
-			struct chan *chan;
-
-			for (chan = first_chan(n, &i);
-			     chan;
-			     chan = next_chan(n, &i)) {
-				int idx = half_chan_to(n, chan);
-
-				SUPERVERBOSE("Node %s edge %s",
-					     type_to_string(tmpctx, struct node_id,
-							    &n->id),
-					     type_to_string(tmpctx,
-							    struct short_channel_id,
-							    &c->scid));
-
-				if (!hc_is_routable(rstate, chan, idx)) {
-					SUPERVERBOSE("...unroutable (local_disabled = %i, is_halfchan_enabled = %i, unroutable_until = %i",
-						     is_chan_local_disabled(rstate, chan),
-						     is_halfchan_enabled(&chan->half[idx]),
-						     chan->half[idx].unroutable_until >= now);
-					continue;
-				}
-				bfg_one_edge(n, chan, idx,
-					     riskfactor, fuzz, base_seed,
-					     max_hops);
-				SUPERVERBOSE("...done");
-			}
-		}
-	}
-
-	best = 0;
-	best_total = INFINITE;
-	for (i = 0; i <= max_hops; i++) {
-		struct amount_msat total;
-		status_trace("%i hop solution: %s + %s",
-			     i,
-			     type_to_string(tmpctx, struct amount_msat,
-					    &dst->bfg[i].total),
-			     type_to_string(tmpctx, struct amount_msat,
-					    &dst->bfg[i].risk));
-		if (!amount_msat_add(&total,
-				     dst->bfg[i].total, dst->bfg[i].risk))
-			continue;
-		if (amount_msat_less(total, best_total)) {
-			best = i;
-			best_total = total;
-		}
-	}
-	status_trace("=> chose %i hop solution", best);
-
-	/* No route? */
-	if (amount_msat_greater_eq(best_total, INFINITE)) {
-		status_trace("find_route: No route to %s",
-			     type_to_string(tmpctx, struct node_id, to));
-		return NULL;
-	}
-
-	/* We (dst) don't charge ourselves fees, so skip first hop */
-	n = other_node(dst, dst->bfg[best].prev);
-	if (!amount_msat_sub(fee, n->bfg[best-1].total, msat)) {
-		status_broken("Could not subtract %s - %s for fee",
-			      type_to_string(tmpctx, struct amount_msat,
-					     &n->bfg[best-1].total),
-			      type_to_string(tmpctx, struct amount_msat, &msat));
-		return NULL;
-	}
-
-	/* Lay out route */
-	route = tal_arr(ctx, struct chan *, best);
-	for (i = 0, n = dst;
-	     i < best;
-	     n = other_node(n, n->bfg[best-i].prev), i++) {
-		route[i] = n->bfg[best-i].prev;
-	}
-	assert(n == src);
-
-	return route;
+	/* This is the far more unlikely case */
+	return find_shorter_route(ctx, rstate, src, dst, me, msat,
+				  max_hops, fuzz, base_seed, route, fee);
 }
 
 /* Checks that key is valid, and signed this hash */
@@ -861,6 +1316,7 @@ static void catch_node_announcement(const tal_t *ctx,
 		pna->nodeid = *nodeid;
 		pna->node_announcement = NULL;
 		pna->timestamp = 0;
+		pna->index = 0;
 		pna->refcount = 0;
 		pending_node_map_add(rstate->pending_node_map, pna);
 	}
@@ -876,38 +1332,43 @@ static void process_pending_node_announcement(struct routing_state *rstate,
 		return;
 
 	if (pna->node_announcement) {
-		u8 *err;
 		SUPERVERBOSE(
 		    "Processing deferred node_announcement for node %s",
 		    type_to_string(pna, struct node_id, nodeid));
 
 		/* Should not error, since we processed it before */
-		err = handle_node_announcement(rstate, pna->node_announcement);
-		if (err)
+		if (!routing_add_node_announcement(rstate,
+						   pna->node_announcement,
+						   pna->index))
 			status_failed(STATUS_FAIL_INTERNAL_ERROR,
-				      "pending node_announcement %s malformed %s?",
-				      tal_hex(tmpctx, pna->node_announcement),
-				      sanitize_error(tmpctx, err, NULL));
+				      "pending node_announcement %s malformed?",
+				      tal_hex(tmpctx, pna->node_announcement));
+		/* Never send this again. */
+		pna->node_announcement = tal_free(pna->node_announcement);
 	}
+
+	/* We don't need to catch any more node_announcements, since we've
+	 * accepted the public channel now.  But other pending announcements
+	 * may still hold a reference they use in
+	 * del_pending_node_announcement, so simply delete it from the map. */
+	pending_node_map_del(rstate->pending_node_map, pna);
 }
 
 static struct pending_cannouncement *
 find_pending_cannouncement(struct routing_state *rstate,
 			   const struct short_channel_id *scid)
 {
-	struct pending_cannouncement *i;
+	struct pending_cannouncement *pann;
 
-	list_for_each(&rstate->pending_cannouncement, i, list) {
-		if (short_channel_id_eq(scid, &i->short_channel_id))
-			return i;
-	}
-	return NULL;
+	pann = pending_cannouncement_map_get(&rstate->pending_cannouncements, scid);
+
+	return pann;
 }
 
 static void destroy_pending_cannouncement(struct pending_cannouncement *pending,
 					  struct routing_state *rstate)
 {
-	list_del_from(&rstate->pending_cannouncement, &pending->list);
+	pending_cannouncement_map_del(&rstate->pending_cannouncements, pending);
 }
 
 static bool is_local_channel(const struct routing_state *rstate,
@@ -923,10 +1384,17 @@ static void add_channel_announce_to_broadcast(struct routing_state *rstate,
 					      u32 timestamp,
 					      u32 index)
 {
+	u8 *addendum = towire_gossip_store_channel_amount(tmpctx, chan->sat);
+
 	chan->bcast.timestamp = timestamp;
 	/* 0, unless we're loading from store */
-	chan->bcast.index = index;
-	insert_broadcast(&rstate->broadcasts, channel_announce, &chan->bcast);
+	if (index)
+		chan->bcast.index = index;
+	else
+		chan->bcast.index = gossip_store_add(rstate->gs,
+						     channel_announce,
+						     chan->bcast.timestamp,
+						     addendum);
 	rstate->local_channel_announced |= is_local_channel(rstate, chan);
 }
 
@@ -952,9 +1420,6 @@ bool routing_add_channel_announcement(struct routing_state *rstate,
 	if (taken(msg))
 		tal_steal(tmpctx, msg);
 
-	if (taken(msg))
-		tal_steal(tmpctx, msg);
-
 	if (!fromwire_channel_announcement(
 		    tmpctx, msg, &node_signature_1, &node_signature_2,
 		    &bitcoin_signature_1, &bitcoin_signature_2, &features, &chain_hash,
@@ -968,24 +1433,31 @@ bool routing_add_channel_announcement(struct routing_state *rstate,
 
 	/* private updates will exist in the store before the announce: we
 	 * can't index those for broadcast since they would predate it, so we
-	 * add fresh ones.  But if we're loading off disk right now, we can't
-	 * do that. */
-	if (chan && index == 0) {
+	 * add fresh ones. */
+	if (chan) {
+		/* If this was in the gossip_store, gossip_store is bad! */
+		if (index) {
+			status_broken("gossip_store channel_announce"
+				      " %u replaces %u!",
+				      index, chan->bcast.index);
+			return false;
+		}
+
 		/* Reload any private updates */
 		if (chan->half[0].bcast.index)
 			private_updates[0]
-				= gossip_store_get(NULL,
-						   rstate->broadcasts->gs,
+				= gossip_store_get_private_update(NULL,
+						   rstate->gs,
 						   chan->half[0].bcast.index);
 		if (chan->half[1].bcast.index)
 			private_updates[1]
-				= gossip_store_get(NULL,
-						   rstate->broadcasts->gs,
+				= gossip_store_get_private_update(NULL,
+						   rstate->gs,
 						   chan->half[1].bcast.index);
-	}
 
-	/* Pretend it didn't exist, for the moment. */
-	tal_free(chan);
+		remove_channel_from_store(rstate, chan);
+		free_chan(rstate, chan);
+	}
 
 	uc = tal(rstate, struct unupdated_channel);
 	uc->channel_announce = tal_dup_arr(uc, u8, msg, tal_count(msg), 0);
@@ -1152,7 +1624,7 @@ u8 *handle_channel_announcement(struct routing_state *rstate,
 	catch_node_announcement(pending, rstate, &pending->node_id_1);
 	catch_node_announcement(pending, rstate, &pending->node_id_2);
 
-	list_add_tail(&rstate->pending_cannouncement, &pending->list);
+	pending_cannouncement_map_add(&rstate->pending_cannouncements, pending);
 	tal_add_destructor2(pending, destroy_pending_cannouncement, rstate);
 
 	/* Success */
@@ -1182,7 +1654,7 @@ static void process_pending_channel_update(struct routing_state *rstate,
 		return;
 
 	/* FIXME: We don't remember who sent us updates, so can't error them */
-	err = handle_channel_update(rstate, cupdate, "pending update");
+	err = handle_channel_update(rstate, cupdate, "pending update", NULL);
 	if (err) {
 		status_trace("Pending channel_update for %s: %s",
 			     type_to_string(tmpctx, struct short_channel_id, scid),
@@ -1191,7 +1663,7 @@ static void process_pending_channel_update(struct routing_state *rstate,
 	}
 }
 
-void handle_pending_cannouncement(struct routing_state *rstate,
+bool handle_pending_cannouncement(struct routing_state *rstate,
 				  const struct short_channel_id *scid,
 				  struct amount_sat sat,
 				  const u8 *outscript)
@@ -1201,17 +1673,7 @@ void handle_pending_cannouncement(struct routing_state *rstate,
 
 	pending = find_pending_cannouncement(rstate, scid);
 	if (!pending)
-		return;
-
-#if DEVELOPER
-	if (rstate->dev_unknown_channel_satoshis) {
-		outscript = scriptpubkey_p2wsh(pending,
-			       bitcoin_redeem_2of2(pending,
-						   &pending->bitcoin_key_1,
-						   &pending->bitcoin_key_2));
-		sat = *rstate->dev_unknown_channel_satoshis;
-	}
-#endif
+		return false;
 
 	/* BOLT #7:
 	 *
@@ -1226,7 +1688,7 @@ void handle_pending_cannouncement(struct routing_state *rstate,
 					    scid));
 		tal_free(pending);
 		uintmap_add(&rstate->txout_failures, scid->u64, true);
-		return;
+		return false;
 	}
 
 	/* BOLT #7:
@@ -1249,11 +1711,11 @@ void handle_pending_cannouncement(struct routing_state *rstate,
 					    scid),
 			     tal_hex(tmpctx, s), tal_hex(tmpctx, outscript));
 		tal_free(pending);
-		return;
+		return false;
 	}
 
 	/* Remove pending now, so below functions don't see it. */
-	list_del_from(&rstate->pending_cannouncement, &pending->list);
+	pending_cannouncement_map_del(&rstate->pending_cannouncements, pending);
 	tal_del_destructor2(pending, destroy_pending_cannouncement, rstate);
 
 	if (!routing_add_channel_announcement(rstate, pending->announce, sat, 0))
@@ -1265,6 +1727,7 @@ void handle_pending_cannouncement(struct routing_state *rstate,
 	process_pending_channel_update(rstate, scid, pending->updates[1]);
 
 	tal_free(pending);
+	return true;
 }
 
 static void update_pending(struct pending_cannouncement *pending,
@@ -1336,10 +1799,6 @@ bool routing_add_channel_update(struct routing_state *rstate,
 	if (taken(update))
 		tal_steal(tmpctx, update);
 
-	/* In case it's free in a failure path */
-	if (taken(update))
-		tal_steal(tmpctx, update);
-
 	if (!fromwire_channel_update(update, &signature, &chain_hash,
 				     &short_channel_id, &timestamp,
 				     &message_flags, &channel_flags,
@@ -1397,6 +1856,14 @@ bool routing_add_channel_update(struct routing_state *rstate,
 
 	/* Discard older updates */
 	hc = &chan->half[direction];
+
+	/* If we're loading from store, duplicate entries are a bug. */
+	if (is_halfchan_defined(hc) && index != 0) {
+		status_broken("gossip_store channel_update %u replaces %u!",
+			      index, hc->bcast.index);
+		return false;
+	}
+
 	if (is_halfchan_defined(hc) && timestamp <= hc->bcast.timestamp) {
 		SUPERVERBOSE("Ignoring outdated update.");
 		/* Ignoring != failing */
@@ -1414,8 +1881,12 @@ bool routing_add_channel_update(struct routing_state *rstate,
 			      message_flags, channel_flags,
 			      timestamp, htlc_minimum, htlc_maximum);
 
-	/* Safe even if was never added */
-	broadcast_del(rstate->broadcasts, &chan->half[direction].bcast);
+	/* Safe even if was never added, but if it's a private channel it
+	 * would be a WIRE_GOSSIP_STORE_PRIVATE_UPDATE. */
+	gossip_store_delete(rstate->gs, &hc->bcast,
+			    is_chan_public(chan)
+			    ? WIRE_CHANNEL_UPDATE
+			    : WIRE_GOSSIP_STORE_PRIVATE_UPDATE);
 
 	/* BOLT #7:
 	 *   - MUST consider the `timestamp` of the `channel_announcement` to be
@@ -1431,23 +1902,25 @@ bool routing_add_channel_update(struct routing_state *rstate,
 	} else if (!is_chan_public(chan)) {
 		/* For private channels, we get updates without an announce: don't
 		 * broadcast them!  But save local ones to store anyway. */
-		struct half_chan *hc = &chan->half[direction];
-		/* Don't save if we're loading from store */
 		assert(is_local_channel(rstate, chan));
+		/* Don't save if we're loading from store */
 		if (!index) {
-			hc->bcast.index = gossip_store_add(rstate->broadcasts->gs,
-							   update);
+			hc->bcast.index
+				= gossip_store_add_private_update(rstate->gs,
+								  update);
 		} else
 			hc->bcast.index = index;
 		return true;
 	}
 
 	/* If we're loading from store, this means we don't re-add to store. */
-	chan->half[direction].bcast.index = index;
-
-	insert_broadcast(&rstate->broadcasts,
-			 update,
-			 &chan->half[direction].bcast);
+	if (index)
+		hc->bcast.index = index;
+	else
+		hc->bcast.index
+			= gossip_store_add(rstate->gs, update,
+					   hc->bcast.timestamp,
+					   NULL);
 
 	if (uc) {
 		/* If we were waiting for these nodes to appear (or gain a
@@ -1476,8 +1949,31 @@ static const struct node_id *get_channel_owner(struct routing_state *rstate,
 	return NULL;
 }
 
+void remove_channel_from_store(struct routing_state *rstate,
+			       struct chan *chan)
+{
+	int update_type, announcment_type;
+
+	if (is_chan_public(chan)) {
+		update_type = WIRE_CHANNEL_UPDATE;
+		announcment_type = WIRE_CHANNEL_ANNOUNCEMENT;
+	} else {
+		update_type = WIRE_GOSSIP_STORE_PRIVATE_UPDATE;
+		announcment_type = WIRE_GOSSIPD_LOCAL_ADD_CHANNEL;
+	}
+
+	/* If these aren't in the store, these are noops. */
+	gossip_store_delete(rstate->gs,
+			    &chan->bcast, announcment_type);
+	gossip_store_delete(rstate->gs,
+			    &chan->half[0].bcast, update_type);
+	gossip_store_delete(rstate->gs,
+			    &chan->half[1].bcast, update_type);
+}
+
 u8 *handle_channel_update(struct routing_state *rstate, const u8 *update TAKES,
-			  const char *source)
+			  const char *source,
+			  struct short_channel_id *unknown_scid)
 {
 	u8 *serialized;
 	const struct node_id *owner;
@@ -1545,6 +2041,8 @@ u8 *handle_channel_update(struct routing_state *rstate, const u8 *update TAKES,
 
 	owner = get_channel_owner(rstate, &short_channel_id, direction);
 	if (!owner) {
+		if (unknown_scid)
+			*unknown_scid = short_channel_id;
 		bad_gossip_order(serialized,
 				 source,
 				 tal_fmt(tmpctx, "%s/%u",
@@ -1638,23 +2136,70 @@ bool routing_add_node_announcement(struct routing_state *rstate,
 		return false;
 	}
 
+	/* Only log this if *not* loading from store. */
+	if (!index)
+		status_trace("Received node_announcement for node %s",
+			     type_to_string(tmpctx, struct node_id, &node_id));
+
 	node = get_node(rstate, &node_id);
 
-	/* May happen if we accepted the node_announcement due to a local
-	 * channel, for which we didn't have the announcement yet. */
-	if (node == NULL)
-		return false;
+	if (node == NULL || !node_has_broadcastable_channels(node)) {
+		struct pending_node_announce *pna;
+		/* BOLT #7:
+		 *
+		 * - if `node_id` is NOT previously known from a
+		 *   `channel_announcement` message, OR if `timestamp` is NOT
+		 *   greater than the last-received `node_announcement` from
+		 *   this `node_id`:
+		 *    - SHOULD ignore the message.
+		 */
+		/* Check if we are currently verifying the txout for a
+		 * matching channel */
+		pna = pending_node_map_get(rstate->pending_node_map,
+					   &node_id);
+		if (!pna) {
+			bad_gossip_order(msg, "node_announcement",
+					 type_to_string(tmpctx, struct node_id,
+							&node_id));
+			return false;
+		} else if (timestamp <= pna->timestamp)
+			/* Ignore old ones: they're OK (unless from store). */
+			return index == 0;
 
-	/* Shouldn't get here, but gossip_store bugs are possible. */
-	if (!node_has_broadcastable_channels(node))
+		SUPERVERBOSE("Deferring node_announcement for node %s",
+			     type_to_string(tmpctx, struct node_id, &node_id));
+		pna->timestamp = timestamp;
+		pna->index = index;
+		tal_free(pna->node_announcement);
+		pna->node_announcement = tal_dup_arr(pna, u8, msg,
+						     tal_count(msg),
+						     0);
+		return true;
+	}
+
+	if (node->bcast.index && index != 0) {
+		status_broken("gossip_store node_announcement %u replaces %u!",
+			      index, node->bcast.index);
 		return false;
+	}
+	if (node->bcast.index && node->bcast.timestamp >= timestamp) {
+		SUPERVERBOSE("Ignoring node announcement, it's outdated.");
+		/* OK unless we're loading from store */
+		return index == 0;
+	}
 
 	/* Harmless if it was never added */
-	broadcast_del(rstate->broadcasts, &node->bcast);
+	gossip_store_delete(rstate->gs,
+			    &node->bcast,
+			    WIRE_NODE_ANNOUNCEMENT);
 
 	node->bcast.timestamp = timestamp;
-	node->bcast.index = index;
-	insert_broadcast(&rstate->broadcasts, msg, &node->bcast);
+	if (index)
+		node->bcast.index = index;
+	else
+		node->bcast.index
+			= gossip_store_add(rstate->gs, msg,
+					   node->bcast.timestamp, NULL);
 	return true;
 }
 
@@ -1662,7 +2207,6 @@ u8 *handle_node_announcement(struct routing_state *rstate, const u8 *node_ann)
 {
 	u8 *serialized;
 	struct sha256_double hash;
-	struct node *node;
 	secp256k1_ecdsa_signature signature;
 	u32 timestamp;
 	struct node_id node_id;
@@ -1670,9 +2214,7 @@ u8 *handle_node_announcement(struct routing_state *rstate, const u8 *node_ann)
 	u8 alias[32];
 	u8 *features, *addresses;
 	struct wireaddr *wireaddrs;
-	struct pending_node_announce *pna;
 	size_t len = tal_count(node_ann);
-	bool applied;
 
 	serialized = tal_dup_arr(tmpctx, u8, node_ann, len, 0);
 	if (!fromwire_node_announcement(tmpctx, serialized,
@@ -1748,49 +2290,8 @@ u8 *handle_node_announcement(struct routing_state *rstate, const u8 *node_ann)
 		return err;
 	}
 
-	/* Beyond this point it's not malformed, so safe if we make it
-	 * pending and requeue later. */
-	node = get_node(rstate, &node_id);
-
-	/* BOLT #7:
-	 *
-	 * - if `node_id` is NOT previously known from a `channel_announcement`
-	 *   message, OR if `timestamp` is NOT greater than the last-received
-	 *   `node_announcement` from this `node_id`:
-	 *    - SHOULD ignore the message.
-	 */
-	if (!node || !node_has_public_channels(node)) {
-		/* Check if we are currently verifying the txout for a
-		 * matching channel */
-		pna = pending_node_map_get(rstate->pending_node_map,
-					   &node_id);
-		if (!pna) {
-			bad_gossip_order(serialized, "node_announcement",
-					 type_to_string(tmpctx, struct node_id,
-							&node_id));
-		} else if (pna->timestamp < timestamp) {
-			SUPERVERBOSE(
-			    "Deferring node_announcement for node %s",
-			    type_to_string(tmpctx, struct node_id, &node_id));
-			pna->timestamp = timestamp;
-			tal_free(pna->node_announcement);
-			pna->node_announcement = tal_dup_arr(pna, u8, node_ann,
-							     tal_count(node_ann),
-							     0);
-		}
-		return NULL;
-	}
-
-	if (node->bcast.index && node->bcast.timestamp >= timestamp) {
-		SUPERVERBOSE("Ignoring node announcement, it's outdated.");
-		return NULL;
-	}
-
-	status_trace("Received node_announcement for node %s",
-		     type_to_string(tmpctx, struct node_id, &node_id));
-
-	applied = routing_add_node_announcement(rstate, serialized, 0);
-	assert(applied);
+	/* May still fail, if we don't know the node. */
+	routing_add_node_announcement(rstate, serialized, 0);
 	return NULL;
 }
 
@@ -1815,6 +2316,9 @@ struct route_hop *get_route(const tal_t *ctx, struct routing_state *rstate,
 	saved_capacity = tal_arr(tmpctx, struct amount_msat, tal_count(excluded));
 
 	base_seed.u.u64[0] = base_seed.u.u64[1] = seed;
+
+	if (amount_msat_eq(msat, AMOUNT_MSAT(0)))
+		return NULL;
 
 	/* Temporarily set excluded channels' capacity to zero. */
 	for (size_t i = 0; i < tal_count(excluded); i++) {
@@ -1871,7 +2375,7 @@ struct route_hop *get_route(const tal_t *ctx, struct routing_state *rstate,
 		total_delay += c->delay;
 		n = other_node(n, route[i]);
 	}
-	assert(node_id_eq(&n->id, source));
+	assert(node_id_eq(&n->id, source ? source : &rstate->local_id));
 
 	return hops;
 }
@@ -1883,6 +2387,8 @@ void routing_failure(struct routing_state *rstate,
 		     enum onion_type failcode,
 		     const u8 *channel_update)
 {
+	struct chan **pruned = tal_arr(tmpctx, struct chan *, 0);
+
 	status_trace("Received routing failure 0x%04x (%s), "
 		     "erring node %s, "
 		     "channel %s/%u",
@@ -1893,7 +2399,8 @@ void routing_failure(struct routing_state *rstate,
 
 	/* lightningd will only extract this if UPDATE is set. */
 	if (channel_update) {
-		u8 *err = handle_channel_update(rstate, channel_update, "error");
+		u8 *err = handle_channel_update(rstate, channel_update, "error",
+						NULL);
 		if (err) {
 			status_unusual("routing_failure: "
 				       "bad channel_update %s",
@@ -1928,7 +2435,7 @@ void routing_failure(struct routing_state *rstate,
 						    &node->id));
 			for (c = first_chan(node, &i); c; c = next_chan(node, &i)) {
 				/* Set it up to be pruned. */
-				tal_steal(tmpctx, c);
+				tal_arr_expand(&pruned, c);
 			}
 		}
 	} else {
@@ -1953,9 +2460,13 @@ void routing_failure(struct routing_state *rstate,
 						    struct short_channel_id,
 						    scid));
 			/* Set it up to be deleted. */
-			tal_steal(tmpctx, chan);
+			tal_arr_expand(&pruned, chan);
 		}
 	}
+
+	/* Now free all the chans and maybe even nodes. */
+	for (size_t i = 0; i < tal_count(pruned); i++)
+		free_chan(rstate, pruned[i]);
 }
 
 
@@ -1964,7 +2475,7 @@ void route_prune(struct routing_state *rstate)
 	u64 now = gossip_time_now(rstate).ts.tv_sec;
 	/* Anything below this highwater mark ought to be pruned */
 	const s64 highwater = now - rstate->prune_timeout;
-	const tal_t *pruned = tal(NULL, char);
+	struct chan **pruned = tal_arr(tmpctx, struct chan *, 0);
 	struct chan *chan;
 	struct unupdated_channel *uc;
 	u64 idx;
@@ -1991,7 +2502,7 @@ void route_prune(struct routing_state *rstate)
 			    : now - chan->half[1].bcast.timestamp);
 
 			/* This may perturb iteration so do outside loop. */
-			tal_steal(pruned, chan);
+			tal_arr_expand(&pruned, chan);
 		}
 	}
 
@@ -2000,12 +2511,15 @@ void route_prune(struct routing_state *rstate)
 	     uc;
 	     uc = uintmap_after(&rstate->unupdated_chanmap, &idx)) {
 		if (uc->added.ts.tv_sec < highwater) {
-			tal_steal(pruned, uc);
+			tal_arr_expand(&pruned, chan);
 		}
 	}
 
-	/* This frees all the chans and maybe even nodes. */
-	tal_free(pruned);
+	/* Now free all the chans and maybe even nodes. */
+	for (size_t i = 0; i < tal_count(pruned); i++) {
+		remove_channel_from_store(rstate, pruned[i]);
+		free_chan(rstate, pruned[i]);
+	}
 }
 
 #if DEVELOPER
@@ -2017,6 +2531,7 @@ void memleak_remove_routing_tables(struct htable *memtable,
 
 	memleak_remove_htable(memtable, &rstate->nodes->raw);
 	memleak_remove_htable(memtable, &rstate->pending_node_map->raw);
+	memleak_remove_htable(memtable, &rstate->pending_cannouncements.raw);
 
 	for (n = node_map_first(rstate->nodes, &nit);
 	     n;
@@ -2027,11 +2542,13 @@ void memleak_remove_routing_tables(struct htable *memtable,
 }
 #endif /* DEVELOPER */
 
-bool handle_local_add_channel(struct routing_state *rstate, const u8 *msg)
+bool handle_local_add_channel(struct routing_state *rstate,
+			      const u8 *msg, u64 index)
 {
 	struct short_channel_id scid;
 	struct node_id remote_node_id;
 	struct amount_sat sat;
+	struct chan *chan;
 
 	if (!fromwire_gossipd_local_add_channel(msg, &scid, &remote_node_id,
 						&sat)) {
@@ -2050,7 +2567,10 @@ bool handle_local_add_channel(struct routing_state *rstate, const u8 *msg)
 		     type_to_string(tmpctx, struct short_channel_id, &scid));
 
 	/* Create new (unannounced) channel */
-	new_chan(rstate, &scid, &rstate->local_id, &remote_node_id, sat);
+	chan = new_chan(rstate, &scid, &rstate->local_id, &remote_node_id, sat);
+	if (!index)
+		index = gossip_store_add(rstate->gs, msg, 0, NULL);
+	chan->bcast.index = index;
 	return true;
 }
 
@@ -2061,4 +2581,65 @@ struct timeabs gossip_time_now(const struct routing_state *rstate)
 		return *rstate->gossip_time;
 #endif
 	return time_now();
+}
+
+const char *unfinalized_entries(const tal_t *ctx, struct routing_state *rstate)
+{
+	struct unupdated_channel *uc;
+	u64 index;
+	struct pending_node_announce *pna;
+	struct pending_node_map_iter it;
+
+	uc = uintmap_first(&rstate->unupdated_chanmap, &index);
+	if (uc)
+		return tal_fmt(ctx, "Unupdated channel_announcement at %u",
+			       uc->index);
+
+	pna = pending_node_map_first(rstate->pending_node_map, &it);
+	if (pna)
+		return tal_fmt(ctx, "Waiting node_announcement at %u",
+			       pna->index);
+
+	return NULL;
+}
+
+/* Gossip store was corrupt, forget anything we loaded. */
+void remove_all_gossip(struct routing_state *rstate)
+{
+	struct node *n;
+	struct node_map_iter nit;
+	struct chan *c;
+	struct unupdated_channel *uc;
+	u64 index;
+	struct pending_cannouncement *pca;
+	struct pending_cannouncement_map_iter pit;
+	struct pending_node_map_iter pnait;
+
+	/* We don't want them to try to delete from store, so do this
+	 * manually. */
+	while ((n = node_map_first(rstate->nodes, &nit)) != NULL) {
+		tal_del_destructor2(n, destroy_node, rstate);
+		if (node_uses_chan_map(n))
+			chan_map_clear(&n->chans.map);
+		node_map_del(rstate->nodes, n);
+		tal_free(n);
+	}
+
+	/* Now free all the channels. */
+	while ((c = uintmap_first(&rstate->chanmap, &index)) != NULL) {
+		uintmap_del(&rstate->chanmap, index);
+
+		/* Remove from local_disabled_map if it's there. */
+		chan_map_del(&rstate->local_disabled_map, c);
+		tal_free(c);
+	}
+
+	while ((uc = uintmap_first(&rstate->unupdated_chanmap, &index)) != NULL)
+		tal_free(uc);
+
+	while ((pca = pending_cannouncement_map_first(&rstate->pending_cannouncements, &pit)) != NULL)
+		tal_free(pca);
+
+	/* Freeing unupdated chanmaps should empty this */
+	assert(pending_node_map_first(rstate->pending_node_map, &pnait) == NULL);
 }

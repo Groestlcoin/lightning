@@ -76,6 +76,7 @@ struct channel {
 
 	/* Last tx they gave us. */
 	struct bitcoin_tx *last_tx;
+	enum wallet_tx_type last_tx_type;
 	struct bitcoin_signature last_sig;
 	secp256k1_ecdsa_signature *last_htlc_sigs;
 
@@ -113,6 +114,9 @@ struct channel {
 
 	/* Feerate per channel */
 	u32 feerate_base, feerate_ppm;
+
+	/* If they used option_upfront_shutdown_script. */
+	const u8 *remote_upfront_shutdown_script;
 };
 
 struct channel *new_channel(struct peer *peer, u64 dbid,
@@ -159,7 +163,9 @@ struct channel *new_channel(struct peer *peer, u64 dbid,
 			    const struct pubkey *local_funding_pubkey,
 			    const struct pubkey *future_per_commitment_point,
 			    u32 feerate_base,
-			    u32 feerate_ppm);
+			    u32 feerate_ppm,
+			    /* NULL or stolen */
+			    const u8 *remote_upfront_shutdown_script);
 
 void delete_channel(struct channel *channel);
 
@@ -196,7 +202,8 @@ struct channel *channel_by_dbid(struct lightningd *ld, const u64 dbid);
 
 void channel_set_last_tx(struct channel *channel,
 			 struct bitcoin_tx *tx,
-			 const struct bitcoin_signature *sig);
+			 const struct bitcoin_signature *sig,
+			 enum wallet_tx_type type);
 
 static inline bool channel_can_add_htlc(const struct channel *channel)
 {

@@ -3,6 +3,7 @@
 #include <closingd/gen_closing_wire.h>
 #include <common/close_tx.h>
 #include <common/initial_commit_tx.h>
+#include <common/per_peer_state.h>
 #include <common/utils.h>
 #include <errno.h>
 #include <gossipd/gen_gossip_wire.h>
@@ -94,8 +95,7 @@ static void peer_received_closing_signature(struct channel *channel,
 
 	/* FIXME: Make sure signature is correct! */
 	if (better_closing_fee(ld, channel, tx)) {
-		channel_set_last_tx(channel, tx, &sig);
-		/* TODO(cdecker) Selectively save updated fields to DB */
+		channel_set_last_tx(channel, tx, &sig, TX_CHANNEL_CLOSE);
 		wallet_channel_save(ld->wallet, channel);
 	}
 
@@ -152,8 +152,7 @@ static unsigned closing_msg(struct subd *sd, const u8 *msg, const int *fds UNUSE
 }
 
 void peer_start_closingd(struct channel *channel,
-			 const struct crypto_state *cs,
-			 int peer_fd, int gossip_fd,
+			 struct per_peer_state *pps,
 			 bool reconnected,
 			 const u8 *channel_reestablish)
 {
@@ -183,7 +182,9 @@ void peer_start_closingd(struct channel *channel,
 					   closing_wire_type_name, closing_msg,
 					   channel_errmsg,
 					   channel_set_billboard,
-					   take(&peer_fd), take(&gossip_fd),
+					   take(&pps->peer_fd),
+					   take(&pps->gossip_fd),
+					   take(&pps->gossip_store_fd),
 					   take(&hsmfd),
 					   NULL),
 			  false);
@@ -263,7 +264,7 @@ void peer_start_closingd(struct channel *channel,
 		return;
 	}
 	initmsg = towire_closing_init(tmpctx,
-				      cs,
+				      pps,
 				      &channel->funding_txid,
 				      channel->funding_outnum,
 				      channel->funding,

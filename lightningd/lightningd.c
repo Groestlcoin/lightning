@@ -46,6 +46,7 @@
 #include <ccan/err/err.h>
 #include <ccan/io/fdpass/fdpass.h>
 #include <ccan/io/io.h>
+#include <ccan/json_escape/json_escape.h>
 #include <ccan/noerr/noerr.h>
 #include <ccan/pipecmd/pipecmd.h>
 #include <ccan/read_write_all/read_write_all.h>
@@ -57,7 +58,6 @@
 /*~ This is common code: routines shared by one or more executables
  *  (separate daemons, or the lightning-cli program). */
 #include <common/daemon.h>
-#include <common/json_escaped.h>
 #include <common/timeout.h>
 #include <common/utils.h>
 #include <common/version.h>
@@ -70,6 +70,7 @@
 #include <lightningd/channel_control.h>
 #include <lightningd/connect_control.h>
 #include <lightningd/invoice.h>
+#include <lightningd/io_loop_with_timers.h>
 #include <lightningd/jsonrpc.h>
 #include <lightningd/log.h>
 #include <lightningd/onchain_control.h>
@@ -117,7 +118,6 @@ static struct lightningd *new_lightningd(const tal_t *ctx)
 	ld->dev_subdaemon_fail = false;
 	ld->dev_allow_localhost = false;
 	ld->dev_gossip_time = 0;
-	ld->dev_unknown_channel_satoshis = NULL;
 #endif
 
 	/*~ These are CCAN lists: an embedded double-linked list.  It's not
@@ -155,7 +155,7 @@ static struct lightningd *new_lightningd(const tal_t *ctx)
 	 * book to hold all the entries (and trims as necessary), and multiple
 	 * log objects which each can write into it, each with a unique
 	 * prefix. */
-	ld->log_book = new_log_book(20*1024*1024, LOG_INFORM);
+	ld->log_book = new_log_book(ld, 20*1024*1024, LOG_INFORM);
 	/*~ Note the tal context arg (by convention, the first argument to any
 	 * allocation function): ld->log will be implicitly freed when ld
 	 * is. */
@@ -196,8 +196,6 @@ static struct lightningd *new_lightningd(const tal_t *ctx)
 	ld->daemon = false;
 	ld->config_filename = NULL;
 	ld->pidfile = NULL;
-	ld->ini_autocleaninvoice_cycle = 0;
-	ld->ini_autocleaninvoice_expiredby = 86400;
 	ld->proxyaddr = NULL;
 	ld->use_proxy_always = false;
 	ld->pure_tor_setup = false;
@@ -218,6 +216,9 @@ static struct lightningd *new_lightningd(const tal_t *ctx)
 	 *the plugins.
 	 */
 	ld->plugins = plugins_new(ld, ld->log_book, ld);
+
+	/*~ This is set when a JSON RPC command comes in to shut us down. */
+	ld->stop_conn = NULL;
 
 	return ld;
 }
@@ -411,9 +412,9 @@ static void shutdown_subdaemons(struct lightningd *ld)
 	close(ld->hsm_fd);
 	/*~ The three "global" daemons, which we shutdown explicitly: we
 	 * give them 10 seconds to exit gracefully before killing them.  */
-	subd_shutdown(ld->connectd, 10);
-	subd_shutdown(ld->gossip, 10);
-	subd_shutdown(ld->hsm, 10);
+	ld->connectd = subd_shutdown(ld->connectd, 10);
+	ld->gossip = subd_shutdown(ld->gossip, 10);
+	ld->hsm = subd_shutdown(ld->hsm, 10);
 
 	/* Now we free all the HTLCs */
 	free_htlcs(ld, NULL);
@@ -617,6 +618,8 @@ int main(int argc, char *argv[])
 	struct lightningd *ld;
 	u32 min_blockheight, max_blockheight;
 	int connectd_gossipd_fd, pid_fd;
+	int stop_fd;
+	const char *stop_response;
 
 	/*~ What happens in strange locales should stay there. */
 	setup_locale();
@@ -722,14 +725,6 @@ int main(int argc, char *argv[])
 	/*~ Initialize the transaction filter with our pubkeys. */
 	init_txfilter(ld->wallet, ld->owned_txfilter);
 
-	/*~ Set up invoice autoclean. */
-	wallet_invoice_autoclean(ld->wallet,
-				 ld->ini_autocleaninvoice_cycle,
-				 ld->ini_autocleaninvoice_expiredby);
-
-	/*~ Pull peers, channels and HTLCs from db. */
-	load_channels_from_wallet(ld);
-
 	/*~ Get the blockheight we are currently at, UINT32_MAX is used to signal
 	 * an uninitialized wallet and that we should start off of groestlcoind's
 	 * current height */
@@ -746,6 +741,10 @@ int main(int argc, char *argv[])
 	else if (max_blockheight != UINT32_MAX)
 		max_blockheight -= ld->config.rescan;
 
+	/*~ Tell the wallet to start figuring out what to do for any reserved
+	 * unspent outputs we may have crashed with. */
+	wallet_clean_utxos(ld->wallet, ld->topology->bitcoind);
+
 	/*~ That's all of the wallet db operations for now. */
 	db_commit_transaction(ld->wallet->db);
 
@@ -753,6 +752,13 @@ int main(int argc, char *argv[])
 	 * talk to groestlcoind, so does its own db transactions. */
 	setup_topology(ld->topology, &ld->timers,
 		       min_blockheight, max_blockheight);
+
+	/*~ Pull peers, channels and HTLCs from db. Needs to happen after the
+	 *  topology is initialized since some decisions rely on being able to
+	 *  know the blockheight. */
+	db_begin_transaction(ld->wallet->db);
+	load_channels_from_wallet(ld);
+	db_commit_transaction(ld->wallet->db);
 
 	/*~ Now create the PID file: this errors out if there's already a
 	 * daemon running, so we call before trying to create an RPC socket. */
@@ -818,40 +824,29 @@ int main(int argc, char *argv[])
 
 	/*~ The root of every backtrace (almost).  This is our main event
 	 *  loop. */
-	for (;;) {
-		/* ~ccan/io's io_loop() continuously calls
-		 * io_poll_lightningd() for all file descriptors registered
-		 * with it, then calls their callbacks or closes them if they
-		 * fail, as appropriate.
-		 *
-		 * It will only exit if there's an expired timer, *or* someone
-		 * calls io_break, or if there are no more file descriptors
-		 * (which never happens in our code). */
-		struct timer *expired;
-		void *v = io_loop(&ld->timers, &expired);
+	void *io_loop_ret = io_loop_with_timers(ld);
+	/*~ io_loop_with_timers will only exit if we call io_break.
+	 *  At this point in code, we should use io_break(ld) to
+	 *  shut down.
+	 */
+	assert(io_loop_ret == ld);
 
-		/*~ We use io_break(ld) to shut down. */
-		if (v == ld)
-			break;
-
-		/*~ Notice that timers are called here in the event loop like
-		 * anything else, so there are no weird concurrency issues. */
-		if (expired) {
-			db_begin_transaction(ld->wallet->db);
-			timer_expired(ld, expired);
-			db_commit_transaction(ld->wallet->db);
-		}
-	}
+	/* Keep this fd around, to write final response at the end. */
+	stop_fd = io_conn_fd(ld->stop_conn);
+	io_close_taken_fd(ld->stop_conn);
+	stop_response = tal_steal(NULL, ld->stop_response);
 
 	shutdown_subdaemons(ld);
 
-	tal_free(ld->plugins);
+	/* Remove plugins. */
+	ld->plugins = tal_free(ld->plugins);
 
 	/* Clean up the JSON-RPC. This needs to happen in a DB transaction since
 	 * it might actually be touching the DB in some destructors, e.g.,
 	 * unreserving UTXOs (see #1737) */
 	db_begin_transaction(ld->wallet->db);
 	tal_free(ld->jsonrpc);
+	free_unreleased_txs(ld->wallet);
 	db_commit_transaction(ld->wallet->db);
 
 	remove(ld->pidfile);
@@ -863,6 +858,11 @@ int main(int argc, char *argv[])
 	opt_free_table();
 
 	daemon_shutdown();
+
+	/* Finally, send response to shutdown command */
+	write_all(stop_fd, stop_response, strlen(stop_response));
+	close(stop_fd);
+	tal_free(stop_response);
 
 	/*~ Farewell.  Next stop: hsmd/hsmd.c. */
 	return 0;

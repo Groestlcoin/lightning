@@ -152,6 +152,9 @@ static PRINTF_FMT(4,5)
 		master_badmsg(fromwire_peektype(msg_in), msg_in);
 	}
 
+	/*~ Nobody should give us bad requests; it's a sign something is broken */
+	status_broken("%s: %s", type_to_string(tmpctx, struct node_id, &c->id), str);
+
 	/*~ Note the use of NULL as the ctx arg to towire_hsmstatus_: only
 	 * use NULL as the allocation when we're about to immediately free it
 	 * or hand it off with take(), as here.  That makes it clear we don't
@@ -582,7 +585,7 @@ static struct io_plan *handle_ecdh(struct io_conn *conn,
 	 * we kill them for bad randomness (~1 in 2^127 if ss.data is random) */
 	node_key(&privkey, NULL);
 	if (secp256k1_ecdh(secp256k1_ctx, ss.data, &point.pubkey,
-			   privkey.secret.data) != 1) {
+			   privkey.secret.data, NULL, NULL) != 1) {
 		return bad_req_fmt(conn, c, msg_in, "secp256k1_ecdh fail");
 	}
 
@@ -630,6 +633,9 @@ static struct io_plan *handle_cannouncement_sig(struct io_conn *conn,
 	 * yourself should go ahead an implement.  Sometimes they're deceptive
 	 * quagmires which will cause you nothing but grief.  You decide! */
 
+	/*~ Christian uses TODO(cdecker) or FIXME(cdecker), but I'm sure he won't
+	 * mind if you fix this for him! */
+
 	/* FIXME: We should cache these. */
 	get_channel_seed(&c->id, c->dbid, &channel_seed);
 	derive_funding_key(&channel_seed, &funding_pubkey, &funding_privkey);
@@ -645,10 +651,10 @@ static struct io_plan *handle_cannouncement_sig(struct io_conn *conn,
 				   "bad cannounce length %zu",
 				   tal_count(ca));
 
-	/*~ Christian uses TODO(cdecker), but I'm sure he won't mind if you fix
-	 * this for him! */
-	/* TODO(cdecker) Check that this is actually a valid
-	 * channel_announcement */
+	if (fromwire_peektype(ca) != WIRE_CHANNEL_ANNOUNCEMENT)
+		return bad_req_fmt(conn, c, msg_in,
+				   "Invalid channel announcement");
+
 	node_key(&node_pkey, NULL);
 	sha256_double(&hash, ca + offset, tal_count(ca) - offset);
 
@@ -767,6 +773,12 @@ static struct io_plan *handle_sign_commitment_tx(struct io_conn *conn,
 					     &funding))
 		return bad_req(conn, c, msg_in);
 
+	/* Basic sanity checks. */
+	if (tx->wtx->num_inputs != 1)
+		return bad_req_fmt(conn, c, msg_in, "tx must have 1 input");
+	if (tx->wtx->num_outputs == 0)
+		return bad_req_fmt(conn, c, msg_in, "tx must have > 0 outputs");
+
 	get_channel_seed(&peer_id, dbid, &channel_seed);
 	derive_basepoints(&channel_seed,
 			  &local_funding_pubkey, NULL, &secrets, NULL);
@@ -819,6 +831,12 @@ static struct io_plan *handle_sign_remote_commitment_tx(struct io_conn *conn,
 						    &remote_funding_pubkey,
 						    &funding))
 		bad_req(conn, c, msg_in);
+
+	/* Basic sanity checks. */
+	if (tx->wtx->num_inputs != 1)
+		return bad_req_fmt(conn, c, msg_in, "tx must have 1 input");
+	if (tx->wtx->num_outputs == 0)
+		return bad_req_fmt(conn, c, msg_in, "tx must have > 0 outputs");
 
 	get_channel_seed(&c->id, c->dbid, &channel_seed);
 	derive_basepoints(&channel_seed,
@@ -1436,7 +1454,6 @@ static struct io_plan *handle_sign_withdrawal_tx(struct io_conn *conn,
 	u32 change_keyindex;
 	struct utxo **utxos;
 	struct bitcoin_tx *tx;
-	struct ext_key ext;
 	struct pubkey changekey;
 	u8 *scriptpubkey;
 
@@ -1445,15 +1462,13 @@ static struct io_plan *handle_sign_withdrawal_tx(struct io_conn *conn,
 					  &scriptpubkey, &utxos))
 		return bad_req(conn, c, msg_in);
 
-	if (bip32_key_from_parent(&secretstuff.bip32, change_keyindex,
-				  BIP32_FLAG_KEY_PUBLIC, &ext) != WALLY_OK)
+	if (!bip32_pubkey(&secretstuff.bip32, &changekey, change_keyindex))
 		return bad_req_fmt(conn, c, msg_in,
 				   "Failed to get key %u", change_keyindex);
 
-	pubkey_from_der(ext.pub_key, sizeof(ext.pub_key), &changekey);
 	tx = withdraw_tx(tmpctx, cast_const2(const struct utxo **, utxos),
 			 scriptpubkey, satoshi_out,
-			 &changekey, change_out, NULL);
+			 &changekey, change_out, NULL, NULL);
 
 	sign_all_inputs(tx, utxos);
 
@@ -1555,7 +1570,10 @@ static struct io_plan *handle_sign_node_announcement(struct io_conn *conn,
 		return bad_req_fmt(conn, c, msg_in,
 				   "Node announcement too short");
 
-	/* FIXME(cdecker) Check the node announcement's content */
+	if (fromwire_peektype(ann) != WIRE_NODE_ANNOUNCEMENT)
+		return bad_req_fmt(conn, c, msg_in,
+				   "Invalid announcement");
+
 	node_key(&node_pkey, NULL);
 	sha256_double(&hash, ann + offset, tal_count(ann) - offset);
 

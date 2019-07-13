@@ -243,7 +243,7 @@ static void send_and_fulfill_htlc(struct channel *channel,
 	sha256(&rhash, &r, sizeof(r));
 
 	assert(channel_add_htlc(channel, sender, 1337, msatoshi, 900, &rhash,
-				dummy_routing, NULL) == CHANNEL_ERR_ADD_OK);
+				dummy_routing, NULL, NULL) == CHANNEL_ERR_ADD_OK);
 
 	changed_htlcs = tal_arr(channel, const struct htlc *, 0);
 

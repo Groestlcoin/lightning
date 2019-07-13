@@ -6,13 +6,13 @@
 #include <bitcoin/base58.h>
 #include <bitcoin/script.h>
 #include <ccan/array_size/array_size.h>
+#include <ccan/json_escape/json_escape.h>
 #include <ccan/str/hex/hex.h>
 #include <ccan/tal/str/str.h>
 #include <common/amount.h>
 #include <common/bech32.h>
 #include <common/bolt11.h>
 #include <common/json_command.h>
-#include <common/json_escaped.h>
 #include <common/json_helpers.h>
 #include <common/jsonrpc_errors.h>
 #include <common/overflows.h>
@@ -46,18 +46,18 @@ static const char *invoice_status_str(const struct invoice_details *inv)
 static void json_add_invoice(struct json_stream *response,
 			     const struct invoice_details *inv)
 {
-	json_object_start(response, NULL);
 	json_add_escaped_string(response, "label", inv->label);
 	json_add_string(response, "bolt11", inv->bolt11);
 	json_add_hex(response, "payment_hash", &inv->rhash, sizeof(inv->rhash));
 	if (inv->msat)
-		json_add_amount_msat(response, *inv->msat,
-				     "msatoshi", "amount_msat");
+		json_add_amount_msat_compat(response, *inv->msat,
+					    "msatoshi", "amount_msat");
 	json_add_string(response, "status", invoice_status_str(inv));
 	if (inv->state == PAID) {
 		json_add_u64(response, "pay_index", inv->pay_index);
-		json_add_amount_msat(response, inv->received,
-				     "msatoshi_received", "amount_received_msat");
+		json_add_amount_msat_compat(response, inv->received,
+					    "msatoshi_received",
+					    "amount_received_msat");
 		json_add_u64(response, "paid_at", inv->paid_timestamp);
 	}
 
@@ -65,8 +65,6 @@ static void json_add_invoice(struct json_stream *response,
 		json_add_string(response, "description", inv->description);
 
 	json_add_u64(response, "expires_at", inv->expiry_time);
-
-	json_object_end(response);
 }
 
 static struct command_result *tell_waiter(struct command *cmd,
@@ -85,6 +83,7 @@ static struct command_result *tell_waiter(struct command *cmd,
 		response = json_stream_fail(cmd, -2,
 					    "invoice expired during wait");
 		json_add_invoice(response, details);
+		json_object_end(response);
 		return command_failed(cmd, response);
 	}
 }
@@ -107,7 +106,7 @@ struct invoice_payment_hook_payload {
 	/* Set to NULL if it is deleted while waiting for plugin */
 	struct htlc_in *hin;
 	/* What invoice it's trying to pay. */
-	const struct json_escaped *label;
+	const struct json_escape *label;
 	/* Amount it's offering. */
 	struct amount_msat msat;
 	/* Preimage we'll give it if succeeds. */
@@ -129,36 +128,6 @@ invoice_payment_serialize(struct invoice_payment_hook_payload *payload,
 	json_object_end(stream); /* .payment */
 }
 
-/* We cheat and return 0 (not a valid onion_type) for "OK" */
-static enum onion_type
-invoice_payment_deserialize(const tal_t *ctx, const char *buffer,
-			    const jsmntok_t *toks)
-{
-	const jsmntok_t *resulttok, *t;
-	unsigned int val;
-
-	resulttok = json_get_member(buffer, toks, "result");
-	if (!resulttok)
-		fatal("Invalid invoice_payment_hook response: %.*s",
-		      toks[0].end - toks[1].start, buffer);
-
-	t = json_get_member(buffer, resulttok, "failure_code");
-	if (!t)
-		return 0;
-
-	if (!json_to_number(buffer, t, &val))
-		fatal("Invalid invoice_payment_hook failure_code: %.*s",
-		      toks[0].end - toks[1].start, buffer);
-
-	/* UPDATE isn't valid for final nodes to return, and I think we
-	 * assert elsewhere that we don't do this! */
-	if (val & UPDATE)
-		fatal("Invalid invoice_payment_hook UPDATE failure_code: %.*s",
-		      toks[0].end - toks[1].start, buffer);
-
-	return val;
-}
-
 /* Peer dies?  Remove hin ptr from payload so we know to ignore plugin return */
 static void invoice_payload_remove_hin(struct htlc_in *hin,
 				       struct invoice_payment_hook_payload *payload)
@@ -167,12 +136,42 @@ static void invoice_payload_remove_hin(struct htlc_in *hin,
 	payload->hin = NULL;
 }
 
+static bool hook_gives_failcode(const char *buffer,
+				const jsmntok_t *toks,
+				enum onion_type *failcode)
+{
+	const jsmntok_t *t;
+	unsigned int val;
+
+	/* No plugin registered on hook at all? */
+	if (!buffer)
+		return false;
+
+	t = json_get_member(buffer, toks, "failure_code");
+	if (!t)
+		return false;
+
+	if (!json_to_number(buffer, t, &val))
+		fatal("Invalid invoice_payment_hook failure_code: %.*s",
+		      toks[0].end - toks[1].start, buffer);
+
+	/* UPDATE isn't valid for final nodes to return, and I think
+	 * we assert elsewhere that we don't do this! */
+	if (val & UPDATE)
+		fatal("Invalid invoice_payment_hook UPDATE failure_code: %.*s",
+		      toks[0].end - toks[1].start, buffer);
+	*failcode = val;
+	return true;
+}
+
 static void
 invoice_payment_hook_cb(struct invoice_payment_hook_payload *payload,
-			enum onion_type failcode)
+			const char *buffer,
+			const jsmntok_t *toks)
 {
 	struct lightningd *ld = payload->ld;
 	struct invoice invoice;
+	enum onion_type failcode;
 
 	tal_del_destructor2(payload->hin, invoice_payload_remove_hin, payload);
 	/* We want to free this, whatever happens. */
@@ -193,7 +192,8 @@ invoice_payment_hook_cb(struct invoice_payment_hook_payload *payload,
 		return;
 	}
 
-	if (failcode != 0) {
+	/* Did we have a hook result? */
+	if (hook_gives_failcode(buffer, toks, &failcode)) {
 		fail_htlc(payload->hin, failcode);
 		return;
 	}
@@ -209,9 +209,7 @@ REGISTER_PLUGIN_HOOK(invoice_payment,
 		     invoice_payment_hook_cb,
 		     struct invoice_payment_hook_payload *,
 		     invoice_payment_serialize,
-		     struct invoice_payment_hook_payload *,
-		     invoice_payment_deserialize,
-		     enum onion_type);
+		     struct invoice_payment_hook_payload *);
 
 void invoice_try_pay(struct lightningd *ld,
 		     struct htlc_in *hin,
@@ -313,27 +311,45 @@ static struct command_result *parse_fallback(struct command *cmd,
 	return NULL;
 }
 
-/* BOLT11 struct wants an array of arrays (can provide multiple routes) */
+/*
+ * From array of incoming channels [inchan], find suitable ones for
+ * a payment-to-us of [amount_needed], using criteria:
+ * 1. Channel's peer is known, in state CHANNELD_NORMAL and is online.
+ * 2. Channel's peer capacity to pay us is sufficient.
+ *
+ * Then use weighted reservoir sampling, which makes probing channel balances
+ * harder, to choose one channel from the set of suitable channels. It favors
+ * channels that have less balance on our side as fraction of their capacity.
+ *
+ * [any_offline] is set if the peer of any suitable channel appears offline.
+ */
 static struct route_info **select_inchan(const tal_t *ctx,
 					 struct lightningd *ld,
-					 struct amount_msat capacity_needed,
+					 struct amount_msat amount_needed,
 					 const struct route_info *inchans,
 					 bool *any_offline)
 {
-	const struct route_info *r = NULL;
-	struct route_info **ret;
+	/* BOLT11 struct wants an array of arrays (can provide multiple routes) */
+	struct route_info **R;
+	double wsum, p;
+
+	struct sample {
+		const struct route_info *route;
+		double weight;
+	};
+
+	struct sample *S = tal_arr(tmpctx, struct sample, 0);
 
 	*any_offline = false;
 
-	/* Weighted reservoir sampling.
-	 * Based on https://en.wikipedia.org/wiki/Reservoir_sampling
-	 *	 Algorithm A-Chao
-	 */
-	u64 wsum = 0;
+	/* Collect suitable channels and assign each a weight.  */
 	for (size_t i = 0; i < tal_count(inchans); i++) {
 		struct peer *peer;
 		struct channel *c;
-		struct amount_msat avail, excess;
+		struct sample sample;
+		struct amount_msat their_msat, capacity_to_pay_us, excess, capacity;
+		struct amount_sat cumulative_reserve;
+		double excess_frac;
 
 		/* Do we know about this peer? */
 		peer = peer_by_id(ld, &inchans[i].pubkey);
@@ -345,8 +361,23 @@ static struct route_info **select_inchan(const tal_t *ctx,
 		if (!c)
 			continue;
 
-		/* Does it have sufficient capacity. */
-		if (!amount_sat_sub_msat(&avail, c->funding, c->our_msat)) {
+		/* Channel balance as seen by our node:
+
+		        |<----------------- capacity ----------------->|
+		        .                                              .
+		        .             |<------------------ their_msat -------------------->|
+		        .             |                                .                   |
+		        .             |<----- capacity_to_pay_us ----->|<- their_reserve ->|
+		        .             |                                |                   |
+		        .             |<- amount_needed --><- excess ->|                   |
+		        .             |                                |                   |
+		|-------|-------------|--------------------------------|-------------------|
+		0       ^             ^                                ^                funding
+		   our_reserve     our_msat	*/
+
+		/* Does the peer have sufficient balance to pay us. */
+		if (!amount_sat_sub_msat(&their_msat, c->funding, c->our_msat)) {
+
 			log_broken(ld->log,
 				   "underflow: funding %s - our_msat %s",
 				   type_to_string(tmpctx, struct amount_sat,
@@ -356,12 +387,12 @@ static struct route_info **select_inchan(const tal_t *ctx,
 			continue;
 		}
 
-		/* Even after reserve taken into account */
-		if (!amount_msat_sub_sat(&avail,
-					 avail, c->our_config.channel_reserve))
+		/* Even after taken into account their reserve */
+		if (!amount_msat_sub_sat(&capacity_to_pay_us, their_msat,
+				c->our_config.channel_reserve))
 			continue;
 
-		if (!amount_msat_sub(&excess, avail, capacity_needed))
+		if (!amount_msat_sub(&excess, capacity_to_pay_us, amount_needed))
 			continue;
 
 		/* Is it offline? */
@@ -370,19 +401,44 @@ static struct route_info **select_inchan(const tal_t *ctx,
 			continue;
 		}
 
-		/* Avoid divide-by-zero corner case. */
-		wsum += excess.millisatoshis + 1; /* Raw: rand select */
-		if (pseudorand(1ULL << 32)
-		    <= ((excess.millisatoshis + 1) << 32) / wsum) /* Raw: rand select */
-			r = &inchans[i];
+		/* Find capacity and calculate its excess fraction */
+		if (!amount_sat_add(&cumulative_reserve,
+				c->our_config.channel_reserve,
+				c->channel_info.their_config.channel_reserve)
+			|| !amount_sat_to_msat(&capacity, c->funding)
+			|| !amount_msat_sub_sat(&capacity, capacity, cumulative_reserve)) {
+			log_broken(ld->log, "Channel %s capacity overflow!",
+					type_to_string(tmpctx, struct short_channel_id, c->scid));
+			continue;
+		}
+
+		excess_frac = (double)excess.millisatoshis / capacity.millisatoshis; /* Raw: double fraction */
+
+		sample.route = &inchans[i];
+		sample.weight = excess_frac;
+		tal_arr_expand(&S, sample);
 	}
 
-	if (!r)
+	if (!tal_count(S))
 		return NULL;
 
-	ret = tal_arr(ctx, struct route_info *, 1);
-	ret[0] = tal_dup(ret, struct route_info, r);
-	return ret;
+	/* Use weighted reservoir sampling, see:
+	 * https://en.wikipedia.org/wiki/Reservoir_sampling#Algorithm_A-Chao
+	 * But (currently) the result will consist of only one sample (k=1) */
+	R = tal_arr(ctx, struct route_info *, 1);
+	R[0] = tal_dup(R, struct route_info, S[0].route);
+	wsum = S[0].weight;
+
+	for (size_t i = 1; i < tal_count(S); i++) {
+		wsum += S[i].weight;
+		p = S[i].weight / wsum;
+		double random_1 = pseudorand_double();	/* range [0,1) */
+
+		if (random_1 <= p)
+			R[0] = tal_dup(R, struct route_info, S[i].route);
+	}
+
+	return R;
 }
 
 /* Encapsulating struct while we wait for gossipd to give us incoming channels */
@@ -390,7 +446,7 @@ struct invoice_info {
 	struct command *cmd;
 	struct preimage payment_preimage;
 	struct bolt11 *b11;
-	struct json_escaped *label;
+	struct json_escape *label;
 };
 
 static void gossipd_incoming_channels_reply(struct subd *gossipd,
@@ -412,6 +468,7 @@ static void gossipd_incoming_channels_reply(struct subd *gossipd,
 
 #if DEVELOPER
 	/* dev-routes overrides this. */
+	any_offline = false;
 	if (!info->b11->routes)
 #endif
 	info->b11->routes
@@ -453,7 +510,6 @@ static void gossipd_incoming_channels_reply(struct subd *gossipd,
 	details = wallet_invoice_details(info, wallet, invoice);
 
 	response = json_stream_success(info->cmd);
-	json_object_start(response, NULL);
 	json_add_hex(response, "payment_hash", details->rhash.u.u8,
 		     sizeof(details->rhash));
 	json_add_u64(response, "expires_at", details->expiry_time);
@@ -479,7 +535,6 @@ static void gossipd_incoming_channels_reply(struct subd *gossipd,
 					"No channels have sufficient"
 					" incoming capacity");
 	}
-	json_object_end(response);
 
 	was_pending(command_success(info->cmd, response));
 }
@@ -728,16 +783,19 @@ static struct command_result *json_invoice(struct command *cmd,
 }
 
 static const struct json_command invoice_command = {
-    "invoice", json_invoice, "Create an invoice for {msatoshi} with {label} "
-			     "and {description} with optional {expiry} seconds "
-			     "(default 1 hour), optional {fallbacks} address list"
-                             "(default empty list) and optional {preimage} "
-			     "(default autogenerated)"};
+	"invoice",
+	"payment",
+	json_invoice,
+	"Create an invoice for {msatoshi} with {label} "
+	"and {description} with optional {expiry} seconds "
+	"(default 1 hour), optional {fallbacks} address list"
+	"(default empty list) and optional {preimage} "
+	"(default autogenerated)"};
 AUTODATA(json_command, &invoice_command);
 
 static void json_add_invoices(struct json_stream *response,
 			      struct wallet *wallet,
-			      const struct json_escaped *label)
+			      const struct json_escape *label)
 {
 	struct invoice_iterator it;
 	const struct invoice_details *details;
@@ -747,7 +805,9 @@ static void json_add_invoices(struct json_stream *response,
 		struct invoice invoice;
 		if (wallet_invoice_find_by_label(wallet, &invoice, label)) {
 			details = wallet_invoice_details(response, wallet, invoice);
+			json_object_start(response, NULL);
 			json_add_invoice(response, details);
+			json_object_end(response);
 		}
 		return;
 	}
@@ -755,7 +815,9 @@ static void json_add_invoices(struct json_stream *response,
 	memset(&it, 0, sizeof(it));
 	while (wallet_invoice_iterate(wallet, &it)) {
 		details = wallet_invoice_iterator_deref(response, wallet, &it);
+		json_object_start(response, NULL);
 		json_add_invoice(response, details);
+		json_object_end(response);
 	}
 }
 
@@ -764,7 +826,7 @@ static struct command_result *json_listinvoices(struct command *cmd,
 						const jsmntok_t *obj UNNEEDED,
 						const jsmntok_t *params)
 {
-	struct json_escaped *label;
+	struct json_escape *label;
 	struct json_stream *response;
 	struct wallet *wallet = cmd->ld->wallet;
 	if (!param(cmd, buffer, params,
@@ -772,16 +834,15 @@ static struct command_result *json_listinvoices(struct command *cmd,
 		   NULL))
 		return command_param_failed();
 	response = json_stream_success(cmd);
-	json_object_start(response, NULL);
 	json_array_start(response, "invoices");
 	json_add_invoices(response, wallet, label);
 	json_array_end(response);
-	json_object_end(response);
 	return command_success(cmd, response);
 }
 
 static const struct json_command listinvoices_command = {
 	"listinvoices",
+	"payment",
 	json_listinvoices,
 	"Show invoice {label} (or all, if no {label})"
 };
@@ -796,7 +857,7 @@ static struct command_result *json_delinvoice(struct command *cmd,
 	const struct invoice_details *details;
 	struct json_stream *response;
 	const char *status, *actual_status;
-	struct json_escaped *label;
+	struct json_escape *label;
 	struct wallet *wallet = cmd->ld->wallet;
 
 	if (!param(cmd, buffer, params,
@@ -834,6 +895,7 @@ static struct command_result *json_delinvoice(struct command *cmd,
 
 static const struct json_command delinvoice_command = {
 	"delinvoice",
+	"payment",
 	json_delinvoice,
 	"Delete unpaid invoice {label} with {status}",
 };
@@ -854,41 +916,15 @@ static struct command_result *json_delexpiredinvoice(struct command *cmd,
 
 	wallet_invoice_delete_expired(cmd->ld->wallet, *maxexpirytime);
 
-	return command_success(cmd, null_response(cmd));
+	return command_success(cmd, json_stream_success(cmd));
 }
 static const struct json_command delexpiredinvoice_command = {
 	"delexpiredinvoice",
+	"payment",
 	json_delexpiredinvoice,
 	"Delete all expired invoices that expired as of given {maxexpirytime} (a UNIX epoch time), or all expired invoices if not specified"
 };
 AUTODATA(json_command, &delexpiredinvoice_command);
-
-static struct command_result *json_autocleaninvoice(struct command *cmd,
-						    const char *buffer,
-						    const jsmntok_t *obj UNNEEDED,
-						    const jsmntok_t *params)
-{
-	u64 *cycle;
-	u64 *exby;
-
-	if (!param(cmd, buffer, params,
-		   p_opt_def("cycle_seconds", param_u64, &cycle, 3600),
-		   p_opt_def("expired_by", param_u64, &exby, 86400),
-		   NULL))
-		return command_param_failed();
-
-	wallet_invoice_autoclean(cmd->ld->wallet, *cycle, *exby);
-
-	return command_success(cmd, null_response(cmd));
-}
-static const struct json_command autocleaninvoice_command = {
-	"autocleaninvoice",
-	json_autocleaninvoice,
-	"Set up autoclean of expired invoices. "
-	"Perform cleanup every {cycle_seconds} (default 3600), or disable autoclean if 0. "
-	"Clean up expired invoices that have expired for {expired_by} seconds (default 86400). "
-};
-AUTODATA(json_command, &autocleaninvoice_command);
 
 static struct command_result *json_waitanyinvoice(struct command *cmd,
 						  const char *buffer,
@@ -920,6 +956,7 @@ static struct command_result *json_waitanyinvoice(struct command *cmd,
 
 static const struct json_command waitanyinvoice_command = {
 	"waitanyinvoice",
+	"payment",
 	json_waitanyinvoice,
 	"Wait for the next invoice to be paid, after {lastpay_index} (if supplied)"
 };
@@ -939,7 +976,7 @@ static struct command_result *json_waitinvoice(struct command *cmd,
 	struct invoice i;
 	const struct invoice_details *details;
 	struct wallet *wallet = cmd->ld->wallet;
-	struct json_escaped *label;
+	struct json_escape *label;
 
 	if (!param(cmd, buffer, params,
 		   p_req("label", param_label, &label),
@@ -966,6 +1003,7 @@ static struct command_result *json_waitinvoice(struct command *cmd,
 
 static const struct json_command waitinvoice_command = {
 	"waitinvoice",
+	"payment",
 	json_waitinvoice,
 	"Wait for an incoming payment matching the invoice with {label}, or if the invoice expires"
 };
@@ -984,11 +1022,11 @@ static void json_add_fallback(struct json_stream *response,
 	if (is_p2pkh(fallback, &pkh)) {
 		json_add_string(response, "type", "P2PKH");
 		json_add_string(response, "addr",
-				bitcoin_to_base58(tmpctx, chain->testnet, &pkh));
+				bitcoin_to_base58(tmpctx, chain, &pkh));
 	} else if (is_p2sh(fallback, &sh)) {
 		json_add_string(response, "type", "P2SH");
 		json_add_string(response, "addr",
-				p2sh_to_base58(tmpctx, chain->testnet, &sh));
+				p2sh_to_base58(tmpctx, chain, &sh));
 	} else if (is_p2wpkh(fallback, &pkh)) {
 		char out[73 + strlen(chain->bip173_name)];
 		json_add_string(response, "type", "P2WPKH");
@@ -1029,17 +1067,15 @@ static struct command_result *json_decodepay(struct command *cmd,
 	}
 
 	response = json_stream_success(cmd);
-	json_object_start(response, NULL);
-
 	json_add_string(response, "currency", b11->chain->bip173_name);
 	json_add_u64(response, "created_at", b11->timestamp);
 	json_add_u64(response, "expiry", b11->expiry);
 	json_add_node_id(response, "payee", &b11->receiver_id);
         if (b11->msat)
-                json_add_amount_msat(response, *b11->msat,
-				     "msatoshi", "amount_msat");
+                json_add_amount_msat_compat(response, *b11->msat,
+					    "msatoshi", "amount_msat");
         if (b11->description) {
-		struct json_escaped *esc = json_escape(NULL, b11->description);
+		struct json_escape *esc = json_escape(NULL, b11->description);
                 json_add_escaped_string(response, "description", take(esc));
 	}
         if (b11->description_hash)
@@ -1111,12 +1147,12 @@ static struct command_result *json_decodepay(struct command *cmd,
 	json_add_string(response, "signature",
                         type_to_string(cmd, secp256k1_ecdsa_signature,
                                        &b11->sig));
-	json_object_end(response);
 	return command_success(cmd, response);
 }
 
 static const struct json_command decodepay_command = {
 	"decodepay",
+	"payment",
 	json_decodepay,
 	"Decode {bolt11}, using {description} if necessary"
 };
