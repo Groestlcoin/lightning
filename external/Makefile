@@ -48,6 +48,9 @@ $(LIBWALLY_HEADERS) $(LIBSECP_HEADERS): submodcheck
 # libsecp included in libwally.
 # Wildcards here are magic.  See http://stackoverflow.com/questions/2973445/gnu-makefile-rule-generating-a-few-targets-from-a-single-source-file
 external/libsecp256k1.% external/libwallycore.%: external/libwally-core/src/secp256k1/libsecp256k1.la external/libwally-core/src/libwallycore.la
+	#GRS patch
+	grep -rl 'wally_sha256d' external/libwally-core/src/transaction.c | xargs sed -i 's/wally_sha256d/wally_sha256/g';exit 0
+	#*********
 	$(MAKE) -C external/libwally-core DESTDIR=$$(pwd)/external install-exec
 
 external/libwally-core/src/libwallycore.% external/libwally-core/src/secp256k1/libsecp256k1.%: $(LIBWALLY_HEADERS) $(LIBSECP_HEADERS)
