@@ -356,7 +356,7 @@ static struct command_result *json_withdraw(struct command *cmd,
 
 static const struct json_command withdraw_command = {
 	"withdraw",
-    "Send to {destination} address {satoshi} (or 'all') amount via Groestlcoin "
+    "Send to {destination} address {satoshi} (or 'all') amount via Groestlcoin ",
 	json_withdraw,
 	"transaction, at optional {feerate}",
 	false,

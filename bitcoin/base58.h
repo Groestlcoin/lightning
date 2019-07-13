@@ -30,6 +30,10 @@ bool key_from_base58(const char *base58, size_t base58_len,
 
 /* Decode a p2pkh or p2sh into the ripemd160 hash */
 
+bool ripemd160_from_base58(u8 *version, struct ripemd160 *rmd,
+			   const char *base58, size_t base58_len);
+
+
 extern bool (*b58_sha256_impl)(void *, const void *, size_t);
 
 extern bool b58tobin(void *bin, size_t *binsz, const char *b58, size_t b58sz);

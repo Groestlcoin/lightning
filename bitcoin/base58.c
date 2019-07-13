@@ -121,7 +121,8 @@ bool b58tobin(void *bin, size_t *binszp, const char *b58, size_t b58sz)
 static
 bool my_dblsha256(void *hash, const void *data, size_t datasz)
 {
-		return b58_sha256_impl(hash, data, datasz);
+		groestlhash((void *)hash, (void *)data, datasz);
+		return true;
 }
 
 int b58check(const void *bin, size_t binsz, const char *base58str, size_t b58sz)
@@ -206,7 +207,7 @@ bool b58check_enc(char *b58c, size_t *b58c_sz, uint8_t ver, const void *data, si
 }
 
 
-	groestlhash((void *)digest, (void *)data, datasz);
+	
 
 static char *to_base58(const tal_t *ctx, u8 version,
 			   const struct ripemd160 *rmd)
@@ -266,13 +267,6 @@ bool bitcoin_from_base58(u8 *version, struct bitcoin_address *addr,
 	return from_base58(version, &addr->addr, base58, len);
 }
 
-
-			  struct ripemd160 *p2sh,
-			  const char *base58, size_t len)
-{
-
-	return from_base58(version, p2sh, base58, len);
-}
 
 bool ripemd160_from_base58(u8 *version, struct ripemd160 *rmd,
 			   const char *base58, size_t base58_len)

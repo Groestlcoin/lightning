@@ -978,7 +978,7 @@ static const char *segwit_addr_net_decode(int *witness_version,
 					  const char *addrz,
 					  const struct chainparams *chainparams)
 {
-	const char *network[] = { "grs" , "tgrs" , "grsrt" };
+	if (segwit_addr_decode(witness_version, witness_program,
 			       witness_program_len, chainparams->bip173_name,
 			       addrz))
 		return chainparams->bip173_name;

@@ -151,7 +151,7 @@ static const struct htlc **include_htlcs(struct channel *channel, enum side side
 		memset(&preimage, i, sizeof(preimage));
 		sha256(&hash, &preimage, sizeof(preimage));
 		e = channel_add_htlc(channel, sender, i, msatoshi, 500+i, &hash,
-					 dummy_routing, NULL);
+					 dummy_routing, NULL, NULL);
 		assert(e == CHANNEL_ERR_ADD_OK);
 		htlcs[i] = channel_get_htlc(channel, sender, i);
 	}

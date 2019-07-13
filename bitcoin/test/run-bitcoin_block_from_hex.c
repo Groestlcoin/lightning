@@ -1,5 +1,7 @@
 #include "../block.c"
 #include "../pullpush.c"
+#include "../sph_groestl.c"
+#include "../groestl.c"
 #include "../shadouble.c"
 #include "../tx.c"
 #include "../varint.c"

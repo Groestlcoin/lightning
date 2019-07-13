@@ -1,4 +1,4 @@
-#include "shadouble.h"
+#include <bitcoin/shadouble.h>
 #include <bitcoin/groestl.h>
 #include <ccan/mem/mem.h>
 #include <common/type_to_string.h>
