@@ -238,7 +238,7 @@ static char *to_base58(const tal_t *ctx, u8 version,
 char *bitcoin_to_base58(const tal_t *ctx, bool test_net,
 			const struct bitcoin_address *addr)
 {
-	return to_base58(ctx, test_net ? 111 : 0, &addr->addr);
+	return to_base58(ctx, test_net ? 111 : 28, &addr->addr);
 }
 
 char *p2sh_to_base58(const tal_t *ctx, bool test_net,
@@ -348,7 +348,7 @@ static char *to_base58(const tal_t *ctx, u8 version,
 char *bitcoin_to_base58(const tal_t *ctx, bool test_net,
 			const struct bitcoin_address *addr)
 {
-	return to_base58(ctx, test_net ? 111 : 0, &addr->addr);
+	return to_base58(ctx, test_net ? 111 : 28, &addr->addr);
 }
 
 char *p2sh_to_base58(const tal_t *ctx, bool test_net,
@@ -386,7 +386,7 @@ bool bitcoin_from_base58(bool *test_net,
 
 	if (version == 111)
 		*test_net = true;
-	else if (version == 0)
+	else if (version == 28)
 		*test_net = false;
 	else
 		return false;
