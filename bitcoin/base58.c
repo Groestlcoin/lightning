@@ -214,123 +214,7 @@ bool b58check_enc(char *b58c, size_t *b58c_sz, uint8_t ver, const void *data, si
 	return b58enc(b58c, b58c_sz, buf, 1 + datasz + 4);
 }
 
-#ifdef USE_GRS_LIBWALLY
 
-
-static char *to_base58(const tal_t *ctx, u8 version,
-			   const struct ripemd160 *rmd)
-{
-	char *out;
-	size_t total_length = sizeof(*rmd) + 1;
-	u8 buf[total_length];
-	buf[0] = version;
-	memcpy(buf + 1, rmd, sizeof(*rmd));
-
-	if (wally_base58_from_bytes((const unsigned char *) buf, total_length, BASE58_FLAG_CHECKSUM, &out) != WALLY_OK) {
-		return NULL;
-	}else{
-		char *res = tal_strdup(ctx, out);
-		wally_free_string(out);
-		return res;
-	}
-}
-
-char *bitcoin_to_base58(const tal_t *ctx, bool test_net,
-			const struct bitcoin_address *addr)
-{
-	return to_base58(ctx, test_net ? 111 : 28, &addr->addr);
-}
-
-char *p2sh_to_base58(const tal_t *ctx, bool test_net,
-			 const struct ripemd160 *p2sh)
-{
-	return to_base58(ctx, test_net ? 196 : 5, p2sh);
-}
-
-static bool from_base58(u8 *version,
-			struct ripemd160 *rmd,
-			const char *base58, size_t base58_len)
-{
-	u8 buf[1 + sizeof(*rmd) + 4];
-	/* Avoid memcheck complaining if decoding resulted in a short value */
-	size_t buflen = sizeof(buf);
-	memset(buf, 0, buflen);
-	char *terminated_base58 = tal_dup_arr(NULL, char, base58, base58_len, 1);
-	terminated_base58[base58_len] = '\0';
-
-	size_t written = 0;
-	int r = wally_base58_to_bytes(terminated_base58, BASE58_FLAG_CHECKSUM, buf, buflen, &written);
-	tal_free(terminated_base58);
-	if (r != WALLY_OK || written > buflen) {
-		return false;
-	}
-	*version = buf[0];
-	memcpy(rmd, buf + 1, sizeof(*rmd));
-	return true;
-}
-
-bool bitcoin_from_base58(u8 *version, struct bitcoin_address *addr,
-			 const char *base58, size_t len)
-{
-	return from_base58(version, &addr->addr, base58, len);
-}
-
-
-bool p2sh_from_base58(u8 *version, struct ripemd160 *p2sh, const char *base58,
-		      size_t len)
-{
-
-	return from_base58(version, p2sh, base58, len);
-}
-
-bool ripemd160_from_base58(u8 *version, struct ripemd160 *rmd,
-			   const char *base58, size_t base58_len)
-{
-	return from_base58(version, rmd, base58, base58_len);
-}
-
-bool key_from_base58(const char *base58, size_t base58_len,
-			 bool *test_net, struct privkey *priv, struct pubkey *key)
-{
-	// 1 byte version, 32 byte private key, 1 byte compressed, 4 byte checksum
-	u8 keybuf[1 + 32 + 1 + 4];
-	char *terminated_base58 = tal_dup_arr(NULL, char, base58, base58_len, 1);
-	terminated_base58[base58_len] = '\0';
-	size_t keybuflen = sizeof(keybuf);
-
-
-	size_t written = 0;
-	int r = wally_base58_to_bytes(terminated_base58, BASE58_FLAG_CHECKSUM, keybuf, keybuflen, &written);
-	wally_bzero(terminated_base58, base58_len + 1);
-	tal_free(terminated_base58);
-	if (r != WALLY_OK || written > keybuflen)
-		return false;
-
-	/* Byte after key should be 1 to represent a compressed key. */
-	if (keybuf[1 + 32] != 1)
-		return false;
-
-	if (keybuf[0] == 128)
-		*test_net = false;
-	else if (keybuf[0] == 239)
-		*test_net = true;
-	else
-		return false;
-
-	/* Copy out secret. */
-	memcpy(priv->secret.data, keybuf + 1, sizeof(priv->secret.data));
-
-	if (!secp256k1_ec_seckey_verify(secp256k1_ctx, priv->secret.data))
-		return false;
-
-	/* Get public key, too. */
-	if (!pubkey_from_privkey(priv, key))
-		return false;
-
-	return true;
-}
-
-#else
 static char *to_base58(const tal_t *ctx, u8 version,
 			   const struct ripemd160 *rmd)
 {
@@ -345,16 +229,16 @@ static char *to_base58(const tal_t *ctx, u8 version,
 	}
 }
 
-char *bitcoin_to_base58(const tal_t *ctx, bool test_net,
+char *bitcoin_to_base58(const tal_t *ctx, const struct chainparams *chainparams,
 			const struct bitcoin_address *addr)
 {
-	return to_base58(ctx, test_net ? 111 : 28, &addr->addr);
+	return to_base58(ctx, chainparams->p2pkh_version, &addr->addr);
 }
 
-char *p2sh_to_base58(const tal_t *ctx, bool test_net,
+char *p2sh_to_base58(const tal_t *ctx, const struct chainparams *chainparams,
 			 const struct ripemd160 *p2sh)
 {
-	return to_base58(ctx, test_net ? 196 : 5, p2sh);
+	return to_base58(ctx, chainparams->p2sh_version, p2sh);
 }
 
 static bool from_base58(u8 *version,
@@ -375,40 +259,28 @@ static bool from_base58(u8 *version,
 	return r >= 0;
 }
 
-bool bitcoin_from_base58(bool *test_net,
+bool bitcoin_from_base58(u8 *version,
 			 struct bitcoin_address *addr,
 			 const char *base58, size_t len)
 {
-	u8 version;
-
-	if (!from_base58(&version, &addr->addr, base58, len))
+	if (!from_base58(version, &addr->addr, base58, len))
 		return false;
 
-	if (version == 111)
-		*test_net = true;
-	else if (version == 28)
-		*test_net = false;
-	else
-		return false;
-	return true;
+	if (( *version == 111) || ( *version == 36))
+		return true;
+	return false;
 }
 
-bool p2sh_from_base58(bool *test_net,
+bool p2sh_from_base58(u8 *version,
 			  struct ripemd160 *p2sh,
 			  const char *base58, size_t len)
 {
-	u8 version;
-
-	if (!from_base58(&version, p2sh, base58, len))
+	if (!from_base58(version, p2sh, base58, len))
 		return false;
 
-	if (version == 196)
-		*test_net = true;
-	else if (version == 5)
-		*test_net = false;
-	else
-		return false;
-	return true;
+	if (( *version == 196) || ( *version == 5))
+		return true;
+	return false;
 }
 
 bool ripemd160_from_base58(u8 *version, struct ripemd160 *rmd,
@@ -454,4 +326,3 @@ bool key_from_base58(const char *base58, size_t base58_len,
 
 	return true;
 }
-#endif

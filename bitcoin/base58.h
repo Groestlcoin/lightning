@@ -1,7 +1,7 @@
 #ifndef LIGHTNING_BITCOIN_BASE58_H
 #define LIGHTNING_BITCOIN_BASE58_H
 #include "config.h"
-
+#include <bitcoin/chainparams.h>
 #include <ccan/crypto/ripemd160/ripemd160.h>
 #include <ccan/short_types/short_types.h>
 #include <ccan/tal/tal.h>
@@ -25,17 +25,17 @@ struct bitcoin_address;
 #define BASE58_KEY_MAX_LEN 53
 
 /* Groestlcoin address encoded in base58, with version and checksum */
-char *bitcoin_to_base58(const tal_t *ctx, bool test_net,
+char *bitcoin_to_base58(const tal_t *ctx, const struct chainparams *chainparams,
 			const struct bitcoin_address *addr);
 
-bool bitcoin_from_base58(bool *test_net,
+bool bitcoin_from_base58(u8 *version,
 			 struct bitcoin_address *addr,
 			 const char *base58, size_t len);
 
 /* P2SH address encoded as base58, with version and checksum */
-char *p2sh_to_base58(const tal_t *ctx, bool test_net,
+char *p2sh_to_base58(const tal_t *ctx, const struct chainparams *chainparams,
 		     const struct ripemd160 *p2sh);
-bool p2sh_from_base58(bool *test_net,
+bool p2sh_from_base58(u8 *version,
 		      struct ripemd160 *p2sh,
 		      const char *base58, size_t len);
 bool ripemd160_from_base58(u8 *version, struct ripemd160 *rmd,
