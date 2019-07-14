@@ -28,7 +28,7 @@ const struct chainparams networks[] = {
      .max_payment = AMOUNT_MSAT_INIT(0xFFFFFFFFULL),
      /* "Lightning Charge Powers Developers & Blockstream Store" */
      .when_lightning_became_cool = 504500,
-     .p2pkh_version = 0,
+     .p2pkh_version = 36,
      .p2sh_version = 5,
      .testnet = false,
      .bip32_key_version = {.bip32_pubkey_version = BIP32_VER_MAIN_PUBLIC, .bip32_privkey_version = BIP32_VER_MAIN_PRIVATE}},
@@ -55,13 +55,9 @@ const struct chainparams networks[] = {
      .dust_limit = { 546 },
      .max_funding = AMOUNT_SAT_INIT((1 << 24) - 1),
      .max_payment = AMOUNT_MSAT_INIT(0xFFFFFFFFULL),
-     .p2pkh_version = 111,
-     .p2sh_version = 196,
-     .p2pkh_version = 48,
-     .p2sh_version = 50,
      .when_lightning_became_cool = 1,
      .p2pkh_version = 111,
-     .p2sh_version = 58,
+     .p2sh_version = 196,
      .testnet = true,
      .bip32_key_version = {.bip32_pubkey_version = BIP32_VER_TEST_PUBLIC, .bip32_privkey_version = BIP32_VER_TEST_PRIVATE}}
 };
