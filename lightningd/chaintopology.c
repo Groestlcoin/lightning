@@ -652,7 +652,7 @@ static struct block *new_block(struct chain_topology *topo,
 {
 	struct block *b = tal(topo, struct block);
 
-	sha256_double_groestl(&b->blkid.shad, &blk->hdr, sizeof(blk->hdr));
+	groestl512_double(&b->blkid.shad, &blk->hdr, sizeof(blk->hdr));
 
 	log_debug(topo->log, "Adding block %u: %s",
 		  height,
