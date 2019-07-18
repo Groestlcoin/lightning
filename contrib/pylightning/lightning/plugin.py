@@ -30,10 +30,11 @@ class Method(object):
      - RPC exposed by RPC passthrough
      - HOOK registered to be called synchronously by lightningd
     """
-    def __init__(self, name, func, mtype=MethodType.RPCMETHOD):
+    def __init__(self, name, func, mtype=MethodType.RPCMETHOD, category=None):
         self.name = name
         self.func = func
         self.mtype = mtype
+        self.category = category
         self.background = False
 
 
@@ -118,7 +119,7 @@ class Plugin(object):
 
         self.write_lock = RLock()
 
-    def add_method(self, name, func, background=False):
+    def add_method(self, name, func, background=False, category=None):
         """Add a plugin method to the dispatch table.
 
         The function will be expected at call time (see `_dispatch`)
@@ -145,6 +146,9 @@ class Plugin(object):
         `request.set_result` or `result.set_exception` to return a result or
         raise an exception for the call.
 
+        The `category` argument can be used to specify the category of the
+        newly created rpc command.
+
         """
         if name in self.methods:
             raise ValueError(
@@ -152,7 +156,7 @@ class Plugin(object):
             )
 
         # Register the function with the name
-        method = Method(name, func, MethodType.RPCMETHOD)
+        method = Method(name, func, MethodType.RPCMETHOD, category)
         method.background = background
         self.methods[name] = method
 
@@ -183,7 +187,7 @@ class Plugin(object):
             return f
         return decorator
 
-    def add_option(self, name, default, description):
+    def add_option(self, name, default, description, opt_type="string"):
         """Add an option that we'd like to register with lightningd.
 
         Needs to be called before `Plugin.run`, otherwise we might not
@@ -194,11 +198,12 @@ class Plugin(object):
             raise ValueError(
                 "Name {} is already used by another option".format(name)
             )
+
         self.options[name] = {
             'name': name,
             'default': default,
             'description': description,
-            'type': 'string',
+            'type': opt_type,
             'value': None,
         }
 
@@ -211,23 +216,23 @@ class Plugin(object):
         else:
             return self.options[name]['default']
 
-    def async_method(self, method_name):
+    def async_method(self, method_name, category=None):
         """Decorator to add an async plugin method to the dispatch table.
 
         Internally uses add_method.
         """
         def decorator(f):
-            self.add_method(method_name, f, background=True)
+            self.add_method(method_name, f, background=True, category=category)
             return f
         return decorator
 
-    def method(self, method_name):
+    def method(self, method_name, category=None):
         """Decorator to add a plugin method to the dispatch table.
 
         Internally uses add_method.
         """
         def decorator(f):
-            self.add_method(method_name, f, background=False)
+            self.add_method(method_name, f, background=False, category=category)
             return f
         return decorator
 
@@ -272,79 +277,73 @@ class Plugin(object):
             return f
         return decorator
 
-    def _exec_func(self, func, request):
-        params = request.params
+    @staticmethod
+    def _coerce_arguments(func, ba):
+        args = OrderedDict()
+        for key, val in ba.arguments.items():
+            annotation = func.__annotations__.get(key)
+            if annotation == Millisatoshi:
+                args[key] = Millisatoshi(val)
+            else:
+                args[key] = val
+        ba.arguments = args
+        return ba
+
+    def _bind_pos(self, func, params, request):
+        """Positional binding of parameters
+        """
+        assert(isinstance(params, list))
         sig = inspect.signature(func)
 
-        arguments = OrderedDict()
-        for name, value in sig.parameters.items():
-            arguments[name] = inspect._empty
+        # Collect injections so we can sort them and insert them in the right
+        # order later. If we don't apply inject them in increasing order we
+        # might shift away an earlier injection.
+        injections = []
+        if 'plugin' in sig.parameters:
+            pos = list(sig.parameters.keys()).index('plugin')
+            injections.append((pos, self))
+        if 'request' in sig.parameters:
+            pos = list(sig.parameters.keys()).index('request')
+            injections.append((pos, request))
+        injections = sorted(injections)
+        for pos, val in injections:
+            params = params[:pos] + [val] + params[pos:]
 
-        # Fill in any injected parameters
-        if 'plugin' in arguments:
-            arguments['plugin'] = self
-
-        if 'request' in arguments:
-            arguments['request'] = request
-
-        args = []
-        kwargs = {}
-        # Now zip the provided arguments and the prefilled a together
-        if isinstance(params, dict):
-            for k, v in params.items():
-                if k in arguments:
-                    # Explicitly (try to) interpret as Millisatoshi if annotated
-                    if func.__annotations__.get(k) == Millisatoshi:
-                        arguments[k] = Millisatoshi(v)
-                    else:
-                        arguments[k] = v
-                else:
-                    kwargs[k] = v
-        else:
-            pos = 0
-            for k, v in arguments.items():
-                # Skip already assigned args and special catch-all args
-                if v is not inspect._empty or k in ['args', 'kwargs']:
-                    continue
-
-                if pos < len(params):
-                    # Apply positional args if we have them
-                    if func.__annotations__.get(k) == Millisatoshi:
-                        arguments[k] = Millisatoshi(params[pos])
-                    else:
-                        arguments[k] = params[pos]
-                elif sig.parameters[k].default is inspect.Signature.empty:
-                    # This is a positional arg with no value passed
-                    raise TypeError("Missing required parameter: %s" % sig.parameters[k])
-                else:
-                    # For the remainder apply default args
-                    arguments[k] = sig.parameters[k].default
-                pos += 1
-            if len(arguments) < len(params):
-                args = params[len(arguments):]
-
-        if 'kwargs' in arguments:
-            arguments['kwargs'] = kwargs
-        elif len(kwargs) > 0:
-            raise TypeError("Extra arguments given: {kwargs}".format(kwargs=kwargs))
-
-        if 'args' in arguments:
-            arguments['args'] = args
-        elif len(args) > 0:
-            raise TypeError("Extra arguments given: {args}".format(args=args))
-
-        missing = [k for k, v in arguments.items() if v is inspect._empty]
-        if missing:
-            raise TypeError("Missing positional arguments ({given} given, "
-                            "expected {expected}): {missing}".format(
-                                missing=", ".join(missing),
-                                given=len(arguments) - len(missing),
-                                expected=len(arguments)
-                            ))
-
-        ba = sig.bind(**arguments)
+        ba = sig.bind(*params)
+        self._coerce_arguments(func, ba)
         ba.apply_defaults()
-        return func(*ba.args, **ba.kwargs)
+        return ba
+
+    def _bind_kwargs(self, func, params, request):
+        """Keyword based binding of parameters
+        """
+        assert(isinstance(params, dict))
+        sig = inspect.signature(func)
+
+        # Inject additional parameters if they are in the signature.
+        if 'plugin' in sig.parameters:
+            params['plugin'] = self
+        elif 'plugin' in params:
+            del params['plugin']
+        if 'request' in sig.parameters:
+            params['request'] = request
+        elif 'request' in params:
+            del params['request']
+
+        ba = sig.bind(**params)
+        self._coerce_arguments(func, ba)
+        return ba
+
+    def _exec_func(self, func, request):
+        params = request.params
+        if isinstance(params, list):
+            ba = self._bind_pos(func, params, request)
+            return func(*ba.args, **ba.kwargs)
+        elif isinstance(params, dict):
+            ba = self._bind_kwargs(func, params, request)
+            return func(*ba.args, **ba.kwargs)
+        else:
+            raise TypeError("Parameters to function call must be either a dict or a list.")
 
     def _dispatch_request(self, request):
         name = request.method
@@ -378,9 +377,11 @@ class Plugin(object):
             self.log(traceback.format_exc())
 
     def _write_locked(self, obj):
-        s = json.dumps(obj, cls=LightningRpc.LightningJSONEncoder) + "\n\n"
+        # ensure_ascii turns UTF-8 into \uXXXX so we need to suppress that,
+        # then utf8 ourselves.
+        s = bytes(json.dumps(obj, cls=LightningRpc.LightningJSONEncoder, ensure_ascii=False) + "\n\n", encoding='utf-8')
         with self.write_lock:
-            self.stdout.write(s)
+            self.stdout.buffer.write(s)
             self.stdout.flush()
 
     def notify(self, method, params):
@@ -415,7 +416,7 @@ class Plugin(object):
         for payload in msgs[:-1]:
             # Note that we use function annotations to do Millisatoshi conversions
             # in _exec_func, so we don't use LightningJSONDecoder here.
-            request = self._parse_request(json.loads(payload))
+            request = self._parse_request(json.loads(payload.decode('utf8')))
 
             # If this has an 'id'-field, it's a request and returns a
             # result. Otherwise it's a notification and it doesn't
@@ -428,11 +429,11 @@ class Plugin(object):
         return msgs[-1]
 
     def run(self):
-        partial = ""
-        for l in self.stdin:
+        partial = b""
+        for l in self.stdin.buffer:
             partial += l
 
-            msgs = partial.split('\n\n')
+            msgs = partial.split(b'\n\n')
             if len(msgs) < 2:
                 continue
 
@@ -477,6 +478,7 @@ class Plugin(object):
 
             methods.append({
                 'name': method.name,
+                'category': method.category if method.category else "plugin",
                 'usage': " ".join(args),
                 'description': doc
             })

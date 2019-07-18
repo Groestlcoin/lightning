@@ -2,6 +2,7 @@
 #include <bitcoin/tx.h>
 #include <ccan/endian/endian.h>
 #include <channeld/commit_tx.h>
+#include <common/htlc_trim.h>
 #include <common/htlc_tx.h>
 #include <common/keyset.h>
 #include <common/permute_tx.h>
@@ -16,36 +17,8 @@ static bool trim(const struct htlc *htlc,
 		 struct amount_sat dust_limit,
 		 enum side side)
 {
-	struct amount_sat htlc_fee, htlc_min;
-
-	/* BOLT #3:
-	 *
-	 *   - for every offered HTLC:
-	 *    - if the HTLC amount minus the HTLC-timeout fee would be less than
-	 *    `dust_limit_satoshis` set by the transaction owner:
-	 *      - MUST NOT contain that output.
-	 *    - otherwise:
-	 *      - MUST be generated as specified in
-	 *      [Offered HTLC Outputs](#offered-htlc-outputs).
-	 */
-	if (htlc_owner(htlc) == side)
-		htlc_fee = htlc_timeout_fee(feerate_per_kw);
-	/* BOLT #3:
-	 *
-	 *  - for every received HTLC:
-	 *    - if the HTLC amount minus the HTLC-success fee would be less than
-	 *    `dust_limit_satoshis` set by the transaction owner:
-	 *      - MUST NOT contain that output.
-	 *    - otherwise:
-	 *      - MUST be generated as specified in
-	 */
-	else
-		htlc_fee = htlc_success_fee(feerate_per_kw);
-
-	/* If these overflow, it implies htlc must be less. */
-	if (!amount_sat_add(&htlc_min, dust_limit, htlc_fee))
-		return true;
-	return amount_msat_less_sat(htlc->amount, htlc_min);
+	return htlc_is_trimmed(htlc_owner(htlc), htlc->amount,
+			       feerate_per_kw, dust_limit, side);
 }
 
 size_t commit_tx_num_untrimmed(const struct htlc **htlcs,
@@ -66,16 +39,15 @@ static void add_offered_htlc_out(struct bitcoin_tx *tx, size_t n,
 				 const struct keyset *keyset)
 {
 	struct ripemd160 ripemd;
-	u8 *wscript;
+	u8 *wscript, *p2wsh;
+	struct amount_sat amount = amount_msat_to_sat_round_down(htlc->amount);
 
 	ripemd160(&ripemd, htlc->rhash.u.u8, sizeof(htlc->rhash.u.u8));
-	wscript = htlc_offered_wscript(tx->output, &ripemd, keyset);
-	tx->output[n].amount = amount_msat_to_sat_round_down(htlc->amount);
-	tx->output[n].script = scriptpubkey_p2wsh(tx, wscript);
-	SUPERVERBOSE("# HTLC %"PRIu64" offered %s wscript %s\n",
-		     htlc->id,
-		     type_to_string(tmpctx, struct amount_sat,
-				    &tx->output[n].amount),
+	wscript = htlc_offered_wscript(tx, &ripemd, keyset);
+	p2wsh = scriptpubkey_p2wsh(tx, wscript);
+	bitcoin_tx_add_output(tx, p2wsh, &amount);
+	SUPERVERBOSE("# HTLC %" PRIu64 " offered %s wscript %s\n", htlc->id,
+		     type_to_string(tmpctx, struct amount_sat, &amount),
 		     tal_hex(wscript, wscript));
 	tal_free(wscript);
 }
@@ -85,16 +57,20 @@ static void add_received_htlc_out(struct bitcoin_tx *tx, size_t n,
 				  const struct keyset *keyset)
 {
 	struct ripemd160 ripemd;
-	u8 *wscript;
+	u8 *wscript, *p2wsh;
+	struct amount_sat amount;
 
 	ripemd160(&ripemd, htlc->rhash.u.u8, sizeof(htlc->rhash.u.u8));
 	wscript = htlc_received_wscript(tx, &ripemd, &htlc->expiry, keyset);
-	tx->output[n].amount = amount_msat_to_sat_round_down(htlc->amount);
-	tx->output[n].script = scriptpubkey_p2wsh(tx->output, wscript);
+	p2wsh = scriptpubkey_p2wsh(tx, wscript);
+	amount = amount_msat_to_sat_round_down(htlc->amount);
+
+	bitcoin_tx_add_output(tx, p2wsh, &amount);
+
 	SUPERVERBOSE("# HTLC %"PRIu64" received %s wscript %s\n",
 		     htlc->id,
 		     type_to_string(tmpctx, struct amount_sat,
-				    &tx->output[n].amount),
+				    &amount),
 		     tal_hex(wscript, wscript));
 	tal_free(wscript);
 }
@@ -173,11 +149,11 @@ struct bitcoin_tx *commit_tx(const tal_t *ctx,
 	tx = bitcoin_tx(ctx, 1, untrimmed + 2);
 
 	/* We keep track of which outputs have which HTLCs */
-	*htlcmap = tal_arr(tx, const struct htlc *, tal_count(tx->output));
+	*htlcmap = tal_arr(tx, const struct htlc *, tx->wtx->outputs_allocation_len);
 
 	/* We keep cltvs for tie-breaking HTLC outputs; we use the same order
 	 * for sending the htlc txs, so it may matter. */
-	cltvs = tal_arr(tmpctx, u32, tal_count(tx->output));
+	cltvs = tal_arr(tmpctx, u32, tx->wtx->outputs_allocation_len);
 
 	/* This could be done in a single loop, but we follow the BOLT
 	 * literally to make comments in test vectors clearer. */
@@ -223,14 +199,15 @@ struct bitcoin_tx *commit_tx(const tal_t *ctx,
 	 */
 	if (amount_msat_greater_eq_sat(self_pay, dust_limit)) {
 		u8 *wscript = to_self_wscript(tmpctx, to_self_delay,keyset);
-		tx->output[n].amount = amount_msat_to_sat_round_down(self_pay);
-		tx->output[n].script = scriptpubkey_p2wsh(tx, wscript);
+		u8 *p2wsh = scriptpubkey_p2wsh(tx, wscript);
+		struct amount_sat amount = amount_msat_to_sat_round_down(self_pay);
+
+		bitcoin_tx_add_output(tx, p2wsh, &amount);
 		(*htlcmap)[n] = NULL;
 		/* We don't assign cltvs[n]: if we use it, order doesn't matter.
 		 * However, valgrind will warn us something wierd is happening */
 		SUPERVERBOSE("# to-local amount %s wscript %s\n",
-			     type_to_string(tmpctx, struct amount_sat,
-					    &tx->output[n].amount),
+			     type_to_string(tmpctx, struct amount_sat, &amount),
 			     tal_hex(tmpctx, wscript));
 		n++;
 	}
@@ -242,6 +219,9 @@ struct bitcoin_tx *commit_tx(const tal_t *ctx,
 	 *    output](#to_remote-output).
 	 */
 	if (amount_msat_greater_eq_sat(other_pay, dust_limit)) {
+		struct amount_sat amount = amount_msat_to_sat_round_down(other_pay);
+		u8 *p2wpkh =
+		    scriptpubkey_p2wpkh(tx, &keyset->other_payment_key);
 		/* BOLT #3:
 		 *
 		 * #### `to_remote` Output
@@ -249,30 +229,36 @@ struct bitcoin_tx *commit_tx(const tal_t *ctx,
 		 * This output sends funds to the other peer and thus is a simple
 		 * P2WPKH to `remotepubkey`.
 		 */
-		tx->output[n].amount = amount_msat_to_sat_round_down(other_pay);
-		tx->output[n].script = scriptpubkey_p2wpkh(tx,
-						   &keyset->other_payment_key);
+		int pos = bitcoin_tx_add_output(tx, p2wpkh, &amount);
+		assert(pos == n);
 		(*htlcmap)[n] = NULL;
 		/* We don't assign cltvs[n]: if we use it, order doesn't matter.
 		 * However, valgrind will warn us something wierd is happening */
 		SUPERVERBOSE("# to-remote amount %s P2WPKH(%s)\n",
 			     type_to_string(tmpctx, struct amount_sat,
-					    &tx->output[n].amount),
+					    &amount),
 			     type_to_string(tmpctx, struct pubkey,
 					    &keyset->other_payment_key));
 		n++;
 	}
 
-	assert(n <= tal_count(tx->output));
-	tal_resize(&tx->output, n);
+	/* BOLT #2:
+	 *
+	 *  - MUST set `channel_reserve_satoshis` greater than or equal to
+	 *    `dust_limit_satoshis`.
+	 */
+	/* This means there must be at least one output. */
+	assert(n > 0);
+
+	assert(n <= tx->wtx->outputs_allocation_len);
 	tal_resize(htlcmap, n);
 
 	/* BOLT #3:
 	 *
-	 * 7. Sort the outputs into [BIP 69
+	 * 7. Sort the outputs into [BIP 69+CLTV
 	 *    order](#transaction-input-and-output-ordering)
 	 */
-	permute_outputs(tx->output, cltvs, (const void **)*htlcmap);
+	permute_outputs(tx, cltvs, (const void **)*htlcmap);
 
 	/* BOLT #3:
 	 *
@@ -280,13 +266,13 @@ struct bitcoin_tx *commit_tx(const tal_t *ctx,
 	 *
 	 * * version: 2
 	 */
-	assert(tx->version == 2);
+	assert(tx->wtx->version == 2);
 
 	/* BOLT #3:
 	 *
 	 * * locktime: upper 8 bits are 0x20, lower 24 bits are the lower 24 bits of the obscured commitment number
 	 */
-	tx->lock_time
+	tx->wtx->locktime
 		= (0x20000000 | (obscured_commitment_number & 0xFFFFFF));
 
 	/* BOLT #3:
@@ -295,18 +281,12 @@ struct bitcoin_tx *commit_tx(const tal_t *ctx,
 	 *    * `txin[0]` outpoint: `txid` and `output_index` from
 	 *      `funding_created` message
 	 */
-	tx->input[0].txid = *funding_txid;
-	tx->input[0].index = funding_txout;
-
 	/* BOLT #3:
 	 *
 	 *    * `txin[0]` sequence: upper 8 bits are 0x80, lower 24 bits are upper 24 bits of the obscured commitment number
 	 */
-	tx->input[0].sequence_number
-		= (0x80000000 | ((obscured_commitment_number>>24) & 0xFFFFFF));
-
-	/* Input amount needed for signature code. */
-	tx->input[0].amount = tal_dup(tx->input, struct amount_sat, &funding);
+	u32 sequence = (0x80000000 | ((obscured_commitment_number>>24) & 0xFFFFFF));
+	bitcoin_tx_add_input(tx, funding_txid, funding_txout, sequence, &funding, NULL);
 
 	return tx;
 }

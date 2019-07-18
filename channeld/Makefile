@@ -47,7 +47,9 @@ CHANNELD_COMMON_OBJS :=				\
 	common/features.o			\
 	common/gen_status_wire.o		\
 	common/gen_peer_status_wire.o		\
+	common/gossip_store.o			\
 	common/htlc_state.o			\
+	common/htlc_trim.o			\
 	common/htlc_tx.o			\
 	common/htlc_wire.o			\
 	common/initial_channel.o		\
@@ -56,8 +58,10 @@ CHANNELD_COMMON_OBJS :=				\
 	common/key_derive.o			\
 	common/memleak.o			\
 	common/msg_queue.o			\
+	common/node_id.o			\
 	common/peer_billboard.o			\
 	common/peer_failed.o			\
+	common/per_peer_state.o			\
 	common/permute_tx.o			\
 	common/ping.o				\
 	common/pseudorand.o			\

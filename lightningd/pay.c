@@ -22,7 +22,7 @@
 struct routing_failure {
 	unsigned int erring_index;
 	enum onion_type failcode;
-	struct pubkey erring_node;
+	struct node_id erring_node;
 	struct short_channel_id erring_channel;
 	int channel_dir;
 };
@@ -77,11 +77,11 @@ json_add_payment_fields(struct json_stream *response,
 {
 	json_add_u64(response, "id", t->id);
 	json_add_hex(response, "payment_hash", &t->payment_hash, sizeof(t->payment_hash));
-	json_add_pubkey(response, "destination", &t->destination);
-	json_add_amount_msat(response, t->msatoshi,
-			     "msatoshi", "amount_msat");
-	json_add_amount_msat(response, t->msatoshi_sent,
-			     "msatoshi_sent", "amount_sent_msat");
+	json_add_node_id(response, "destination", &t->destination);
+	json_add_amount_msat_compat(response, t->msatoshi,
+				    "msatoshi", "amount_msat");
+	json_add_amount_msat_compat(response, t->msatoshi_sent,
+				    "msatoshi_sent", "amount_sent_msat");
 	json_add_u64(response, "created_at", t->timestamp);
 
 	switch (t->status) {
@@ -116,9 +116,7 @@ static struct command_result *sendpay_success(struct command *cmd,
 	assert(payment->status == PAYMENT_COMPLETE);
 
 	response = json_stream_success(cmd);
-	json_object_start(response, NULL);
 	json_add_payment_fields(response, payment);
-	json_object_end(response);
 	return command_success(cmd, response);
 }
 
@@ -126,22 +124,20 @@ static void
 json_add_routefail_info(struct json_stream *js,
 			unsigned int erring_index,
 			enum onion_type failcode,
-			const struct pubkey *erring_node,
+			const struct node_id *erring_node,
 			const struct short_channel_id *erring_channel,
 			int channel_dir)
 {
 	const char *failcodename = onion_type_name(failcode);
 
-	json_object_start(js, NULL);
 	json_add_num(js, "erring_index", erring_index);
 	json_add_num(js, "failcode", failcode);
 	/* FIXME: Better way to detect this? */
 	if (!strstarts(failcodename, "INVALID "))
 		json_add_string(js, "failcodename", failcodename);
-	json_add_pubkey(js, "erring_node", erring_node);
+	json_add_node_id(js, "erring_node", erring_node);
 	json_add_short_channel_id(js, "erring_channel", erring_channel);
 	json_add_num(js, "erring_direction", channel_dir);
-	json_object_end(js);
 }
 
 /* onionreply used if pay_errcode == PAY_UNPARSEABLE_ONION */
@@ -157,7 +153,6 @@ sendpay_fail(struct command *cmd,
 	if (pay_errcode == PAY_UNPARSEABLE_ONION) {
 		data = json_stream_fail(cmd, PAY_UNPARSEABLE_ONION,
 					"Malformed error reply");
- 		json_object_start(data, NULL);
 		json_add_hex_talarr(data, "onionreply", onionreply);
 		json_object_end(data);
 		return command_failed(cmd, data);
@@ -174,6 +169,7 @@ sendpay_fail(struct command *cmd,
 				&fail->erring_node,
 				&fail->erring_channel,
 				fail->channel_dir);
+	json_object_end(data);
 	return command_failed(cmd, data);
 }
 
@@ -183,11 +179,9 @@ json_sendpay_in_progress(struct command *cmd,
 			 const struct wallet_payment *payment)
 {
 	struct json_stream *response = json_stream_success(cmd);
-	json_object_start(response, NULL);
 	json_add_string(response, "message",
 			"Monitor status with listpayments or waitsendpay");
 	json_add_payment_fields(response, payment);
-	json_object_end(response);
 	return command_success(cmd, response);
 }
 
@@ -248,7 +242,7 @@ immediate_routing_failure(const tal_t *ctx,
 			  const struct lightningd *ld,
 			  enum onion_type failcode,
 			  const struct short_channel_id *channel0,
-			  const struct pubkey *dstid)
+			  const struct node_id *dstid)
 {
 	struct routing_failure *routing_failure;
 
@@ -259,7 +253,7 @@ immediate_routing_failure(const tal_t *ctx,
 	routing_failure->failcode = failcode;
 	routing_failure->erring_node = ld->id;
 	routing_failure->erring_channel = *channel0;
-	routing_failure->channel_dir = pubkey_idx(&ld->id, dstid);
+	routing_failure->channel_dir = node_id_idx(&ld->id, dstid);
 
 	return routing_failure;
 }
@@ -281,8 +275,8 @@ local_routing_failure(const tal_t *ctx,
 	routing_failure->failcode = hout->failcode;
 	routing_failure->erring_node = ld->id;
 	routing_failure->erring_channel = payment->route_channels[0];
-	routing_failure->channel_dir = pubkey_idx(&ld->id,
-						  &payment->route_nodes[0]);
+	routing_failure->channel_dir = node_id_idx(&ld->id,
+						   &payment->route_nodes[0]);
 
 	log_debug(hout->key.channel->log, "local_routing_failure: %u (%s)",
 		  hout->failcode, onion_type_name(hout->failcode));
@@ -300,8 +294,8 @@ remote_routing_failure(const tal_t *ctx,
 {
 	enum onion_type failcode = fromwire_peektype(failure->msg);
 	struct routing_failure *routing_failure;
-	const struct pubkey *route_nodes;
-	const struct pubkey *erring_node;
+	const struct node_id *route_nodes;
+	const struct node_id *erring_node;
 	const struct short_channel_id *route_channels;
 	const struct short_channel_id *erring_channel;
 	int origin_index;
@@ -320,11 +314,11 @@ remote_routing_failure(const tal_t *ctx,
 		erring_channel = &route_channels[origin_index];
 		/* Single hop? */
 		if (origin_index == 0)
-			dir = pubkey_idx(&ld->id,
-					 &route_nodes[origin_index]);
+			dir = node_id_idx(&ld->id,
+					  &route_nodes[origin_index]);
 		else
-			dir = pubkey_idx(&route_nodes[origin_index - 1],
-					 &route_nodes[origin_index]);
+			dir = node_id_idx(&route_nodes[origin_index - 1],
+					  &route_nodes[origin_index]);
 
 		/* BOLT #4:
 		 *
@@ -346,8 +340,8 @@ remote_routing_failure(const tal_t *ctx,
 		/* Report the *next* channel as failing. */
 		erring_channel = &route_channels[origin_index + 1];
 
-		dir = pubkey_idx(&route_nodes[origin_index],
-				 &route_nodes[origin_index+1]);
+		dir = node_id_idx(&route_nodes[origin_index],
+				  &route_nodes[origin_index+1]);
 
 		/* If the error is a BADONION, then it's on behalf of the
 		 * following node. */
@@ -511,7 +505,7 @@ static struct command_result *wait_payment(struct lightningd *ld,
 	bool faildestperm;
 	int failindex;
 	enum onion_type failcode;
-	struct pubkey *failnode;
+	struct node_id *failnode;
 	struct short_channel_id *failchannel;
 	u8 *failupdate;
 	char *faildetail;
@@ -596,7 +590,8 @@ send_payment(struct lightningd *ld,
 	enum onion_type failcode;
 	size_t i, n_hops = tal_count(route);
 	struct hop_data *hop_data = tal_arr(tmpctx, struct hop_data, n_hops);
-	struct pubkey *ids = tal_arr(tmpctx, struct pubkey, n_hops);
+	struct pubkey *path = tal_arr(tmpctx, struct pubkey, n_hops);
+	struct node_id *ids = tal_arr(tmpctx, struct node_id, n_hops);
 	struct wallet_payment *payment = NULL;
 	struct htlc_out *hout;
 	struct short_channel_id *channels;
@@ -606,9 +601,19 @@ send_payment(struct lightningd *ld,
 	/* Expiry for HTLCs is absolute.  And add one to give some margin. */
 	base_expiry = get_block_height(ld->topology) + 1;
 
-	/* Extract IDs for each hop: create_onionpacket wants array. */
-	for (i = 0; i < n_hops; i++)
+	/* Extract IDs for each hop: create_onionpacket wants array of *keys*,
+	 * and wallet wants continuous array of node_ids */
+	for (i = 0; i < n_hops; i++) {
 		ids[i] = route[i].nodeid;
+		/* JSON parsing checked these were valid, so Shouldn't Happen */
+		if (!pubkey_from_node_id(&path[i], &ids[i])) {
+			return command_fail(cmd, PAY_UNSPECIFIED_ERROR,
+					    "Invalid nodeid %s",
+					    type_to_string(tmpctx,
+							   struct node_id,
+							   &ids[i]));
+		}
+	}
 
 	/* Copy hop_data[n] from route[n+1] (ie. where it goes next) */
 	for (i = 0; i < n_hops - 1; i++) {
@@ -645,11 +650,11 @@ send_payment(struct lightningd *ld,
 								   struct amount_msat,
 								   &payment->msatoshi));
 			}
-			if (!pubkey_eq(&payment->destination, &ids[n_hops-1])) {
+			if (!node_id_eq(&payment->destination, &ids[n_hops-1])) {
 				return command_fail(cmd, PAY_RHASH_ALREADY_USED,
 						    "Already succeeded to %s",
 						    type_to_string(tmpctx,
-								   struct pubkey,
+								   struct node_id,
 								   &payment->destination));
 			}
 			return sendpay_success(cmd, payment);
@@ -666,14 +671,15 @@ send_payment(struct lightningd *ld,
 
 		json_add_routefail_info(data, 0, WIRE_UNKNOWN_NEXT_PEER,
 					&ld->id, &route[0].channel_id,
-					pubkey_idx(&ld->id, &route[0].nodeid));
+					node_id_idx(&ld->id, &route[0].nodeid));
+		json_object_end(data);
 		return command_failed(cmd, data);
 	}
 
 	randombytes_buf(&sessionkey, sizeof(sessionkey));
 
 	/* Onion will carry us from first peer onwards. */
-	packet = create_onionpacket(tmpctx, ids, hop_data, sessionkey, rhash->u.u8,
+	packet = create_onionpacket(tmpctx, path, hop_data, sessionkey, rhash->u.u8,
 				    sizeof(struct sha256), &path_secrets);
 	onion = serialize_onionpacket(tmpctx, packet);
 
@@ -799,7 +805,7 @@ static struct command_result *json_sendpay(struct command *cmd,
 	route = tal_arr(cmd, struct route_hop, routetok->size);
 	json_for_each_arr(i, t, routetok) {
 		struct amount_msat *msat, *amount_msat;
-		struct pubkey *id;
+		struct node_id *id;
 		struct short_channel_id *channel;
 		unsigned *delay, *direction;
 
@@ -808,7 +814,7 @@ static struct command_result *json_sendpay(struct command *cmd,
 			   p_opt("msatoshi", param_msat, &msat),
 			   p_opt("amount_msat", param_msat, &amount_msat),
 			   /* These three actually required */
-			   p_opt("id", param_pubkey, &id),
+			   p_opt("id", param_node_id, &id),
 			   p_opt("delay", param_number, &delay),
 			   p_opt("channel", param_short_channel_id, &channel),
 			   p_opt("direction", param_number, &direction),
@@ -883,6 +889,7 @@ static struct command_result *json_sendpay(struct command *cmd,
 
 static const struct json_command sendpay_command = {
 	"sendpay",
+	"payment",
 	json_sendpay,
 	"Send along {route} in return for preimage of {payment_hash}"
 };
@@ -921,6 +928,7 @@ static struct command_result *json_waitsendpay(struct command *cmd,
 
 static const struct json_command waitsendpay_command = {
 	"waitsendpay",
+	"payment",
 	json_waitsendpay,
 	"Wait for payment attempt on {payment_hash} to succeed or fail, "
 	"but only up to {timeout} seconds."
@@ -964,7 +972,6 @@ static struct command_result *json_listsendpays(struct command *cmd,
 	payments = wallet_payment_list(cmd, cmd->ld->wallet, rhash);
 
 	response = json_stream_success(cmd);
-	json_object_start(response, NULL);
 
 	json_array_start(response, "payments");
 	for (size_t i = 0; i < tal_count(payments); i++) {
@@ -974,12 +981,12 @@ static struct command_result *json_listsendpays(struct command *cmd,
 	}
 	json_array_end(response);
 
-	json_object_end(response);
 	return command_success(cmd, response);
 }
 
 static const struct json_command listpayments_command = {
 	"listpayments",
+	"payment",
 	json_listsendpays,
 	"Show outgoing payments",
 	true /* deprecated, use new name */
@@ -988,6 +995,7 @@ AUTODATA(json_command, &listpayments_command);
 
 static const struct json_command listsendpays_command = {
 	"listsendpays",
+	"payment",
 	json_listsendpays,
 	"Show sendpay, old and current, optionally limiting to {bolt11} or {payment_hash}."
 };

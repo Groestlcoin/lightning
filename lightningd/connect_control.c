@@ -1,4 +1,3 @@
-#include <bitcoin/pubkey.h>
 #include <ccan/err/err.h>
 #include <ccan/fdpass/fdpass.h>
 #include <ccan/list/list.h>
@@ -8,6 +7,7 @@
 #include <common/json_helpers.h>
 #include <common/jsonrpc_errors.h>
 #include <common/memleak.h>
+#include <common/node_id.h>
 #include <common/param.h>
 #include <common/pseudorand.h>
 #include <common/timeout.h>
@@ -32,7 +32,7 @@
 
 struct connect {
 	struct list_node list;
-	struct pubkey id;
+	struct node_id id;
 	struct command *cmd;
 };
 
@@ -42,7 +42,7 @@ static void destroy_connect(struct connect *c)
 }
 
 static struct connect *new_connect(struct lightningd *ld,
-				   const struct pubkey *id,
+				   const struct node_id *id,
 				   struct command *cmd)
 {
 	struct connect *c = tal(cmd, struct connect);
@@ -55,24 +55,22 @@ static struct connect *new_connect(struct lightningd *ld,
 
 /* Finds first command which matches. */
 static struct connect *find_connect(struct lightningd *ld,
-				    const struct pubkey *id)
+				    const struct node_id *id)
 {
 	struct connect *i;
 
 	list_for_each(&ld->connects, i, list) {
-		if (pubkey_eq(&i->id, id))
+		if (node_id_eq(&i->id, id))
 			return i;
 	}
 	return NULL;
 }
 
 static struct command_result *connect_cmd_succeed(struct command *cmd,
-						  const struct pubkey *id)
+						  const struct node_id *id)
 {
 	struct json_stream *response = json_stream_success(cmd);
-	json_object_start(response, NULL);
-	json_add_pubkey(response, "id", id);
-	json_object_end(response);
+	json_add_node_id(response, "id", id);
 	return command_success(cmd, response);
 }
 
@@ -83,7 +81,7 @@ static struct command_result *json_connect(struct command *cmd,
 {
 	u32 *port;
 	jsmntok_t *idtok;
-	struct pubkey id;
+	struct node_id id;
 	char *id_str;
 	char *atptr;
 	char *ataddr = NULL;
@@ -110,7 +108,7 @@ static struct command_result *json_connect(struct command *cmd,
 		idtok->end = idtok->start + atidx;
 	}
 
-	if (!json_to_pubkey(buffer, idtok, &id)) {
+	if (!json_to_node_id(buffer, idtok, &id)) {
 		return command_fail(cmd, JSONRPC2_INVALID_PARAMS,
 				    "id %.*s not valid",
 				    json_tok_full_len(idtok),
@@ -175,6 +173,7 @@ static struct command_result *json_connect(struct command *cmd,
 
 static const struct json_command connect_command = {
 	"connect",
+	"network",
 	json_connect,
 	"Connect to {id} at {host} (which can end in ':port' if not default). "
 	"{id} can also be of the form id@host"
@@ -231,7 +230,7 @@ void delay_then_reconnect(struct channel *channel, u32 seconds_delay,
 
 static void connect_failed(struct lightningd *ld, const u8 *msg)
 {
-	struct pubkey id;
+	struct node_id id;
 	char *err;
 	struct connect *c;
 	u32 seconds_to_delay;
@@ -255,7 +254,7 @@ static void connect_failed(struct lightningd *ld, const u8 *msg)
 		delay_then_reconnect(channel, seconds_to_delay, addrhint);
 }
 
-void connect_succeeded(struct lightningd *ld, const struct pubkey *id)
+void connect_succeeded(struct lightningd *ld, const struct node_id *id)
 {
 	struct connect *c;
 
@@ -268,7 +267,7 @@ void connect_succeeded(struct lightningd *ld, const struct pubkey *id)
 
 static void peer_please_disconnect(struct lightningd *ld, const u8 *msg)
 {
-	struct pubkey id;
+	struct node_id id;
 	struct channel *c;
 	struct uncommitted_channel *uc;
 
@@ -304,9 +303,9 @@ static unsigned connectd_msg(struct subd *connectd, const u8 *msg, const int *fd
 		break;
 
 	case WIRE_CONNECT_PEER_CONNECTED:
-		if (tal_count(fds) != 2)
-			return 2;
-		peer_connected(connectd->ld, msg, fds[0], fds[1]);
+		if (tal_count(fds) != 3)
+			return 3;
+		peer_connected(connectd->ld, msg, fds[0], fds[1], fds[2]);
 		break;
 
 	case WIRE_CONNECTCTL_CONNECT_FAILED:

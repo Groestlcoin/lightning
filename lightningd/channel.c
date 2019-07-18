@@ -32,9 +32,19 @@ void channel_set_owner(struct channel *channel, struct subd *owner,
 	if (old_owner) {
 		subd_release_channel(old_owner, channel);
 		if (channel->connected && !connects_to_peer(owner)) {
-			u8 *msg = towire_connectctl_peer_disconnected(NULL,
-							     &channel->peer->id);
-			subd_send_msg(channel->peer->ld->connectd, take(msg));
+			/* If shutting down, connectd no longer exists,
+			 * and we should not transfer peer to connectd.
+			 * Only transfer to connectd if connectd is
+			 * there to be transferred to.
+			 */
+			if (channel->peer->ld->connectd) {
+				u8 *msg;
+				msg = towire_connectctl_peer_disconnected(
+						NULL,
+						&channel->peer->id);
+				subd_send_msg(channel->peer->ld->connectd,
+					      take(msg));
+			}
 		}
 
 		if (reconnect) {
@@ -110,7 +120,7 @@ void delete_channel(struct channel *channel)
 }
 
 void get_channel_basepoints(struct lightningd *ld,
-			    const struct pubkey *peer_id,
+			    const struct node_id *peer_id,
 			    const u64 dbid,
 			    struct basepoints *local_basepoints,
 			    struct pubkey *local_funding_pubkey)
@@ -171,7 +181,10 @@ struct channel *new_channel(struct peer *peer, u64 dbid,
 			    bool connected,
 			    const struct basepoints *local_basepoints,
 			    const struct pubkey *local_funding_pubkey,
-			    const struct pubkey *future_per_commitment_point)
+			    const struct pubkey *future_per_commitment_point,
+			    u32 feerate_base,
+			    u32 feerate_ppm,
+			    const u8 *remote_upfront_shutdown_script)
 {
 	struct channel *channel = tal(peer->ld, struct channel);
 
@@ -195,7 +208,9 @@ struct channel *new_channel(struct peer *peer, u64 dbid,
 	if (!log) {
 		/* FIXME: update log prefix when we get scid */
 		/* FIXME: Use minimal unique pubkey prefix for logs! */
-		const char *idname = type_to_string(peer, struct pubkey, &peer->id);
+		const char *idname = type_to_string(peer,
+						    struct node_id,
+						    &peer->id);
 		channel->log = new_log(channel,
 				       peer->log_book, "%s chan #%"PRIu64":",
 				       idname, dbid);
@@ -218,6 +233,7 @@ struct channel *new_channel(struct peer *peer, u64 dbid,
 	channel->msat_to_us_min = msat_to_us_min;
 	channel->msat_to_us_max = msat_to_us_max;
 	channel->last_tx = tal_steal(channel, last_tx);
+	channel->last_tx_type = TX_UNKNOWN;
 	channel->last_sig = *last_sig;
 	channel->last_htlc_sigs = tal_steal(channel, last_htlc_sigs);
 	channel->channel_info = *channel_info;
@@ -234,6 +250,10 @@ struct channel *new_channel(struct peer *peer, u64 dbid,
 	channel->local_funding_pubkey = *local_funding_pubkey;
 	channel->future_per_commitment_point
 		= tal_steal(channel, future_per_commitment_point);
+	channel->feerate_base = feerate_base;
+	channel->feerate_ppm = feerate_ppm;
+	channel->remote_upfront_shutdown_script
+		= tal_steal(channel, remote_upfront_shutdown_script);
 
 	list_add_tail(&peer->channels, &channel->list);
 	tal_add_destructor(channel, destroy_channel);
@@ -282,7 +302,7 @@ struct channel *peer_normal_channel(struct peer *peer)
 }
 
 struct channel *active_channel_by_id(struct lightningd *ld,
-				     const struct pubkey *id,
+				     const struct node_id *id,
 				     struct uncommitted_channel **uc)
 {
 	struct peer *peer = peer_by_id(ld, id);
@@ -312,19 +332,19 @@ struct channel *channel_by_dbid(struct lightningd *ld, const u64 dbid)
 
 void channel_set_last_tx(struct channel *channel,
 			 struct bitcoin_tx *tx,
-			 const struct bitcoin_signature *sig)
+			 const struct bitcoin_signature *sig,
+			 enum wallet_tx_type txtypes)
 {
 	channel->last_sig = *sig;
 	tal_free(channel->last_tx);
 	channel->last_tx = tal_steal(channel, tx);
+	channel->last_tx_type = txtypes;
 }
 
 void channel_set_state(struct channel *channel,
 		       enum channel_state old_state,
 		       enum channel_state state)
 {
-	bool was_active = channel_active(channel);
-
 	log_info(channel->log, "State changed from %s to %s",
 		 channel_state_name(channel), channel_state_str(state));
 	if (channel->state != old_state)
@@ -335,11 +355,6 @@ void channel_set_state(struct channel *channel,
 
 	/* TODO(cdecker) Selectively save updated fields to DB */
 	wallet_channel_save(channel->peer->ld->wallet, channel);
-
-	/* If openingd is running, it might want to know we're no longer
-	 * active */
-	if (was_active && !channel_active(channel))
-		opening_peer_no_active_channels(channel->peer);
 }
 
 void channel_fail_permanent(struct channel *channel, const char *fmt, ...)

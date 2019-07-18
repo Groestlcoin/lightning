@@ -31,6 +31,7 @@
 #include <common/hash_u5.h>
 #include <common/key_derive.h>
 #include <common/memleak.h>
+#include <common/node_id.h>
 #include <common/status.h>
 #include <common/subdaemon.h>
 #include <common/type_to_string.h>
@@ -66,6 +67,11 @@ static struct {
 	struct ext_key bip32;
 } secretstuff;
 
+/* Version codes for BIP32 extended keys in libwally-core.
+ * It's not suitable to add this struct into client struct,
+ * so set it static.*/
+static struct  bip32_key_version  bip32_key_version;
+
 /*~ We keep track of clients, but there's not much to keep. */
 struct client {
 	/* The ccan/io async io connection for this client: it closes, we die. */
@@ -76,7 +82,7 @@ struct client {
 	u8 *msg_in;
 
 	/* ~Useful for logging, but also used to derive the per-channel seed. */
-	struct pubkey id;
+	struct node_id id;
 
 	/* ~This is a unique value handed to us from lightningd, used for
 	 * per-channel seed generation (a single id may have multiple channels
@@ -146,6 +152,9 @@ static PRINTF_FMT(4,5)
 		master_badmsg(fromwire_peektype(msg_in), msg_in);
 	}
 
+	/*~ Nobody should give us bad requests; it's a sign something is broken */
+	status_broken("%s: %s", type_to_string(tmpctx, struct node_id, &c->id), str);
+
 	/*~ Note the use of NULL as the ctx arg to towire_hsmstatus_: only
 	 * use NULL as the allocation when we're about to immediately free it
 	 * or hand it off with take(), as here.  That makes it clear we don't
@@ -190,7 +199,7 @@ static void destroy_client(struct client *c)
 }
 
 static struct client *new_client(const tal_t *ctx,
-				 const struct pubkey *id,
+				 const struct node_id *id,
 				 u64 dbid,
 				 const u64 capabilities,
 				 int fd)
@@ -200,6 +209,11 @@ static struct client *new_client(const tal_t *ctx,
 	/*~ All-zero pubkey is used for the initial master connection */
 	if (id) {
 		c->id = *id;
+		if (!node_id_valid(id))
+			status_failed(STATUS_FAIL_INTERNAL_ERROR,
+				      "Invalid node id %s",
+				      type_to_string(tmpctx, struct node_id,
+						     id));
 	} else {
 		memset(&c->id, 0, sizeof(c->id));
 	}
@@ -318,11 +332,11 @@ static void hsm_channel_secret_base(struct secret *channel_seed_base)
 }
 
 /*~ This gets the seed for this particular channel. */
-static void get_channel_seed(const struct pubkey *peer_id, u64 dbid,
+static void get_channel_seed(const struct node_id *peer_id, u64 dbid,
 			     struct secret *channel_seed)
 {
 	struct secret channel_base;
-	u8 input[PUBKEY_DER_LEN + sizeof(dbid)];
+	u8 input[sizeof(peer_id->k) + sizeof(dbid)];
 	/*~ Again, "per-peer" should be "per-channel", but Hysterical Raisins */
 	const char *info = "per-peer seed";
 
@@ -332,11 +346,12 @@ static void get_channel_seed(const struct pubkey *peer_id, u64 dbid,
 	/* FIXME: lnd has a nicer BIP32 method for deriving secrets which we
 	 * should migrate to. */
 	hsm_channel_secret_base(&channel_base);
-	pubkey_to_der(input, peer_id);
+	memcpy(input, peer_id->k, sizeof(peer_id->k));
+	BUILD_ASSERT(sizeof(peer_id->k) == PUBKEY_CMPR_LEN);
 	/*~ For all that talk about platform-independence, note that this
 	 * field is endian-dependent!  But let's face it, little-endian won.
 	 * In related news, we don't support EBCDIC or middle-endian. */
-	memcpy(input + PUBKEY_DER_LEN, &dbid, sizeof(dbid));
+	memcpy(input + PUBKEY_CMPR_LEN, &dbid, sizeof(dbid));
 
 	hkdf_sha256(channel_seed, sizeof(*channel_seed),
 		    input, sizeof(input),
@@ -351,7 +366,16 @@ static void populate_secretstuff(void)
 	u32 salt = 0;
 	struct ext_key master_extkey, child_extkey;
 
+	assert(bip32_key_version.bip32_pubkey_version == BIP32_VER_MAIN_PUBLIC
+			|| bip32_key_version.bip32_pubkey_version == BIP32_VER_TEST_PUBLIC);
+
+	assert(bip32_key_version.bip32_privkey_version == BIP32_VER_MAIN_PRIVATE
+			|| bip32_key_version.bip32_privkey_version == BIP32_VER_TEST_PRIVATE);
+
 	/* Fill in the BIP32 tree for bitcoin addresses. */
+	/* In libwally-core, the version BIP32_VER_TEST_PRIVATE is for testnet/regtest,
+	 * and BIP32_VER_MAIN_PRIVATE is for mainnet. For litecoin, we also set it like
+	 * bitcoin else.*/
 	do {
 		hkdf_sha256(bip32_seed, sizeof(bip32_seed),
 			    &salt, sizeof(salt),
@@ -360,7 +384,7 @@ static void populate_secretstuff(void)
 			    "bip32 seed", strlen("bip32 seed"));
 		salt++;
 	} while (bip32_key_from_seed(bip32_seed, sizeof(bip32_seed),
-				     BIP32_VER_TEST_PRIVATE,
+				     bip32_key_version.bip32_privkey_version,
 				     0, &master_extkey) != WALLY_OK);
 
 	/* BIP 32:
@@ -380,7 +404,8 @@ static void populate_secretstuff(void)
 	 * separate keychains for these should use the external one for
 	 * everything.
 	 *
-	 *  - m/iH/0/k corresponds to the k'th keypair of the external chain of account number i of the HDW derived from master m.
+	 *  - m/iH/0/k corresponds to the k'th keypair of the external chain of
+	 * account number i of the HDW derived from master m.
 	 */
 	/* Hence child 0, then child 0 again to get extkey to derive from. */
 	if (bip32_key_from_parent(&master_extkey, 0, BIP32_FLAG_KEY_PRIVATE,
@@ -513,7 +538,8 @@ static struct io_plan *init_hsm(struct io_conn *conn,
 				struct client *c,
 				const u8 *msg_in)
 {
-	struct pubkey node_id;
+	struct node_id node_id;
+	struct pubkey key;
 
 	/* This must be lightningd. */
 	assert(is_lightningd(c));
@@ -522,14 +548,15 @@ static struct io_plan *init_hsm(struct io_conn *conn,
 	 * definitions in hsm_client_wire.csv.  The format of those files is
 	 * an extension of the simple comma-separated format output by the
 	 * BOLT tools/extract-formats.py tool. */
-	if (!fromwire_hsm_init(msg_in))
+	if (!fromwire_hsm_init(msg_in, &bip32_key_version))
 		return bad_req(conn, c, msg_in);
 
 	maybe_create_new_hsm();
 	load_hsm();
 
 	/*~ We tell lightning our node id and (public) bip32 seed. */
-	node_key(NULL, &node_id);
+	node_key(NULL, &key);
+	node_id_from_pubkey(&node_id, &key);
 
 	/*~ Note: marshalling a bip32 tree only marshals the public side,
 	 * not the secrets!  So we're not actually handing them out here!
@@ -558,7 +585,7 @@ static struct io_plan *handle_ecdh(struct io_conn *conn,
 	 * we kill them for bad randomness (~1 in 2^127 if ss.data is random) */
 	node_key(&privkey, NULL);
 	if (secp256k1_ecdh(secp256k1_ctx, ss.data, &point.pubkey,
-			   privkey.secret.data) != 1) {
+			   privkey.secret.data, NULL, NULL) != 1) {
 		return bad_req_fmt(conn, c, msg_in, "secp256k1_ecdh fail");
 	}
 
@@ -606,6 +633,9 @@ static struct io_plan *handle_cannouncement_sig(struct io_conn *conn,
 	 * yourself should go ahead an implement.  Sometimes they're deceptive
 	 * quagmires which will cause you nothing but grief.  You decide! */
 
+	/*~ Christian uses TODO(cdecker) or FIXME(cdecker), but I'm sure he won't
+	 * mind if you fix this for him! */
+
 	/* FIXME: We should cache these. */
 	get_channel_seed(&c->id, c->dbid, &channel_seed);
 	derive_funding_key(&channel_seed, &funding_pubkey, &funding_privkey);
@@ -621,10 +651,10 @@ static struct io_plan *handle_cannouncement_sig(struct io_conn *conn,
 				   "bad cannounce length %zu",
 				   tal_count(ca));
 
-	/*~ Christian uses TODO(cdecker), but I'm sure he won't mind if you fix
-	 * this for him! */
-	/* TODO(cdecker) Check that this is actually a valid
-	 * channel_announcement */
+	if (fromwire_peektype(ca) != WIRE_CHANNEL_ANNOUNCEMENT)
+		return bad_req_fmt(conn, c, msg_in,
+				   "Invalid channel announcement");
+
 	node_key(&node_pkey, NULL);
 	sha256_double(&hash, ca + offset, tal_count(ca) - offset);
 
@@ -697,7 +727,7 @@ static struct io_plan *handle_get_channel_basepoints(struct io_conn *conn,
 						     struct client *c,
 						     const u8 *msg_in)
 {
-	struct pubkey peer_id;
+	struct node_id peer_id;
 	u64 dbid;
 	struct secret seed;
 	struct basepoints basepoints;
@@ -726,7 +756,8 @@ static struct io_plan *handle_sign_commitment_tx(struct io_conn *conn,
 						 struct client *c,
 						 const u8 *msg_in)
 {
-	struct pubkey peer_id, remote_funding_pubkey, local_funding_pubkey;
+	struct pubkey remote_funding_pubkey, local_funding_pubkey;
+	struct node_id peer_id;
 	u64 dbid;
 	struct amount_sat funding;
 	struct secret channel_seed;
@@ -741,6 +772,12 @@ static struct io_plan *handle_sign_commitment_tx(struct io_conn *conn,
 					     &remote_funding_pubkey,
 					     &funding))
 		return bad_req(conn, c, msg_in);
+
+	/* Basic sanity checks. */
+	if (tx->wtx->num_inputs != 1)
+		return bad_req_fmt(conn, c, msg_in, "tx must have 1 input");
+	if (tx->wtx->num_outputs == 0)
+		return bad_req_fmt(conn, c, msg_in, "tx must have > 0 outputs");
 
 	get_channel_seed(&peer_id, dbid, &channel_seed);
 	derive_basepoints(&channel_seed,
@@ -758,7 +795,7 @@ static struct io_plan *handle_sign_commitment_tx(struct io_conn *conn,
 	 * pointer, as we don't always know it (and zero is a valid amount, so
 	 * NULL is better to mean 'unknown' and has the nice property that
 	 * you'll crash if you assume it's there and you're wrong. */
-	tx->input[0].amount = tal_dup(tx->input, struct amount_sat, &funding);
+	tx->input_amounts[0] = tal_dup(tx, struct amount_sat, &funding);
 	sign_tx_input(tx, 0, NULL, funding_wscript,
 		      &secrets.funding_privkey,
 		      &local_funding_pubkey,
@@ -795,6 +832,12 @@ static struct io_plan *handle_sign_remote_commitment_tx(struct io_conn *conn,
 						    &funding))
 		bad_req(conn, c, msg_in);
 
+	/* Basic sanity checks. */
+	if (tx->wtx->num_inputs != 1)
+		return bad_req_fmt(conn, c, msg_in, "tx must have 1 input");
+	if (tx->wtx->num_outputs == 0)
+		return bad_req_fmt(conn, c, msg_in, "tx must have > 0 outputs");
+
 	get_channel_seed(&c->id, c->dbid, &channel_seed);
 	derive_basepoints(&channel_seed,
 			  &local_funding_pubkey, NULL, &secrets, NULL);
@@ -803,7 +846,7 @@ static struct io_plan *handle_sign_remote_commitment_tx(struct io_conn *conn,
 					      &local_funding_pubkey,
 					      &remote_funding_pubkey);
 	/* Need input amount for signing */
-	tx->input[0].amount = tal_dup(tx->input, struct amount_sat, &funding);
+	tx->input_amounts[0] = tal_dup(tx, struct amount_sat, &funding);
 	sign_tx_input(tx, 0, NULL, funding_wscript,
 		      &secrets.funding_privkey,
 		      &local_funding_pubkey,
@@ -852,7 +895,7 @@ static struct io_plan *handle_sign_remote_htlc_tx(struct io_conn *conn,
 				   "Failed deriving htlc pubkey");
 
 	/* Need input amount for signing */
-	tx->input[0].amount = tal_dup(tx->input, struct amount_sat, &amount);
+	tx->input_amounts[0] = tal_dup(tx, struct amount_sat, &amount);
 	sign_tx_input(tx, 0, NULL, wscript, &htlc_privkey, &htlc_pubkey,
 		      SIGHASH_ALL, &sig);
 
@@ -876,10 +919,10 @@ static struct io_plan *handle_sign_to_us_tx(struct io_conn *conn,
 	if (!pubkey_from_privkey(privkey, &pubkey))
 		return bad_req_fmt(conn, c, msg_in, "bad pubkey_from_privkey");
 
-	if (tal_count(tx->input) != 1)
+	if (tx->wtx->num_inputs != 1)
 		return bad_req_fmt(conn, c, msg_in, "bad txinput count");
 
-	tx->input[0].amount = tal_dup(tx->input, struct amount_sat, &input_sat);
+	tx->input_amounts[0] = tal_dup(tx, struct amount_sat, &input_sat);
 	sign_tx_input(tx, 0, NULL, wscript, privkey, &pubkey, SIGHASH_ALL, &sig);
 
 	return req_reply(conn, c, take(towire_hsm_sign_tx_reply(NULL, &sig)));
@@ -1074,11 +1117,11 @@ static struct io_plan *handle_sign_local_htlc_tx(struct io_conn *conn,
 	if (!pubkey_from_privkey(&htlc_privkey, &htlc_pubkey))
 		return bad_req_fmt(conn, c, msg_in, "bad pubkey_from_privkey");
 
-	if (tal_count(tx->input) != 1)
+	if (tx->wtx->num_inputs != 1)
 		return bad_req_fmt(conn, c, msg_in, "bad txinput count");
 
 	/* FIXME: Check that output script is correct! */
-	tx->input[0].amount = tal_dup(tx->input, struct amount_sat, &input_sat);
+	tx->input_amounts[0] = tal_dup(tx, struct amount_sat, &input_sat);
 	sign_tx_input(tx, 0, NULL, wscript, &htlc_privkey, &htlc_pubkey,
 		      SIGHASH_ALL, &sig);
 
@@ -1193,7 +1236,7 @@ static struct io_plan *handle_sign_mutual_close_tx(struct io_conn *conn,
 					      &local_funding_pubkey,
 					      &remote_funding_pubkey);
 	/* Need input amount for signing */
-	tx->input[0].amount = tal_dup(tx->input, struct amount_sat, &funding);
+	tx->input_amounts[0] = tal_dup(tx, struct amount_sat, &funding);
 	sign_tx_input(tx, 0, NULL, funding_wscript,
 		      &secrets.funding_privkey,
 		      &local_funding_pubkey,
@@ -1240,7 +1283,7 @@ static struct io_plan *pass_client_hsmfd(struct io_conn *conn,
 {
 	int fds[2];
 	u64 dbid, capabilities;
-	struct pubkey id;
+	struct node_id id;
 
 	/* This must be lightningd itself. */
 	assert(is_lightningd(c));
@@ -1323,12 +1366,12 @@ static void sign_all_inputs(struct bitcoin_tx *tx, struct utxo **utxos)
 	 * define what it is?
 	 *
 	 *... I'm not sure that helps! */
-	assert(tal_count(tx->input) == tal_count(utxos));
+	assert(tx->wtx->num_inputs == tal_count(utxos));
 	for (size_t i = 0; i < tal_count(utxos); i++) {
 		struct pubkey inkey;
 		struct privkey inprivkey;
 		const struct utxo *in = utxos[i];
-		u8 *subscript, *wscript;
+		u8 *subscript, *wscript, *script;
 		struct bitcoin_signature sig;
 
 		/* Figure out keys to spend this. */
@@ -1341,21 +1384,21 @@ static void sign_all_inputs(struct bitcoin_tx *tx, struct utxo **utxos)
 			/* For P2SH-wrapped Segwit, the (implied) redeemScript
 			 * is defined in BIP141 */
 			subscript = bitcoin_redeem_p2sh_p2wpkh(tmpctx, &inkey);
-			tx->input[i].script
-				= bitcoin_scriptsig_p2sh_p2wpkh(tx->input,
-								&inkey);
+			script = bitcoin_scriptsig_p2sh_p2wpkh(tx, &inkey);
+			bitcoin_tx_input_set_script(tx, i, script);
 		} else {
 			/* Pure segwit uses an empty inputScript; NULL has
 			 * tal_count() == 0, so it works great here. */
 			subscript = NULL;
-			tx->input[i].script = NULL;
+			bitcoin_tx_input_set_script(tx, i, NULL);
 		}
 		/* This is the core crypto magic. */
 		sign_tx_input(tx, i, subscript, wscript, &inprivkey, &inkey,
 			      SIGHASH_ALL, &sig);
 
 		/* The witness is [sig] [key] */
-		tx->input[i].witness = bitcoin_witness_p2wpkh(tx, &sig, &inkey);
+		bitcoin_tx_input_set_witness(
+		    tx, i, bitcoin_witness_p2wpkh(tx, &sig, &inkey));
 	}
 }
 
@@ -1411,7 +1454,6 @@ static struct io_plan *handle_sign_withdrawal_tx(struct io_conn *conn,
 	u32 change_keyindex;
 	struct utxo **utxos;
 	struct bitcoin_tx *tx;
-	struct ext_key ext;
 	struct pubkey changekey;
 	u8 *scriptpubkey;
 
@@ -1420,15 +1462,13 @@ static struct io_plan *handle_sign_withdrawal_tx(struct io_conn *conn,
 					  &scriptpubkey, &utxos))
 		return bad_req(conn, c, msg_in);
 
-	if (bip32_key_from_parent(&secretstuff.bip32, change_keyindex,
-				  BIP32_FLAG_KEY_PUBLIC, &ext) != WALLY_OK)
+	if (!bip32_pubkey(&secretstuff.bip32, &changekey, change_keyindex))
 		return bad_req_fmt(conn, c, msg_in,
 				   "Failed to get key %u", change_keyindex);
 
-	pubkey_from_der(ext.pub_key, sizeof(ext.pub_key), &changekey);
 	tx = withdraw_tx(tmpctx, cast_const2(const struct utxo **, utxos),
 			 scriptpubkey, satoshi_out,
-			 &changekey, change_out, NULL);
+			 &changekey, change_out, NULL, NULL);
 
 	sign_all_inputs(tx, utxos);
 
@@ -1530,7 +1570,10 @@ static struct io_plan *handle_sign_node_announcement(struct io_conn *conn,
 		return bad_req_fmt(conn, c, msg_in,
 				   "Node announcement too short");
 
-	/* FIXME(cdecker) Check the node announcement's content */
+	if (fromwire_peektype(ann) != WIRE_NODE_ANNOUNCEMENT)
+		return bad_req_fmt(conn, c, msg_in,
+				   "Invalid announcement");
+
 	node_key(&node_pkey, NULL);
 	sha256_double(&hash, ann + offset, tal_count(ann) - offset);
 

@@ -15,12 +15,12 @@ CCANDIR := ccan
 
 # Where we keep the BOLT RFCs
 BOLTDIR := ../lightning-rfc/
-BOLTVERSION := 3fef98d10695462edecc63cba05e4a96374f4664
+BOLTVERSION := da71867c840abe057d7a68f358dd9493e0e79110
 
 -include config.vars
 
 ifneq ($(VALGRIND),0)
-VG=valgrind -q --error-exitcode=7
+VG=VALGRIND=1 valgrind -q --error-exitcode=7
 VG_TEST_ARGS = --track-origins=yes --leak-check=full --show-reachable=yes --errors-for-leak-kinds=all
 endif
 
@@ -31,7 +31,7 @@ SANITIZER_FLAGS=
 endif
 
 ifeq ($(DEVELOPER),1)
-DEV_CFLAGS=-DCCAN_TAKE_DEBUG=1 -DCCAN_TAL_DEBUG=1
+DEV_CFLAGS=-DCCAN_TAKE_DEBUG=1 -DCCAN_TAL_DEBUG=1 -DCCAN_JSON_OUT_DEBUG=1
 else
 DEV_CFLAGS=
 endif
@@ -47,7 +47,7 @@ endif
 
 ifeq ($(COMPAT),1)
 # We support compatibility with pre-0.6.
-COMPAT_CFLAGS=-DCOMPAT_V052=1 -DCOMPAT_V060=1 -DCOMPAT_V061=1 -DCOMPAT_V062=1
+COMPAT_CFLAGS=-DCOMPAT_V052=1 -DCOMPAT_V060=1 -DCOMPAT_V061=1 -DCOMPAT_V062=1 -DCOMPAT_V070=1
 endif
 
 # Timeout shortly before the 600 second travis silence timeout
@@ -63,7 +63,7 @@ CCAN_OBJS :=					\
 	ccan-bitmap.o				\
 	ccan-bitops.o				\
 	ccan-breakpoint.o			\
-	ccan-crc.o				\
+	ccan-crc32c.o				\
 	ccan-crypto-hmac.o			\
 	ccan-crypto-hkdf.o			\
 	ccan-crypto-ripemd160.o			\
@@ -81,6 +81,8 @@ CCAN_OBJS :=					\
 	ccan-io-fdpass.o			\
 	ccan-isaac.o				\
 	ccan-isaac64.o				\
+	ccan-json_escape.o			\
+	ccan-json_out.o				\
 	ccan-list.o				\
 	ccan-mem.o				\
 	ccan-membuf.o				\
@@ -123,7 +125,7 @@ CCAN_HEADERS :=						\
 	$(CCANDIR)/ccan/compiler/compiler.h		\
 	$(CCANDIR)/ccan/container_of/container_of.h	\
 	$(CCANDIR)/ccan/cppmagic/cppmagic.h		\
-	$(CCANDIR)/ccan/crc/crc.h			\
+	$(CCANDIR)/ccan/crc32c/crc32c.h			\
 	$(CCANDIR)/ccan/crypto/hkdf_sha256/hkdf_sha256.h \
 	$(CCANDIR)/ccan/crypto/hmac_sha256/hmac_sha256.h \
 	$(CCANDIR)/ccan/crypto/ripemd160/ripemd160.h	\
@@ -144,6 +146,8 @@ CCAN_HEADERS :=						\
 	$(CCANDIR)/ccan/io/io_plan.h			\
 	$(CCANDIR)/ccan/isaac/isaac.h			\
 	$(CCANDIR)/ccan/isaac/isaac64.h			\
+	$(CCANDIR)/ccan/json_escape/json_escape.h	\
+	$(CCANDIR)/ccan/json_out/json_out.h		\
 	$(CCANDIR)/ccan/likely/likely.h			\
 	$(CCANDIR)/ccan/list/list.h			\
 	$(CCANDIR)/ccan/mem/mem.h			\
@@ -185,14 +189,12 @@ WIRE_GEN := tools/generate-wire.py
 ALL_PROGRAMS =
 
 CPPFLAGS = -DBINTOPKGLIBEXECDIR='"'$(shell sh tools/rel.sh $(bindir) $(pkglibexecdir))'"'
-CWARNFLAGS := -Werror -Wall -Wundef -Wmissing-prototypes -Wmissing-declarations -Wstrict-prototypes -Wold-style-definition
-CDEBUGFLAGS := -std=gnu11 -g -fstack-protector $(SANITIZER_FLAGS)
-CFLAGS = $(CPPFLAGS) $(CWARNFLAGS) $(CDEBUGFLAGS) -I $(CCANDIR) $(EXTERNAL_INCLUDE_FLAGS) -I . -I/usr/local/include $(FEATURES) $(COVFLAGS) $(DEV_CFLAGS) -DSHACHAIN_BITS=48 -DJSMN_PARENT_LINKS $(PIE_CFLAGS) $(COMPAT_CFLAGS)
+CFLAGS = $(CPPFLAGS) $(CWARNFLAGS) $(CDEBUGFLAGS) $(COPTFLAGS) -I $(CCANDIR) $(EXTERNAL_INCLUDE_FLAGS) -I . -I/usr/local/include $(FEATURES) $(COVFLAGS) $(DEV_CFLAGS) -DSHACHAIN_BITS=48 -DJSMN_PARENT_LINKS $(PIE_CFLAGS) $(COMPAT_CFLAGS)
 
 # We can get configurator to run a different compile cmd to cross-configure.
 CONFIGURATOR_CC := $(CC)
 
-LDFLAGS = $(PIE_LDFLAGS) $(SANITIZER_FLAGS)
+LDFLAGS = $(PIE_LDFLAGS) $(SANITIZER_FLAGS) $(COPTFLAGS)
 ifeq ($(STATIC),1)
 LDLIBS = -L/usr/local/lib -Wl,-dn -lgmp -lsqlite3 -lz -Wl,-dy -lm -lpthread -ldl $(COVFLAGS)
 else
@@ -487,7 +489,7 @@ PKGLIBEXEC_PROGRAMS = \
 	       lightningd/lightning_hsmd \
 	       lightningd/lightning_onchaind \
 	       lightningd/lightning_openingd
-PLUGINS=plugins/pay
+PLUGINS=plugins/pay plugins/autoclean
 
 install-program: installdirs $(BIN_PROGRAMS) $(PKGLIBEXEC_PROGRAMS) $(PLUGINS)
 	@$(NORMAL_INSTALL)
@@ -603,7 +605,7 @@ ccan-noerr.o: $(CCANDIR)/ccan/noerr/noerr.c
 	$(CC) $(CFLAGS) -c -o $@ $<
 ccan-str-hex.o: $(CCANDIR)/ccan/str/hex/hex.c
 	$(CC) $(CFLAGS) -c -o $@ $<
-ccan-crc.o: $(CCANDIR)/ccan/crc/crc.c
+ccan-crc32c.o: $(CCANDIR)/ccan/crc32c/crc32c.c
 	$(CC) $(CFLAGS) -c -o $@ $<
 ccan-crypto-hmac.o: $(CCANDIR)/ccan/crypto/hmac_sha256/hmac_sha256.c
 	$(CC) $(CFLAGS) -c -o $@ $<
@@ -658,4 +660,8 @@ ccan-utf8.o: $(CCANDIR)/ccan/utf8/utf8.c
 ccan-bitmap.o: $(CCANDIR)/ccan/bitmap/bitmap.c
 	$(CC) $(CFLAGS) -c -o $@ $<
 ccan-membuf.o: $(CCANDIR)/ccan/membuf/membuf.c
+	$(CC) $(CFLAGS) -c -o $@ $<
+ccan-json_escape.o: $(CCANDIR)/ccan/json_escape/json_escape.c
+	$(CC) $(CFLAGS) -c -o $@ $<
+ccan-json_out.o: $(CCANDIR)/ccan/json_out/json_out.c
 	$(CC) $(CFLAGS) -c -o $@ $<

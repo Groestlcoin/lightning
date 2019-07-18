@@ -2,7 +2,6 @@ SUBMODULES =					\
 	external/libsodium			\
 	external/libwally-core			\
 	external/jsmn				\
-	external/libbase58			\
 	external/libbacktrace
 
 LIBSODIUM_HEADERS := external/libsodium/src/libsodium/include/sodium.h
@@ -12,9 +11,8 @@ LIBWALLY_HEADERS := external/libwally-core/include/wally_bip32.h		\
 LIBSECP_HEADERS := external/libwally-core/src/secp256k1/include/secp256k1_ecdh.h		\
 		external/libwally-core/src/secp256k1/include/secp256k1.h
 JSMN_HEADERS := external/jsmn/jsmn.h
-LIBBASE58_HEADERS := external/libbase58/libbase58.h
 
-EXTERNAL_HEADERS := $(LIBSODIUM_HEADERS) $(LIBWALLY_HEADERS) $(LIBSECP_HEADERS) $(JSMN_HEADERS) $(LIBBASE58_HEADERS)
+EXTERNAL_HEADERS := $(LIBSODIUM_HEADERS) $(LIBWALLY_HEADERS) $(LIBSECP_HEADERS) $(JSMN_HEADERS)
 EXTERNAL_LIBS := external/libwallycore.a external/libsecp256k1.a external/libjsmn.a external/libbacktrace.a
 
 EXTERNAL_INCLUDE_FLAGS :=					\
@@ -29,13 +27,6 @@ EXTERNAL_INCLUDE_FLAGS += -I external/libsodium/src/libsodium/include
 EXTERNAL_LIBS += external/libsodium.a
 else
 LDLIBS += -lsodium
-endif
-
-ifneq ($(HAVE_SYSTEM_LIBBASE58),1)
-EXTERNAL_INCLUDE_FLAGS += -I external/libbase58/
-EXTERNAL_LIBS +=  external/libbase58.a
-else
-LDLIBS += -lbase58
 endif
 
 EXTERNAL_LDLIBS := -Lexternal $(patsubst lib%.a,-l%,$(notdir $(EXTERNAL_LIBS)))
@@ -57,6 +48,9 @@ $(LIBWALLY_HEADERS) $(LIBSECP_HEADERS): submodcheck
 # libsecp included in libwally.
 # Wildcards here are magic.  See http://stackoverflow.com/questions/2973445/gnu-makefile-rule-generating-a-few-targets-from-a-single-source-file
 external/libsecp256k1.% external/libwallycore.%: external/libwally-core/src/secp256k1/libsecp256k1.la external/libwally-core/src/libwallycore.la
+	#GRS patch
+	grep -rl 'wally_sha256d' external/libwally-core/src/transaction.c | xargs sed -i 's/wally_sha256d/wally_sha256/g';exit 0
+	#*********
 	$(MAKE) -C external/libwally-core DESTDIR=$$(pwd)/external install-exec
 
 external/libwally-core/src/libwallycore.% external/libwally-core/src/secp256k1/libsecp256k1.%: $(LIBWALLY_HEADERS) $(LIBSECP_HEADERS)
@@ -73,19 +67,6 @@ external/jsmn.o: external/jsmn/jsmn.c Makefile
 	$(COMPILE.c) -DJSMN_STRICT=1 $(OUTPUT_OPTION) $<
 
 external/libjsmn.a: external/jsmn.o
-	$(AR) rc $@ $<
-
-LIBBASE58_SRC := external/libbase58/base58.c
-
-$(LIBBASE58_SRC): $(LIBBASE58_HEADERS)
-
-$(LIBBASE58_HEADERS): submodcheck
-
-# Can't be inside submodule, as that makes git think it's dirty.
-external/base58.o: $(LIBBASE58_SRC) Makefile
-	$(COMPILE.c) $(OUTPUT_OPTION) $<
-
-external/libbase58.a: external/base58.o
 	$(AR) rc $@ $<
 
 external/libbacktrace/backtrace.h: submodcheck

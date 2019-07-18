@@ -4,6 +4,7 @@
 #include "bitcoin/tx.h"
 #include "bitcoind.h"
 #include "chaintopology.h"
+#include "channel.h"
 #include "jsonrpc.h"
 #include "lightningd.h"
 #include "log.h"
@@ -22,6 +23,7 @@
 #include <inttypes.h>
 #include <lightningd/channel_control.h>
 #include <lightningd/gossip_control.h>
+#include <lightningd/io_loop_with_timers.h>
 
 /* Mutual recursion via timer. */
 static void try_extend_tip(struct chain_topology *topo);
@@ -69,11 +71,11 @@ static void filter_block_txs(struct chain_topology *topo, struct block *b)
 		size_t j;
 
 		/* Tell them if it spends a txo we care about. */
-		for (j = 0; j < tal_count(tx->input); j++) {
+		for (j = 0; j < tx->wtx->num_inputs; j++) {
 			struct txwatch_output out;
 			struct txowatch *txo;
-			out.txid = tx->input[j].txid;
-			out.index = tx->input[j].index;
+			bitcoin_tx_input_get_txid(tx, j, &out.txid);
+			out.index = tx->wtx->inputs[j].index;
 
 			txo = txowatch_hash_get(&topo->txowatches, &out);
 			if (txo) {
@@ -84,19 +86,23 @@ static void filter_block_txs(struct chain_topology *topo, struct block *b)
 		}
 
 		owned = AMOUNT_SAT(0);
+		bitcoin_txid(tx, &txid);
 		if (txfilter_match(topo->bitcoind->ld->owned_txfilter, tx)) {
 			wallet_extract_owned_outputs(topo->bitcoind->ld->wallet,
-						     tx, &b->height,
-						     &owned);
+						     tx, &b->height, &owned);
+			wallet_transaction_add(topo->ld->wallet, tx, b->height,
+					       i);
+			wallet_transaction_annotate(topo->ld->wallet, &txid,
+						    TX_WALLET_DEPOSIT, 0);
 		}
 
 		/* We did spends first, in case that tells us to watch tx. */
-		bitcoin_txid(tx, &txid);
-		if (watching_txid(topo, &txid) || we_broadcast(topo, &txid) ||
-		    !amount_sat_eq(owned, AMOUNT_SAT(0))) {
+		if (watching_txid(topo, &txid) || we_broadcast(topo, &txid)) {
 			wallet_transaction_add(topo->ld->wallet,
 					       tx, b->height, i);
 		}
+
+		txwatch_inform(topo, &txid, tx);
 	}
 	b->full_txs = tal_free(b->full_txs);
 }
@@ -140,7 +146,7 @@ static void broadcast_remainder(struct bitcoind *bitcoind,
 	if (txs->cursor == tal_count(txs->txs)) {
 		if (txs->cmd)
 			was_pending(command_success(txs->cmd,
-						    null_response(txs->cmd)));
+						    json_stream_success(txs->cmd)));
 		tal_free(txs);
 		return;
 	}
@@ -237,8 +243,26 @@ void broadcast_tx(struct chain_topology *topo,
 static enum watch_result closeinfo_txid_confirmed(struct lightningd *ld,
 						  struct channel *channel,
 						  const struct bitcoin_txid *txid,
+						  const struct bitcoin_tx *tx,
 						  unsigned int depth)
 {
+	/* Sanity check. */
+	if (tx != NULL) {
+		struct bitcoin_txid txid2;
+
+		bitcoin_txid(tx, &txid2);
+		if (!bitcoin_txid_eq(txid, &txid2)) {
+			channel_internal_error(channel, "Txid for %s is not %s",
+					       type_to_string(tmpctx,
+							      struct bitcoin_tx,
+							      tx),
+					       type_to_string(tmpctx,
+							      struct bitcoin_txid,
+							      txid));
+			return DELETE_WATCH;
+		}
+	}
+
 	/* We delete ourselves first time, so should not be reorged out!! */
 	assert(depth > 0);
 	/* Subtle: depth 1 == current block. */
@@ -488,7 +512,6 @@ static struct command_result *json_feerates(struct command *cmd,
 	}
 
 	response = json_stream_success(cmd);
-	json_object_start(response, NULL);
 	json_object_start(response, json_feerate_style_name(*style));
 	for (size_t i = 0; i < ARRAY_SIZE(feerates); i++) {
 		if (!feerates[i])
@@ -519,13 +542,12 @@ static struct command_result *json_feerates(struct command *cmd,
 		json_object_end(response);
 	}
 
-	json_object_end(response);
-
 	return command_success(cmd, response);
 }
 
 static const struct json_command feerates_command = {
 	"feerates",
+	"bitcoin",
 	json_feerates,
 	"Return feerate estimates, either satoshi-per-kw ({style} perkw) or satoshi-per-kb ({style} perkb)."
 };
@@ -571,10 +593,13 @@ static void topo_update_spends(struct chain_topology *topo, struct block *b)
 	const struct short_channel_id *scid;
 	for (size_t i = 0; i < tal_count(b->full_txs); i++) {
 		const struct bitcoin_tx *tx = b->full_txs[i];
-		for (size_t j = 0; j < tal_count(tx->input); j++) {
-			const struct bitcoin_tx_input *input = &tx->input[j];
+		for (size_t j = 0; j < tx->wtx->num_inputs; j++) {
+			const struct wally_tx_input *input = &tx->wtx->inputs[j];
+			struct bitcoin_txid txid;
+			bitcoin_tx_input_get_txid(tx, j, &txid);
+
 			scid = wallet_outpoint_spend(topo->ld->wallet, tmpctx,
-						     b->height, &input->txid,
+						     b->height, &txid,
 						     input->index);
 			if (scid) {
 				gossipd_notify_spend(topo->bitcoind->ld, scid);
@@ -588,12 +613,14 @@ static void topo_add_utxos(struct chain_topology *topo, struct block *b)
 {
 	for (size_t i = 0; i < tal_count(b->full_txs); i++) {
 		const struct bitcoin_tx *tx = b->full_txs[i];
-		for (size_t j = 0; j < tal_count(tx->output); j++) {
-			const struct bitcoin_tx_output *output = &tx->output[j];
-			if (is_p2wsh(output->script, NULL)) {
+		for (size_t j = 0; j < tx->wtx->num_outputs; j++) {
+			const u8 *script = bitcoin_tx_output_get_script(tmpctx, tx, j);
+			struct amount_sat amt = bitcoin_tx_output_get_amount(tx, j);
+
+			if (is_p2wsh(script, NULL)) {
 				wallet_utxoset_add(topo->ld->wallet, tx, j,
-						   b->height, i, output->script,
-						   output->amount);
+						   b->height, i, script,
+						   amt);
 			}
 		}
 	}
@@ -604,7 +631,7 @@ static void add_tip(struct chain_topology *topo, struct block *b)
 	/* Attach to tip; b is now the tip. */
 	assert(b->height == topo->tip->height + 1);
 	b->prev = topo->tip;
-	topo->tip->next = b;
+	topo->tip->next = b;	/* FIXME this doesn't seem to be used anywhere */
 	topo->tip = b;
 	wallet_block_add(topo->ld->wallet, b);
 
@@ -625,7 +652,7 @@ static struct block *new_block(struct chain_topology *topo,
 {
 	struct block *b = tal(topo, struct block);
 
-	sha256_double(&b->blkid.shad, &blk->hdr, sizeof(blk->hdr));
+	groestl512_double(&b->blkid.shad, &blk->hdr, sizeof(blk->hdr));
 
 	log_debug(topo->log, "Adding block %u: %s",
 		  height,
@@ -654,6 +681,10 @@ static void remove_tip(struct chain_topology *topo)
 	struct block *b;
 
 	b = topo->tip;
+	log_debug(topo->log, "Removing stale block %u: %s",
+			  topo->tip->height,
+			  type_to_string(tmpctx, struct bitcoin_blkid, &b->blkid));
+
 	/* Move tip back one. */
 	topo->tip = b->prev;
 	if (!(topo->tip))
@@ -663,7 +694,7 @@ static void remove_tip(struct chain_topology *topo)
 	txs = wallet_transactions_by_height(b, topo->ld->wallet, b->height);
 	n = tal_count(txs);
 
-	/* Notify that txs are kicked out. */
+	/* Notify that txs are kicked out (their height will be set NULL in db) */
 	for (i = 0; i < n; i++)
 		txwatch_fire(topo, &txs[i], 0);
 
@@ -890,7 +921,7 @@ void setup_topology(struct chain_topology *topo,
 	start_fee_estimate(topo);
 
 	/* Once it gets initial block, it calls io_break() and we return. */
-	io_loop(NULL, NULL);
+	io_loop_with_timers(topo->ld);
 }
 
 void begin_topology(struct chain_topology *topo)

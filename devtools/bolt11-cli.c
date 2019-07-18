@@ -101,7 +101,7 @@ int main(int argc, char *argv[])
 	printf("expiry: %"PRIu64" (%s)\n",
 	       b11->expiry, fmt_time(ctx, b11->timestamp + b11->expiry));
 	printf("payee: %s\n",
-	       type_to_string(ctx, struct pubkey, &b11->receiver_id));
+	       type_to_string(ctx, struct node_id, &b11->receiver_id));
 	printf("payment_hash: %s\n",
 	       tal_hexstr(ctx, &b11->payment_hash, sizeof(b11->payment_hash)));
 	printf("min_final_cltv_expiry: %u\n", b11->min_final_cltv_expiry);
@@ -125,12 +125,12 @@ int main(int argc, char *argv[])
 		printf("fallback: %s\n", tal_hex(ctx, b11->fallbacks[i]));
                 if (is_p2pkh(b11->fallbacks[i], &pkh)) {
 			printf("fallback-P2PKH: %s\n",
-			       bitcoin_to_base58(ctx, b11->chain->testnet,
+			       bitcoin_to_base58(ctx, b11->chain,
 						 &pkh));
                 } else if (is_p2sh(b11->fallbacks[i], &sh)) {
 			printf("fallback-P2SH: %s\n",
 			       p2sh_to_base58(ctx,
-					      b11->chain->testnet,
+					      b11->chain,
 					      &sh));
                 } else if (is_p2wpkh(b11->fallbacks[i], &pkh)) {
                         char out[73 + strlen(b11->chain->bip173_name)];
@@ -149,7 +149,7 @@ int main(int argc, char *argv[])
 		printf("route: (node/chanid/fee/expirydelta) ");
 		for (size_t n = 0; n < tal_count(b11->routes[i]); n++) {
 			printf(" %s/%s/%u/%u/%u",
-			       type_to_string(ctx, struct pubkey,
+			       type_to_string(ctx, struct node_id,
 					      &b11->routes[i][n].pubkey),
 			       type_to_string(ctx, struct short_channel_id,
 					      &b11->routes[i][n].short_channel_id),

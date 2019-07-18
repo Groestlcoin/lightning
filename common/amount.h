@@ -98,6 +98,14 @@ bool amount_msat_less_sat(struct amount_msat msat, struct amount_sat sat);
 /* Is msat <= sat? */
 bool amount_msat_less_eq_sat(struct amount_msat msat, struct amount_sat sat);
 
+/* Returns true if msat fits in a u32 value. */
+WARN_UNUSED_RESULT bool amount_msat_to_u32(struct amount_msat msat,
+					   u32 *millisatoshis);
+
+/* Programatically initialize from various types */
+void amount_msat_from_u64(struct amount_msat *msat, u64 millisatoshis);
+WARN_UNUSED_RESULT bool amount_msat_from_sat_u64(struct amount_msat *msat, u64 satoshis);
+
 /* Common operation: what is the HTLC fee for given feerate?  Can overflow! */
 WARN_UNUSED_RESULT bool amount_msat_fee(struct amount_msat *fee,
 					struct amount_msat amt,

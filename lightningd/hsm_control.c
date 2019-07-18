@@ -10,6 +10,7 @@
 #include <errno.h>
 #include <hsmd/gen_hsm_wire.h>
 #include <inttypes.h>
+#include <lightningd/bitcoind.h>
 #include <lightningd/hsm_control.h>
 #include <lightningd/log.h>
 #include <lightningd/log_status.h>
@@ -20,7 +21,7 @@
 #include <wire/wire_sync.h>
 
 static int hsm_get_fd(struct lightningd *ld,
-		      const struct pubkey *id,
+		      const struct node_id *id,
 		      u64 dbid,
 		      int capabilities)
 {
@@ -42,7 +43,7 @@ static int hsm_get_fd(struct lightningd *ld,
 }
 
 int hsm_get_client_fd(struct lightningd *ld,
-		      const struct pubkey *id,
+		      const struct node_id *id,
 		      u64 dbid,
 		      int capabilities)
 {
@@ -60,7 +61,7 @@ static unsigned int hsm_msg(struct subd *hsmd,
 			    const u8 *msg, const int *fds UNUSED)
 {
 	/* We only expect one thing from the HSM that's not a STATUS message */
-	struct pubkey client_id;
+	struct node_id client_id;
 	u8 *bad_msg;
 	char *desc;
 
@@ -70,7 +71,7 @@ static unsigned int hsm_msg(struct subd *hsmd,
 
 	/* This should, of course, never happen. */
 	log_broken(hsmd->log, "client %s %s (request %s)",
-		   type_to_string(tmpctx, struct pubkey, &client_id),
+		   type_to_string(tmpctx, struct node_id, &client_id),
 		   desc, tal_hex(tmpctx, bad_msg));
 	return 0;
 }
@@ -92,7 +93,8 @@ void hsm_init(struct lightningd *ld)
 		err(1, "Could not subd hsm");
 
 	ld->hsm_fd = fds[0];
-	if (!wire_sync_write(ld->hsm_fd, towire_hsm_init(tmpctx)))
+	if (!wire_sync_write(ld->hsm_fd, towire_hsm_init(tmpctx,
+				  &ld->topology->bitcoind->chainparams->bip32_key_version)))
 		err(1, "Writing init msg to hsm");
 
 	ld->wallet->bip32_base = tal(ld->wallet, struct ext_key);

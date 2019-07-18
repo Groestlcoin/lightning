@@ -2,6 +2,7 @@
 #include <bitcoin/short_channel_id.h>
 #include <common/amount.h>
 #include <common/json_helpers.h>
+#include <common/node_id.h>
 #include <errno.h>
 
 bool json_to_bitcoin_amount(const char *buffer, const jsmntok_t *tok,
@@ -32,6 +33,13 @@ bool json_to_bitcoin_amount(const char *buffer, const jsmntok_t *tok,
 	return true;
 }
 
+bool json_to_node_id(const char *buffer, const jsmntok_t *tok,
+		     struct node_id *id)
+{
+	return node_id_from_hexstr(buffer + tok->start,
+				   tok->end - tok->start, id);
+}
+
 bool json_to_pubkey(const char *buffer, const jsmntok_t *tok,
 		    struct pubkey *pubkey)
 {
@@ -59,4 +67,27 @@ bool json_to_short_channel_id(const char *buffer, const jsmntok_t *tok,
 	return (short_channel_id_from_str(buffer + tok->start,
 					  tok->end - tok->start, scid,
 					  may_be_deprecated_form));
+}
+
+bool json_to_txid(const char *buffer, const jsmntok_t *tok,
+		  struct bitcoin_txid *txid)
+{
+	return bitcoin_txid_from_hex(buffer + tok->start,
+				     tok->end - tok->start, txid);
+}
+
+bool split_tok(const char *buffer, const jsmntok_t *tok,
+				char split,
+				jsmntok_t *a,
+				jsmntok_t *b)
+{
+	const char *p = memchr(buffer + tok->start, split, tok->end - tok->start);
+	if (!p)
+		return false;
+
+	*a = *b = *tok;
+	a->end = p - buffer;
+	b->start = p + 1 - buffer;
+
+	return true;
 }

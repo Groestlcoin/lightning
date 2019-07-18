@@ -1,6 +1,6 @@
-FROM fedora:28
+FROM fedora:29
 
-ENV GROESTLCOIN_VERSION 2.16.3
+ENV GROESTLCOIN_VERSION 2.17.2
 WORKDIR /tmp
 
 RUN dnf update -y && \
@@ -23,9 +23,12 @@ RUN dnf update -y && \
 		zlib-devel && \
 	dnf clean all
 
-RUN wget https://github.com/Groestlcoin/groestlcoin/releases/download/v2.16.3/groestlcoin-2.16.3-x86_64-linux-gnu.tar.gz -O groestlcoin.tar.gz && \
+RUN wget https://github.com/Groestlcoin/groestlcoin/releases/download/v$GROESTLCOIN_VERSION/groestlcoin-$GROESTLCOIN_VERSION-x86_64-linux-gnu.tar.gz -O groestlcoin.tar.gz && \
     tar -xvzf groestlcoin.tar.gz && \
     mv groestlcoin-$GROESTLCOIN_VERSION/bin/groestlcoin* /usr/local/bin/ && \
+		mv groestlcoin-$GROESTLCOIN_VERSION/lib/* /usr/local/lib/ && \
+		mv groestlcoin-$GROESTLCOIN_VERSION/include/* /usr/local/include/ && \
+		mv groestlcoin-$GROESTLCOIN_VERSION/share/man/man1/* /usr/share/man/man1 && \
     rm -rf groestlcoin.tar.gz groestlcoin-$GROESTLCOIN_VERSION
 
 RUN python3 -m pip install --upgrade pip && \

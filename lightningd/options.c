@@ -1,6 +1,7 @@
 #include <bitcoin/chainparams.h>
 #include <ccan/array_size/array_size.h>
 #include <ccan/err/err.h>
+#include <ccan/json_escape/json_escape.h>
 #include <ccan/mem/mem.h>
 #include <ccan/opt/opt.h>
 #include <ccan/opt/private.h>
@@ -11,7 +12,6 @@
 #include <ccan/tal/str/str.h>
 #include <common/configdir.h>
 #include <common/json_command.h>
-#include <common/json_escaped.h>
 #include <common/jsonrpc_errors.h>
 #include <common/memleak.h>
 #include <common/param.h>
@@ -376,6 +376,9 @@ static void config_register_opts(struct lightningd *ld)
 	opt_register_arg("--fee-per-satoshi", opt_set_u32, opt_show_u32,
 			 &ld->config.fee_per_satoshi,
 			 "Microgro fee for every gro in HTLC");
+	opt_register_arg("--min-capacity-sat", opt_set_u64, opt_show_u64,
+			 &ld->config.min_capacity_sat,
+			 "Minimum capacity in gro for accepting channels");
 	opt_register_arg("--addr", opt_add_addr, NULL,
 			 ld,
 			 "Set an IP address (v4 or v6) to listen on and announce to the network for incoming connections");
@@ -404,14 +407,6 @@ static void config_register_opts(struct lightningd *ld)
 			       opt_set_bool_arg, opt_show_bool,
 			       &deprecated_apis,
 			       "Enable deprecated options, JSONRPC commands, fields, etc.");
-	opt_register_arg("--autocleaninvoice-cycle",
-			 opt_set_u64, opt_show_u64,
-			 &ld->ini_autocleaninvoice_cycle,
-			 "Perform cleanup of expired invoices every given seconds, or do not autoclean if 0");
-	opt_register_arg("--autocleaninvoice-expired-by",
-			 opt_set_u64, opt_show_u64,
-			 &ld->ini_autocleaninvoice_expiredby,
-			 "If expired invoice autoclean enabled, invoices that have expired for at least this given seconds are cleaned");
 	opt_register_arg("--proxy", opt_add_proxy_addr, NULL,
 			ld,"Set a socks v5 proxy IP address and port");
 	opt_register_arg("--tor-service-password", opt_set_talstr, NULL,
@@ -475,7 +470,11 @@ static void dev_register_opts(struct lightningd *ld)
 	    "--dev-channel-update-interval=<s>", opt_set_u32, opt_show_u32,
 	    &ld->config.channel_update_interval,
 	    "Time in seconds between channel updates for our own channels.");
-}
+
+	opt_register_arg("--dev-gossip-time", opt_set_u32, opt_show_u32,
+			 &ld->dev_gossip_time,
+			 "UNIX time to override gossipd to use.");
+ }
 #endif
 
 
@@ -529,6 +528,9 @@ static const struct config testnet_config = {
 	.max_fee_multiplier = 10,
 
 	.use_dns = false,
+
+	/* Sets min_effective_htlc_capacity - at 1000$/BTC this is 10ct */
+	.min_capacity_sat = 10000,
 };
 
 /* aka. "Dude, where's my coins?" */
@@ -592,6 +594,9 @@ static const struct config mainnet_config = {
 	.max_fee_multiplier = 10,
 
 	.use_dns = false,
+
+	/* Sets min_effective_htlc_capacity - at 1000$/BTC this is 10ct */
+	.min_capacity_sat = 10000,
 };
 
 
@@ -716,7 +721,7 @@ static void opt_parse_from_config(struct lightningd *ld, bool early)
 			if (all_args[i] != NULL) {
 				config_parse_line_number = i + 1;
 				argv[1] = all_args[i];
-				opt_early_parse(argc, argv,
+				opt_early_parse_incomplete(argc, argv,
 						config_log_stderr_exit);
 			}
 		}
@@ -824,19 +829,16 @@ static const char *codename_noun[]
 
 void setup_color_and_alias(struct lightningd *ld)
 {
-	u8 der[PUBKEY_DER_LEN];
-	pubkey_to_der(der, &ld->id);
-
 	if (!ld->rgb)
 		/* You can't get much red by default */
-		ld->rgb = tal_dup_arr(ld, u8, der, 3, 0);
+		ld->rgb = tal_dup_arr(ld, u8, ld->id.k, 3, 0);
 
 	if (!ld->alias) {
 		u64 adjective, noun;
 		char *name;
 
-		memcpy(&adjective, der+3, sizeof(adjective));
-		memcpy(&noun, der+3+sizeof(adjective), sizeof(noun));
+		memcpy(&adjective, ld->id.k+3, sizeof(adjective));
+		memcpy(&noun, ld->id.k+3+sizeof(adjective), sizeof(noun));
 		noun %= ARRAY_SIZE(codename_noun);
 		adjective %= ARRAY_SIZE(codename_adjective);
 
@@ -1046,7 +1048,7 @@ static void add_config(struct lightningd *ld,
 	}
 
 	if (answer) {
-		struct json_escaped *esc = json_escape(NULL, answer);
+		struct json_escape *esc = json_escape(NULL, answer);
 		json_add_escaped_string(response, name0, take(esc));
 	}
 	tal_free(name0);
@@ -1068,7 +1070,6 @@ static struct command_result *json_listconfigs(struct command *cmd,
 
 	if (!configtok) {
 		response = json_stream_success(cmd);
-		json_object_start(response, NULL);
 		json_add_string(response, "# version", version());
 	}
 
@@ -1093,10 +1094,8 @@ static struct command_result *json_listconfigs(struct command *cmd,
 				      name + 1, len - 1))
 				continue;
 
-			if (!response) {
+			if (!response)
 				response = json_stream_success(cmd);
-				json_object_start(response, NULL);
-			}
 			add_config(cmd->ld, response, &opt_table[i],
 				   name+1, len-1);
 		}
@@ -1108,15 +1107,14 @@ static struct command_result *json_listconfigs(struct command *cmd,
 				    json_tok_full_len(configtok),
 				    json_tok_full(buffer, configtok));
 	}
-	json_object_end(response);
 	return command_success(cmd, response);
 }
 
 static const struct json_command listconfigs_command = {
 	"listconfigs",
+	"utility",
 	json_listconfigs,
 	"List all configuration options, or with [config], just that one.",
-
 	.verbose = "listconfigs [config]\n"
 	"Outputs an object, with each field a config options\n"
 	"(Option names which start with # are comments)\n"

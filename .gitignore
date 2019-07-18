@@ -38,6 +38,6 @@ tools/headerversions
 contrib/pylightning/build/
 contrib/pylightning/dist/
 contrib/pylightning/pylightning.egg-info/
-
+devtools/create-gossipstore
 contrib/compose/groestlcoin_datadir/
 contrib/compose/clightning_groestlcoin_datadir/

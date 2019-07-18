@@ -9,7 +9,9 @@
 
 struct channel;
 struct htlc_in;
+struct htlc_in_map;
 struct htlc_out;
+struct htlc_out_map;
 struct htlc_stub;
 struct lightningd;
 
@@ -62,5 +64,9 @@ void htlcs_notify_new_block(struct lightningd *ld, u32 height);
 void htlcs_reconnect(struct lightningd *ld,
 		     struct htlc_in_map *htlcs_in,
 		     struct htlc_out_map *htlcs_out);
+
+/* For HTLCs which terminate here, invoice payment calls one of these. */
+void fulfill_htlc(struct htlc_in *hin, const struct preimage *preimage);
+void fail_htlc(struct htlc_in *hin, enum onion_type failcode);
 
 #endif /* LIGHTNING_LIGHTNINGD_PEER_HTLCS_H */

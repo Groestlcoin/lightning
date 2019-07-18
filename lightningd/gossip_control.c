@@ -8,12 +8,12 @@
 #include <ccan/crypto/siphash24/siphash24.h>
 #include <ccan/err/err.h>
 #include <ccan/fdpass/fdpass.h>
+#include <ccan/json_escape/json_escape.h>
 #include <ccan/take/take.h>
 #include <ccan/tal/str/str.h>
 #include <common/amount.h>
 #include <common/features.h>
 #include <common/json_command.h>
-#include <common/json_escaped.h>
 #include <common/json_helpers.h>
 #include <common/jsonrpc_errors.h>
 #include <common/param.h>
@@ -121,6 +121,7 @@ static unsigned gossip_msg(struct subd *gossip, const u8 *msg, const int *fds)
 	case WIRE_GOSSIP_DEV_SUPPRESS:
 	case WIRE_GOSSIP_LOCAL_CHANNEL_CLOSE:
 	case WIRE_GOSSIP_DEV_MEMLEAK:
+	case WIRE_GOSSIP_DEV_COMPACT_STORE:
 	/* This is a reply, so never gets through to here. */
 	case WIRE_GOSSIP_GETNODES_REPLY:
 	case WIRE_GOSSIP_GETROUTE_REPLY:
@@ -130,6 +131,7 @@ static unsigned gossip_msg(struct subd *gossip, const u8 *msg, const int *fds)
 	case WIRE_GOSSIP_GET_CHANNEL_PEER_REPLY:
 	case WIRE_GOSSIP_GET_INCOMING_CHANNELS_REPLY:
 	case WIRE_GOSSIP_DEV_MEMLEAK_REPLY:
+	case WIRE_GOSSIP_DEV_COMPACT_STORE_REPLY:
 		break;
 
 	case WIRE_GOSSIP_PING_REPLY:
@@ -159,12 +161,18 @@ void gossip_init(struct lightningd *ld, int connectd_fd)
 		err(1, "Could not subdaemon gossip");
 
 	msg = towire_gossipctl_init(
-	    tmpctx, ld->config.broadcast_interval_msec,
+	    tmpctx,
 	    &get_chainparams(ld)->genesis_blockhash, &ld->id,
 	    get_offered_globalfeatures(tmpctx),
 	    ld->rgb,
 	    ld->alias, ld->config.channel_update_interval,
-	    ld->announcable);
+	    ld->announcable,
+#if DEVELOPER
+	    ld->dev_gossip_time ? &ld->dev_gossip_time: NULL
+#else
+	    NULL
+#endif
+		);
 	subd_send_msg(ld->gossip, msg);
 }
 
@@ -173,24 +181,6 @@ void gossipd_notify_spend(struct lightningd *ld,
 {
 	u8 *msg = towire_gossip_outpoint_spent(tmpctx, scid);
 	subd_send_msg(ld->gossip, msg);
-}
-
-/* Gossipd shouldn't give us bad pubkeys, but don't abort if they do */
-static void json_add_raw_pubkey(struct json_stream *response,
-			 const char *fieldname,
-			 const u8 raw_pubkey[sizeof(struct pubkey)])
-{
-	secp256k1_pubkey pubkey;
-	u8 der[PUBKEY_DER_LEN];
-	size_t outlen = PUBKEY_DER_LEN;
-
-	memcpy(&pubkey, raw_pubkey, sizeof(pubkey));
-	if (!secp256k1_ec_pubkey_serialize(secp256k1_ctx, der, &outlen,
-					   &pubkey,
-					   SECP256K1_EC_COMPRESSED))
-		json_add_string(response, fieldname, "INVALID PUBKEY");
-	else
-		json_add_hex(response, fieldname, der, sizeof(der));
 }
 
 static void json_getnodes_reply(struct subd *gossip UNUSED, const u8 *reply,
@@ -208,14 +198,13 @@ static void json_getnodes_reply(struct subd *gossip UNUSED, const u8 *reply,
 	}
 
 	response = json_stream_success(cmd);
-	json_object_start(response, NULL);
 	json_array_start(response, "nodes");
 
 	for (i = 0; i < tal_count(nodes); i++) {
-		struct json_escaped *esc;
+		struct json_escape *esc;
 
 		json_object_start(response, NULL);
-		json_add_raw_pubkey(response, "nodeid", nodes[i]->nodeid);
+		json_add_node_id(response, "nodeid", &nodes[i]->nodeid);
 		if (nodes[i]->last_timestamp < 0) {
 			json_object_end(response);
 			continue;
@@ -231,9 +220,6 @@ static void json_getnodes_reply(struct subd *gossip UNUSED, const u8 *reply,
 			     nodes[i]->last_timestamp);
 		json_add_hex_talarr(response, "globalfeatures",
 				    nodes[i]->globalfeatures);
-		if (deprecated_apis)
-			json_add_hex_talarr(response, "global_features",
-					    nodes[i]->globalfeatures);
 		json_array_start(response, "addresses");
 		for (j=0; j<tal_count(nodes[i]->addresses); j++) {
 			json_add_address(response, NULL, &nodes[i]->addresses[j]);
@@ -242,7 +228,6 @@ static void json_getnodes_reply(struct subd *gossip UNUSED, const u8 *reply,
 		json_object_end(response);
 	}
 	json_array_end(response);
-	json_object_end(response);
 	was_pending(command_success(cmd, response));
 }
 
@@ -252,10 +237,10 @@ static struct command_result *json_listnodes(struct command *cmd,
 					     const jsmntok_t *params)
 {
 	u8 *req;
-	struct pubkey *id;
+	struct node_id *id;
 
 	if (!param(cmd, buffer, params,
-		   p_opt("id", param_pubkey, &id),
+		   p_opt("id", param_node_id, &id),
 		   NULL))
 		return command_param_failed();
 
@@ -266,6 +251,7 @@ static struct command_result *json_listnodes(struct command *cmd,
 
 static const struct json_command listnodes_command = {
 	"listnodes",
+	"network",
 	json_listnodes,
 	"Show node {id} (or all, if no {id}), in our local network view"
 };
@@ -286,9 +272,7 @@ static void json_getroute_reply(struct subd *gossip UNUSED, const u8 *reply, con
 	}
 
 	response = json_stream_success(cmd);
-	json_object_start(response, NULL);
 	json_add_route(response, "route", hops, tal_count(hops));
-	json_object_end(response);
 	was_pending(command_success(cmd, response));
 }
 
@@ -298,8 +282,8 @@ static struct command_result *json_getroute(struct command *cmd,
 					    const jsmntok_t *params)
 {
 	struct lightningd *ld = cmd->ld;
-	struct pubkey *destination;
-	struct pubkey *source;
+	struct node_id *destination;
+	struct node_id *source;
 	const jsmntok_t *excludetok;
 	struct amount_msat *msat;
 	unsigned *cltv;
@@ -315,11 +299,11 @@ static struct command_result *json_getroute(struct command *cmd,
 	double *fuzz;
 
 	if (!param(cmd, buffer, params,
-		   p_req("id", param_pubkey, &destination),
+		   p_req("id", param_node_id, &destination),
 		   p_req("msatoshi", param_msat, &msat),
 		   p_req("riskfactor", param_double, &riskfactor),
 		   p_opt_def("cltv", param_number, &cltv, 9),
-		   p_opt_def("fromid", param_pubkey, &source, ld->id),
+		   p_opt("fromid", param_node_id, &source),
 		   p_opt_def("fuzzpercent", param_percent, &fuzz, 5.0),
 		   p_opt("exclude", param_array, &excludetok),
 		   p_opt_def("maxhops", param_number, &max_hops,
@@ -365,62 +349,91 @@ static struct command_result *json_getroute(struct command *cmd,
 
 static const struct json_command getroute_command = {
 	"getroute",
+	"channels",
 	json_getroute,
 	"Show route to {id} for {msatoshi}, using {riskfactor} and optional {cltv} (default 9). "
 	"If specified search from {fromid} otherwise use this node as source. "
-	"Randomize the route with up to {fuzzpercent} (default 5.0) "
-	"using {seed} as an arbitrary-size string seed."
+	"Randomize the route with up to {fuzzpercent} (default 5.0). "
+	"{exclude} an array of short-channel-id/direction (e.g. [ '564334x877x1/0', '564195x1292x0/1' ]) "
+	"from consideration. "
+	"Set the {maxhops} the route can take (default 20)."
 };
 AUTODATA(json_command, &getroute_command);
 
+static void json_add_halfchan(struct json_stream *response,
+			      const struct gossip_getchannels_entry *e,
+			      int idx)
+{
+	const struct gossip_halfchannel_entry *he = e->e[idx];
+	if (!he)
+		return;
+
+	json_object_start(response, NULL);
+	json_add_node_id(response, "source", &e->node[idx]);
+	json_add_node_id(response, "destination", &e->node[!idx]);
+	json_add_short_channel_id(response, "short_channel_id",
+				  &e->short_channel_id);
+	json_add_bool(response, "public", e->public);
+	json_add_amount_sat_compat(response, e->sat,
+				   "satoshis", "amount_msat");
+	json_add_num(response, "message_flags", he->message_flags);
+	json_add_num(response, "channel_flags", he->channel_flags);
+	json_add_bool(response, "active",
+		      !(he->channel_flags & ROUTING_FLAGS_DISABLED)
+		      && !e->local_disabled);
+	json_add_num(response, "last_update", he->last_update_timestamp);
+	json_add_num(response, "base_fee_millisatoshi", he->base_fee_msat);
+	json_add_num(response, "fee_per_millionth", he->fee_per_millionth);
+	json_add_num(response, "delay", he->delay);
+	json_add_amount_msat_only(response, "htlc_minimum_msat", he->min);
+	json_add_amount_msat_only(response, "htlc_maximum_msat", he->max);
+	json_object_end(response);
+}
+
+struct listchannels_info {
+	struct command *cmd;
+	struct json_stream *response;
+	struct short_channel_id *id;
+	struct node_id *source;
+};
+
 /* Called upon receiving a getchannels_reply from `gossipd` */
 static void json_listchannels_reply(struct subd *gossip UNUSED, const u8 *reply,
-				   const int *fds UNUSED, struct command *cmd)
+				    const int *fds UNUSED,
+				    struct listchannels_info *linfo)
 {
 	size_t i;
-	struct gossip_getchannels_entry *entries;
-	struct json_stream *response;
+	struct gossip_getchannels_entry **entries;
+	bool complete;
 
-	if (!fromwire_gossip_getchannels_reply(reply, reply, &entries)) {
-		was_pending(command_fail(cmd, LIGHTNINGD,
-					 "Invalid reply from gossipd"));
+	if (!fromwire_gossip_getchannels_reply(reply, reply,
+					       &complete, &entries)) {
+		/* Shouldn't happen: just end json stream. */
+		log_broken(linfo->cmd->ld->log, "Invalid reply from gossipd");
+		was_pending(command_raw_complete(linfo->cmd, linfo->response));
 		return;
 	}
 
-	response = json_stream_success(cmd);
-	json_object_start(response, NULL);
-	json_array_start(response, "channels");
 	for (i = 0; i < tal_count(entries); i++) {
-		json_object_start(response, NULL);
-		json_add_raw_pubkey(response, "source", entries[i].source);
-		json_add_raw_pubkey(response, "destination",
-				    entries[i].destination);
-		json_add_string(response, "short_channel_id",
-				type_to_string(reply, struct short_channel_id,
-					       &entries[i].short_channel_id));
-		json_add_bool(response, "public", entries[i].public);
-		json_add_amount_sat(response, entries[i].sat,
-				    "satoshis", "amount_msat");
-		json_add_num(response, "message_flags", entries[i].message_flags);
-		json_add_num(response, "channel_flags", entries[i].channel_flags);
-		/* Prior to spec v0891374d47ddffa64c5a2e6ad151247e3d6b7a59, these two were a single u16 field */
-		if (deprecated_apis)
-			json_add_num(response, "flags", ((u16)entries[i].message_flags << 8) | entries[i].channel_flags);
-		json_add_bool(response, "active",
-			      !(entries[i].channel_flags & ROUTING_FLAGS_DISABLED)
-			      && !entries[i].local_disabled);
-		json_add_num(response, "last_update",
-			     entries[i].last_update_timestamp);
-		json_add_num(response, "base_fee_millisatoshi",
-			     entries[i].base_fee_msat);
-		json_add_num(response, "fee_per_millionth",
-			     entries[i].fee_per_millionth);
-		json_add_num(response, "delay", entries[i].delay);
-		json_object_end(response);
+		json_add_halfchan(linfo->response, entries[i], 0);
+		json_add_halfchan(linfo->response, entries[i], 1);
 	}
-	json_array_end(response);
-	json_object_end(response);
-	was_pending(command_success(cmd, response));
+
+	/* More coming?  Ask from this point on.. */
+	if (!complete) {
+		u8 *req;
+		assert(tal_count(entries) != 0);
+		req = towire_gossip_getchannels_request(linfo->cmd,
+							linfo->id,
+							linfo->source,
+							&entries[i-1]
+							->short_channel_id);
+		subd_req(linfo->cmd->ld->gossip, linfo->cmd->ld->gossip,
+			 req, -1, 0, json_listchannels_reply, linfo);
+	} else {
+		json_array_end(linfo->response);
+		was_pending(command_success(linfo->cmd, linfo->response));
+	}
 }
 
 static struct command_result *json_listchannels(struct command *cmd,
@@ -429,26 +442,34 @@ static struct command_result *json_listchannels(struct command *cmd,
 						const jsmntok_t *params)
 {
 	u8 *req;
-	struct short_channel_id *id;
-	struct pubkey *source;
+	struct listchannels_info *linfo = tal(cmd, struct listchannels_info);
 
+	linfo->cmd = cmd;
 	if (!param(cmd, buffer, params,
-		   p_opt("short_channel_id", param_short_channel_id, &id),
-		   p_opt("source", param_pubkey, &source),
+		   p_opt("short_channel_id", param_short_channel_id, &linfo->id),
+		   p_opt("source", param_node_id, &linfo->source),
 		   NULL))
 		return command_param_failed();
 
-	if (id && source)
+	if (linfo->id && linfo->source)
 		return command_fail(cmd, JSONRPC2_INVALID_PARAMS,
 				    "Cannot specify both source and short_channel_id");
-	req = towire_gossip_getchannels_request(cmd, id, source);
+
+	/* Start JSON response, then we stream. */
+	linfo->response = json_stream_success(cmd);
+	json_array_start(linfo->response, "channels");
+
+	req = towire_gossip_getchannels_request(cmd, linfo->id, linfo->source,
+						NULL);
 	subd_req(cmd->ld->gossip, cmd->ld->gossip,
-		 req, -1, 0, json_listchannels_reply, cmd);
+		 req, -1, 0, json_listchannels_reply, linfo);
+
 	return command_still_pending(cmd);
 }
 
 static const struct json_command listchannels_command = {
 	"listchannels",
+	"channels",
 	json_listchannels,
 	"Show channel {short_channel_id} or {source} (or all known channels, if not specified)"
 };
@@ -474,9 +495,7 @@ static void json_scids_reply(struct subd *gossip UNUSED, const u8 *reply,
 	}
 
 	response = json_stream_success(cmd);
-	json_object_start(response, NULL);
 	json_add_bool(response, "complete", complete);
-	json_object_end(response);
 	was_pending(command_success(cmd, response));
 }
 
@@ -488,12 +507,12 @@ static struct command_result *json_dev_query_scids(struct command *cmd,
 	u8 *msg;
 	const jsmntok_t *scidstok;
 	const jsmntok_t *t;
-	struct pubkey *id;
+	struct node_id *id;
 	struct short_channel_id *scids;
 	size_t i;
 
 	if (!param(cmd, buffer, params,
-		   p_req("id", param_pubkey, &id),
+		   p_req("id", param_node_id, &id),
 		   p_req("scids", param_array, &scidstok),
 		   NULL))
 		return command_param_failed();
@@ -518,6 +537,7 @@ static struct command_result *json_dev_query_scids(struct command *cmd,
 
 static const struct json_command dev_query_scids_command = {
 	"dev-query-scids",
+	"developer",
 	json_dev_query_scids,
 	"Query peer {id} for [scids]"
 };
@@ -530,11 +550,11 @@ json_dev_send_timestamp_filter(struct command *cmd,
 			       const jsmntok_t *params)
 {
 	u8 *msg;
-	struct pubkey *id;
+	struct node_id *id;
 	u32 *first, *range;
 
 	if (!param(cmd, buffer, params,
-		   p_req("id", param_pubkey, &id),
+		   p_req("id", param_node_id, &id),
 		   p_req("first", param_number, &first),
 		   p_req("range", param_number, &range),
 		   NULL))
@@ -545,11 +565,12 @@ json_dev_send_timestamp_filter(struct command *cmd,
 	msg = towire_gossip_send_timestamp_filter(NULL, id, *first, *range);
 	subd_send_msg(cmd->ld->gossip, take(msg));
 
-	return command_success(cmd, null_response(cmd));
+	return command_success(cmd, json_stream_success(cmd));
 }
 
 static const struct json_command dev_send_timestamp_filter = {
 	"dev-send-timestamp-filter",
+	"developer",
 	json_dev_send_timestamp_filter,
 	"Send peer {id} the timestamp filter {first} {range}"
 };
@@ -580,7 +601,6 @@ static void json_channel_range_reply(struct subd *gossip UNUSED, const u8 *reply
 	}
 
 	response = json_stream_success(cmd);
-	json_object_start(response, NULL);
 	/* As this is a dev interface, we don't bother saving and
 	 * returning all the replies, just the final one. */
 	json_add_num(response, "final_first_block", final_first_block);
@@ -590,7 +610,6 @@ static void json_channel_range_reply(struct subd *gossip UNUSED, const u8 *reply
 	for (size_t i = 0; i < tal_count(scids); i++)
 		json_add_short_channel_id(response, NULL, &scids[i]);
 	json_array_end(response);
-	json_object_end(response);
 	was_pending(command_success(cmd, response));
 }
 
@@ -600,11 +619,11 @@ static struct command_result *json_dev_query_channel_range(struct command *cmd,
 					 const jsmntok_t *params)
 {
 	u8 *msg;
-	struct pubkey *id;
+	struct node_id *id;
 	u32 *first, *num;
 
 	if (!param(cmd, buffer, params,
-		   p_req("id", param_pubkey, &id),
+		   p_req("id", param_node_id, &id),
 		   p_req("first", param_number, &first),
 		   p_req("num", param_number, &num),
 		   NULL))
@@ -619,6 +638,7 @@ static struct command_result *json_dev_query_channel_range(struct command *cmd,
 
 static const struct json_command dev_query_channel_range_command = {
 	"dev-query-channel-range",
+	"developer",
 	json_dev_query_channel_range,
 	"Query peer {id} for short_channel_ids for {first} block + {num} blocks"
 };
@@ -641,11 +661,12 @@ json_dev_set_max_scids_encode_size(struct command *cmd,
 	msg = towire_gossip_dev_set_max_scids_encode_size(NULL, *max);
 	subd_send_msg(cmd->ld->gossip, take(msg));
 
-	return command_success(cmd, null_response(cmd));
+	return command_success(cmd, json_stream_success(cmd));
 }
 
 static const struct json_command dev_set_max_scids_encode_size = {
 	"dev-set-max-scids-encode-size",
+	"developer",
 	json_dev_set_max_scids_encode_size,
 	"Set {max} bytes of short_channel_ids per reply_channel_range"
 };
@@ -661,13 +682,57 @@ static struct command_result *json_dev_suppress_gossip(struct command *cmd,
 
 	subd_send_msg(cmd->ld->gossip, take(towire_gossip_dev_suppress(NULL)));
 
-	return command_success(cmd, null_response(cmd));
+	return command_success(cmd, json_stream_success(cmd));
 }
 
 static const struct json_command dev_suppress_gossip = {
 	"dev-suppress-gossip",
+	"developer",
 	json_dev_suppress_gossip,
 	"Stop this node from sending any more gossip."
 };
 AUTODATA(json_command, &dev_suppress_gossip);
+
+static void dev_compact_gossip_store_reply(struct subd *gossip UNUSED,
+					   const u8 *reply,
+					   const int *fds UNUSED,
+					   struct command *cmd)
+{
+	bool success;
+
+	if (!fromwire_gossip_dev_compact_store_reply(reply, &success)) {
+		was_pending(command_fail(cmd, LIGHTNINGD,
+					 "Gossip gave bad dev_gossip_compact_store_reply"));
+		return;
+	}
+
+	if (!success)
+		was_pending(command_fail(cmd, LIGHTNINGD,
+					 "gossip_compact_store failed"));
+	else
+		was_pending(command_success(cmd, json_stream_success(cmd)));
+}
+
+static struct command_result *json_dev_compact_gossip_store(struct command *cmd,
+							    const char *buffer,
+							    const jsmntok_t *obj UNNEEDED,
+							    const jsmntok_t *params)
+{
+	u8 *msg;
+	if (!param(cmd, buffer, params, NULL))
+		return command_param_failed();
+
+	msg = towire_gossip_dev_compact_store(NULL);
+	subd_req(cmd->ld->gossip, cmd->ld->gossip,
+		 take(msg), -1, 0, dev_compact_gossip_store_reply, cmd);
+	return command_still_pending(cmd);
+}
+
+static const struct json_command dev_compact_gossip_store = {
+	"dev-compact-gossip-store",
+	"developer",
+	json_dev_compact_gossip_store,
+	"Ask gossipd to rewrite the gossip store."
+};
+AUTODATA(json_command, &dev_compact_gossip_store);
 #endif /* DEVELOPER */

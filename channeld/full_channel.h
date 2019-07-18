@@ -10,8 +10,10 @@
 /**
  * new_full_channel: Given initial fees and funding, what is initial state?
  * @ctx: tal context to allocate return value from.
+ * @chain_hash: Which blockchain are we talking about?
  * @funding_txid: The commitment transaction id.
  * @funding_txout: The commitment transaction output number.
+ * @minimum_depth: The minimum confirmations needed for funding transaction.
  * @funding: The commitment transaction amount.
  * @local_msat: The amount for the local side (remainder goes to remote)
  * @feerate_per_kw: feerate per kiloweight (satoshis) for the commitment
@@ -30,6 +32,7 @@ struct channel *new_full_channel(const tal_t *ctx,
 				 const struct bitcoin_blkid *chain_hash,
 				 const struct bitcoin_txid *funding_txid,
 				 unsigned int funding_txout,
+				 u32 minimum_depth,
 				 struct amount_sat funding,
 				 struct amount_msat local_msat,
 				 const u32 feerate_per_kw[NUM_SIDES],
@@ -101,7 +104,8 @@ enum channel_add_err channel_add_htlc(struct channel *channel,
 				      u32 cltv_expiry,
 				      const struct sha256 *payment_hash,
 				      const u8 routing[TOTAL_PACKET_SIZE],
-				      struct htlc **htlcp);
+				      struct htlc **htlcp,
+				      struct amount_sat *htlc_fee);
 
 /**
  * channel_get_htlc: find an HTLC

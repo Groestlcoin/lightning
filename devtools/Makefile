@@ -1,6 +1,6 @@
 DEVTOOLS_SRC := devtools/gen_print_wire.c devtools/gen_print_onion_wire.c devtools/print_wire.c
 DEVTOOLS_OBJS := $(DEVTOOLS_SRC:.c=.o)
-DEVTOOLS := devtools/bolt11-cli devtools/decodemsg devtools/onion devtools/dump-gossipstore devtools/gossipwith
+DEVTOOLS := devtools/bolt11-cli devtools/decodemsg devtools/onion devtools/dump-gossipstore devtools/gossipwith devtools/create-gossipstore
 DEVTOOLS_TOOL_SRC := $(DEVTOOLS:=.c)
 DEVTOOLS_TOOL_OBJS := $(DEVTOOLS_TOOL_SRC:.c=.o)
 
@@ -10,13 +10,17 @@ DEVTOOLS_COMMON_OBJS :=				\
 	common/bech32.o				\
 	common/bech32_util.o			\
 	common/bolt11.o				\
+	common/crypto_state.o			\
 	common/decode_short_channel_ids.o	\
 	common/hash_u5.o			\
+	common/node_id.o			\
+	common/per_peer_state.o			\
 	common/type_to_string.o			\
 	common/utils.o				\
 	common/version.o			\
 	common/wireaddr.o			\
-	wire/gen_onion_wire.o
+	wire/gen_onion_wire.o			\
+	wire/gen_peer_wire.o
 
 devtools-all: $(DEVTOOLS)
 
@@ -39,6 +43,10 @@ devtools/decodemsg: $(DEVTOOLS_OBJS) $(DEVTOOLS_COMMON_OBJS) $(JSMN_OBJS) $(CCAN
 devtools/dump-gossipstore: $(DEVTOOLS_OBJS) $(DEVTOOLS_COMMON_OBJS) $(JSMN_OBJS) $(CCAN_OBJS) $(BITCOIN_OBJS) wire/fromwire.o wire/towire.o devtools/dump-gossipstore.o gossipd/gen_gossip_store.o
 
 devtools/dump-gossipstore.o: gossipd/gen_gossip_store.h
+
+devtools/create-gossipstore: $(DEVTOOLS_OBJS) $(DEVTOOLS_COMMON_OBJS) $(JSMN_OBJS) $(CCAN_OBJS) $(BITCOIN_OBJS) wire/fromwire.o wire/towire.o devtools/create-gossipstore.o gossipd/gen_gossip_store.o
+devtools/create-gossipstore.o: gossipd/gen_gossip_store.h
+
 devtools/onion.c: ccan/config.h
 
 devtools/onion: $(DEVTOOLS_OBJS) $(DEVTOOLS_COMMON_OBJS) $(JSMN_OBJS) $(CCAN_OBJS) $(BITCOIN_OBJS) wire/fromwire.o wire/towire.o devtools/onion.o common/sphinx.o

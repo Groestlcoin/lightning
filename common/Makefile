@@ -1,4 +1,5 @@
 COMMON_SRC_NOGEN :=				\
+	common/addr.c				\
 	common/amount.c				\
 	common/base32.c				\
 	common/bech32.c				\
@@ -18,22 +19,25 @@ COMMON_SRC_NOGEN :=				\
 	common/dev_disconnect.c			\
 	common/features.c			\
 	common/funding_tx.c			\
+	common/gossip_store.c			\
 	common/hash_u5.c			\
 	common/htlc_state.c			\
+	common/htlc_trim.c			\
 	common/htlc_tx.c			\
 	common/htlc_wire.c			\
 	common/initial_channel.c		\
 	common/initial_commit_tx.c		\
 	common/io_lock.c			\
 	common/json.c				\
-	common/json_escaped.c			\
 	common/json_helpers.c			\
 	common/json_tok.c			\
 	common/key_derive.c			\
 	common/keyset.c				\
 	common/memleak.c			\
 	common/msg_queue.c			\
+	common/node_id.c			\
 	common/param.c				\
+	common/per_peer_state.c			\
 	common/peer_billboard.c			\
 	common/peer_failed.c			\
 	common/permute_tx.c			\
@@ -50,6 +54,7 @@ COMMON_SRC_NOGEN :=				\
 	common/utils.c				\
 	common/utxo.c				\
 	common/version.c			\
+	common/wallet.c				\
 	common/wallet_tx.c			\
 	common/wireaddr.c			\
 	common/wire_error.c			\

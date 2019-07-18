@@ -2,6 +2,7 @@
 #include <common/cryptomsg.h>
 #include <common/dev_disconnect.h>
 #include <common/features.h>
+#include <common/per_peer_state.h>
 #include <common/status.h>
 #include <common/wire_error.h>
 #include <connectd/connectd.h>
@@ -14,7 +15,7 @@ struct peer {
 	struct daemon *daemon;
 
 	/* The ID of the peer */
-	struct pubkey id;
+	struct node_id id;
 
 	/* Where it's connected to/from. */
 	struct wireaddr_internal addr;
@@ -51,7 +52,7 @@ static struct io_plan *peer_init_received(struct io_conn *conn,
 
 	if (!fromwire_init(peer, msg, &globalfeatures, &localfeatures)) {
 		status_trace("peer %s bad fromwire_init '%s', closing",
-			     type_to_string(tmpctx, struct pubkey, &peer->id),
+			     type_to_string(tmpctx, struct node_id, &peer->id),
 			     tal_hex(tmpctx, msg));
 		return io_close(conn);
 	}
@@ -79,15 +80,12 @@ static struct io_plan *peer_init_received(struct io_conn *conn,
 		return io_write(conn, msg, tal_count(msg), io_close_cb, NULL);
 	}
 
-	/* Create message to tell master peer has connected. */
-	msg = towire_connect_peer_connected(NULL, &peer->id, &peer->addr,
-					    &peer->cs,
-					    globalfeatures, localfeatures);
-
 	/* Usually return io_close_taken_fd, but may wait for old peer to
 	 * be disconnected if it's a reconnect. */
 	return peer_connected(conn, peer->daemon, &peer->id,
-			      take(msg), take(localfeatures));
+			      &peer->addr, &peer->cs,
+			      take(globalfeatures),
+			      take(localfeatures));
 }
 
 static struct io_plan *peer_init_hdr_received(struct io_conn *conn,
@@ -131,7 +129,7 @@ static struct io_plan *peer_write_postclose(struct io_conn *conn,
 struct io_plan *peer_exchange_initmsg(struct io_conn *conn,
 				      struct daemon *daemon,
 				      const struct crypto_state *cs,
-				      const struct pubkey *id,
+				      const struct node_id *id,
 				      const struct wireaddr_internal *addr)
 {
 	/* If conn is closed, forget peer */

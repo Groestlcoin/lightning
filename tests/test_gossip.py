@@ -397,33 +397,37 @@ def test_gossip_persistence(node_factory, bitcoind):
     l2.rpc.connect(l3.info['id'], 'localhost', l3.port)
     l3.rpc.connect(l4.info['id'], 'localhost', l4.port)
 
-    l1.fund_channel(l2, 10**6)
-    l2.fund_channel(l3, 10**6)
+    scid12 = l1.fund_channel(l2, 10**6)
+    scid23 = l2.fund_channel(l3, 10**6)
 
     # Make channels public, except for l3 -> l4, which is kept local-only for now
     bitcoind.generate_block(5)
-    l3.fund_channel(l4, 10**6)
+    scid34 = l3.fund_channel(l4, 10**6)
     bitcoind.generate_block(1)
 
-    def count_active(node):
+    def active(node):
         chans = node.rpc.listchannels()['channels']
-        active = [c for c in chans if c['active']]
-        return len(active)
+        return sorted([c['short_channel_id'] for c in chans if c['active']])
+
+    def non_public(node):
+        chans = node.rpc.listchannels()['channels']
+        return sorted([c['short_channel_id'] for c in chans if not c['public']])
 
     # Channels should be activated
-    wait_for(lambda: count_active(l1) == 4)
-    wait_for(lambda: count_active(l2) == 4)
-    wait_for(lambda: count_active(l3) == 6)  # 4 public + 2 local
+    wait_for(lambda: active(l1) == [scid12, scid12, scid23, scid23])
+    wait_for(lambda: active(l2) == [scid12, scid12, scid23, scid23])
+    # This one sees its private channel
+    wait_for(lambda: active(l3) == [scid12, scid12, scid23, scid23, scid34, scid34])
 
     # l1 restarts and doesn't connect, but loads from persisted store, all
     # local channels should be disabled, leaving only the two l2 <-> l3
     # directions
     l1.restart()
-    wait_for(lambda: count_active(l1) == 2)
+    wait_for(lambda: active(l1) == [scid23, scid23])
 
     # Now reconnect, they should re-enable the two l1 <-> l2 directions
     l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
-    wait_for(lambda: count_active(l1) == 4)
+    wait_for(lambda: active(l1) == [scid12, scid12, scid23, scid23])
 
     # Now spend the funding tx, generate a block and see others deleting the
     # channel from their network view
@@ -431,32 +435,26 @@ def test_gossip_persistence(node_factory, bitcoind):
     time.sleep(1)
     bitcoind.generate_block(1)
 
-    wait_for(lambda: count_active(l1) == 2)
-    wait_for(lambda: count_active(l2) == 2)
-    wait_for(lambda: count_active(l3) == 4)  # 2 public + 2 local
-
-    # We should have one local-only channel
-    def count_non_public(node):
-        chans = node.rpc.listchannels()['channels']
-        nonpublic = [c for c in chans if not c['public']]
-        return len(nonpublic)
+    wait_for(lambda: active(l1) == [scid23, scid23])
+    wait_for(lambda: active(l2) == [scid23, scid23])
+    wait_for(lambda: active(l3) == [scid23, scid23, scid34, scid34])
 
     # The channel l3 -> l4 should be known only to them
-    assert count_non_public(l1) == 0
-    assert count_non_public(l2) == 0
-    wait_for(lambda: count_non_public(l3) == 2)
-    wait_for(lambda: count_non_public(l4) == 2)
+    assert non_public(l1) == []
+    assert non_public(l2) == []
+    wait_for(lambda: non_public(l3) == [scid34, scid34])
+    wait_for(lambda: non_public(l4) == [scid34, scid34])
 
     # Finally, it should also remember the deletion after a restart
     l3.restart()
     l4.restart()
     l2.rpc.connect(l3.info['id'], 'localhost', l3.port)
     l3.rpc.connect(l4.info['id'], 'localhost', l4.port)
-    wait_for(lambda: count_active(l3) == 4)  # 2 public + 2 local
+    wait_for(lambda: active(l3) == [scid23, scid23, scid34, scid34])
 
     # Both l3 and l4 should remember their local-only channel
-    wait_for(lambda: count_non_public(l3) == 2)
-    wait_for(lambda: count_non_public(l4) == 2)
+    wait_for(lambda: non_public(l3) == [scid34, scid34])
+    wait_for(lambda: non_public(l4) == [scid34, scid34])
 
 
 @unittest.skipIf(not DEVELOPER, "needs DEVELOPER=1")
@@ -863,24 +861,99 @@ def test_gossip_store_load(node_factory):
     """Make sure we can read canned gossip store"""
     l1 = node_factory.get_node(start=False)
     with open(os.path.join(l1.daemon.lightning_dir, 'gossip_store'), 'wb') as f:
-        f.write(bytearray.fromhex("03"  # GOSSIP_VERSION
-                                  "000001bc"  # len
-                                  "521ef598"  # csum
-                                  "1000"  # WIRE_GOSSIP_STORE_CHANNEL_ANNOUNCEMENT
-                                  "01b00100bb8d7b6998cca3c2b3ce12a6bd73a8872c808bb48de2a30c5ad9cdf835905d1e27505755087e675fb517bbac6beb227629b694ea68f49d357458327138978ebfd7adfde1c69d0d2f497154256f6d5567a5cf2317c589e0046c0cc2b3e986cf9b6d3b44742bd57bce32d72cd1180a7f657795976130b20508b239976d3d4cdc4d0d6e6fbb9ab6471f664a662972e406f519eab8bce87a8c0365646df5acbc04c91540b4c7c518cec680a4a6af14dae1aca0fd5525220f7f0e96fcd2adef3c803ac9427fe71034b55a50536638820ef21903d09ccddd38396675b598587fa886ca711415c813fc6d69f46552b9a0a539c18f265debd0e2e286980a118ba349c216000043497fd7f826957108f4a30fd9cec3aeba79972084e90ead01ea33090000000013a63c0000b50001021bf3de4e84e3d52f9a3e36fbdcd2c4e8dbf203b9ce4fc07c2f03be6c21d0c67503f113414ebdc6c1fb0f33c99cd5a1d09dd79e7fdf2468cf1fe1af6674361695d203801fd8ab98032f11cc9e4916dd940417082727077609d5c7f8cc6e9a3ad25dd102517164b97ab46cee3826160841a36c46a2b7b9c74da37bdc070ed41ba172033a0000000001000000"
-                                  "00000086"  # len
-                                  "88c703c8"  # csum
-                                  "1001"  # WIRE_GOSSIP_STORE_CHANNEL_UPDATE
-                                  "008201021ea7c2eadf8a29eb8690511a519b5656e29aa0a853771c4e38e65c5abf43d907295a915e69e451f4c7a0c3dc13dd943cfbe3ae88c0b96667cd7d58955dbfedcf43497fd7f826957108f4a30fd9cec3aeba79972084e90ead01ea33090000000013a63c0000b500015b8d9b440000009000000000000003e8000003e800000001"
-                                  "00000099"  # len
-                                  "12abbbba"  # csum
-                                  "1002"  # WIRE_GOSSIP_STORE_NODE_ANNOUNCEMENT
-                                  "00950101cf5d870bc7ecabcb7cd16898ef66891e5f0c6c5851bd85b670f03d325bc44d7544d367cd852e18ec03f7f4ff369b06860a3b12b07b29f36fb318ca11348bf8ec00005aab817c03f113414ebdc6c1fb0f33c99cd5a1d09dd79e7fdf2468cf1fe1af6674361695d23974b250757a7a6c6549544300000000000000000000000000000000000000000000000007010566933e2607"))
+        f.write(bytearray.fromhex("07"        # GOSSIP_STORE_VERSION
+                                  "000001b0"  # len
+                                  "fea676e8"  # csum
+                                  "5b8d9b44"  # timestamp
+                                  "0100"      # WIRE_CHANNEL_ANNOUNCEMENT
+                                  "bb8d7b6998cca3c2b3ce12a6bd73a8872c808bb48de2a30c5ad9cdf835905d1e27505755087e675fb517bbac6beb227629b694ea68f49d357458327138978ebfd7adfde1c69d0d2f497154256f6d5567a5cf2317c589e0046c0cc2b3e986cf9b6d3b44742bd57bce32d72cd1180a7f657795976130b20508b239976d3d4cdc4d0d6e6fbb9ab6471f664a662972e406f519eab8bce87a8c0365646df5acbc04c91540b4c7c518cec680a4a6af14dae1aca0fd5525220f7f0e96fcd2adef3c803ac9427fe71034b55a50536638820ef21903d09ccddd38396675b598587fa886ca711415c813fc6d69f46552b9a0a539c18f265debd0e2e286980a118ba349c216000043497fd7f826957108f4a30fd9cec3aeba79972084e90ead01ea33090000000013a63c0000b50001021bf3de4e84e3d52f9a3e36fbdcd2c4e8dbf203b9ce4fc07c2f03be6c21d0c67503f113414ebdc6c1fb0f33c99cd5a1d09dd79e7fdf2468cf1fe1af6674361695d203801fd8ab98032f11cc9e4916dd940417082727077609d5c7f8cc6e9a3ad25dd102517164b97ab46cee3826160841a36c46a2b7b9c74da37bdc070ed41ba172033a"
+                                  "0000000a"  # len
+                                  "99dc98b4"  # csum
+                                  "00000000"  # timestamp
+                                  "1005"      # WIRE_GOSSIP_STORE_CHANNEL_AMOUNT
+                                  "0000000001000000"
+                                  "00000082"  # len
+                                  "fd421aeb"  # csum
+                                  "5b8d9b44"  # timestamp
+                                  "0102"      # WIRE_CHANNEL_UPDATE
+                                  "1ea7c2eadf8a29eb8690511a519b5656e29aa0a853771c4e38e65c5abf43d907295a915e69e451f4c7a0c3dc13dd943cfbe3ae88c0b96667cd7d58955dbfedcf43497fd7f826957108f4a30fd9cec3aeba79972084e90ead01ea33090000000013a63c0000b500015b8d9b440000009000000000000003e8000003e800000001"
+                                  "00000095"  # len
+                                  "f036515e"  # csum
+                                  "5aab817c"  # timestamp
+                                  "0101"      # WIRE_NODE_ANNOUNCEMENT
+                                  "cf5d870bc7ecabcb7cd16898ef66891e5f0c6c5851bd85b670f03d325bc44d7544d367cd852e18ec03f7f4ff369b06860a3b12b07b29f36fb318ca11348bf8ec00005aab817c03f113414ebdc6c1fb0f33c99cd5a1d09dd79e7fdf2468cf1fe1af6674361695d23974b250757a7a6c6549544300000000000000000000000000000000000000000000000007010566933e2607"))
 
     l1.start()
     # May preceed the Started msg waited for in 'start'.
-    wait_for(lambda: l1.daemon.is_in_log('gossip_store: Read 1/1/1/0 cannounce/cupdate/nannounce/cdelete from store in 744 bytes'))
+    wait_for(lambda: l1.daemon.is_in_log(r'gossip_store: Read 1/1/1/0 cannounce/cupdate/nannounce/cdelete from store \(0 deleted\) in 770 bytes'))
     assert not l1.daemon.is_in_log('gossip_store.*truncating')
+
+
+def test_gossip_store_load_announce_before_update(node_factory):
+    """Make sure we can read canned gossip store with node_announce before update.  This happens when a channel_update gets replaced, leaving node_announce before it"""
+    l1 = node_factory.get_node(start=False)
+    with open(os.path.join(l1.daemon.lightning_dir, 'gossip_store'), 'wb') as f:
+        f.write(bytearray.fromhex("07"        # GOSSIP_STORE_VERSION
+                                  "000001b0"  # len
+                                  "fea676e8"  # csum
+                                  "5b8d9b44"  # timestamp
+                                  "0100"      # WIRE_CHANNEL_ANNOUNCEMENT
+                                  "bb8d7b6998cca3c2b3ce12a6bd73a8872c808bb48de2a30c5ad9cdf835905d1e27505755087e675fb517bbac6beb227629b694ea68f49d357458327138978ebfd7adfde1c69d0d2f497154256f6d5567a5cf2317c589e0046c0cc2b3e986cf9b6d3b44742bd57bce32d72cd1180a7f657795976130b20508b239976d3d4cdc4d0d6e6fbb9ab6471f664a662972e406f519eab8bce87a8c0365646df5acbc04c91540b4c7c518cec680a4a6af14dae1aca0fd5525220f7f0e96fcd2adef3c803ac9427fe71034b55a50536638820ef21903d09ccddd38396675b598587fa886ca711415c813fc6d69f46552b9a0a539c18f265debd0e2e286980a118ba349c216000043497fd7f826957108f4a30fd9cec3aeba79972084e90ead01ea33090000000013a63c0000b50001021bf3de4e84e3d52f9a3e36fbdcd2c4e8dbf203b9ce4fc07c2f03be6c21d0c67503f113414ebdc6c1fb0f33c99cd5a1d09dd79e7fdf2468cf1fe1af6674361695d203801fd8ab98032f11cc9e4916dd940417082727077609d5c7f8cc6e9a3ad25dd102517164b97ab46cee3826160841a36c46a2b7b9c74da37bdc070ed41ba172033a"
+                                  "0000000a"  # len
+                                  "99dc98b4"  # csum
+                                  "00000000"  # timestamp
+                                  "1005"      # WIRE_GOSSIP_STORE_CHANNEL_AMOUNT
+                                  "0000000001000000"
+                                  "80000082"  # len (DELETED)
+                                  "fd421aeb"  # csum
+                                  "5b8d9b44"  # timestamp
+                                  "0102"      # WIRE_CHANNEL_UPDATE
+                                  "1ea7c2eadf8a29eb8690511a519b5656e29aa0a853771c4e38e65c5abf43d907295a915e69e451f4c7a0c3dc13dd943cfbe3ae88c0b96667cd7d58955dbfedcf43497fd7f826957108f4a30fd9cec3aeba79972084e90ead01ea33090000000013a63c0000b500015b8d9b440000009000000000000003e8000003e800000001"
+                                  "00000095"  # len
+                                  "f036515e"  # csum
+                                  "5aab817c"  # timestamp
+                                  "0101"      # WIRE_NODE_ANNOUNCEMENT
+                                  "cf5d870bc7ecabcb7cd16898ef66891e5f0c6c5851bd85b670f03d325bc44d7544d367cd852e18ec03f7f4ff369b06860a3b12b07b29f36fb318ca11348bf8ec00005aab817c03f113414ebdc6c1fb0f33c99cd5a1d09dd79e7fdf2468cf1fe1af6674361695d23974b250757a7a6c6549544300000000000000000000000000000000000000000000000007010566933e2607"
+                                  "00000082"  # len
+                                  "fd421aeb"  # csum
+                                  "5b8d9b44"  # timestamp
+                                  "0102"      # WIRE_CHANNEL_UPDATE
+                                  "1ea7c2eadf8a29eb8690511a519b5656e29aa0a853771c4e38e65c5abf43d907295a915e69e451f4c7a0c3dc13dd943cfbe3ae88c0b96667cd7d58955dbfedcf43497fd7f826957108f4a30fd9cec3aeba79972084e90ead01ea33090000000013a63c0000b500015b8d9b440000009000000000000003e8000003e800000001"))
+
+    l1.start()
+    # May preceed the Started msg waited for in 'start'.
+    wait_for(lambda: l1.daemon.is_in_log(r'gossip_store: Read 1/1/1/0 cannounce/cupdate/nannounce/cdelete from store \(0 deleted\) in 770 bytes'))
+    assert not l1.daemon.is_in_log('gossip_store.*truncating')
+
+    # Extra sanity check if we can.
+    if DEVELOPER:
+        l1.rpc.call('dev-compact-gossip-store')
+        l1.restart()
+        l1.rpc.call('dev-compact-gossip-store')
+
+
+def test_gossip_store_load_amount_truncated(node_factory):
+    """Make sure we can read canned gossip store with truncated amount"""
+    l1 = node_factory.get_node(start=False)
+    with open(os.path.join(l1.daemon.lightning_dir, 'gossip_store'), 'wb') as f:
+        f.write(bytearray.fromhex("07"        # GOSSIP_STORE_VERSION
+                                  "000001b0"  # len
+                                  "fea676e8"  # csum
+                                  "5b8d9b44"  # timestamp
+                                  "0100"      # WIRE_CHANNEL_ANNOUNCEMENT
+                                  "bb8d7b6998cca3c2b3ce12a6bd73a8872c808bb48de2a30c5ad9cdf835905d1e27505755087e675fb517bbac6beb227629b694ea68f49d357458327138978ebfd7adfde1c69d0d2f497154256f6d5567a5cf2317c589e0046c0cc2b3e986cf9b6d3b44742bd57bce32d72cd1180a7f657795976130b20508b239976d3d4cdc4d0d6e6fbb9ab6471f664a662972e406f519eab8bce87a8c0365646df5acbc04c91540b4c7c518cec680a4a6af14dae1aca0fd5525220f7f0e96fcd2adef3c803ac9427fe71034b55a50536638820ef21903d09ccddd38396675b598587fa886ca711415c813fc6d69f46552b9a0a539c18f265debd0e2e286980a118ba349c216000043497fd7f826957108f4a30fd9cec3aeba79972084e90ead01ea33090000000013a63c0000b50001021bf3de4e84e3d52f9a3e36fbdcd2c4e8dbf203b9ce4fc07c2f03be6c21d0c67503f113414ebdc6c1fb0f33c99cd5a1d09dd79e7fdf2468cf1fe1af6674361695d203801fd8ab98032f11cc9e4916dd940417082727077609d5c7f8cc6e9a3ad25dd102517164b97ab46cee3826160841a36c46a2b7b9c74da37bdc070ed41ba172033a"))
+
+    l1.start()
+    # May preceed the Started msg waited for in 'start'.
+    wait_for(lambda: l1.daemon.is_in_log(r'gossip_store: dangling channel_announcement. Moving to gossip_store.corrupt and truncating'))
+    wait_for(lambda: l1.daemon.is_in_log(r'gossip_store: Read 0/0/0/0 cannounce/cupdate/nannounce/cdelete from store \(0 deleted\) in 1 bytes'))
+    assert os.path.exists(os.path.join(l1.daemon.lightning_dir, 'gossip_store.corrupt'))
+
+    # Extra sanity check if we can.
+    if DEVELOPER:
+        l1.rpc.call('dev-compact-gossip-store')
+        l1.restart()
+        l1.rpc.call('dev-compact-gossip-store')
 
 
 @unittest.skipIf(not DEVELOPER, "Needs fast gossip propagation")
@@ -945,9 +1018,9 @@ def test_gossip_notices_close(node_factory, bitcoind):
 
     bitcoind.generate_block(5)
 
-    # Make sure l1 learns about channel.
+    # Make sure l1 learns about channel and nodes.
     wait_for(lambda: len(l1.rpc.listchannels()['channels']) == 2)
-    wait_for(lambda: len(l1.rpc.listnodes()['nodes']) == 2)
+    wait_for(lambda: ['alias' in n for n in l1.rpc.listnodes()['nodes']] == [True, True])
     l1.rpc.disconnect(l2.info['id'])
 
     # Grab channel_announcement from io logs (ends in ')
@@ -955,9 +1028,9 @@ def test_gossip_notices_close(node_factory, bitcoind):
     channel_update = l1.daemon.is_in_log(r'\[IN\] 0102').split(' ')[-1][:-1]
     node_announcement = l1.daemon.is_in_log(r'\[IN\] 0101').split(' ')[-1][:-1]
 
-    l2.rpc.close(l3.info['id'])
+    txid = l2.rpc.close(l3.info['id'])['txid']
     wait_for(lambda: only_one(l2.rpc.listpeers(l3.info['id'])['peers'])['channels'][0]['state'] == 'CLOSINGD_COMPLETE')
-    bitcoind.generate_block(1)
+    bitcoind.generate_block(1, txid)
 
     wait_for(lambda: l1.rpc.listchannels()['channels'] == [])
     wait_for(lambda: l1.rpc.listnodes()['nodes'] == [])
@@ -1031,3 +1104,191 @@ def test_getroute_exclude(node_factory, bitcoind):
     # This doesn't
     with pytest.raises(RpcError):
         l1.rpc.getroute(l4.info['id'], 1, 1, exclude=[chan_l2l3, chan_l2l4])
+
+
+@unittest.skipIf(not DEVELOPER, "need dev-compact-gossip-store")
+def test_gossip_store_local_channels(node_factory, bitcoind):
+    l1, l2 = node_factory.line_graph(2, wait_for_announce=False)
+
+    # We see this channel, even though it's not announced, because it's local.
+    wait_for(lambda: len(l1.rpc.listchannels()['channels']) == 2)
+
+    l2.stop()
+    l1.restart()
+
+    # We should still see local channels!
+    time.sleep(3)  # Make sure store is loaded
+    chans = l1.rpc.listchannels()['channels']
+    assert len(chans) == 2
+
+    # Now compact store
+    l1.rpc.call('dev-compact-gossip-store')
+    l1.restart()
+
+    time.sleep(3)  # Make sure store is loaded
+    # We should still see local channels!
+    chans = l1.rpc.listchannels()['channels']
+    assert len(chans) == 2
+
+
+@unittest.skipIf(not DEVELOPER, "need dev-compact-gossip-store")
+def test_gossip_store_private_channels(node_factory, bitcoind):
+    l1, l2 = node_factory.line_graph(2, announce_channels=False)
+
+    # We see this channel, even though it's not announced, because it's local.
+    wait_for(lambda: len(l1.rpc.listchannels()['channels']) == 2)
+
+    l2.stop()
+    l1.restart()
+
+    # We should still see local channels!
+    time.sleep(3)  # Make sure store is loaded
+    chans = l1.rpc.listchannels()['channels']
+    assert len(chans) == 2
+
+    # Now compact store
+    l1.rpc.call('dev-compact-gossip-store')
+    l1.restart()
+
+    time.sleep(3)  # Make sure store is loaded
+    # We should still see local channels!
+    chans = l1.rpc.listchannels()['channels']
+    assert len(chans) == 2
+
+
+def setup_gossip_store_test(node_factory, bitcoind):
+    l1, l2, l3 = node_factory.line_graph(3, fundchannel=False)
+
+    # Create channel.
+    scid23 = l2.fund_channel(l3, 10**6)
+
+    # Have that channel announced.
+    bitcoind.generate_block(5)
+    # Make sure we've got node_announcements
+    wait_for(lambda: ['alias' in n for n in l2.rpc.listnodes()['nodes']] == [True, True])
+
+    # Now, replace the one channel_update, so it's past the node announcements.
+    l2.rpc.setchannelfee(l3.info['id'], 20, 1000)
+    # Old base feerate is 1.
+    wait_for(lambda: sum([c['base_fee_millisatoshi'] for c in l2.rpc.listchannels()['channels']]) == 21)
+
+    # Create another channel, which will stay private.
+    scid12 = l1.fund_channel(l2, 10**6)
+
+    # Now insert channel_update for previous channel; now they're both past the
+    # node announcements.
+    l3.rpc.setchannelfee(l2.info['id'], 20, 1000)
+    wait_for(lambda: [c['base_fee_millisatoshi'] for c in l2.rpc.listchannels(scid23)['channels']] == [20, 20])
+
+    # Replace both (private) updates for scid12.
+    l1.rpc.setchannelfee(l2.info['id'], 20, 1000)
+    l2.rpc.setchannelfee(l1.info['id'], 20, 1000)
+    wait_for(lambda: [c['base_fee_millisatoshi'] for c in l2.rpc.listchannels(scid12)['channels']] == [20, 20])
+
+    # Active records in store now looks like:
+    #  channel_announcement (scid23)
+    #  channel_amount
+    #  node_announcement
+    #  node_announcement
+    #  channel_update (scid23)
+    #  local_add_channel (scid12)
+    #  channel_update (scid23)
+    #  private_channel_update (scid12)
+    #  private_channel_update (scid12)
+    return l2
+
+
+@unittest.skipIf(not DEVELOPER, "need dev-compact-gossip-store")
+def test_gossip_store_compact_noappend(node_factory, bitcoind):
+    l2 = setup_gossip_store_test(node_factory, bitcoind)
+
+    # It should truncate this, not leave junk!
+    with open(os.path.join(l2.daemon.lightning_dir, 'gossip_store.tmp'), 'wb') as f:
+        f.write(bytearray.fromhex("07deadbeef"))
+
+    l2.rpc.call('dev-compact-gossip-store')
+    l2.restart()
+    wait_for(lambda: l2.daemon.is_in_log('gossip_store: Read '))
+    assert not l2.daemon.is_in_log('gossip_store:.*truncate')
+
+
+def test_gossip_store_load_complex(node_factory, bitcoind):
+    l2 = setup_gossip_store_test(node_factory, bitcoind)
+
+    l2.restart()
+
+    wait_for(lambda: l2.daemon.is_in_log('gossip_store: Read '))
+
+
+@unittest.skipIf(not DEVELOPER, "need dev-compact-gossip-store")
+def test_gossip_store_compact(node_factory, bitcoind):
+    l2 = setup_gossip_store_test(node_factory, bitcoind)
+
+    # Now compact store.
+    l2.rpc.call('dev-compact-gossip-store')
+
+    # Should still be connected.
+    time.sleep(1)
+    assert len(l2.rpc.listpeers()['peers']) == 2
+
+    # Should restart ok.
+    l2.restart()
+    wait_for(lambda: l2.daemon.is_in_log('gossip_store: Read '))
+
+
+@unittest.skipIf(not DEVELOPER, "need dev-compact-gossip-store")
+def test_gossip_store_compact_restart(node_factory, bitcoind):
+    l2 = setup_gossip_store_test(node_factory, bitcoind)
+
+    # Should restart ok.
+    l2.restart()
+    wait_for(lambda: l2.daemon.is_in_log('gossip_store: Read '))
+
+    # Now compact store.
+    l2.rpc.call('dev-compact-gossip-store')
+
+
+@unittest.skipIf(not DEVELOPER, "need dev-compact-gossip-store")
+def test_gossip_store_load_no_channel_update(node_factory):
+    """Make sure we can read truncated gossip store with a channel_announcement and no channel_update"""
+    l1 = node_factory.get_node(start=False)
+
+    # A channel announcement with no channel_update.
+    with open(os.path.join(l1.daemon.lightning_dir, 'gossip_store'), 'wb') as f:
+        f.write(bytearray.fromhex("07"        # GOSSIP_STORE_VERSION
+                                  "000001b0"  # len
+                                  "fea676e8"  # csum
+                                  "5b8d9b44"  # timestamp
+                                  "0100"      # WIRE_CHANNEL_ANNOUNCEMENT
+                                  "bb8d7b6998cca3c2b3ce12a6bd73a8872c808bb48de2a30c5ad9cdf835905d1e27505755087e675fb517bbac6beb227629b694ea68f49d357458327138978ebfd7adfde1c69d0d2f497154256f6d5567a5cf2317c589e0046c0cc2b3e986cf9b6d3b44742bd57bce32d72cd1180a7f657795976130b20508b239976d3d4cdc4d0d6e6fbb9ab6471f664a662972e406f519eab8bce87a8c0365646df5acbc04c91540b4c7c518cec680a4a6af14dae1aca0fd5525220f7f0e96fcd2adef3c803ac9427fe71034b55a50536638820ef21903d09ccddd38396675b598587fa886ca711415c813fc6d69f46552b9a0a539c18f265debd0e2e286980a118ba349c216000043497fd7f826957108f4a30fd9cec3aeba79972084e90ead01ea33090000000013a63c0000b50001021bf3de4e84e3d52f9a3e36fbdcd2c4e8dbf203b9ce4fc07c2f03be6c21d0c67503f113414ebdc6c1fb0f33c99cd5a1d09dd79e7fdf2468cf1fe1af6674361695d203801fd8ab98032f11cc9e4916dd940417082727077609d5c7f8cc6e9a3ad25dd102517164b97ab46cee3826160841a36c46a2b7b9c74da37bdc070ed41ba172033a"
+                                  "0000000a"  # len
+                                  "99dc98b4"  # csum
+                                  "00000000"  # timestamp
+                                  "1005"      # WIRE_GOSSIP_STORE_CHANNEL_AMOUNT
+                                  "0000000001000000"
+                                  "00000095"  # len
+                                  "f036515e"  # csum
+                                  "5aab817c"  # timestamp
+                                  "0101"      # WIRE_NODE_ANNOUNCEMENT
+                                  "cf5d870bc7ecabcb7cd16898ef66891e5f0c6c5851bd85b670f03d325bc44d7544d367cd852e18ec03f7f4ff369b06860a3b12b07b29f36fb318ca11348bf8ec00005aab817c03f113414ebdc6c1fb0f33c99cd5a1d09dd79e7fdf2468cf1fe1af6674361695d23974b250757a7a6c6549544300000000000000000000000000000000000000000000000007010566933e2607"))
+
+    l1.start()
+
+    # May preceed the Started msg waited for in 'start'.
+    wait_for(lambda: l1.daemon.is_in_log('gossip_store: Unupdated channel_announcement at 1. Moving to gossip_store.corrupt and truncating'))
+    assert os.path.exists(os.path.join(l1.daemon.lightning_dir, 'gossip_store.corrupt'))
+
+    # This should actually result in an empty store.
+    l1.rpc.call('dev-compact-gossip-store')
+
+    with open(os.path.join(l1.daemon.lightning_dir, 'gossip_store'), "rb") as f:
+        assert bytearray(f.read()) == bytearray.fromhex("07")
+
+
+def test_gossip_store_compact_on_load(node_factory, bitcoind):
+    l2 = setup_gossip_store_test(node_factory, bitcoind)
+
+    l2.restart()
+
+    wait_for(lambda: l2.daemon.is_in_log('gossip_store_compact_offline: 9 deleted, 9 copied'))
+    wait_for(lambda: l2.daemon.is_in_log(r'gossip_store: Read 1/4/2/0 cannounce/cupdate/nannounce/cdelete from store \(0 deleted\) in 1446 bytes'))

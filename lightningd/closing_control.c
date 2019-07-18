@@ -3,6 +3,7 @@
 #include <closingd/gen_closing_wire.h>
 #include <common/close_tx.h>
 #include <common/initial_commit_tx.h>
+#include <common/per_peer_state.h>
 #include <common/utils.h>
 #include <errno.h>
 #include <gossipd/gen_gossip_wire.h>
@@ -20,9 +21,10 @@
 static struct amount_sat calc_tx_fee(struct amount_sat sat_in,
 				     const struct bitcoin_tx *tx)
 {
-	struct amount_sat fee = sat_in;
-	for (size_t i = 0; i < tal_count(tx->output); i++) {
-		if (!amount_sat_sub(&fee, fee, tx->output[i].amount))
+	struct amount_sat amt, fee = sat_in;
+	for (size_t i = 0; i < tx->wtx->num_outputs; i++) {
+		amt = bitcoin_tx_output_get_amount(tx, i);
+		if (!amount_sat_sub(&fee, fee, amt))
 			fatal("Tx spends more than input %s? %s",
 			      type_to_string(tmpctx, struct amount_sat, &sat_in),
 			      type_to_string(tmpctx, struct bitcoin_tx, tx));
@@ -82,6 +84,7 @@ static void peer_received_closing_signature(struct channel *channel,
 {
 	struct bitcoin_signature sig;
 	struct bitcoin_tx *tx;
+	struct bitcoin_txid tx_id;
 	struct lightningd *ld = channel->peer->ld;
 
 	if (!fromwire_closing_received_signature(msg, msg, &sig, &tx)) {
@@ -92,14 +95,16 @@ static void peer_received_closing_signature(struct channel *channel,
 
 	/* FIXME: Make sure signature is correct! */
 	if (better_closing_fee(ld, channel, tx)) {
-		channel_set_last_tx(channel, tx, &sig);
-		/* TODO(cdecker) Selectively save updated fields to DB */
+		channel_set_last_tx(channel, tx, &sig, TX_CHANNEL_CLOSE);
 		wallet_channel_save(ld->wallet, channel);
 	}
 
+
+	// Send back the txid so we can update the billboard on selection.
+	bitcoin_txid(channel->last_tx, &tx_id);
 	/* OK, you can continue now. */
 	subd_send_msg(channel->owner,
-		      take(towire_closing_received_signature_reply(channel)));
+		      take(towire_closing_received_signature_reply(channel, &tx_id)));
 }
 
 static void peer_closing_complete(struct channel *channel, const u8 *msg)
@@ -147,8 +152,7 @@ static unsigned closing_msg(struct subd *sd, const u8 *msg, const int *fds UNUSE
 }
 
 void peer_start_closingd(struct channel *channel,
-			 const struct crypto_state *cs,
-			 int peer_fd, int gossip_fd,
+			 struct per_peer_state *pps,
 			 bool reconnected,
 			 const u8 *channel_reestablish)
 {
@@ -158,6 +162,7 @@ void peer_start_closingd(struct channel *channel,
 	u64 num_revocations;
 	struct amount_msat their_msat;
 	int hsmfd;
+	struct secret last_remote_per_commit_secret;
 	struct lightningd *ld = channel->peer->ld;
 
 	if (!channel->remote_shutdown_scriptpubkey) {
@@ -167,7 +172,8 @@ void peer_start_closingd(struct channel *channel,
 	}
 
 	hsmfd = hsm_get_client_fd(ld, &channel->peer->id, channel->dbid,
-				  HSM_CAP_SIGN_CLOSING_TX);
+				  HSM_CAP_SIGN_CLOSING_TX
+				  | HSM_CAP_COMMITMENT_POINT);
 
 	channel_set_owner(channel,
 			  new_channel_subd(ld,
@@ -176,7 +182,9 @@ void peer_start_closingd(struct channel *channel,
 					   closing_wire_type_name, closing_msg,
 					   channel_errmsg,
 					   channel_set_billboard,
-					   take(&peer_fd), take(&gossip_fd),
+					   take(&pps->peer_fd),
+					   take(&pps->gossip_fd),
+					   take(&pps->gossip_store_fd),
 					   take(&hsmfd),
 					   NULL),
 			  false);
@@ -234,8 +242,29 @@ void peer_start_closingd(struct channel *channel,
 		channel_fail_permanent(channel, "our_msat overflow on closing");
 		return;
 	}
+
+	/* BOLT #2:
+	 *
+	 *   - if it supports `option_data_loss_protect`:
+	 *     - if `next_remote_revocation_number` equals 0:
+	 *       - MUST set `your_last_per_commitment_secret` to all zeroes
+	 *     - otherwise:
+	 *       - MUST set `your_last_per_commitment_secret` to the last
+	 *         `per_commitment_secret` it received
+	 */
+	if (num_revocations == 0)
+		memset(&last_remote_per_commit_secret, 0,
+		       sizeof(last_remote_per_commit_secret));
+	else if (!shachain_get_secret(&channel->their_shachain.chain,
+				      num_revocations-1,
+				      &last_remote_per_commit_secret)) {
+		channel_fail_permanent(channel,
+				       "Could not get revocation secret %"PRIu64,
+				       num_revocations-1);
+		return;
+	}
 	initmsg = towire_closing_init(tmpctx,
-				      cs,
+				      pps,
 				      &channel->funding_txid,
 				      channel->funding_outnum,
 				      channel->funding,
@@ -255,7 +284,8 @@ void peer_start_closingd(struct channel *channel,
 				      num_revocations,
 				      channel_reestablish,
 				      p2wpkh_for_keyidx(tmpctx, ld,
-							channel->final_key_idx));
+							channel->final_key_idx),
+				      &last_remote_per_commit_secret);
 
 	/* We don't expect a response: it will give us feedback on
 	 * signatures sent and received, then closing_complete. */

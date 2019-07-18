@@ -362,6 +362,27 @@ bool amount_msat_less_eq_sat(struct amount_msat msat, struct amount_sat sat)
 	return msat.millisatoshis <= msat_from_sat.millisatoshis;
 }
 
+bool amount_msat_to_u32(struct amount_msat msat, u32 *millisatoshis)
+{
+	if (amount_msat_greater_eq(msat, AMOUNT_MSAT(0x100000000)))
+		return false;
+	*millisatoshis = msat.millisatoshis;
+	return true;
+}
+
+void amount_msat_from_u64(struct amount_msat *msat, u64 millisatoshis)
+{
+	msat->millisatoshis = millisatoshis;
+}
+
+WARN_UNUSED_RESULT bool amount_msat_from_sat_u64(struct amount_msat *msat, u64 satoshis)
+{
+	if (mul_overflows_u64(satoshis, MSAT_PER_SAT))
+		return false;
+	msat->millisatoshis = satoshis * MSAT_PER_SAT;
+	return true;
+}
+
 bool amount_msat_fee(struct amount_msat *fee,
 		     struct amount_msat amt,
 		     u32 fee_base_msat,
@@ -402,7 +423,7 @@ struct amount_sat amount_tx_fee(u32 fee_per_kw, size_t weight)
 
 	/* If this overflows, weight must be > 2^32, which is not a real tx */
 	assert(!mul_overflows_u64(fee_per_kw, weight));
-	fee.satoshis = fee_per_kw * weight / 1000;
+	fee.satoshis = (u64)fee_per_kw * weight / 1000;
 
 	return fee;
 }

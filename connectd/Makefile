@@ -53,6 +53,8 @@ CONNECTD_COMMON_OBJS :=				\
 	common/key_derive.o			\
 	common/memleak.o			\
 	common/msg_queue.o			\
+	common/node_id.o			\
+	common/per_peer_state.o			\
 	common/pseudorand.o			\
 	common/status.o				\
 	common/status_wire.o			\

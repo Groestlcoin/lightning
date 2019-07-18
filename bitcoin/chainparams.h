@@ -7,6 +7,11 @@
 #include <common/amount.h>
 #include <stdbool.h>
 
+struct bip32_key_version {
+	u32 bip32_pubkey_version;
+	u32 bip32_privkey_version;
+};
+
 struct chainparams {
 	const char *network_name;
 	const char *bip173_name;
@@ -18,9 +23,14 @@ struct chainparams {
 	const struct amount_sat max_funding;
 	const struct amount_msat max_payment;
 	const u32 when_lightning_became_cool;
+	const u8 p2pkh_version;
+	const u8 p2sh_version;
 
 	/* Whether this is a test network or not */
 	const bool testnet;
+
+	/* Version codes for BIP32 extended keys in libwally-core*/
+	const struct bip32_key_version bip32_key_version;
 };
 
 /**

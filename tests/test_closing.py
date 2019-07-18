@@ -1,4 +1,5 @@
 from fixtures import *  # noqa: F401,F403
+from flaky import flaky
 from lightning import RpcError
 from utils import only_one, sync_blockheight, wait_for, DEVELOPER, TIMEOUT, VALGRIND, SLOW_MACHINE
 
@@ -61,25 +62,27 @@ def test_closing(node_factory, bitcoind):
     closetxid = only_one(bitcoind.rpc.getrawmempool(False))
 
     billboard = only_one(l1.rpc.listpeers(l2.info['id'])['peers'][0]['channels'])['status']
-    assert billboard == ['CLOSINGD_SIGEXCHANGE:We agreed on a closing fee of 5430 satoshi']
+    assert billboard == [
+        'CLOSINGD_SIGEXCHANGE:We agreed on a closing fee of 5430 satoshi for tx:{}'.format(closetxid),
+    ]
     bitcoind.generate_block(1)
 
-    l1.daemon.wait_for_log(r'Owning output .* txid %s' % closetxid)
-    l2.daemon.wait_for_log(r'Owning output .* txid %s' % closetxid)
+    l1.daemon.wait_for_log(r'Owning output.* \(SEGWIT\).* txid %s.* CONFIRMED' % closetxid)
+    l2.daemon.wait_for_log(r'Owning output.* \(SEGWIT\).* txid %s.* CONFIRMED' % closetxid)
 
     # Make sure both nodes have grabbed their close tx funds
     assert closetxid in set([o['txid'] for o in l1.rpc.listfunds()['outputs']])
     assert closetxid in set([o['txid'] for o in l2.rpc.listfunds()['outputs']])
 
     wait_for(lambda: only_one(l1.rpc.listpeers(l2.info['id'])['peers'][0]['channels'])['status'] == [
-        'CLOSINGD_SIGEXCHANGE:We agreed on a closing fee of 5430 satoshi',
+        'CLOSINGD_SIGEXCHANGE:We agreed on a closing fee of 5430 satoshi for tx:{}'.format(closetxid),
         'ONCHAIN:Tracking mutual close transaction',
         'ONCHAIN:All outputs resolved: waiting 99 more blocks before forgetting channel'
     ])
 
     bitcoind.generate_block(9)
     wait_for(lambda: only_one(l1.rpc.listpeers(l2.info['id'])['peers'][0]['channels'])['status'] == [
-        'CLOSINGD_SIGEXCHANGE:We agreed on a closing fee of 5430 satoshi',
+        'CLOSINGD_SIGEXCHANGE:We agreed on a closing fee of 5430 satoshi for tx:{}'.format(closetxid),
         'ONCHAIN:Tracking mutual close transaction',
         'ONCHAIN:All outputs resolved: waiting 90 more blocks before forgetting channel'
     ])
@@ -198,7 +201,7 @@ def test_closing_different_fees(node_factory, bitcoind, executor):
     amounts = [0, 545999, 546000]
     num_peers = len(feerates) * len(amounts)
 
-    addr = l1.rpc.newaddr()['address']
+    addr = l1.rpc.newaddr()['bech32']
     bitcoind.rpc.sendtoaddress(addr, 1)
     numfunds = len(l1.rpc.listfunds()['outputs'])
     bitcoind.generate_block(1)
@@ -306,7 +309,7 @@ def test_penalty_inhtlc(node_factory, bitcoind, executor):
     l2.daemon.wait_for_log('=WIRE_COMMITMENT_SIGNED-nocommit')
 
     # Make sure l1 got l2's commitment to the HTLC, and sent to master.
-    l1.daemon.wait_for_log('UPDATE WIRE_CHANNEL_GOT_COMMITSIG')
+    l1.daemon.wait_for_log('got commitsig')
 
     # Take our snapshot.
     tx = l1.rpc.dev_sign_last_tx(l2.info['id'])['tx']
@@ -501,7 +504,7 @@ def test_onchain_unwatch(node_factory, bitcoind):
 
     # Now test unrelated onchain churn.
     # Daemon gets told about wallet; says it doesn't care.
-    l1.rpc.withdraw(l1.rpc.newaddr()['address'], 'all')
+    l1.rpc.withdraw(l1.rpc.newaddr()['bech32'], 'all')
     bitcoind.generate_block(1)
     l1.daemon.wait_for_log("but we don't care")
 
@@ -510,7 +513,7 @@ def test_onchain_unwatch(node_factory, bitcoind):
 
     # So these should not generate further messages
     for i in range(5):
-        l1.rpc.withdraw(l1.rpc.newaddr()['address'], 'all')
+        l1.rpc.withdraw(l1.rpc.newaddr()['bech32'], 'all')
         bitcoind.generate_block(1)
         # Make sure it digests the block
         sync_blockheight(bitcoind, [l1])
@@ -777,7 +780,7 @@ def test_onchain_middleman(node_factory, bitcoind):
         print("Got err from sendpay thread")
         raise err
     t.join(timeout=1)
-    assert not t.isAlive()
+    assert not t.is_alive()
 
     # Three more, l2 can spend to-us.
     bitcoind.generate_block(3)
@@ -1122,6 +1125,10 @@ def test_onchain_multihtlc_our_unilateral(node_factory, bitcoind):
 
     # Now, restart and manually reconnect end nodes (so they don't ignore HTLCs)
     # In fact, they'll fail them with WIRE_TEMPORARY_NODE_FAILURE.
+    # TODO Remove our reliance on HTLCs failing on startup and the need for
+    #      this plugin
+    nodes[0].daemon.opts['plugin'] = 'tests/plugins/fail_htlcs.py'
+    nodes[-1].daemon.opts['plugin'] = 'tests/plugins/fail_htlcs.py'
     nodes[0].restart()
     nodes[-1].restart()
 
@@ -1210,6 +1217,10 @@ def test_onchain_multihtlc_their_unilateral(node_factory, bitcoind):
 
     # Now, restart and manually reconnect end nodes (so they don't ignore HTLCs)
     # In fact, they'll fail them with WIRE_TEMPORARY_NODE_FAILURE.
+    # TODO Remove our reliance on HTLCs failing on startup and the need for
+    #      this plugin
+    nodes[0].daemon.opts['plugin'] = 'tests/plugins/fail_htlcs.py'
+    nodes[-1].daemon.opts['plugin'] = 'tests/plugins/fail_htlcs.py'
     nodes[0].restart()
     nodes[-1].restart()
 
@@ -1489,3 +1500,57 @@ def test_shutdown(node_factory):
             raise Exception("Node {} has memory leaks: {}"
                             .format(l1.daemon.lightning_dir, leaks))
     l1.rpc.stop()
+
+
+@flaky
+@unittest.skipIf(not DEVELOPER, "needs to set upfront_shutdown_script")
+def test_option_upfront_shutdown_script(node_factory, bitcoind):
+    l1 = node_factory.get_node(start=False)
+    # Insist on upfront script we're not going to match.
+    l1.daemon.env["DEV_OPENINGD_UPFRONT_SHUTDOWN_SCRIPT"] = "76a91404b61f7dc1ea0dc99424464cc4064dc564d91e8988ac"
+    l1.start()
+
+    l2 = node_factory.get_node()
+    l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
+    l1.fund_channel(l2, 1000000, False)
+
+    l1.rpc.close(l2.info['id'])
+
+    # l2 will close unilaterally when it dislikes shutdown script.
+    l1.daemon.wait_for_log(r'received ERROR.*scriptpubkey .* is not as agreed upfront \(76a91404b61f7dc1ea0dc99424464cc4064dc564d91e8988ac\)')
+
+    # Clear channel.
+    wait_for(lambda: len(bitcoind.rpc.getrawmempool()) != 0)
+    bitcoind.generate_block(1)
+    wait_for(lambda: [c['state'] for c in only_one(l1.rpc.listpeers()['peers'])['channels']] == ['ONCHAIN'])
+
+    # Works when l2 closes channel, too.
+    l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
+    l1.fund_channel(l2, 1000000, False)
+
+    l2.rpc.close(l1.info['id'])
+
+    # l2 will close unilaterally when it dislikes shutdown script.
+    l1.daemon.wait_for_log(r'received ERROR.*scriptpubkey .* is not as agreed upfront \(76a91404b61f7dc1ea0dc99424464cc4064dc564d91e8988ac\)')
+
+    # Clear channel.
+    wait_for(lambda: len(bitcoind.rpc.getrawmempool()) != 0)
+    bitcoind.generate_block(1)
+    wait_for(lambda: [c['state'] for c in only_one(l1.rpc.listpeers()['peers'])['channels']] == ['ONCHAIN', 'ONCHAIN'])
+
+    # Figure out what address it will try to use.
+    keyidx = int(l1.db_query("SELECT val FROM vars WHERE name='bip32_max_index';")[0]['val'])
+
+    # Expect 1 for change address, 1 for the channel final address.
+    addr = l1.rpc.call('dev-listaddrs', [keyidx + 2])['addresses'][-1]
+
+    # Now, if we specify upfront and it's OK, all good.
+    l1.stop()
+    # We need to prepend the segwit version (0) and push opcode (14).
+    l1.daemon.env["DEV_OPENINGD_UPFRONT_SHUTDOWN_SCRIPT"] = '0014' + addr['bech32_redeemscript']
+    l1.start()
+
+    l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
+    l1.rpc.fundchannel(l2.info['id'], 1000000)
+    l1.rpc.close(l2.info['id'])
+    wait_for(lambda: sorted([c['state'] for c in only_one(l1.rpc.listpeers()['peers'])['channels']]) == ['CLOSINGD_COMPLETE', 'ONCHAIN', 'ONCHAIN'])

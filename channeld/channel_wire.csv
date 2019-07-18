@@ -1,6 +1,7 @@
 #include <common/cryptomsg.h>
 #include <common/channel_config.h>
 #include <common/derive_basepoints.h>
+#include <common/per_peer_state.h>
 
 # Begin!  (passes gossipd-client fd)
 channel_init,1000
@@ -8,6 +9,7 @@ channel_init,,chain_hash,struct bitcoin_blkid
 channel_init,,funding_txid,struct bitcoin_txid
 channel_init,,funding_txout,u16
 channel_init,,funding_satoshi,struct amount_sat
+channel_init,,minimum_depth,u32
 channel_init,,our_config,struct channel_config
 channel_init,,their_config,struct channel_config
 # FIXME: Fix generate-wire.py to allow NUM_SIDES*u32 here.
@@ -15,7 +17,7 @@ channel_init,,feerate_per_kw,2*u32
 channel_init,,feerate_min,u32
 channel_init,,feerate_max,u32
 channel_init,,first_commit_sig,struct bitcoin_signature
-channel_init,,crypto_state,struct crypto_state
+channel_init,,per_peer_state,struct per_peer_state
 channel_init,,remote_fundingkey,struct pubkey
 channel_init,,remote_basepoints,struct basepoints
 channel_init,,remote_per_commit,struct pubkey
@@ -26,8 +28,8 @@ channel_init,,fee_proportional,u32
 channel_init,,local_msatoshi,struct amount_msat
 channel_init,,our_basepoints,struct basepoints
 channel_init,,our_funding_pubkey,struct pubkey
-channel_init,,local_node_id,struct pubkey
-channel_init,,remote_node_id,struct pubkey
+channel_init,,local_node_id,struct node_id
+channel_init,,remote_node_id,struct node_id
 channel_init,,commit_msec,u32
 channel_init,,cltv_delta,u16
 channel_init,,last_was_revoke,bool
@@ -61,11 +63,15 @@ channel_init,,reached_announce_depth,bool
 channel_init,,last_remote_secret,struct secret
 channel_init,,lflen,u16
 channel_init,,localfeatures,lflen*u8
+channel_init,,upfront_shutdown_script_len,u16
+channel_init,,upfront_shutdown_script,upfront_shutdown_script_len*u8
+channel_init,,remote_ann_node_sig,?secp256k1_ecdsa_signature
+channel_init,,remote_ann_bitcoin_sig,?secp256k1_ecdsa_signature
 
-# master->channeld funding hit new depth >= lock depth
-channel_funding_locked,1002
-channel_funding_locked,,short_channel_id,struct short_channel_id
-channel_funding_locked,,depth,u32
+# master->channeld funding hit new depth(funding locked if >= lock depth)
+channel_funding_depth,1002
+channel_funding_depth,,short_channel_id,?struct short_channel_id
+channel_funding_depth,,depth,u32
 
 # Tell channel to offer this htlc
 channel_offer_htlc,1004
@@ -157,7 +163,7 @@ channel_got_shutdown,,scriptpubkey,scriptpubkey_len*u8
 
 # Shutdown is complete, ready for closing negotiation. + peer_fd & gossip_fd.
 channel_shutdown_complete,1025
-channel_shutdown_complete,,crypto_state,struct crypto_state
+channel_shutdown_complete,,per_peer_state,struct per_peer_state
 
 # Re-enable commit timer.
 channel_dev_reenable_commit,1026
@@ -178,3 +184,12 @@ channel_dev_memleak_reply,,leak,bool
 channel_fail_fallen_behind,1028
 channel_fail_fallen_behind,,remote_per_commitment_point,struct pubkey
 
+# Handle a channel specific feerate base ppm configuration
+channel_specific_feerates,1029
+channel_specific_feerates,,feerate_base,u32
+channel_specific_feerates,,feerate_ppm,u32
+
+# When we receive announcement_signatures for channel announce
+channel_got_announcement,1017
+channel_got_announcement,,remote_ann_node_sig,secp256k1_ecdsa_signature
+channel_got_announcement,,remote_ann_bitcoin_sig,secp256k1_ecdsa_signature

@@ -76,6 +76,7 @@ struct channel {
 
 	/* Last tx they gave us. */
 	struct bitcoin_tx *last_tx;
+	enum wallet_tx_type last_tx_type;
 	struct bitcoin_signature last_sig;
 	secp256k1_ecdsa_signature *last_htlc_sigs;
 
@@ -110,6 +111,12 @@ struct channel {
 	/* Do we have an "impossible" future per_commitment_point from
 	 * peer via option_data_loss_protect? */
 	const struct pubkey *future_per_commitment_point;
+
+	/* Feerate per channel */
+	u32 feerate_base, feerate_ppm;
+
+	/* If they used option_upfront_shutdown_script. */
+	const u8 *remote_upfront_shutdown_script;
 };
 
 struct channel *new_channel(struct peer *peer, u64 dbid,
@@ -154,7 +161,11 @@ struct channel *new_channel(struct peer *peer, u64 dbid,
 			    bool connected,
 			    const struct basepoints *local_basepoints,
 			    const struct pubkey *local_funding_pubkey,
-			    const struct pubkey *future_per_commitment_point);
+			    const struct pubkey *future_per_commitment_point,
+			    u32 feerate_base,
+			    u32 feerate_ppm,
+			    /* NULL or stolen */
+			    const u8 *remote_upfront_shutdown_script);
 
 void delete_channel(struct channel *channel);
 
@@ -184,14 +195,15 @@ struct channel *peer_normal_channel(struct peer *peer);
 
 /* Get active channel for peer, optionally any uncommitted_channel. */
 struct channel *active_channel_by_id(struct lightningd *ld,
-				     const struct pubkey *id,
+				     const struct node_id *id,
 				     struct uncommitted_channel **uc);
 
 struct channel *channel_by_dbid(struct lightningd *ld, const u64 dbid);
 
 void channel_set_last_tx(struct channel *channel,
 			 struct bitcoin_tx *tx,
-			 const struct bitcoin_signature *sig);
+			 const struct bitcoin_signature *sig,
+			 enum wallet_tx_type type);
 
 static inline bool channel_can_add_htlc(const struct channel *channel)
 {
@@ -222,7 +234,7 @@ static inline bool channel_active(const struct channel *channel)
 }
 
 void get_channel_basepoints(struct lightningd *ld,
-			    const struct pubkey *peer_id,
+			    const struct node_id *peer_id,
 			    const u64 dbid,
 			    struct basepoints *local_basepoints,
 			    struct pubkey *local_funding_pubkey);
