@@ -267,7 +267,8 @@ void bitcoin_txid(const struct bitcoin_tx *tx, struct bitcoin_txid *txid)
 
 	/* For TXID, we never use extended form. */
 	push_tx(tx, NULL, 0, push_sha, &ctx, false);
-	sha256_double_done(&ctx, &txid->shad);
+	/* jush finish to generate single sha for groestl tx*/
+	sha256_done(&ctx, (struct sha256 *)&txid->shad);
 }
 
 /* Use the bitcoin_tx destructor to also free the wally_tx */
