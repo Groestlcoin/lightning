@@ -92,6 +92,7 @@ static void peer_received_closing_signature(struct channel *channel,
 				       tal_hex(msg, msg));
 		return;
 	}
+	tx->chainparams = get_chainparams(channel->peer->ld);
 
 	/* FIXME: Make sure signature is correct! */
 	if (better_closing_fee(ld, channel, tx)) {
@@ -116,7 +117,7 @@ static void peer_closing_complete(struct channel *channel, const u8 *msg)
 	}
 
 	/* Don't report spurious failure when closingd exits. */
-	channel_set_owner(channel, NULL, false);
+	channel_set_owner(channel, NULL);
 	/* Clear any transient negotiation messages */
 	channel_set_billboard(channel, false, NULL);
 
@@ -186,13 +187,13 @@ void peer_start_closingd(struct channel *channel,
 					   take(&pps->gossip_fd),
 					   take(&pps->gossip_store_fd),
 					   take(&hsmfd),
-					   NULL),
-			  false);
+					   NULL));
 
 	if (!channel->owner) {
 		log_unusual(channel->log, "Could not subdaemon closing: %s",
 			    strerror(errno));
-		channel_fail_transient(channel, "Failed to subdaemon closing");
+		channel_fail_reconnect_later(channel,
+					     "Failed to subdaemon closing");
 		return;
 	}
 
@@ -246,7 +247,7 @@ void peer_start_closingd(struct channel *channel,
 	/* BOLT #2:
 	 *
 	 *   - if it supports `option_data_loss_protect`:
-	 *     - if `next_remote_revocation_number` equals 0:
+	 *     - if `next_revocation_number` equals 0:
 	 *       - MUST set `your_last_per_commitment_secret` to all zeroes
 	 *     - otherwise:
 	 *       - MUST set `your_last_per_commitment_secret` to the last
@@ -264,6 +265,7 @@ void peer_start_closingd(struct channel *channel,
 		return;
 	}
 	initmsg = towire_closing_init(tmpctx,
+				      &get_chainparams(ld)->genesis_blockhash,
 				      pps,
 				      &channel->funding_txid,
 				      channel->funding_outnum,

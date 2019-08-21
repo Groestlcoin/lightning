@@ -3,7 +3,7 @@ from flaky import flaky
 from lightning import RpcError
 from utils import only_one, sync_blockheight, wait_for, DEVELOPER, TIMEOUT, VALGRIND, SLOW_MACHINE
 
-
+import os
 import queue
 import pytest
 import re
@@ -38,9 +38,7 @@ def test_closing(node_factory, bitcoind):
         # check for the substring
         assert 'CHANNELD_NORMAL:Funding transaction locked.' in billboard[0]
 
-    # This should return with an error, then close.
-    with pytest.raises(RpcError, match=r'Channel close negotiation not finished'):
-        l1.rpc.close(chan, False, 0)
+    l1.rpc.close(chan)
 
     l1.daemon.wait_for_log(' to CHANNELD_SHUTTING_DOWN')
     l2.daemon.wait_for_log(' to CHANNELD_SHUTTING_DOWN')
@@ -92,8 +90,12 @@ def test_closing(node_factory, bitcoind):
     wait_for(lambda: len(l1.rpc.listchannels()['channels']) == 0)
     wait_for(lambda: len(l2.rpc.listchannels()['channels']) == 0)
 
+    # The entry in the channels table should still be there
+    assert l1.db_query("SELECT count(*) as c FROM channels;")[0]['c'] == 1
+    assert l2.db_query("SELECT count(*) as c FROM channels;")[0]['c'] == 1
 
-def test_closing_while_disconnected(node_factory, bitcoind):
+
+def test_closing_while_disconnected(node_factory, bitcoind, executor):
     l1, l2 = node_factory.line_graph(2, opts={'may_reconnect': True})
     chan = l1.get_channel_scid(l2)
 
@@ -101,11 +103,12 @@ def test_closing_while_disconnected(node_factory, bitcoind):
     l2.stop()
 
     # The close should still be triggered afterwards.
-    with pytest.raises(RpcError, match=r'Channel close negotiation not finished'):
-        l1.rpc.close(chan, False, 0)
+    fut = executor.submit(l1.rpc.close, chan, 0)
     l1.daemon.wait_for_log(' to CHANNELD_SHUTTING_DOWN')
 
     l2.start()
+    fut.result(TIMEOUT)
+
     l1.daemon.wait_for_log(' to CLOSINGD_SIGEXCHANGE')
     l2.daemon.wait_for_log(' to CLOSINGD_SIGEXCHANGE')
 
@@ -177,8 +180,8 @@ def test_closing_torture(node_factory, executor, bitcoind):
         l2.wait_channel_active(scid)
 
         # Start closers: can take a long time under valgrind!
-        c1 = executor.submit(l1.rpc.close, l2.info['id'], False, 60)
-        c2 = executor.submit(l2.rpc.close, l1.info['id'], False, 60)
+        c1 = executor.submit(l1.rpc.close, l2.info['id'])
+        c2 = executor.submit(l2.rpc.close, l1.info['id'])
         # Wait for close to finish
         c1.result(TIMEOUT)
         c2.result(TIMEOUT)
@@ -231,13 +234,8 @@ def test_closing_different_fees(node_factory, bitcoind, executor):
         if p.amount != 0:
             l1.pay(p, 100000000)
 
-    # Now close all channels
-    # All closes occur in parallel, and on Travis,
-    # ALL those lightningd are running on a single core,
-    # so increase the timeout so that this test will pass
-    # when valgrind is enabled.
-    # (close timeout defaults to 30 as of this writing)
-    closes = [executor.submit(l1.rpc.close, p.channel, False, 90) for p in peers]
+    # Now close all channels (not unilaterally!)
+    closes = [executor.submit(l1.rpc.close, p.channel, 0) for p in peers]
 
     for c in closes:
         c.result(90)
@@ -270,9 +268,7 @@ def test_closing_negotiation_reconnect(node_factory, bitcoind):
 
     assert bitcoind.rpc.getmempoolinfo()['size'] == 0
 
-    # This should return with an error, then close.
-    with pytest.raises(RpcError, match=r'Channel close negotiation not finished'):
-        l1.rpc.close(chan, False, 0)
+    l1.rpc.close(chan)
 
     l1.daemon.wait_for_log(' to CHANNELD_SHUTTING_DOWN')
     l2.daemon.wait_for_log(' to CHANNELD_SHUTTING_DOWN')
@@ -292,7 +288,7 @@ def test_penalty_inhtlc(node_factory, bitcoind, executor):
     """Test penalty transaction with an incoming HTLC"""
     # We suppress each one after first commit; HTLC gets added not fulfilled.
     # Feerates identical so we don't get gratuitous commit to update them
-    l1 = node_factory.get_node(disconnect=['=WIRE_COMMITMENT_SIGNED-nocommit'], may_fail=True, feerates=(7500, 7500, 7500))
+    l1 = node_factory.get_node(disconnect=['=WIRE_COMMITMENT_SIGNED-nocommit'], may_fail=True, feerates=(7500, 7500, 7500), allow_broken_log=True)
     l2 = node_factory.get_node(disconnect=['=WIRE_COMMITMENT_SIGNED-nocommit'])
 
     l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
@@ -364,7 +360,7 @@ def test_penalty_outhtlc(node_factory, bitcoind, executor):
     """Test penalty transaction with an outgoing HTLC"""
     # First we need to get funds to l2, so suppress after second.
     # Feerates identical so we don't get gratuitous commit to update them
-    l1 = node_factory.get_node(disconnect=['=WIRE_COMMITMENT_SIGNED*3-nocommit'], may_fail=True, feerates=(7500, 7500, 7500))
+    l1 = node_factory.get_node(disconnect=['=WIRE_COMMITMENT_SIGNED*3-nocommit'], may_fail=True, feerates=(7500, 7500, 7500), allow_broken_log=True)
     l2 = node_factory.get_node(disconnect=['=WIRE_COMMITMENT_SIGNED*3-nocommit'])
 
     l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
@@ -1127,8 +1123,8 @@ def test_onchain_multihtlc_our_unilateral(node_factory, bitcoind):
     # In fact, they'll fail them with WIRE_TEMPORARY_NODE_FAILURE.
     # TODO Remove our reliance on HTLCs failing on startup and the need for
     #      this plugin
-    nodes[0].daemon.opts['plugin'] = 'tests/plugins/fail_htlcs.py'
-    nodes[-1].daemon.opts['plugin'] = 'tests/plugins/fail_htlcs.py'
+    nodes[0].daemon.opts['plugin'] = os.path.join(os.getcwd(), 'tests/plugins/fail_htlcs.py')
+    nodes[-1].daemon.opts['plugin'] = os.path.join(os.getcwd(), 'tests/plugins/fail_htlcs.py')
     nodes[0].restart()
     nodes[-1].restart()
 
@@ -1219,8 +1215,8 @@ def test_onchain_multihtlc_their_unilateral(node_factory, bitcoind):
     # In fact, they'll fail them with WIRE_TEMPORARY_NODE_FAILURE.
     # TODO Remove our reliance on HTLCs failing on startup and the need for
     #      this plugin
-    nodes[0].daemon.opts['plugin'] = 'tests/plugins/fail_htlcs.py'
-    nodes[-1].daemon.opts['plugin'] = 'tests/plugins/fail_htlcs.py'
+    nodes[0].daemon.opts['plugin'] = os.path.join(os.getcwd(), 'tests/plugins/fail_htlcs.py')
+    nodes[-1].daemon.opts['plugin'] = os.path.join(os.getcwd(), 'tests/plugins/fail_htlcs.py')
     nodes[0].restart()
     nodes[-1].restart()
 
@@ -1523,6 +1519,7 @@ def test_option_upfront_shutdown_script(node_factory, bitcoind):
     wait_for(lambda: len(bitcoind.rpc.getrawmempool()) != 0)
     bitcoind.generate_block(1)
     wait_for(lambda: [c['state'] for c in only_one(l1.rpc.listpeers()['peers'])['channels']] == ['ONCHAIN'])
+    wait_for(lambda: [c['state'] for c in only_one(l2.rpc.listpeers()['peers'])['channels']] == ['ONCHAIN'])
 
     # Works when l2 closes channel, too.
     l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
@@ -1537,6 +1534,7 @@ def test_option_upfront_shutdown_script(node_factory, bitcoind):
     wait_for(lambda: len(bitcoind.rpc.getrawmempool()) != 0)
     bitcoind.generate_block(1)
     wait_for(lambda: [c['state'] for c in only_one(l1.rpc.listpeers()['peers'])['channels']] == ['ONCHAIN', 'ONCHAIN'])
+    wait_for(lambda: [c['state'] for c in only_one(l2.rpc.listpeers()['peers'])['channels']] == ['ONCHAIN', 'ONCHAIN'])
 
     # Figure out what address it will try to use.
     keyidx = int(l1.db_query("SELECT val FROM vars WHERE name='bip32_max_index';")[0]['val'])

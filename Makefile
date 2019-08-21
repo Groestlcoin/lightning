@@ -15,7 +15,7 @@ CCANDIR := ccan
 
 # Where we keep the BOLT RFCs
 BOLTDIR := ../lightning-rfc/
-BOLTVERSION := da71867c840abe057d7a68f358dd9493e0e79110
+BOLTVERSION := 8b2cf0054660bece9e1004f42a500c6a1a77efd3
 
 -include config.vars
 
@@ -52,7 +52,7 @@ endif
 
 # Timeout shortly before the 600 second travis silence timeout
 # (method=thread to support xdist)
-PYTEST_OPTS := -v --timeout=550 --timeout_method=thread -p no:logging
+PYTEST_OPTS := -v --timeout=550 --timeout_method=thread -p no:logging --duration=0
 
 # This is where we add new features as bitcoin adds them.
 FEATURES :=
@@ -70,7 +70,6 @@ CCAN_OBJS :=					\
 	ccan-crypto-sha256.o			\
 	ccan-crypto-shachain.o			\
 	ccan-crypto-siphash24.o			\
-	ccan-daemonize.o			\
 	ccan-err.o				\
 	ccan-fdpass.o				\
 	ccan-htable.o				\
@@ -132,7 +131,6 @@ CCAN_HEADERS :=						\
 	$(CCANDIR)/ccan/crypto/sha256/sha256.h		\
 	$(CCANDIR)/ccan/crypto/shachain/shachain.h	\
 	$(CCANDIR)/ccan/crypto/siphash24/siphash24.h	\
-	$(CCANDIR)/ccan/daemonize/daemonize.h		\
 	$(CCANDIR)/ccan/endian/endian.h			\
 	$(CCANDIR)/ccan/err/err.h			\
 	$(CCANDIR)/ccan/fdpass/fdpass.h			\
@@ -184,11 +182,13 @@ ALL_GEN_HEADERS += gen_version.h
 
 CDUMP_OBJS := ccan-cdump.o ccan-strmap.o
 
-WIRE_GEN := tools/generate-wire.py
+BOLT_GEN := tools/generate-wire.py
+WIRE_GEN := $(BOLT_GEN)
+BOLT_DEPS := $(BOLT_GEN)
 
 ALL_PROGRAMS =
 
-CPPFLAGS = -DBINTOPKGLIBEXECDIR='"'$(shell sh tools/rel.sh $(bindir) $(pkglibexecdir))'"'
+CPPFLAGS = -DBINTOPKGLIBEXECDIR="\"$(shell sh tools/rel.sh $(bindir) $(pkglibexecdir))\""
 CFLAGS = $(CPPFLAGS) $(CWARNFLAGS) $(CDEBUGFLAGS) $(COPTFLAGS) -I $(CCANDIR) $(EXTERNAL_INCLUDE_FLAGS) -I . -I/usr/local/include $(FEATURES) $(COVFLAGS) $(DEV_CFLAGS) -DSHACHAIN_BITS=48 -DJSMN_PARENT_LINKS $(PIE_CFLAGS) $(COMPAT_CFLAGS)
 
 # We can get configurator to run a different compile cmd to cross-configure.
@@ -225,6 +225,7 @@ include lightningd/Makefile
 include cli/Makefile
 include doc/Makefile
 include devtools/Makefile
+include tools/Makefile
 include plugins/Makefile
 
 # Git doesn't maintain timestamps, so we only regen if git says we should.
@@ -244,9 +245,9 @@ else
 PYTEST_OPTS += -x
 endif
 
-check:
-	$(MAKE) installcheck
-	$(MAKE) pytest
+check-units:
+
+check: check-units installcheck pytest
 
 pytest: $(ALL_PROGRAMS)
 ifeq ($(PYTEST),)
@@ -254,7 +255,7 @@ ifeq ($(PYTEST),)
 	exit 1
 else
 # Explicitly hand DEVELOPER and VALGRIND so you can override on make cmd line.
-	PYTHONPATH=contrib/pylightning:$$PYTHONPATH TEST_DEBUG=1 DEVELOPER=$(DEVELOPER) VALGRIND=$(VALGRIND) $(PYTEST) tests/ $(PYTEST_OPTS)
+	PYTHONPATH=`pwd`/contrib/pylightning:$$PYTHONPATH TEST_DEBUG=1 DEVELOPER=$(DEVELOPER) VALGRIND=$(VALGRIND) $(PYTEST) tests/ $(PYTEST_OPTS)
 endif
 
 # Keep includes in alpha order.
@@ -270,9 +271,16 @@ check-hdr-include-order/%: %
 check-makefile:
 	@if [ x"$(CCANDIR)/config.h `find $(CCANDIR)/ccan -name '*.h' | grep -v /test/ | LC_ALL=C sort | tr '\n' ' '`" != x"$(CCAN_HEADERS) " ]; then echo CCAN_HEADERS incorrect; exit 1; fi
 
+# Experimental quotes quote the exact version.
+ifeq ($(EXPERIMENTAL_FEATURES),1)
+CHECK_BOLT_PREFIX=--prefix="BOLT-$(BOLTVERSION)"
+else
+CHECK_BOLT_PREFIX=
+endif
+
 # Any mention of BOLT# must be followed by an exact quote, modulo whitespace.
 bolt-check/%: % bolt-precheck tools/check-bolt
-	@if [ -d .tmp.lightningrfc ]; then tools/check-bolt .tmp.lightningrfc $<; else echo "Not checking BOLTs: BOLTDIR $(BOLTDIR) does not exist" >&2; fi
+	@if [ -d .tmp.lightningrfc ]; then tools/check-bolt $(CHECK_BOLT_PREFIX) .tmp.lightningrfc $<; else echo "Not checking BOLTs: BOLTDIR $(BOLTDIR) does not exist" >&2; fi
 
 LOCAL_BOLTDIR=.tmp.lightningrfc
 
@@ -280,10 +288,6 @@ bolt-precheck:
 	@[ -d $(BOLTDIR) ] || exit 0; set -e; if [ -z "$(BOLTVERSION)" ]; then rm -rf $(LOCAL_BOLTDIR); ln -sf $(BOLTDIR) $(LOCAL_BOLTDIR); exit 0; fi; [ "$$(git -C $(LOCAL_BOLTDIR) rev-list --max-count=1 HEAD 2>/dev/null)" != "$(BOLTVERSION)" ] || exit 0; rm -rf $(LOCAL_BOLTDIR) && git clone -q $(BOLTDIR) $(LOCAL_BOLTDIR) && cd $(LOCAL_BOLTDIR) && git checkout -q $(BOLTVERSION)
 
 check-source-bolt: $(ALL_TEST_PROGRAMS:%=bolt-check/%.c)
-
-tools/check-bolt: tools/check-bolt.o $(CCAN_OBJS) common/utils.o
-
-tools/check-bolt.o: $(CCAN_HEADERS)
 
 check-whitespace/%: %
 	@if grep -Hn '[ 	]$$' $<; then echo Extraneous whitespace found >&2; exit 1; fi
@@ -311,7 +315,7 @@ check-includes:
 
 # cppcheck gets confused by list_for_each(head, i, list): thinks i is uninit.
 .cppcheck-suppress:
-	@git ls-files -- "*.c" "*.h" | grep -vE '^ccan/' | xargs grep -n 'list_for_each' | sed 's/\([^:]*:.*\):.*/uninitvar:\1/' > $@
+	@git ls-files -- "*.c" "*.h" | grep -vE '^ccan/' | xargs grep -n '_for_each' | sed 's/\([^:]*:.*\):.*/uninitvar:\1/' > $@
 
 check-cppcheck: .cppcheck-suppress
 	@trap 'rm -f .cppcheck-suppress' 0; git ls-files -- "*.c" "*.h" | grep -vE '^ccan/' | xargs cppcheck -q --language=c --std=c11 --error-exitcode=1 --suppressions-list=.cppcheck-suppress --inline-suppr
@@ -348,7 +352,7 @@ coverage: coverage/coverage.info
 # We make libwallycore.la a dependency, so that it gets built normally, without ncc.
 # Ncc can't handle the libwally source code (yet).
 ncc: external/libwally-core/src/libwallycore.la
-	make CC="ncc -ncgcc -ncld -ncfabs" AR=nccar LD=nccld
+	$(MAKE) CC="ncc -ncgcc -ncld -ncfabs" AR=nccar LD=nccld
 
 # Ignore test/ directories.
 TAGS: FORCE
@@ -364,10 +368,6 @@ ccan/ccan/cdump/tools/cdump-enumstr.o: $(CCAN_HEADERS) Makefile
 gen_version.h: FORCE
 	@(echo "#define VERSION \"$(VERSION)\"" && echo "#define BUILD_FEATURES \"$(FEATURES)\"") > $@.new
 	@if cmp $@.new $@ >/dev/null 2>&2; then rm -f $@.new; else mv $@.new $@; echo Version updated; fi
-
-# We force make to relink this every time, to detect version changes.
-tools/headerversions: FORCE tools/headerversions.o $(CCAN_OBJS)
-	@$(LINK.o) tools/headerversions.o $(CCAN_OBJS) $(LOADLIBES) $(LDLIBS) -o $@
 
 # That forces this rule to be run every time, too.
 gen_header_versions.h: tools/headerversions
@@ -420,19 +420,18 @@ maintainer-clean: distclean
 	@echo 'This command is intended for maintainers to use; it'
 	@echo 'deletes files that may need special tools to rebuild.'
 
-clean: wire-clean
+clean:
 	$(RM) $(CCAN_OBJS) $(CDUMP_OBJS) $(ALL_OBJS)
 	$(RM) $(ALL_PROGRAMS) $(ALL_PROGRAMS:=.o)
 	$(RM) $(ALL_TEST_PROGRAMS) $(ALL_TEST_PROGRAMS:=.o)
 	$(RM) gen_*.h ccan/tools/configurator/configurator
 	$(RM) ccan/ccan/cdump/tools/cdump-enumstr.o
-	$(RM) check-bolt tools/check-bolt tools/*.o
 	find . -name '*gcda' -delete
 	find . -name '*gcno' -delete
 	find . -name '*.nccout' -delete
 
 update-mocks/%: %
-	@tools/update-mocks.sh "$*"
+	@MAKE=$(MAKE) tools/update-mocks.sh "$*"
 
 unittest/%: %
 	$(VG) $(VG_TEST_ARGS) $* > /dev/null
@@ -449,6 +448,7 @@ mandir = $(datadir)/man
 man1dir = $(mandir)/man1
 man5dir = $(mandir)/man5
 man7dir = $(mandir)/man7
+man8dir = $(mandir)/man8
 
 # Commands
 MKDIR_P = mkdir -p
@@ -473,6 +473,7 @@ installdirs:
 	$(MKDIR_P) $(DESTDIR)$(man1dir)
 	$(MKDIR_P) $(DESTDIR)$(man5dir)
 	$(MKDIR_P) $(DESTDIR)$(man7dir)
+	$(MKDIR_P) $(DESTDIR)$(man8dir)
 	$(MKDIR_P) $(DESTDIR)$(docdir)
 
 # Programs to install in bindir and pkglibexecdir.
@@ -500,13 +501,15 @@ install-program: installdirs $(BIN_PROGRAMS) $(PKGLIBEXEC_PROGRAMS) $(PLUGINS)
 MAN1PAGES = $(filter %.1,$(MANPAGES))
 MAN5PAGES = $(filter %.5,$(MANPAGES))
 MAN7PAGES = $(filter %.7,$(MANPAGES))
+MAN8PAGES = $(filter %.8,$(MANPAGES))
 DOC_DATA = README.md doc/INSTALL.md doc/HACKING.md LICENSE
 
-install-data: installdirs $(MAN1PAGES) $(MAN5PAGES) $(MAN7PAGES) $(DOC_DATA)
+install-data: installdirs $(MAN1PAGES) $(MAN5PAGES) $(MAN7PAGES) $(MAN8PAGES) $(DOC_DATA)
 	@$(NORMAL_INSTALL)
 	$(INSTALL_DATA) $(MAN1PAGES) $(DESTDIR)$(man1dir)
 	$(INSTALL_DATA) $(MAN5PAGES) $(DESTDIR)$(man5dir)
 	$(INSTALL_DATA) $(MAN7PAGES) $(DESTDIR)$(man7dir)
+	$(INSTALL_DATA) $(MAN8PAGES) $(DESTDIR)$(man8dir)
 	$(INSTALL_DATA) $(DOC_DATA) $(DESTDIR)$(docdir)
 
 install: install-program install-data
@@ -536,6 +539,10 @@ uninstall:
 	@for f in $(MAN7PAGES); do \
 	  echo rm -f $(DESTDIR)$(man7dir)/`basename $$f`; \
 	  rm -f $(DESTDIR)$(man7dir)/`basename $$f`; \
+	done
+	@for f in $(MAN8PAGES); do \
+	  echo rm -f $(DESTDIR)$(man8dir)/`basename $$f`; \
+	  rm -f $(DESTDIR)$(man8dir)/`basename $$f`; \
 	done
 	@for f in $(DOC_DATA); do \
 	  echo rm -f $(DESTDIR)$(docdir)/`basename $$f`; \
@@ -596,8 +603,6 @@ ccan-opt-helpers.o: $(CCANDIR)/ccan/opt/helpers.c
 ccan-opt-parse.o: $(CCANDIR)/ccan/opt/parse.c
 	$(CC) $(CFLAGS) -c -o $@ $<
 ccan-opt-usage.o: $(CCANDIR)/ccan/opt/usage.c
-	$(CC) $(CFLAGS) -c -o $@ $<
-ccan-daemonize.o: $(CCANDIR)/ccan/daemonize/daemonize.c
 	$(CC) $(CFLAGS) -c -o $@ $<
 ccan-err.o: $(CCANDIR)/ccan/err/err.c
 	$(CC) $(CFLAGS) -c -o $@ $<

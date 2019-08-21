@@ -12,6 +12,8 @@
 #include <ccan/short_types/short_types.h>
 #include <ccan/structeq/structeq.h>
 #include <common/amount.h>
+#include <common/bigsize.h>
+#include <common/node_id.h>
 #include <secp256k1_recovery.h>
 #include <stdlib.h>
 
@@ -24,13 +26,18 @@ STRUCTEQ_DEF(channel_id, 0, id);
 struct bitcoin_blkid;
 struct bitcoin_signature;
 struct bitcoin_txid;
-struct node_id;
 struct preimage;
 struct ripemd160;
 struct siphash_seed;
 
 /* Makes generate-wire.py work */
 typedef char wirestring;
+typedef bigsize_t bigsize;
+
+/* FIXME: Some versions of spec using 'varint' for bigsize' */
+typedef bigsize varint;
+#define fromwire_varint fromwire_bigsize
+#define towire_varint towire_bigsize
 
 void derive_channel_id(struct channel_id *channel_id,
 		       const struct bitcoin_txid *txid, u16 txout);
@@ -66,10 +73,13 @@ void towire_u8(u8 **pptr, u8 v);
 void towire_u16(u8 **pptr, u16 v);
 void towire_u32(u8 **pptr, u32 v);
 void towire_u64(u8 **pptr, u64 v);
+void towire_tu16(u8 **pptr, u16 v);
+void towire_tu32(u8 **pptr, u32 v);
+void towire_tu64(u8 **pptr, u64 v);
 void towire_double(u8 **pptr, const double *v);
 void towire_pad(u8 **pptr, size_t num);
 void towire_bool(u8 **pptr, bool v);
-void towire_var_int(u8 **pptr, const u64 val);
+void towire_bigsize(u8 **pptr, const bigsize_t val);
 
 void towire_u8_array(u8 **pptr, const u8 *arr, size_t num);
 
@@ -84,9 +94,12 @@ u8 fromwire_u8(const u8 **cursor, size_t *max);
 u16 fromwire_u16(const u8 **cursor, size_t *max);
 u32 fromwire_u32(const u8 **cursor, size_t *max);
 u64 fromwire_u64(const u8 **cursor, size_t *max);
+u16 fromwire_tu16(const u8 **cursor, size_t *max);
+u32 fromwire_tu32(const u8 **cursor, size_t *max);
+u64 fromwire_tu64(const u8 **cursor, size_t *max);
 void fromwire_double(const u8 **cursor, size_t *max, double *v);
 bool fromwire_bool(const u8 **cursor, size_t *max);
-u64 fromwire_var_int(const u8 **cursor, size_t *max);
+bigsize_t fromwire_bigsize(const u8 **cursor, size_t *max);
 void fromwire_secret(const u8 **cursor, size_t *max, struct secret *secret);
 void fromwire_privkey(const u8 **cursor, size_t *max, struct privkey *privkey);
 void fromwire_pubkey(const u8 **cursor, size_t *max, struct pubkey *pubkey);

@@ -19,6 +19,7 @@ LIGHTNINGD_COMMON_OBJS :=			\
 	common/base32.o				\
 	common/bech32.o				\
 	common/bech32_util.o			\
+	common/bigsize.o			\
 	common/bip32.o				\
 	common/bolt11.o				\
 	common/channel_config.o			\
@@ -89,6 +90,7 @@ LIGHTNINGD_SRC :=				\
 	lightningd/peer_htlcs.c			\
 	lightningd/ping.c			\
 	lightningd/plugin.c			\
+	lightningd/plugin_control.c		\
 	lightningd/plugin_hook.c		\
 	lightningd/subd.c			\
 	lightningd/watch.c

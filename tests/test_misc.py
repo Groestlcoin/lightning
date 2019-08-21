@@ -1,7 +1,9 @@
+from bitcoin.rpc import RawProxy
 from fixtures import *  # noqa: F401,F403
 from flaky import flaky  # noqa: F401
 from lightning import RpcError
-from utils import DEVELOPER, VALGRIND, sync_blockheight, only_one, wait_for, TailableProc
+from threading import Event
+from utils import DEVELOPER, TIMEOUT, VALGRIND, sync_blockheight, only_one, wait_for, TailableProc
 from ephemeral_port_reserve import reserve
 
 import json
@@ -110,6 +112,94 @@ def test_bitcoin_failure(node_factory, bitcoind):
 
     bitcoind.generate_block(5)
     sync_blockheight(bitcoind, [l1])
+
+
+def test_bitcoin_ibd(node_factory, bitcoind):
+    """Test that we recognize bitcoin in initial download mode"""
+    info = bitcoind.rpc.getblockchaininfo()
+    info['initialblockdownload'] = True
+
+    l1 = node_factory.get_node(start=False)
+    l1.daemon.rpcproxy.mock_rpc('getblockchaininfo', info)
+
+    l1.start(wait_for_bitcoind_sync=False)
+
+    # This happens before the Starting message start() waits for.
+    assert l1.daemon.is_in_log('Waiting for initial block download')
+    assert 'warning_bitcoind_sync' in l1.rpc.getinfo()
+
+    # "Finish" IDB.
+    l1.daemon.rpcproxy.mock_rpc('getblockchaininfo', None)
+
+    l1.daemon.wait_for_log('Bitcoind now synced')
+    assert 'warning_bitcoind_sync' not in l1.rpc.getinfo()
+
+
+def test_lightningd_still_loading(node_factory, bitcoind, executor):
+    """Test that we recognize we haven't got all blocks from bitcoind"""
+
+    mock_release = Event()
+
+    # This is slow enough that we're going to notice.
+    def mock_getblock(r):
+        conf_file = os.path.join(bitcoind.bitcoin_dir, 'bitcoin.conf')
+        brpc = RawProxy(btc_conf_file=conf_file)
+        if r['params'][0] == slow_blockid:
+            mock_release.wait(TIMEOUT)
+        return {
+            "result": brpc._call(r['method'], *r['params']),
+            "error": None,
+            "id": r['id']
+        }
+
+    # Start it, establish channel, get extra funds.
+    l1, l2 = node_factory.line_graph(2, opts={'may_reconnect': True, 'wait_for_bitcoind_sync': False})
+    # Extra funds, for second channel attempt.
+    bitcoind.rpc.sendtoaddress(l1.rpc.newaddr()['bech32'], 1.0)
+    # Balance l1<->l2 channel
+    l1.pay(l2, 10**9 // 2)
+
+    l1.stop()
+
+    # Start extra node.
+    l3 = node_factory.get_node()
+
+    # Now make sure it's behind.
+    bitcoind.generate_block(2)
+    # Make sure l2/l3 are synced
+    sync_blockheight(bitcoind, [l2, l3])
+
+    # Make it slow grabbing the final block.
+    slow_blockid = bitcoind.rpc.getblockhash(bitcoind.rpc.getblockcount())
+    l1.daemon.rpcproxy.mock_rpc('getblock', mock_getblock)
+
+    l1.start(wait_for_bitcoind_sync=False)
+
+    # It will warn about being out-of-sync.
+    assert 'warning_bitcoind_sync' not in l1.rpc.getinfo()
+    assert 'warning_lightningd_sync' in l1.rpc.getinfo()
+
+    # Payments will fail.  FIXME: More informative msg?
+    with pytest.raises(RpcError, match=r'TEMPORARY_CHANNEL_FAILURE'):
+        l1.pay(l2, 1000)
+
+    # Can't fund a new channel, either.
+    l1.rpc.connect(l3.info['id'], 'localhost', l3.port)
+    with pytest.raises(RpcError, match=r'304'):
+        l1.rpc.fundchannel(l3.info['id'], 'all')
+
+    # This will work, but will be delayed until synced.
+    fut = executor.submit(l2.pay, l1, 1000)
+    l1.daemon.wait_for_log("Deferring incoming commit until we sync")
+
+    # Release the mock.
+    mock_release.set()
+    fut.result()
+
+    assert 'warning_lightningd_sync' not in l1.rpc.getinfo()
+
+    # This will now work normally.
+    l1.pay(l2, 1000)
 
 
 def test_ping(node_factory):
@@ -522,14 +612,14 @@ def test_multiplexed_rpc(node_factory):
 
     # Neighbouring ones may be in or out of order.
     commands = [
-        b'{"id":1,"jsonrpc":"2.0","method":"dev-slowcmd","params":[2000]}',
-        b'{"id":1,"jsonrpc":"2.0","method":"dev-slowcmd","params":[2000]}',
-        b'{"id":2,"jsonrpc":"2.0","method":"dev-slowcmd","params":[1500]}',
-        b'{"id":2,"jsonrpc":"2.0","method":"dev-slowcmd","params":[1500]}',
-        b'{"id":3,"jsonrpc":"2.0","method":"dev-slowcmd","params":[1000]}',
-        b'{"id":3,"jsonrpc":"2.0","method":"dev-slowcmd","params":[1000]}',
-        b'{"id":4,"jsonrpc":"2.0","method":"dev-slowcmd","params":[500]}',
-        b'{"id":4,"jsonrpc":"2.0","method":"dev-slowcmd","params":[500]}'
+        b'{"id":1,"jsonrpc":"2.0","method":"dev","params":["slowcmd",2000]}',
+        b'{"id":1,"jsonrpc":"2.0","method":"dev","params":["slowcmd",2000]}',
+        b'{"id":2,"jsonrpc":"2.0","method":"dev","params":["slowcmd",1500]}',
+        b'{"id":2,"jsonrpc":"2.0","method":"dev","params":["slowcmd",1500]}',
+        b'{"id":3,"jsonrpc":"2.0","method":"dev","params":["slowcmd",1000]}',
+        b'{"id":3,"jsonrpc":"2.0","method":"dev","params":["slowcmd",1000]}',
+        b'{"id":4,"jsonrpc":"2.0","method":"dev","params":["slowcmd",500]}',
+        b'{"id":4,"jsonrpc":"2.0","method":"dev","params":["slowcmd",500]}'
     ]
 
     sock.sendall(b'\n'.join(commands))
@@ -674,6 +764,20 @@ def test_cli(node_factory):
     j = json.loads(out)
     assert only_one(j['invoices'])['label'] == 'l"[]{}'
 
+    # For those using shell scripts (you know who you are Rene), make sure we're maintaining whitespace
+    lines = [l for l in out.splitlines() if '"bolt11"' not in l and '"payment_hash"' not in l and '"expires_at"' not in l]
+    assert lines == ['{',
+                     '   "invoices": [',
+                     '      {',
+                     r'         "label": "l\"[]{}",',
+                     '         "msatoshi": 123000,',
+                     '         "amount_msat": "123000msat",',
+                     '         "status": "unpaid",',
+                     r'         "description": "d\"[]{}",',
+                     '      }',
+                     '   ]',
+                     '}']
+
 
 def test_daemon_option(node_factory):
     """
@@ -698,6 +802,10 @@ def test_daemon_option(node_factory):
     subprocess.run(['cli/lightning-cli',
                     '--lightning-dir={}'.format(l1.daemon.lightning_dir),
                     'stop'], check=True)
+
+    # It should not complain that subdaemons aren't children.
+    with open('{}/log-daemon'.format(l1.daemon.lightning_dir), 'r') as f:
+        assert 'No child process' not in f.read()
 
 
 @flaky
@@ -948,7 +1056,7 @@ def test_htlc_send_timeout(node_factory, bitcoind):
     assert not l2.daemon.is_in_log(r'channeld.*:\[IN\] 0013')
     assert not l2.daemon.is_in_log(r'channeld.*:\[OUT\] 0084')
     # L2 killed the channel with l3 because it was too slow.
-    l2.daemon.wait_for_log('channeld-{}.*Adding HTLC too slow: killing channel'.format(l3.info['id']))
+    l2.daemon.wait_for_log('channeld-{}.*Adding HTLC too slow: killing connection'.format(l3.info['id']))
 
 
 def test_ipv4_and_ipv6(node_factory):
@@ -1060,7 +1168,7 @@ def test_logging(node_factory):
 @unittest.skipIf(VALGRIND,
                  "Valgrind sometimes fails assert on injected SEGV")
 def test_crashlog(node_factory):
-    l1 = node_factory.get_node(may_fail=True)
+    l1 = node_factory.get_node(may_fail=True, allow_broken_log=True)
 
     def has_crash_log(n):
         files = os.listdir(n.daemon.lightning_dir)
@@ -1276,3 +1384,70 @@ def test_bitcoind_fail_first(node_factory, bitcoind, executor):
     l1.daemon.rpcproxy.mock_rpc('estimatesmartfee', None)
 
     f.result()
+
+
+@unittest.skipIf(not DEVELOPER, "needs --dev-force-bip32-seed")
+def test_dev_force_bip32_seed(node_factory):
+    l1 = node_factory.get_node(options={'dev-force-bip32-seed': '0000000000000000000000000000000000000000000000000000000000000001'})
+    # First is m/0/0/1 ..
+    bech32 = l1.rpc.newaddr('bech32')['bech32']
+    assert bech32 == "bcrt1qsdzqt93xsyewdjvagndw9523m27e52er5ca7hm"
+    bech32 = l1.rpc.newaddr('bech32')['bech32']
+    assert bech32 == "bcrt1qlkt93775wmf33uacykc49v2j4tayn0yj25msjn"
+    bech32 = l1.rpc.newaddr('bech32')['bech32']
+    assert bech32 == "bcrt1q2ng546gs0ylfxrvwx0fauzcvhuz655en4kwe2c"
+    bech32 = l1.rpc.newaddr('bech32')['bech32']
+    assert bech32 == "bcrt1qrdpwrlrmrnvn535l5eldt64lxm8r2nwkv0ruxq"
+    bech32 = l1.rpc.newaddr('bech32')['bech32']
+    assert bech32 == "bcrt1q622lwmdzxxterumd746eu3d3t40pq53p62zhlz"
+
+
+@unittest.skipIf(not DEVELOPER, "needs dev command")
+def test_dev_demux(node_factory):
+    l1 = node_factory.get_node(may_fail=True, allow_broken_log=True)
+
+    # Check should work.
+    l1.rpc.check(command_to_check='dev', subcommand='crash')
+    l1.rpc.check(command_to_check='dev', subcommand='slowcmd', msec=1000)
+    l1.rpc.check(command_to_check='dev', subcommand='rhash', secret='00' * 32)
+    with pytest.raises(RpcError, match=r'Unknown subcommand'):
+        l1.rpc.check(command_to_check='dev', subcommand='foobar')
+    with pytest.raises(RpcError, match=r'unknown parameter'):
+        l1.rpc.check(command_to_check='dev', subcommand='crash', unk=1)
+    with pytest.raises(RpcError, match=r"'msec' should be an integer"):
+        l1.rpc.check(command_to_check='dev', subcommand='slowcmd', msec='aaa')
+    with pytest.raises(RpcError, match=r'missing required parameter'):
+        l1.rpc.check(command_to_check='dev', subcommand='rhash')
+    with pytest.raises(RpcError, match=r'missing required parameter'):
+        l1.rpc.check(command_to_check='dev')
+
+    # Non-check failures should fail, in both object and array form.
+    with pytest.raises(RpcError, match=r'Unknown subcommand'):
+        l1.rpc.call('dev', {'subcommand': 'foobar'})
+    with pytest.raises(RpcError, match=r'Unknown subcommand'):
+        l1.rpc.call('dev', ['foobar'])
+    with pytest.raises(RpcError, match=r'unknown parameter'):
+        l1.rpc.call('dev', {'subcommand': 'crash', 'unk': 1})
+    with pytest.raises(RpcError, match=r'too many parameters'):
+        l1.rpc.call('dev', ['crash', 1])
+    with pytest.raises(RpcError, match=r"'msec' should be an integer"):
+        l1.rpc.call('dev', {'subcommand': 'slowcmd', 'msec': 'aaa'})
+    with pytest.raises(RpcError, match=r"'msec' should be an integer"):
+        l1.rpc.call('dev', ['slowcmd', 'aaa'])
+    with pytest.raises(RpcError, match=r'missing required parameter'):
+        l1.rpc.call('dev', {'subcommand': 'rhash'})
+    with pytest.raises(RpcError, match=r'missing required parameter'):
+        l1.rpc.call('dev', ['rhash'])
+    with pytest.raises(RpcError, match=r'missing required parameter'):
+        l1.rpc.call('dev')
+
+    # Help should list them all.
+    assert 'subcommand=crash|rhash|slowcmd' in l1.rpc.help('dev')['help'][0]['command']
+
+    # These work
+    assert l1.rpc.call('dev', ['slowcmd', '7'])['msec'] == 7
+    assert l1.rpc.call('dev', {'subcommand': 'slowcmd', 'msec': '7'})['msec'] == 7
+    assert l1.rpc.call('dev', {'subcommand': 'rhash', 'secret': '00' * 32})['rhash'] == '66687aadf862bd776c8fc18b8e9f8e20089714856ee233b3902a591d0d5f2925'
+
+    with pytest.raises(RpcError):
+        l1.rpc.call('dev', {'subcommand': 'crash'})

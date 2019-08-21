@@ -120,7 +120,7 @@ static const u8 *dev_upfront_shutdown_script(const tal_t *ctx)
 /*~ If we can't agree on parameters, we fail to open the channel.  If we're
  * the funder, we need to tell lightningd, otherwise it never really notices. */
 static void negotiation_aborted(struct state *state, bool am_funder,
-				const char *why, bool is_err)
+				const char *why)
 {
 	status_debug("aborted opening negotiation: %s", why);
 	/*~ The "billboard" (exposed as "status" in the JSON listpeers RPC
@@ -133,7 +133,7 @@ static void negotiation_aborted(struct state *state, bool am_funder,
 
 	/* If necessary, tell master that funding failed. */
 	if (am_funder) {
-		u8 *msg = towire_opening_funder_failed(NULL, why, is_err);
+		u8 *msg = towire_opening_funder_failed(NULL, why);
 		wire_sync_write(REQ_FD, take(msg));
 	}
 
@@ -159,7 +159,7 @@ static void negotiation_failed(struct state *state, bool am_funder,
 			      "You gave bad parameters: %s", errmsg);
 	sync_crypto_write(state->pps, take(msg));
 
-	negotiation_aborted(state, am_funder, errmsg, true);
+	negotiation_aborted(state, am_funder, errmsg);
 }
 
 /*~ This is the key function that checks that their configuration is reasonable:
@@ -312,11 +312,11 @@ static bool check_config_bounds(struct state *state,
 	return true;
 }
 
-/* We always set channel_reserve_satoshis to 1%, rounded up. */
+/* We always set channel_reserve_satoshis to 1%, rounded down. */
 static void set_reserve(struct state *state)
 {
 	state->localconf.channel_reserve.satoshis  /* Raw: rounding. */
-		= (state->funding.satoshis + 99) / 100;   /* Raw: rounding. */
+		= state->funding.satoshis / 100;   /* Raw: rounding. */
 
 	/* BOLT #2:
 	 *
@@ -367,6 +367,7 @@ static u8 *opening_negotiate_msg(const tal_t *ctx, struct state *state,
 
 		/* This helper routine polls both the peer and gossipd. */
 		msg = peer_or_gossip_sync_read(ctx, state->pps, &from_gossipd);
+
 		/* Use standard helper for gossip msgs (forwards, if it's an
 		 * error, exits). */
 		if (from_gossipd) {
@@ -379,6 +380,15 @@ static u8 *opening_negotiate_msg(const tal_t *ctx, struct state *state,
 			wire_sync_write(state->pps->gossip_fd, take(msg));
 			continue;
 		}
+
+		/* BOLT #1:
+		 *
+		 * A receiving node:
+		 *   - upon receiving a message of _odd_, unknown type:
+		 *     - MUST ignore the received message.
+		 */
+		if (is_unknown_msg_discardable(msg))
+			continue;
 
 		/* Might be a timestamp filter request: handle. */
 		if (handle_timestamp_filter(state->pps, msg))
@@ -403,8 +413,7 @@ static u8 *opening_negotiate_msg(const tal_t *ctx, struct state *state,
 			if (all_channels) {
 				if (am_funder) {
 					msg = towire_opening_funder_failed(NULL,
-									   err,
-									   true);
+									   err);
 					wire_sync_write(REQ_FD, take(msg));
 				}
 				peer_failed_received_errmsg(state->pps, err,
@@ -412,8 +421,7 @@ static u8 *opening_negotiate_msg(const tal_t *ctx, struct state *state,
 			}
 			negotiation_aborted(state, am_funder,
 					    tal_fmt(tmpctx, "They sent error %s",
-						    err),
-					    true);
+						    err));
 			/* Return NULL so caller knows to stop negotiating. */
 			return NULL;
 		}
@@ -1071,7 +1079,7 @@ static u8 *funder_channel(struct state *state,
 	 * it; lightningd will recreate it (and have the HSM sign it) when
 	 * we've completed opening negotiation.
 	 */
-	funding = funding_tx(state, &state->funding_txout,
+	funding = funding_tx(state, state->chainparams, &state->funding_txout,
 			     cast_const2(const struct utxo **, utxos),
 			     state->funding,
 			     &state->our_funding_pubkey,
@@ -1523,45 +1531,13 @@ static u8 *handle_peer_in(struct state *state)
 	enum wire_type t = fromwire_peektype(msg);
 	struct channel_id channel_id;
 
-	switch (t) {
-	case WIRE_OPEN_CHANNEL:
+	if (t == WIRE_OPEN_CHANNEL)
 		return fundee_channel(state, msg);
 
-	/* These are handled by handle_peer_gossip_or_error. */
-	case WIRE_PING:
-	case WIRE_PONG:
-	case WIRE_CHANNEL_ANNOUNCEMENT:
-	case WIRE_NODE_ANNOUNCEMENT:
-	case WIRE_CHANNEL_UPDATE:
-	case WIRE_QUERY_SHORT_CHANNEL_IDS:
-	case WIRE_REPLY_SHORT_CHANNEL_IDS_END:
-	case WIRE_QUERY_CHANNEL_RANGE:
-	case WIRE_REPLY_CHANNEL_RANGE:
-	case WIRE_GOSSIP_TIMESTAMP_FILTER:
-	case WIRE_ERROR:
-	case WIRE_CHANNEL_REESTABLISH:
-	/* These are all protocol violations at this stage. */
-	case WIRE_INIT:
-	case WIRE_ACCEPT_CHANNEL:
-	case WIRE_FUNDING_CREATED:
-	case WIRE_FUNDING_SIGNED:
-	case WIRE_FUNDING_LOCKED:
-	case WIRE_SHUTDOWN:
-	case WIRE_CLOSING_SIGNED:
-	case WIRE_UPDATE_ADD_HTLC:
-	case WIRE_UPDATE_FULFILL_HTLC:
-	case WIRE_UPDATE_FAIL_HTLC:
-	case WIRE_UPDATE_FAIL_MALFORMED_HTLC:
-	case WIRE_COMMITMENT_SIGNED:
-	case WIRE_REVOKE_AND_ACK:
-	case WIRE_UPDATE_FEE:
-	case WIRE_ANNOUNCEMENT_SIGNATURES:
-		/* Standard cases */
-		if (handle_peer_gossip_or_error(state->pps,
-						&state->channel_id, msg))
-			return NULL;
-		break;
-	}
+	/* Handles standard cases, and legal unknown ones. */
+	if (handle_peer_gossip_or_error(state->pps,
+					&state->channel_id, msg))
+		return NULL;
 
 	sync_crypto_write(state->pps,
 			  take(towire_errorfmt(NULL,
@@ -1690,8 +1666,7 @@ static u8 *handle_master_in(struct state *state)
 
 		msg = towire_errorfmt(NULL, &state->channel_id, "Channel open canceled by us");
 		sync_crypto_write(state->pps, take(msg));
-		negotiation_aborted(state, true,
-				    "Channel open canceled by RPC", false);
+		negotiation_aborted(state, true, "Channel open canceled by RPC");
 		return NULL;
 	case WIRE_OPENING_DEV_MEMLEAK:
 #if DEVELOPER

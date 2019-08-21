@@ -134,13 +134,11 @@ static void broadcast_remainder(struct bitcoind *bitcoind,
 {
 	/* These are expected. */
 	if (strstr(msg, "txn-mempool-conflict")
-	    || strstr(msg, "transaction already in block chain"))
+	    || strstr(msg, "transaction already in block chain")
+	    || exitstatus)
 		log_debug(bitcoind->log,
 			  "Expected error broadcasting tx %s: %s",
 			  txs->txs[txs->cursor], msg);
-	else if (exitstatus)
-		log_unusual(bitcoind->log, "Broadcasting tx %s: %i %s",
-			    txs->txs[txs->cursor], exitstatus, msg);
 
 	txs->cursor++;
 	if (txs->cursor == tal_count(txs->txs)) {
@@ -561,6 +559,31 @@ static void next_updatefee_timer(struct chain_topology *topo)
 			     start_fee_estimate, topo));
 }
 
+struct sync_waiter {
+	/* Linked from chain_topology->sync_waiters */
+	struct list_node list;
+	void (*cb)(struct chain_topology *topo, void *arg);
+	void *arg;
+};
+
+static void destroy_sync_waiter(struct sync_waiter *waiter)
+{
+	list_del(&waiter->list);
+}
+
+void topology_add_sync_waiter_(const tal_t *ctx,
+			       struct chain_topology *topo,
+			       void (*cb)(struct chain_topology *topo,
+					  void *arg),
+			       void *arg)
+{
+	struct sync_waiter *w = tal(ctx, struct sync_waiter);
+	w->cb = cb;
+	w->arg = arg;
+	list_add_tail(topo->sync_waiters, &w->list);
+	tal_add_destructor(w, destroy_sync_waiter);
+}
+
 /* Once we're run out of new blocks to add, call this. */
 static void updates_complete(struct chain_topology *topo)
 {
@@ -579,6 +602,23 @@ static void updates_complete(struct chain_topology *topo)
 			      "last_processed_block", topo->tip->height);
 
 		topo->prev_tip = topo->tip;
+	}
+
+	/* If bitcoind is synced, we're now synced. */
+	if (topo->bitcoind->synced && !topology_synced(topo)) {
+		struct sync_waiter *w;
+		struct list_head *list = topo->sync_waiters;
+
+		/* Mark topology_synced() before callbacks. */
+		topo->sync_waiters = NULL;
+
+		while ((w = list_pop(list, struct sync_waiter, list))) {
+			/* In case it doesn't free itself. */
+			tal_del_destructor(w, destroy_sync_waiter);
+			tal_steal(list, w);
+			w->cb(topo, w->arg);
+		}
+		tal_free(list);
 	}
 
 	/* Try again soon. */
@@ -709,6 +749,12 @@ static void have_new_block(struct bitcoind *bitcoind UNUSED,
 			   struct bitcoin_block *blk,
 			   struct chain_topology *topo)
 {
+	const struct chainparams *chainparams = get_chainparams(topo->ld);
+	/* Annotate all transactions with the chainparams */
+	for (size_t i=0; i<tal_count(blk->tx); i++)
+		blk->tx[i]->chainparams = chainparams;
+
+
 	/* Unexpected predecessor?  Free predecessor, refetch it. */
 	if (!bitcoin_blkid_eq(&topo->tip->blkid, &blk->hdr.prev_hash))
 		remove_tip(topo);
@@ -881,6 +927,11 @@ static void destroy_chain_topology(struct chain_topology *topo)
 
 	while ((otx = list_pop(&topo->outgoing_txs, struct outgoing_tx, list)))
 		tal_free(otx);
+
+	/* htable uses malloc, so it would leak here */
+	txwatch_hash_clear(&topo->txwatches);
+	txowatch_hash_clear(&topo->txowatches);
+	block_map_clear(&topo->block_map);
 }
 
 struct chain_topology *new_topology(struct lightningd *ld, struct log *log)
@@ -907,12 +958,16 @@ void setup_topology(struct chain_topology *topo,
 {
 	memset(&topo->feerate, 0, sizeof(topo->feerate));
 	topo->timers = timers;
+	topo->sync_waiters = tal(topo, struct list_head);
+	list_head_init(topo->sync_waiters);
 
 	topo->min_blockheight = min_blockheight;
 	topo->max_blockheight = max_blockheight;
 
 	/* Make sure groestlcoind is started, and ready */
 	wait_for_bitcoind(topo->bitcoind);
+
+	bitcoind_getclientversion(topo->bitcoind);
 
 	bitcoind_getblockcount(topo->bitcoind, get_init_blockhash, topo);
 

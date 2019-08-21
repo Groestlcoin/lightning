@@ -88,6 +88,9 @@ struct funding_channel {
 
 	/* Whether or not this is in the middle of getting funded */
 	bool inflight;
+
+	/* Any commands trying to cancel us. */
+	struct command **cancels;
 };
 
 static void uncommitted_channel_disconnect(struct uncommitted_channel *uc,
@@ -96,7 +99,7 @@ static void uncommitted_channel_disconnect(struct uncommitted_channel *uc,
 	u8 *msg = towire_connectctl_peer_disconnected(tmpctx, &uc->peer->id);
 	log_info(uc->log, "%s", desc);
 	subd_send_msg(uc->peer->ld->connectd, msg);
-	if (uc->fc)
+	if (uc->fc && uc->fc->cmd)
 		was_pending(command_fail(uc->fc->cmd, LIGHTNINGD, "%s", desc));
 	notify_disconnect(uc->peer->ld, &uc->peer->id);
 }
@@ -265,6 +268,11 @@ static void funding_success(struct channel *channel)
 	struct funding_channel *fc = channel->peer->uncommitted_channel->fc;
 	struct command *cmd = fc->cmd;
 
+	/* Well, those cancels didn't work! */
+	for (size_t i = 0; i < tal_count(fc->cancels); i++)
+		was_pending(command_fail(fc->cancels[i], LIGHTNINGD,
+					 "Funding succeeded before cancel"));
+
 	response = json_stream_success(cmd);
 	json_add_string(response, "channel_id",
 			type_to_string(tmpctx, struct channel_id, &fc->cid));
@@ -312,6 +320,9 @@ static void funding_started_success(struct funding_channel *fc,
 					  scriptPubkey);
 	if (out)
 		json_add_string(response, "funding_address", out);
+
+	/* Clear this so cancel doesn't think it's still in progress */
+	fc->cmd = NULL;
 	was_pending(command_success(cmd, response));
 }
 
@@ -359,6 +370,7 @@ static bool compose_and_broadcast_tx(struct lightningd *ld,
 	struct bitcoin_tx *fundingtx;
 	struct amount_sat change;
 	struct bitcoin_txid funding_txid;
+	const struct chainparams *chainparams = get_chainparams(ld);
 
 	/* Generate the funding tx. */
 	if (!amount_sat_eq(fc->wtx->change, AMOUNT_SAT(0))
@@ -366,7 +378,7 @@ static bool compose_and_broadcast_tx(struct lightningd *ld,
 			     &changekey, fc->wtx->change_key_index))
 		fatal("Error deriving change key %u", fc->wtx->change_key_index);
 
-	fundingtx = funding_tx(tmpctx, &funding_outnum,
+	fundingtx = funding_tx(tmpctx, chainparams, &funding_outnum,
 			       fc->wtx->utxos, fc->wtx->amount,
 			       &fc->uc->local_funding_pubkey,
 			       &channel_info->remote_fundingkey,
@@ -442,6 +454,7 @@ static bool compose_and_broadcast_tx(struct lightningd *ld,
 	if (!fromwire_hsm_sign_funding_reply(tmpctx, msg, &fundingtx))
 		fatal("HSM gave bad sign_funding_reply %s",
 		      tal_hex(msg, resp));
+	fundingtx->chainparams = chainparams;
 
 	/* Extract the change output and add it to the DB */
 	wallet_extract_owned_outputs(ld->wallet, fundingtx, NULL, &change);
@@ -509,6 +522,7 @@ static void opening_funder_finished(struct subd *openingd, const u8 *resp,
 					 tal_hex(fc->cmd, resp)));
 		goto cleanup;
 	}
+	remote_commit->chainparams = get_chainparams(openingd->ld);
 	per_peer_state_set_fds_arr(pps, fds);
 
 	log_debug(ld->log,
@@ -616,6 +630,8 @@ static void opening_fundee_finished(struct subd *openingd,
 		uncommitted_channel_disconnect(uc, "bad OPENING_FUNDEE_REPLY");
 		goto failed;
 	}
+
+	remote_commit->chainparams = get_chainparams(openingd->ld);
 	per_peer_state_set_fds_arr(pps, fds);
 
 	/* openingd should never accept them funding channel in this case. */
@@ -648,6 +664,10 @@ static void opening_fundee_finished(struct subd *openingd,
 
 	channel_watch_funding(ld, channel);
 
+	/* Tell plugins about the success */
+	notify_channel_opened(ld, &channel->peer->id, &channel->funding,
+			   &channel->funding_txid, &channel->remote_funding_locked);
+
 	/* On to normal operation! */
 	peer_start_channeld(channel, pps, funding_signed, false);
 
@@ -667,11 +687,8 @@ static void opening_funder_failed(struct subd *openingd, const u8 *msg,
 				  struct uncommitted_channel *uc)
 {
 	char *desc;
-	bool is_err;
 
-	struct json_stream *response;
-
-	if (!fromwire_opening_funder_failed(msg, msg, &desc, &is_err)) {
+	if (!fromwire_opening_funder_failed(msg, msg, &desc)) {
 		log_broken(uc->log,
 			   "bad OPENING_FUNDER_FAILED %s",
 			   tal_hex(tmpctx, msg));
@@ -682,13 +699,18 @@ static void opening_funder_failed(struct subd *openingd, const u8 *msg,
 		return;
 	}
 
-	if (is_err)
-		was_pending(command_fail(uc->fc->cmd, LIGHTNINGD, "%s", desc));
-	else {
-		response = json_stream_success(uc->fc->cmd);
+	/* Tell anyone who was trying to cancel */
+	for (size_t i = 0; i < tal_count(uc->fc->cancels); i++) {
+		struct json_stream *response;
+
+		response = json_stream_success(uc->fc->cancels[i]);
 		json_add_string(response, "cancelled", desc);
-		was_pending(command_success(uc->fc->cmd, response));
+		was_pending(command_success(uc->fc->cancels[i], response));
 	}
+
+	/* Tell any fundchannel_complete or fundchannel command */
+	if (uc->fc->cmd)
+		was_pending(command_fail(uc->fc->cmd, LIGHTNINGD, "%s", desc));
 
 	/* Clear uc->fc, so we can try again, and so we don't fail twice
 	 * if they close. */
@@ -699,6 +721,7 @@ static void opening_channel_errmsg(struct uncommitted_channel *uc,
 				   struct per_peer_state *pps,
 				   const struct channel_id *channel_id UNUSED,
 				   const char *desc,
+				   bool soft_error UNUSED,
 				   const u8 *err_for_them UNUSED)
 {
 	/* Close fds, if any. */
@@ -812,13 +835,7 @@ static void channel_config(struct lightningd *ld,
 	 */
 	 ours->to_self_delay = ld->config.locktime_blocks;
 
-	 /* BOLT #2:
-	  *
-	  * The receiving node MUST fail the channel if:
-	  *...
-	  *   - `max_accepted_htlcs` is greater than 483.
-	  */
-	 ours->max_accepted_htlcs = 483;
+	 ours->max_accepted_htlcs = ld->config.max_concurrent_htlcs;
 
 	 /* This is filled in by lightning_openingd, for consistency. */
 	 ours->channel_reserve = AMOUNT_SAT(UINT64_MAX);
@@ -992,7 +1009,7 @@ static unsigned int openingd_msg(struct subd *openingd,
 		return 0;
 	case WIRE_OPENING_FUNDER_FAILED:
 		if (!uc->fc) {
-			log_broken(openingd->log, "Unexpected FUNDER_FAILED %s",
+			log_unusual(openingd->log, "Unexpected FUNDER_FAILED %s",
 				   tal_hex(tmpctx, msg));
 			tal_free(openingd);
 			return 0;
@@ -1133,8 +1150,10 @@ static struct command_result *json_fund_channel_complete(struct command *cmd,
 
 	if (!peer->uncommitted_channel->fc || !peer->uncommitted_channel->fc->inflight)
 		return command_fail(cmd, LIGHTNINGD, "No channel funding in progress.");
+	if (peer->uncommitted_channel->fc->cmd)
+		return command_fail(cmd, LIGHTNINGD, "Channel funding in progress.");
 
-	/* Update the cmd to the new cmd */
+	/* Set the cmd to this new cmd */
 	peer->uncommitted_channel->fc->cmd = cmd;
 	msg = towire_opening_funder_complete(NULL,
 					     funding_txid,
@@ -1195,8 +1214,8 @@ static struct command_result *json_fund_channel_cancel(struct command *cmd,
 	 * question about 'how long cancelable'.
 	 */
 
-	/* Update the cmd to the new cmd */
-	peer->uncommitted_channel->fc->cmd = cmd;
+	/* Make sure this gets notified if we succeed or cancel */
+	tal_arr_expand(&peer->uncommitted_channel->fc->cancels, cmd);
 	msg = towire_opening_funder_cancel(NULL);
 	subd_send_msg(peer->uncommitted_channel->openingd, take(msg));
 	return command_still_pending(cmd);
@@ -1222,6 +1241,7 @@ static struct command_result *json_fund_channel_start(struct command *cmd,
 
 	max_funding_satoshi = get_chainparams(cmd->ld)->max_funding;
 	fc->cmd = cmd;
+	fc->cancels = tal_arr(fc, struct command *, 0);
 	fc->uc = NULL;
 	fc->inflight = false;
 	if (!param(fc->cmd, buffer, params,
@@ -1251,6 +1271,11 @@ static struct command_result *json_fund_channel_start(struct command *cmd,
 	if (*feerate_per_kw < feerate_floor()) {
 		return command_fail(cmd, LIGHTNINGD,
 				    "Feerate below feerate floor");
+	}
+
+	if (!topology_synced(cmd->ld->topology)) {
+		return command_fail(cmd, FUNDING_STILL_SYNCING_BITCOIN,
+				    "Still syncing with bitcoin network");
 	}
 
 	peer = peer_by_id(cmd->ld, id);
@@ -1316,6 +1341,7 @@ static struct command_result *json_fund_channel(struct command *cmd,
 	max_funding_satoshi = get_chainparams(cmd->ld)->max_funding;
 
 	fc->cmd = cmd;
+	fc->cancels = tal_arr(fc, struct command *, 0);
 	fc->uc = NULL;
 	fc->inflight = false;
 	fc->wtx = tal(fc, struct wallet_tx);
@@ -1342,6 +1368,11 @@ static struct command_result *json_fund_channel(struct command *cmd,
 	if (*feerate_per_kw < feerate_floor()) {
 		return command_fail(cmd, LIGHTNINGD,
 				    "Feerate below feerate floor");
+	}
+
+	if (!topology_synced(cmd->ld->topology)) {
+		return command_fail(cmd, FUNDING_STILL_SYNCING_BITCOIN,
+				    "Still syncing with bitcoin network");
 	}
 
 	peer = peer_by_id(cmd->ld, id);

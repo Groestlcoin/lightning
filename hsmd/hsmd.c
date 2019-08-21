@@ -72,6 +72,13 @@ static struct {
  * so set it static.*/
 static struct  bip32_key_version  bip32_key_version;
 
+#if DEVELOPER
+/* If they specify --dev-force-privkey it ends up in here. */
+static struct privkey *dev_force_privkey;
+/* If they specify --dev-force-bip32-seed it ends up in here. */
+static struct secret *dev_force_bip32_seed;
+#endif
+
 /*~ We keep track of clients, but there's not much to keep. */
 struct client {
 	/* The ccan/io async io connection for this client: it closes, we die. */
@@ -95,6 +102,9 @@ struct client {
 
 	/* What is this client allowed to ask for? */
 	u64 capabilities;
+
+	/* Params to apply to all transactions for this client */
+	const struct chainparams *chainparams;
 };
 
 /*~ We keep a map of nonzero dbid -> clients, mainly for leak detection.
@@ -199,6 +209,7 @@ static void destroy_client(struct client *c)
 }
 
 static struct client *new_client(const tal_t *ctx,
+				 const struct chainparams *chainparams,
 				 const struct node_id *id,
 				 u64 dbid,
 				 const u64 capabilities,
@@ -220,6 +231,8 @@ static struct client *new_client(const tal_t *ctx,
 	c->dbid = dbid;
 
 	c->capabilities = capabilities;
+	c->chainparams = chainparams;
+
 	/*~ This is the core of ccan/io: the connection creation calls a
 	 * callback which returns the initial plan to execute: in our case,
 	 * read a message.*/
@@ -314,6 +327,17 @@ static void node_key(struct privkey *node_privkey, struct pubkey *node_id)
 		salt++;
 	} while (!secp256k1_ec_pubkey_create(secp256k1_ctx, &node_id->pubkey,
 					     node_privkey->secret.data));
+
+#if DEVELOPER
+	/* In DEVELOPER mode, we can override with --dev-force-privkey */
+	if (dev_force_privkey) {
+		*node_privkey = *dev_force_privkey;
+		if (!secp256k1_ec_pubkey_create(secp256k1_ctx, &node_id->pubkey,
+						node_privkey->secret.data))
+			status_failed(STATUS_FAIL_INTERNAL_ERROR,
+				      "Failed to derive pubkey for dev_force_privkey");
+	}
+#endif
 }
 
 /*~ This secret is the basis for all per-channel secrets: the per-channel seeds
@@ -386,6 +410,18 @@ static void populate_secretstuff(void)
 	} while (bip32_key_from_seed(bip32_seed, sizeof(bip32_seed),
 				     bip32_key_version.bip32_privkey_version,
 				     0, &master_extkey) != WALLY_OK);
+
+#if DEVELOPER
+	/* In DEVELOPER mode, we can override with --dev-force-bip32-seed */
+	if (dev_force_bip32_seed) {
+		if (bip32_key_from_seed(dev_force_bip32_seed->data,
+					sizeof(dev_force_bip32_seed->data),
+					bip32_key_version.bip32_privkey_version,
+					0, &master_extkey) != WALLY_OK)
+			status_failed(STATUS_FAIL_INTERNAL_ERROR,
+				      "Can't derive bip32 master key");
+	}
+#endif /* DEVELOPER */
 
 	/* BIP 32:
 	 *
@@ -540,6 +576,11 @@ static struct io_plan *init_hsm(struct io_conn *conn,
 {
 	struct node_id node_id;
 	struct pubkey key;
+	struct privkey *privkey;
+	struct secret *seed;
+	struct secrets *secrets;
+	struct sha256 *shaseed;
+	struct bitcoin_blkid chain_hash;
 
 	/* This must be lightningd. */
 	assert(is_lightningd(c));
@@ -548,9 +589,20 @@ static struct io_plan *init_hsm(struct io_conn *conn,
 	 * definitions in hsm_client_wire.csv.  The format of those files is
 	 * an extension of the simple comma-separated format output by the
 	 * BOLT tools/extract-formats.py tool. */
-	if (!fromwire_hsm_init(msg_in, &bip32_key_version))
+	if (!fromwire_hsm_init(NULL, msg_in, &bip32_key_version, &chain_hash,
+			       &privkey, &seed, &secrets, &shaseed))
 		return bad_req(conn, c, msg_in);
 
+#if DEVELOPER
+	dev_force_privkey = privkey;
+	dev_force_bip32_seed = seed;
+	dev_force_channel_secrets = secrets;
+	dev_force_channel_secrets_shaseed = shaseed;
+#endif
+
+	/* Once we have read the init message we know which params the master
+	 * will use */
+	c->chainparams = chainparams_by_chainhash(&chain_hash);
 	maybe_create_new_hsm();
 	load_hsm();
 
@@ -773,6 +825,8 @@ static struct io_plan *handle_sign_commitment_tx(struct io_conn *conn,
 					     &funding))
 		return bad_req(conn, c, msg_in);
 
+	tx->chainparams = c->chainparams;
+
 	/* Basic sanity checks. */
 	if (tx->wtx->num_inputs != 1)
 		return bad_req_fmt(conn, c, msg_in, "tx must have 1 input");
@@ -831,6 +885,7 @@ static struct io_plan *handle_sign_remote_commitment_tx(struct io_conn *conn,
 						    &remote_funding_pubkey,
 						    &funding))
 		bad_req(conn, c, msg_in);
+	tx->chainparams = c->chainparams;
 
 	/* Basic sanity checks. */
 	if (tx->wtx->num_inputs != 1)
@@ -877,7 +932,7 @@ static struct io_plan *handle_sign_remote_htlc_tx(struct io_conn *conn,
 					      &tx, &wscript, &amount,
 					      &remote_per_commit_point))
 		return bad_req(conn, c, msg_in);
-
+	tx->chainparams = c->chainparams;
 	get_channel_seed(&c->id, c->dbid, &channel_seed);
 	derive_basepoints(&channel_seed, NULL, &basepoints, &secrets, NULL);
 
@@ -952,7 +1007,7 @@ static struct io_plan *handle_sign_delayed_payment_to_us(struct io_conn *conn,
 						     &tx, &wscript,
 						     &input_sat))
 		return bad_req(conn, c, msg_in);
-
+	tx->chainparams = c->chainparams;
 	get_channel_seed(&c->id, c->dbid, &channel_seed);
 
 	/*~ ccan/crypto/shachain how we efficiently derive 2^48 ordered
@@ -1007,6 +1062,7 @@ static struct io_plan *handle_sign_remote_htlc_to_us(struct io_conn *conn,
 						 &input_sat))
 		return bad_req(conn, c, msg_in);
 
+	tx->chainparams = c->chainparams;
 	get_channel_seed(&c->id, c->dbid, &channel_seed);
 
 	if (!derive_htlc_basepoint(&channel_seed, &htlc_basepoint,
@@ -1045,6 +1101,7 @@ static struct io_plan *handle_sign_penalty_to_us(struct io_conn *conn,
 					     &tx, &wscript,
 					     &input_sat))
 		return bad_req(conn, c, msg_in);
+	tx->chainparams = c->chainparams;
 
 	if (!pubkey_from_secret(&revocation_secret, &point))
 		return bad_req_fmt(conn, c, msg_in, "Failed deriving pubkey");
@@ -1091,6 +1148,7 @@ static struct io_plan *handle_sign_local_htlc_tx(struct io_conn *conn,
 					     &input_sat))
 		return bad_req(conn, c, msg_in);
 
+	tx->chainparams = c->chainparams;
 	get_channel_seed(&c->id, c->dbid, &channel_seed);
 
 	if (!derive_shaseed(&channel_seed, &shaseed))
@@ -1225,6 +1283,7 @@ static struct io_plan *handle_sign_mutual_close_tx(struct io_conn *conn,
 					       &funding))
 		return bad_req(conn, c, msg_in);
 
+	tx->chainparams = c->chainparams;
 	/* FIXME: We should know dust level, decent fee range and
 	 * balances, and final_keyindex, and thus be able to check tx
 	 * outputs! */
@@ -1297,7 +1356,7 @@ static struct io_plan *pass_client_hsmfd(struct io_conn *conn,
 			      strerror(errno));
 
 	status_trace("new_client: %"PRIu64, dbid);
-	new_client(c, &id, dbid, capabilities, fds[0]);
+	new_client(c, c->chainparams, &id, dbid, capabilities, fds[0]);
 
 	/*~ We stash this in a global, because we need to get both the fd and
 	 * the client pointer to the callback.  The other way would be to
@@ -1429,7 +1488,7 @@ static struct io_plan *handle_sign_funding_tx(struct io_conn *conn,
 	} else
 		changekey = NULL;
 
-	tx = funding_tx(tmpctx, &outnum,
+	tx = funding_tx(tmpctx, c->chainparams, &outnum,
 			/*~ For simplicity, our generated code is not const
 			 * correct.  The C rules around const and
 			 * pointer-to-pointer are a bit weird, so we use
@@ -1466,9 +1525,9 @@ static struct io_plan *handle_sign_withdrawal_tx(struct io_conn *conn,
 		return bad_req_fmt(conn, c, msg_in,
 				   "Failed to get key %u", change_keyindex);
 
-	tx = withdraw_tx(tmpctx, cast_const2(const struct utxo **, utxos),
-			 scriptpubkey, satoshi_out,
-			 &changekey, change_out, NULL, NULL);
+	tx = withdraw_tx(tmpctx, c->chainparams,
+			 cast_const2(const struct utxo **, utxos), scriptpubkey,
+			 satoshi_out, &changekey, change_out, NULL, NULL);
 
 	sign_all_inputs(tx, utxos);
 
@@ -1600,6 +1659,9 @@ static struct io_plan *handle_memleak(struct io_conn *conn,
 			    dbid_zero_clients, sizeof(dbid_zero_clients));
 	memleak_remove_uintmap(memtable, &clients);
 	memleak_scan_region(memtable, status_conn, tal_bytelen(status_conn));
+
+	memleak_scan_region(memtable, dev_force_privkey, 0);
+	memleak_scan_region(memtable, dev_force_bip32_seed, 0);
 
 	found_leak = dump_memleak(memtable);
 	reply = towire_hsm_dev_memleak_reply(NULL, found_leak);
@@ -1809,7 +1871,7 @@ int main(int argc, char *argv[])
 	status_setup_async(status_conn);
 	uintmap_init(&clients);
 
-	master = new_client(NULL, NULL, 0, HSM_CAP_MASTER | HSM_CAP_SIGN_GOSSIP,
+	master = new_client(NULL, NULL, NULL, 0, HSM_CAP_MASTER | HSM_CAP_SIGN_GOSSIP,
 			    REQ_FD);
 
 	/* First client == lightningd. */

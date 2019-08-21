@@ -44,8 +44,8 @@ Here's a list of parts, with notes:
 * tools/ - tools for building
   - check-bolt.c: check the source code contains correct BOLT quotes
     (as used by check-source)
-  - generate-wire.py: generate marshal/unmarshal routines from
-    extracts from BOLT specs, and as specified by subdaemons.
+  - generate-wire.py: generates wire marshal/unmarshal-ing
+    routines for subdaemons and BOLT specs.
   - mockup.sh / update-mocks.sh: tools to generate mock functions for
     unit tests.
 
@@ -59,7 +59,7 @@ Here's a list of parts, with notes:
 
 * contrib/ - python support and other stuff which doesn't belong :)
 
-* wire/ - basic marshalling/un
+* wire/ - basic marshalling/un for messages defined in the BOLTs
 
 * common/ - routines needed by any two or more of the directories below
 
@@ -190,7 +190,8 @@ There are three kinds of tests:
   header order, and checks formatted quotes from BOLTs if BOLTDIR
   exists.
 
-* **unit tests** - standalone programs that can be run individually.
+* **unit tests** - standalone programs that can be run individually. You can
+  also run all of the unit tests with `make check-units`.
   They are `run-*.c` files in test/ subdirectories used to test routines
   inside C source files.
 
@@ -214,6 +215,15 @@ There are three kinds of tests:
 
 Our Travis CI instance (see `.travis.yml`) runs all these for each
 pull request.
+
+
+Making BOLT Modifications
+-------------------------
+
+All of code for marshalling/unmarshalling BOLT protocol messages is generated
+directly from the spec. These are pegged to the BOLTVERSION, as specified in
+`Makefile`.
+
 
 Source code analysis
 --------------------

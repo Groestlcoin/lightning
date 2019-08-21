@@ -12,17 +12,18 @@
 #include <wire/gen_onion_wire.h>
 #include <wire/wire.h>
 
-#define SECURITY_PARAMETER 32
-#define NUM_MAX_HOPS 20
-#define PAYLOAD_SIZE 32
-#define HOP_DATA_SIZE (1 + SECURITY_PARAMETER + PAYLOAD_SIZE)
-#define ROUTING_INFO_SIZE (HOP_DATA_SIZE * NUM_MAX_HOPS)
-#define TOTAL_PACKET_SIZE (1 + 33 + SECURITY_PARAMETER + ROUTING_INFO_SIZE)
+#define VERSION_SIZE 1
+#define REALM_SIZE 1
+#define HMAC_SIZE 32
+#define PUBKEY_SIZE 33
+#define FRAME_SIZE 65
+#define ROUTING_INFO_SIZE 1300
+#define TOTAL_PACKET_SIZE (VERSION_SIZE + PUBKEY_SIZE + HMAC_SIZE + ROUTING_INFO_SIZE)
 
 struct onionpacket {
 	/* Cleartext information */
 	u8 version;
-	u8 mac[SECURITY_PARAMETER];
+	u8 mac[HMAC_SIZE];
 	struct pubkey ephemeralkey;
 
 	/* Encrypted information */
@@ -34,49 +35,53 @@ enum route_next_case {
 	ONION_FORWARD = 1,
 };
 
+/**
+ * A sphinx payment path.
+ *
+ * This struct defines a path a payment is taking through the Lightning
+ * Network, including the session_key used to generate secrets, the associated
+ * data that'll be included in the HMACs and the payloads at each hop in the
+ * path. The struct is opaque since it should not be modified externally. Use
+ * `sphinx_path_new` or `sphinx_path_new_with_key` (testing only) to create a
+ * new instance.
+ */
+struct sphinx_path;
+
 /* BOLT #4:
  *
- * The `hops_data` field is a structure that holds obfuscations of the
- * next hop's address, transfer information, and its associated HMAC. It is
- * 1300 bytes (`20x65`) long and has the following structure:
+ * ## Legacy `hop_data` payload format
  *
- * 1. type: `hops_data`
+ * The `hop_data` format is identified by a single `0x00`-byte length,
+ * for backward compatibility.  Its payload is defined as:
+ *
+ * 1. type: `hop_data` (for `realm` 0)
  * 2. data:
- *    * [`1`:`realm`]
- *    * [`32`:`per_hop`]
- *    * [`32`:`HMAC`]
- *    * ...
- *    * `filler`
- *
- * Where, the `realm`, `per_hop` (with contents dependent on `realm`), and `HMAC`
- * are repeated for each hop; and where, `filler` consists of obfuscated,
- * deterministically-generated padding, as detailed in
- * [Filler Generation](#filler-generation).  Additionally, `hops_data` is
- * incrementally obfuscated at each hop.
- *
- * The `realm` byte determines the format of the `per_hop` field; currently, only
- * `realm` 0 is defined, for which the `per_hop` format follows:
- *
- * 1. type: `per_hop` (for `realm` 0)
- * 2. data:
- *    * [`8`:`short_channel_id`]
- *    * [`8`:`amt_to_forward`]
- *    * [`4`:`outgoing_cltv_value`]
- *    * [`12`:`padding`]
+ *    * [`short_channel_id`:`short_channel_id`]
+ *    * [`u64`:`amt_to_forward`]
+ *    * [`u32`:`outgoing_cltv_value`]
+ *    * [`12*byte`:`padding`]
  */
 struct hop_data {
 	u8 realm;
 	struct short_channel_id channel_id;
 	struct amount_msat amt_forward;
 	u32 outgoing_cltv;
-	/* Padding omitted, will be zeroed */
-	u8 hmac[SECURITY_PARAMETER];
+};
+
+enum sphinx_payload_type {
+	SPHINX_V0_PAYLOAD = 0,
+	SPHINX_TLV_PAYLOAD = 1,
+	SPHINX_INVALID_PAYLOAD = 254,
+	SPHINX_RAW_PAYLOAD = 255,
 };
 
 struct route_step {
 	enum route_next_case nextcase;
 	struct onionpacket *next;
-	struct hop_data hop_data;
+	enum sphinx_payload_type type;
+	union {
+		struct hop_data v0;
+	} payload;
 	u8 *raw_payload;
 };
 
@@ -96,11 +101,7 @@ struct route_step {
  */
 struct onionpacket *create_onionpacket(
 	const tal_t * ctx,
-	struct pubkey path[],
-	struct hop_data hops_data[],
-	const u8 * sessionkey,
-	const u8 *assocdata,
-	const size_t assocdatalen,
+	struct sphinx_path *sp,
 	struct secret **path_secrets
 	);
 
@@ -197,5 +198,36 @@ u8 *wrap_onionreply(const tal_t *ctx, const struct secret *shared_secret,
 struct onionreply *unwrap_onionreply(const tal_t *ctx,
 				     const struct secret *shared_secrets,
 				     const int numhops, const u8 *reply);
+
+/**
+ * Create a new empty sphinx_path.
+ *
+ * The sphinx_path instance can then be decorated with other functions and
+ * passed to `create_onionpacket` to generate the packet.
+ */
+struct sphinx_path *sphinx_path_new(const tal_t *ctx,
+				    const u8 *associated_data);
+
+/**
+ * Create a new empty sphinx_path with a given `session_key`.
+ *
+ * This MUST NOT be used outside of tests and tools as it may leak the path
+ * details if the `session_key` is not randomly generated.
+ */
+struct sphinx_path *sphinx_path_new_with_key(const tal_t *ctx,
+					     const u8 *associated_data,
+					     const struct secret *session_key);
+
+/**
+ * Add a V0 (Realm 0) single frame hop to the path.
+ */
+void sphinx_add_v0_hop(struct sphinx_path *path, const struct pubkey *pubkey,
+		       const struct short_channel_id *scid, struct amount_msat forward,
+		       u32 outgoing_cltv);
+/**
+ * Add a raw payload hop to the path.
+ */
+void sphinx_add_raw_hop(struct sphinx_path *path, const struct pubkey *pubkey,
+			enum sphinx_payload_type type, const u8 *payload);
 
 #endif /* LIGHTNING_COMMON_SPHINX_H */

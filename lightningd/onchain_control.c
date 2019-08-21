@@ -102,7 +102,7 @@ static enum watch_result onchain_tx_watched(struct lightningd *ld,
 
 	if (depth == 0) {
 		log_unusual(channel->log, "Chain reorganization!");
-		channel_set_owner(channel, NULL, false);
+		channel_set_owner(channel, NULL);
 
 		/* We will most likely be freed, so this is a noop */
 		return KEEP_WATCHING;
@@ -187,6 +187,7 @@ static void handle_onchain_broadcast_tx(struct channel *channel, const u8 *msg)
 		channel_internal_error(channel, "Invalid onchain_broadcast_tx");
 		return;
 	}
+	tx->chainparams = get_chainparams(channel->peer->ld);
 
 	bitcoin_txid(tx, &txid);
 	wallet_transaction_add(w, tx, 0, 0);
@@ -416,12 +417,13 @@ static void onchain_error(struct channel *channel,
 			  struct per_peer_state *pps UNUSED,
 			  const struct channel_id *channel_id UNUSED,
 			  const char *desc,
+			  bool soft_error UNUSED,
 			  const u8 *err_for_them UNUSED)
 {
 	/* FIXME: re-launch? */
 	log_broken(channel->log, "%s", desc);
 	channel_set_billboard(channel, true, desc);
-	channel_set_owner(channel, NULL, false);
+	channel_set_owner(channel, NULL);
 }
 
 /* With a reorg, this can get called multiple times; each time we'll kill
@@ -437,6 +439,7 @@ enum watch_result onchaind_funding_spent(struct channel *channel,
 	struct pubkey final_key;
 	int hsmfd;
 	u32 feerate;
+	const struct chainparams *chainparams;
 
 	channel_fail_permanent(channel, "Funding transaction spent");
 
@@ -457,8 +460,7 @@ enum watch_result onchaind_funding_spent(struct channel *channel,
 						    onchain_error,
 						    channel_set_billboard,
 						    take(&hsmfd),
-						    NULL),
-			  false);
+						    NULL));
 
 	if (!channel->owner) {
 		log_broken(channel->log, "Could not subdaemon onchain: %s",
@@ -507,8 +509,11 @@ enum watch_result onchaind_funding_spent(struct channel *channel,
 			feerate = feerate_floor();
 	}
 
+	chainparams = get_chainparams(channel->peer->ld);
+
 	msg = towire_onchain_init(channel,
 				  &channel->their_shachain.chain,
+				  &chainparams->genesis_blockhash,
 				  channel->funding,
 				  &channel->channel_info.old_remote_per_commit,
 				  &channel->channel_info.remote_per_commit,

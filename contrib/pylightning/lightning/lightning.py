@@ -3,6 +3,7 @@ import json
 import logging
 from math import floor, log10
 import socket
+import warnings
 
 __version__ = "0.0.7.3"
 
@@ -308,16 +309,43 @@ class LightningRpc(UnixDomainSocketRpc):
         payload.update({k: v for k, v in kwargs.items()})
         return self.call("check", payload)
 
-    def close(self, peer_id, force=None, timeout=None):
-        """
-        Close the channel with peer {id}, forcing a unilateral
-        close if {force} is True, and timing out with {timeout}
-        seconds.
-        """
+    def _deprecated_close(self, peer_id, force=None, timeout=None):
+        warnings.warn("close now takes unilateraltimeout arg: expect removal"
+                      " in early 2020",
+                      DeprecationWarning)
         payload = {
             "id": peer_id,
             "force": force,
             "timeout": timeout
+        }
+        return self.call("close", payload)
+
+    def close(self, peer_id, *args, **kwargs):
+        """
+        Close the channel with peer {id}, forcing a unilateral
+        close after {unilateraltimeout} seconds if non-zero.
+
+        Deprecated usage has {force} and {timeout} args.
+        """
+        unilateraltimeout = None
+
+        if 'force' in kwargs or 'timeout' in kwargs:
+            return self._deprecated_close(peer_id, *args, **kwargs)
+
+        # Single arg is ambigious.
+        if len(args) == 1:
+            if isinstance(args[0], bool):
+                return self._deprecated_close(peer_id, *args, **kwargs)
+            unilateraltimeout = args[0]
+        elif len(args) > 1:
+            return self._deprecated_close(peer_id, *args, **kwargs)
+
+        if 'unilateraltimeout' in kwargs:
+            unilateraltimeout = kwargs['unilateraltimeout']
+
+        payload = {
+            "id": peer_id,
+            "unilateraltimeout": unilateraltimeout
         }
         return self.call("close", payload)
 
@@ -365,7 +393,10 @@ class LightningRpc(UnixDomainSocketRpc):
         """
         Crash lightningd by calling fatal()
         """
-        return self.call("dev-crash")
+        payload = {
+            "subcommand": "crash"
+        }
+        return self.call("dev", payload)
 
     def dev_fail(self, peer_id):
         """
@@ -426,9 +457,10 @@ class LightningRpc(UnixDomainSocketRpc):
         Show SHA256 of {secret}
         """
         payload = {
+            "subcommand": "rhash",
             "secret": secret
         }
-        return self.call("dev-rhash", payload)
+        return self.call("dev", payload)
 
     def dev_sign_last_tx(self, peer_id):
         """
@@ -438,6 +470,16 @@ class LightningRpc(UnixDomainSocketRpc):
             "id": peer_id
         }
         return self.call("dev-sign-last-tx", payload)
+
+    def dev_slowcmd(self, msec=None):
+        """
+        Torture test for slow commands, optional {msec}
+        """
+        payload = {
+            "subcommand": "slowcmd",
+            "msec": msec
+        }
+        return self.call("dev", payload)
 
     def disconnect(self, peer_id, force=False):
         """
@@ -712,6 +754,51 @@ class LightningRpc(UnixDomainSocketRpc):
             "pongbytes": pongbytes
         }
         return self.call("ping", payload)
+
+    def plugin_start(self, plugin):
+        """
+        Adds a plugin to lightningd.
+        """
+        payload = {
+            "subcommand": "start",
+            "plugin": plugin
+        }
+        return self.call("plugin", payload)
+
+    def plugin_startdir(self, directory):
+        """
+        Adds all plugins from a directory to lightningd.
+        """
+        payload = {
+            "subcommand": "startdir",
+            "directory": directory
+        }
+        return self.call("plugin", payload)
+
+    def plugin_stop(self, plugin):
+        """
+        Stops a lightningd plugin, will fail if plugin is not dynamic.
+        """
+        payload = {
+            "subcommand": "stop",
+            "plugin": plugin
+        }
+        return self.call("plugin", payload)
+
+    def plugin_list(self):
+        """
+        Lists all plugins lightningd knows about.
+        """
+        payload = {
+            "subcommand": "list"
+        }
+        return self.call("plugin", payload)
+
+    def plugin_rescan(self):
+        payload = {
+            "subcommand": "rescan"
+        }
+        return self.call("plugin", payload)
 
     def sendpay(self, route, payment_hash, description=None, msatoshi=None):
         """

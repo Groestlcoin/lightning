@@ -18,6 +18,12 @@ char *add_plugin_dir(struct plugins *plugins UNNEEDED, const char *dir UNNEEDED,
 /* Generated stub for begin_topology */
 void begin_topology(struct chain_topology *topo UNNEEDED)
 { fprintf(stderr, "begin_topology called!\n"); abort(); }
+/* Generated stub for bigsize_get */
+size_t bigsize_get(const u8 *p UNNEEDED, size_t max UNNEEDED, bigsize_t *val UNNEEDED)
+{ fprintf(stderr, "bigsize_get called!\n"); abort(); }
+/* Generated stub for bigsize_put */
+size_t bigsize_put(u8 buf[BIGSIZE_MAX_LEN] UNNEEDED, bigsize_t v UNNEEDED)
+{ fprintf(stderr, "bigsize_put called!\n"); abort(); }
 /* Generated stub for channel_notify_new_block */
 void channel_notify_new_block(struct lightningd *ld UNNEEDED,
 			      u32 block_height UNNEEDED)
@@ -45,18 +51,12 @@ void db_assert_no_outstanding_statements(void)
 /* Generated stub for db_begin_transaction_ */
 void db_begin_transaction_(struct db *db UNNEEDED, const char *location UNNEEDED)
 { fprintf(stderr, "db_begin_transaction_ called!\n"); abort(); }
-/* Generated stub for db_close_for_fork */
-void db_close_for_fork(struct db *db UNNEEDED)
-{ fprintf(stderr, "db_close_for_fork called!\n"); abort(); }
 /* Generated stub for db_commit_transaction */
 void db_commit_transaction(struct db *db UNNEEDED)
 { fprintf(stderr, "db_commit_transaction called!\n"); abort(); }
 /* Generated stub for db_get_intvar */
 s64 db_get_intvar(struct db *db UNNEEDED, char *varname UNNEEDED, s64 defval UNNEEDED)
 { fprintf(stderr, "db_get_intvar called!\n"); abort(); }
-/* Generated stub for db_reopen_after_fork */
-void db_reopen_after_fork(struct db *db UNNEEDED)
-{ fprintf(stderr, "db_reopen_after_fork called!\n"); abort(); }
 /* Generated stub for fatal */
 void   fatal(const char *fmt UNNEEDED, ...)
 { fprintf(stderr, "fatal called!\n"); abort(); }
@@ -73,7 +73,7 @@ bool fromwire_status_fail(const tal_t *ctx UNNEEDED, const void *p UNNEEDED, enu
 bool fromwire_status_peer_billboard(const tal_t *ctx UNNEEDED, const void *p UNNEEDED, bool *perm UNNEEDED, wirestring **happenings UNNEEDED)
 { fprintf(stderr, "fromwire_status_peer_billboard called!\n"); abort(); }
 /* Generated stub for fromwire_status_peer_error */
-bool fromwire_status_peer_error(const tal_t *ctx UNNEEDED, const void *p UNNEEDED, struct channel_id *channel UNNEEDED, wirestring **desc UNNEEDED, struct per_peer_state **pps UNNEEDED, u8 **error_for_them UNNEEDED)
+bool fromwire_status_peer_error(const tal_t *ctx UNNEEDED, const void *p UNNEEDED, struct channel_id *channel UNNEEDED, wirestring **desc UNNEEDED, bool *soft_error UNNEEDED, struct per_peer_state **pps UNNEEDED, u8 **error_for_them UNNEEDED)
 { fprintf(stderr, "fromwire_status_peer_error called!\n"); abort(); }
 /* Generated stub for get_log_book */
 struct log_book *get_log_book(const struct log *log UNNEEDED)
@@ -147,9 +147,6 @@ void plugins_init(struct plugins *plugins UNNEEDED, const char *dev_plugin_debug
 struct plugins *plugins_new(const tal_t *ctx UNNEEDED, struct log_book *log_book UNNEEDED,
 			    struct lightningd *ld UNNEEDED)
 { fprintf(stderr, "plugins_new called!\n"); abort(); }
-/* Generated stub for register_opts */
-void register_opts(struct lightningd *ld UNNEEDED)
-{ fprintf(stderr, "register_opts called!\n"); abort(); }
 /* Generated stub for setup_color_and_alias */
 void setup_color_and_alias(struct lightningd *ld UNNEEDED)
 { fprintf(stderr, "setup_color_and_alias called!\n"); abort(); }

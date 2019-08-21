@@ -2,30 +2,35 @@ from collections import OrderedDict
 from fixtures import *  # noqa: F401,F403
 from flaky import flaky  # noqa: F401
 from lightning import RpcError, Millisatoshi
-from utils import only_one, wait_for, TIMEOUT
+from utils import DEVELOPER, only_one, sync_blockheight, TIMEOUT, wait_for
 
+import json
 import os
 import pytest
+import re
 import sqlite3
 import subprocess
 import time
+import unittest
 
 
-def test_option_passthrough(node_factory):
+def test_option_passthrough(node_factory, directory):
     """ Ensure that registering options works.
 
     First attempts without the plugin and then with the plugin.
     """
-    plugin_path = 'contrib/plugins/helloworld.py'
+    plugin_path = os.path.join(os.getcwd(), 'contrib/plugins/helloworld.py')
 
     help_out = subprocess.check_output([
         'lightningd/lightningd',
+        '--lightning-dir={}'.format(directory),
         '--help'
     ]).decode('utf-8')
     assert('--greeting' not in help_out)
 
     help_out = subprocess.check_output([
         'lightningd/lightningd',
+        '--lightning-dir={}'.format(directory),
         '--plugin={}'.format(plugin_path),
         '--help'
     ]).decode('utf-8')
@@ -40,7 +45,7 @@ def test_option_passthrough(node_factory):
 def test_millisatoshi_passthrough(node_factory):
     """ Ensure that Millisatoshi arguments and return work.
     """
-    plugin_path = 'tests/plugins/millisatoshis.py'
+    plugin_path = os.path.join(os.getcwd(), 'tests/plugins/millisatoshis.py')
     n = node_factory.get_node(options={'plugin': plugin_path, 'log-level': 'io'})
 
     # By keyword
@@ -61,7 +66,7 @@ def test_rpc_passthrough(node_factory):
     then try to call it.
 
     """
-    plugin_path = 'contrib/plugins/helloworld.py'
+    plugin_path = os.path.join(os.getcwd(), 'contrib/plugins/helloworld.py')
     n = node_factory.get_node(options={'plugin': plugin_path, 'greeting': 'Ciao'})
 
     # Make sure that the 'hello' command that the helloworld.py plugin
@@ -84,13 +89,74 @@ def test_rpc_passthrough(node_factory):
 
 def test_plugin_dir(node_factory):
     """--plugin-dir works"""
-    plugin_dir = 'contrib/plugins'
+    plugin_dir = os.path.join(os.getcwd(), 'contrib/plugins')
     node_factory.get_node(options={'plugin-dir': plugin_dir, 'greeting': 'Mars'})
+
+
+def test_plugin_slowinit(node_factory):
+    """Tests the 'plugin' RPC command when init is slow"""
+    n = node_factory.get_node()
+
+    n.rpc.plugin_start(os.path.join(os.getcwd(), "tests/plugins/slow_init.py"))
+    n.daemon.wait_for_log("slow_init.py initializing")
+
+    # It's not actually configured yet, see what happens;
+    # make sure 'rescan' and 'list' controls dont crash
+    n.rpc.plugin_rescan()
+    n.rpc.plugin_list()
+
+
+def test_plugin_command(node_factory):
+    """Tests the 'plugin' RPC command"""
+    n = node_factory.get_node()
+
+    # Make sure that the 'hello' command from the helloworld.py plugin
+    # is not available.
+    cmd = [hlp for hlp in n.rpc.help()["help"] if "hello" in hlp["command"]]
+    assert(len(cmd) == 0)
+
+    # Add the 'contrib/plugins' test dir
+    time.sleep(2)
+    n.rpc.plugin_startdir(directory=os.path.join(os.getcwd(), "contrib/plugins"))
+    n.daemon.wait_for_log(r"Plugin helloworld.py initialized")
+    # Make sure that the 'hello' command from the helloworld.py plugin
+    # is now available.
+    cmd = [hlp for hlp in n.rpc.help()["help"] if "hello" in hlp["command"]]
+    assert(len(cmd) == 1)
+
+    # Make sure 'rescan' and 'list' controls dont crash
+    n.rpc.plugin_rescan()
+    n.rpc.plugin_list()
+    time.sleep(1)
+
+    # Make sure the plugin behaves normally after stop and restart
+    n.rpc.plugin_stop(plugin="helloworld.py")
+    n.daemon.wait_for_log(r"Killing plugin: helloworld.py")
+    time.sleep(1)
+    n.rpc.plugin_start(plugin=os.path.join(os.getcwd(), "contrib/plugins/helloworld.py"))
+    n.daemon.wait_for_log(r"Plugin helloworld.py initialized")
+    assert("Hello world" == n.rpc.call(method="hello"))
+
+    # Now stop the helloworld plugin
+    n.rpc.plugin_stop(plugin="helloworld.py")
+    n.daemon.wait_for_log(r"Killing plugin: helloworld.py")
+    time.sleep(1)
+    # Make sure that the 'hello' command from the helloworld.py plugin
+    # is not available anymore.
+    cmd = [hlp for hlp in n.rpc.help()["help"] if "hello" in hlp["command"]]
+    assert(len(cmd) == 0)
+
+    # Test that we cannot stop a plugin with 'dynamic' set to False in
+    # getmanifest
+    n.rpc.plugin_start(plugin=os.path.join(os.getcwd(), "tests/plugins/static.py"))
+    n.daemon.wait_for_log(r"Static plugin initialized.")
+    with pytest.raises(RpcError, match=r"plugin cannot be managed when lightningd is up"):
+        n.rpc.plugin_stop(plugin="static.py")
 
 
 def test_plugin_disable(node_factory):
     """--disable-plugin works"""
-    plugin_dir = 'contrib/plugins'
+    plugin_dir = os.path.join(os.getcwd(), 'contrib/plugins')
     # We need plugin-dir before disable-plugin!
     n = node_factory.get_node(options=OrderedDict([('plugin-dir', plugin_dir),
                                                    ('disable-plugin',
@@ -115,7 +181,7 @@ def test_plugin_hook(node_factory, executor):
     complete the payment.
 
     """
-    l1, l2 = node_factory.line_graph(2, opts={'plugin': 'contrib/plugins/helloworld.py'})
+    l1, l2 = node_factory.line_graph(2, opts={'plugin': os.path.join(os.getcwd(), 'contrib/plugins/helloworld.py')})
     start_time = time.time()
     f = executor.submit(l1.pay, l2, 100000)
     l2.daemon.wait_for_log(r'on_htlc_accepted called')
@@ -130,7 +196,7 @@ def test_plugin_hook(node_factory, executor):
 def test_plugin_connect_notifications(node_factory):
     """ test 'connect' and 'disconnect' notifications
     """
-    l1, l2 = node_factory.get_nodes(2, opts={'plugin': 'contrib/plugins/helloworld.py'})
+    l1, l2 = node_factory.get_nodes(2, opts={'plugin': os.path.join(os.getcwd(), 'contrib/plugins/helloworld.py')})
 
     l1.connect(l2)
     l1.daemon.wait_for_log(r'Received connect event')
@@ -141,16 +207,17 @@ def test_plugin_connect_notifications(node_factory):
     l2.daemon.wait_for_log(r'Received disconnect event')
 
 
-def test_failing_plugins():
+def test_failing_plugins(directory):
     fail_plugins = [
-        'contrib/plugins/fail/failtimeout.py',
-        'contrib/plugins/fail/doesnotexist.py',
+        os.path.join(os.getcwd(), 'contrib/plugins/fail/failtimeout.py'),
+        os.path.join(os.getcwd(), 'contrib/plugins/fail/doesnotexist.py'),
     ]
 
     for p in fail_plugins:
         with pytest.raises(subprocess.CalledProcessError):
             subprocess.check_output([
                 'lightningd/lightningd',
+                '--lightning-dir={}'.format(directory),
                 '--plugin={}'.format(p),
                 '--help',
             ])
@@ -176,7 +243,7 @@ def test_plugin_connected_hook(node_factory):
 
     l1 is configured to accept connections from l2, but not from l3.
     """
-    opts = [{'plugin': 'tests/plugins/reject.py'}, {}, {}]
+    opts = [{'plugin': os.path.join(os.getcwd(), 'tests/plugins/reject.py')}, {}, {}]
     l1, l2, l3 = node_factory.get_nodes(3, opts=opts)
     l1.rpc.reject(l3.info['id'])
 
@@ -205,7 +272,7 @@ def test_async_rpcmethod(node_factory, executor):
     It works in conjunction with the `asynctest` plugin which stashes
     requests and then resolves all of them on the fifth call.
     """
-    l1 = node_factory.get_node(options={'plugin': 'tests/plugins/asynctest.py'})
+    l1 = node_factory.get_node(options={'plugin': os.path.join(os.getcwd(), 'tests/plugins/asynctest.py')})
 
     results = []
     for i in range(10):
@@ -226,7 +293,7 @@ def test_async_rpcmethod(node_factory, executor):
 def test_db_hook(node_factory, executor):
     """This tests the db hook."""
     dbfile = os.path.join(node_factory.directory, "dblog.sqlite3")
-    l1 = node_factory.get_node(options={'plugin': 'tests/plugins/dblog.py',
+    l1 = node_factory.get_node(options={'plugin': os.path.join(os.getcwd(), 'tests/plugins/dblog.py'),
                                         'dblog-file': dbfile})
 
     # It should see the db being created, and sometime later actually get
@@ -249,7 +316,7 @@ def test_db_hook(node_factory, executor):
 
 
 def test_utf8_passthrough(node_factory, executor):
-    l1 = node_factory.get_node(options={'plugin': 'tests/plugins/utf8.py',
+    l1 = node_factory.get_node(options={'plugin': os.path.join(os.getcwd(), 'tests/plugins/utf8.py'),
                                         'log-level': 'io'})
 
     # This works because Python unmangles.
@@ -263,13 +330,13 @@ def test_utf8_passthrough(node_factory, executor):
                                    .format(l1.daemon.lightning_dir),
                                    'utf8', 'ナンセンス 1杯']).decode('utf-8')
     assert '\\u' not in out
-    assert out == '{\n   "utf8" : "ナンセンス 1杯"\n}\n'
+    assert out == '{\n   "utf8": "ナンセンス 1杯"\n}\n'
 
 
 def test_invoice_payment_hook(node_factory):
     """ l1 uses the reject-payment plugin to reject invoices with odd preimages.
     """
-    opts = [{}, {'plugin': 'tests/plugins/reject_some_invoices.py'}]
+    opts = [{}, {'plugin': os.path.join(os.getcwd(), 'tests/plugins/reject_some_invoices.py')}]
     l1, l2 = node_factory.line_graph(2, opts=opts)
 
     # This one works
@@ -296,7 +363,7 @@ def test_invoice_payment_hook(node_factory):
 def test_invoice_payment_hook_hold(node_factory):
     """ l1 uses the hold_invoice plugin to delay invoice payment.
     """
-    opts = [{}, {'plugin': 'tests/plugins/hold_invoice.py', 'holdtime': TIMEOUT / 2}]
+    opts = [{}, {'plugin': os.path.join(os.getcwd(), 'tests/plugins/hold_invoice.py'), 'holdtime': TIMEOUT / 2}]
     l1, l2 = node_factory.line_graph(2, opts=opts)
 
     inv1 = l2.rpc.invoice(123000, 'label', 'description', preimage='1' * 64)
@@ -306,7 +373,7 @@ def test_invoice_payment_hook_hold(node_factory):
 def test_openchannel_hook(node_factory, bitcoind):
     """ l2 uses the reject_odd_funding_amounts plugin to reject some openings.
     """
-    opts = [{}, {'plugin': 'tests/plugins/reject_odd_funding_amounts.py'}]
+    opts = [{}, {'plugin': os.path.join(os.getcwd(), 'tests/plugins/reject_odd_funding_amounts.py')}]
     l1, l2 = node_factory.line_graph(2, fundchannel=False, opts=opts)
 
     # Get some funds.
@@ -344,6 +411,7 @@ def test_openchannel_hook(node_factory, bitcoind):
         l1.rpc.fundchannel(l2.info['id'], 100001)
 
 
+@unittest.skipIf(not DEVELOPER, "without DEVELOPER=1, gossip v slow")
 def test_htlc_accepted_hook_fail(node_factory):
     """Send payments from l1 to l2, but l2 just declines everything.
 
@@ -354,7 +422,7 @@ def test_htlc_accepted_hook_fail(node_factory):
     """
     l1, l2, l3 = node_factory.line_graph(3, opts=[
         {},
-        {'plugin': 'tests/plugins/fail_htlcs.py'},
+        {'plugin': os.path.join(os.getcwd(), 'tests/plugins/fail_htlcs.py')},
         {}
     ], wait_for_announce=True)
 
@@ -380,12 +448,13 @@ def test_htlc_accepted_hook_fail(node_factory):
     assert len(inv) == 1 and inv[0]['status'] == 'unpaid'
 
 
+@unittest.skipIf(not DEVELOPER, "without DEVELOPER=1, gossip v slow")
 def test_htlc_accepted_hook_resolve(node_factory):
     """l3 creates an invoice, l2 knows the preimage and will shortcircuit.
     """
     l1, l2, l3 = node_factory.line_graph(3, opts=[
         {},
-        {'plugin': 'tests/plugins/shortcircuit.py'},
+        {'plugin': os.path.join(os.getcwd(), 'tests/plugins/shortcircuit.py')},
         {}
     ], wait_for_announce=True)
 
@@ -402,7 +471,8 @@ def test_htlc_accepted_hook_direct_restart(node_factory, executor):
     """
     l1, l2 = node_factory.line_graph(2, opts=[
         {'may_reconnect': True},
-        {'may_reconnect': True, 'plugin': 'tests/plugins/hold_htlcs.py'}
+        {'may_reconnect': True,
+         'plugin': os.path.join(os.getcwd(), 'tests/plugins/hold_htlcs.py')}
     ])
 
     i1 = l2.rpc.invoice(msatoshi=1000, label="direct", description="desc")['bolt11']
@@ -414,12 +484,14 @@ def test_htlc_accepted_hook_direct_restart(node_factory, executor):
     f1.result()
 
 
+@unittest.skipIf(not DEVELOPER, "without DEVELOPER=1, gossip v slow")
 def test_htlc_accepted_hook_forward_restart(node_factory, executor):
     """l2 restarts while it is pondering what to do with an HTLC.
     """
     l1, l2, l3 = node_factory.line_graph(3, opts=[
         {'may_reconnect': True},
-        {'may_reconnect': True, 'plugin': 'tests/plugins/hold_htlcs.py'},
+        {'may_reconnect': True,
+         'plugin': os.path.join(os.getcwd(), 'tests/plugins/hold_htlcs.py')},
         {'may_reconnect': True},
     ], wait_for_announce=True)
 
@@ -427,7 +499,20 @@ def test_htlc_accepted_hook_forward_restart(node_factory, executor):
     f1 = executor.submit(l1.rpc.pay, i1)
 
     l2.daemon.wait_for_log(r'Holding onto an incoming htlc for 10 seconds')
+
     l2.restart()
+
+    # Grab the file where the plugin wrote the onion and read it in for some
+    # additional checks
+    logline = l2.daemon.wait_for_log(r'Onion written to')
+    fname = re.search(r'Onion written to (.*\.json)', logline).group(1)
+    onion = json.load(open(fname))
+    assert re.match(r'^00006700000.000100000000000003e8000000..000000000000000000000000$', onion['payload'])
+    assert len(onion['payload']) == 64
+    assert len(onion['shared_secret']) == 64
+    assert onion['per_hop_v0']['realm'] == "00"
+    assert onion['per_hop_v0']['forward_amount'] == '1000msat'
+    assert len(onion['next_onion']) == 2 * (1300 + 32 + 33 + 1)
 
     f1.result()
 
@@ -435,7 +520,7 @@ def test_htlc_accepted_hook_forward_restart(node_factory, executor):
 def test_warning_notification(node_factory):
     """ test 'warning' notifications
     """
-    l1 = node_factory.get_node(options={'plugin': 'tests/plugins/pretend_badlog.py'})
+    l1 = node_factory.get_node(options={'plugin': os.path.join(os.getcwd(), 'tests/plugins/pretend_badlog.py')}, allow_broken_log=True)
 
     # 1. test 'warn' level
     event = "Test warning notification(for unusual event)"
@@ -454,10 +539,140 @@ def test_warning_notification(node_factory):
     # 2. test 'error' level, steps like above
     event = "Test warning notification(for broken event)"
     l1.rpc.call('pretendbad', {'event': event, 'level': 'error'})
-    l1.daemon.wait_for_log('plugin-pretend_badlog.py Test warning notification\\(for broken event\\)')
+    l1.daemon.wait_for_log(r'\*\*BROKEN\*\* plugin-pretend_badlog.py Test warning notification\(for broken event\)')
 
     l1.daemon.wait_for_log('plugin-pretend_badlog.py Received warning')
     l1.daemon.wait_for_log('plugin-pretend_badlog.py level: error')
     l1.daemon.wait_for_log('plugin-pretend_badlog.py time: *')
     l1.daemon.wait_for_log('plugin-pretend_badlog.py source: plugin-pretend_badlog.py')
     l1.daemon.wait_for_log('plugin-pretend_badlog.py log: Test warning notification\\(for broken event\\)')
+
+
+def test_invoice_payment_notification(node_factory):
+    """
+    Test the 'invoice_payment' notification
+    """
+    opts = [{}, {"plugin": os.path.join(os.getcwd(), "contrib/plugins/helloworld.py")}]
+    l1, l2 = node_factory.line_graph(2, opts=opts)
+
+    msats = 12345
+    preimage = '1' * 64
+    label = "a_descriptive_label"
+    inv1 = l2.rpc.invoice(msats, label, 'description', preimage=preimage)
+    l1.rpc.pay(inv1['bolt11'])
+
+    l2.daemon.wait_for_log(r"Received invoice_payment event for label {},"
+                           " preimage {}, and amount of {}msat"
+                           .format(label, preimage, msats))
+
+
+def test_channel_opened_notification(node_factory):
+    """
+    Test the 'channel_opened' notification sent at channel funding success.
+    """
+    opts = [{}, {"plugin": os.path.join(os.getcwd(), "tests/plugins/misc_notifications.py")}]
+    amount = 10**6
+    l1, l2 = node_factory.line_graph(2, fundchannel=True, fundamount=amount,
+                                     opts=opts)
+    l2.daemon.wait_for_log(r"A channel was opened to us by {}, "
+                           "with an amount of {}*"
+                           .format(l1.info["id"], amount))
+
+
+@unittest.skipIf(not DEVELOPER, "needs DEVELOPER=1")
+def test_forward_event_notification(node_factory, bitcoind, executor):
+    """ test 'forward_event' notifications
+    """
+    amount = 10**8
+    disconnects = ['-WIRE_UPDATE_FAIL_HTLC', 'permfail']
+
+    l1, l2, l3 = node_factory.line_graph(3, opts=[
+        {},
+        {'plugin': os.path.join(os.getcwd(), 'tests/plugins/forward_payment_status.py')},
+        {}
+    ], wait_for_announce=True)
+    l4 = node_factory.get_node()
+    l5 = node_factory.get_node(disconnect=disconnects)
+    l2.openchannel(l4, 10**6, wait_for_announce=False)
+    l2.openchannel(l5, 10**6, wait_for_announce=True)
+
+    bitcoind.generate_block(5)
+
+    wait_for(lambda: len(l1.rpc.listchannels()['channels']) == 8)
+
+    payment_hash13 = l3.rpc.invoice(amount, "first", "desc")['payment_hash']
+    route = l1.rpc.getroute(l3.info['id'], amount, 1)['route']
+
+    # status: offered -> settled
+    l1.rpc.sendpay(route, payment_hash13)
+    l1.rpc.waitsendpay(payment_hash13)
+
+    # status: offered -> failed
+    route = l1.rpc.getroute(l4.info['id'], amount, 1)['route']
+    payment_hash14 = "f" * 64
+    with pytest.raises(RpcError):
+        l1.rpc.sendpay(route, payment_hash14)
+        l1.rpc.waitsendpay(payment_hash14)
+
+    # status: offered -> local_failed
+    payment_hash15 = l5.rpc.invoice(amount, 'onchain_timeout', 'desc')['payment_hash']
+    fee = amount * 10 // 1000000 + 1
+    c12 = l1.get_channel_scid(l2)
+    c25 = l2.get_channel_scid(l5)
+    route = [{'msatoshi': amount + fee - 1,
+              'id': l2.info['id'],
+              'delay': 12,
+              'channel': c12},
+             {'msatoshi': amount - 1,
+              'id': l5.info['id'],
+              'delay': 5,
+              'channel': c25}]
+
+    executor.submit(l1.rpc.sendpay, route, payment_hash15)
+
+    l5.daemon.wait_for_log('permfail')
+    l5.wait_for_channel_onchain(l2.info['id'])
+    l2.bitcoin.generate_block(1)
+    l2.daemon.wait_for_log(' to ONCHAIN')
+    l5.daemon.wait_for_log(' to ONCHAIN')
+
+    l2.daemon.wait_for_log('Propose handling THEIR_UNILATERAL/OUR_HTLC by OUR_HTLC_TIMEOUT_TO_US .* after 6 blocks')
+    bitcoind.generate_block(6)
+
+    l2.wait_for_onchaind_broadcast('OUR_HTLC_TIMEOUT_TO_US',
+                                   'THEIR_UNILATERAL/OUR_HTLC')
+
+    bitcoind.generate_block(1)
+    l2.daemon.wait_for_log('Resolved THEIR_UNILATERAL/OUR_HTLC by our proposal OUR_HTLC_TIMEOUT_TO_US')
+    l5.daemon.wait_for_log('Ignoring output.*: OUR_UNILATERAL/THEIR_HTLC')
+
+    bitcoind.generate_block(100)
+    sync_blockheight(bitcoind, [l2])
+
+    stats = l2.rpc.listforwards()
+
+    assert l2.rpc.call('recordcheck', {'payment_hash': payment_hash13, 'status': 'offered', 'dbforward': stats['forwards'][0]})
+    assert l2.rpc.call('recordcheck', {'payment_hash': payment_hash13, 'status': 'settled', 'dbforward': stats['forwards'][0]})
+    assert l2.rpc.call('recordcheck', {'payment_hash': payment_hash14, 'status': 'offered', 'dbforward': stats['forwards'][1]})
+    assert l2.rpc.call('recordcheck', {'payment_hash': payment_hash14, 'status': 'failed', 'dbforward': stats['forwards'][1]})
+    assert l2.rpc.call('recordcheck', {'payment_hash': payment_hash15, 'status': 'offered', 'dbforward': stats['forwards'][2]})
+    assert l2.rpc.call('recordcheck', {'payment_hash': payment_hash15, 'status': 'local_failed', 'dbforward': stats['forwards'][2]})
+
+
+def test_plugin_deprecated_relpath(node_factory):
+    """Test that we can use old-style relative plugin paths with deprecated-apis"""
+    l1 = node_factory.get_node(options={'plugin-dir': 'contrib/plugins',
+                                        'plugin': 'tests/plugins/millisatoshis.py',
+                                        'allow-deprecated-apis': True})
+
+    plugins = l1.rpc.plugin_list()['plugins']
+    assert ('helloworld.py', True) in [(os.path.basename(p['name']), p['active']) for p in plugins]
+    assert ('millisatoshis.py', True) in [(os.path.basename(p['name']), p['active']) for p in plugins]
+
+    assert l1.daemon.is_in_log('DEPRECATED WARNING.*plugin-dir={}'
+                               .format(os.path.join(os.getcwd(),
+                                                    'contrib/plugins')))
+
+    assert l1.daemon.is_in_log('DEPRECATED WARNING.*plugin={}'
+                               .format(os.path.join(os.getcwd(),
+                                                    'tests/plugins/millisatoshis.py')))

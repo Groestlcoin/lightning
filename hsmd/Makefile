@@ -14,6 +14,7 @@ LIGHTNINGD_HSM_OBJS := $(LIGHTNINGD_HSM_SRC:.c=.o)
 # Common source we use.
 HSMD_COMMON_OBJS :=				\
 	common/amount.o				\
+	common/bigsize.o			\
 	common/bip32.o				\
 	common/daemon.o				\
 	common/daemon_conn.o			\
@@ -51,10 +52,10 @@ hsmd-all: lightningd/lightning_hsmd
 lightningd/lightning_hsmd: $(LIGHTNINGD_HSM_OBJS) $(LIGHTNINGD_LIB_OBJS) $(HSMD_COMMON_OBJS) $(BITCOIN_OBJS) $(WIRE_OBJS)
 
 hsmd/gen_hsm_wire.h: $(WIRE_GEN) hsmd/hsm_wire.csv
-	$(WIRE_GEN) --header $@ hsm_wire_type < hsmd/hsm_wire.csv > $@
+	$(WIRE_GEN) --page header $@ hsm_wire_type < hsmd/hsm_wire.csv > $@
 
 hsmd/gen_hsm_wire.c: $(WIRE_GEN) hsmd/hsm_wire.csv
-	$(WIRE_GEN) ${@:.c=.h} hsm_wire_type < hsmd/hsm_wire.csv > $@
+	$(WIRE_GEN) --page impl ${@:.c=.h} hsm_wire_type < hsmd/hsm_wire.csv > $@
 
 check-source: $(LIGHTNINGD_HSM_ALLSRC_NOGEN:%=check-src-include-order/%) $(LIGHTNINGD_HSM_ALLHEADERS_NOGEN:%=check-hdr-include-order/%)
 check-source-bolt: $(LIGHTNINGD_HSM_SRC:%=bolt-check/%)

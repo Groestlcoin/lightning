@@ -21,14 +21,17 @@ void *io_loop_with_timers(struct lightningd *ld)
 		 * It will only exit if there's an expired timer, *or* someone
 		 * calls io_break, or if there are no more file descriptors
 		 * (which never happens in our code). */
-		retval = io_loop(&ld->timers, &expired);
+		retval = io_loop(ld->timers, &expired);
 
 		/*~ Notice that timers are called here in the event loop like
 		 * anything else, so there are no weird concurrency issues. */
 		if (expired) {
-			db_begin_transaction(ld->wallet->db);
+			/* This routine is legal in early startup, too. */
+			if (ld->wallet)
+				db_begin_transaction(ld->wallet->db);
 			timer_expired(ld, expired);
-			db_commit_transaction(ld->wallet->db);
+			if (ld->wallet)
+				db_commit_transaction(ld->wallet->db);
 		}
 	}
 

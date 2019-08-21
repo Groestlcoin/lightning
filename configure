@@ -34,12 +34,12 @@ default_coptflags()
 default_cwarnflags()
 {
     F=$BASE_WARNFLAGS
-    # Clang doesn't like -Wno-error=maybe-uninitialized, but doesn't seem
+    # Clang doesn't like -Wno-maybe-uninitialized, but doesn't seem
     # to give spurious warnings, either.
     if [ "$2" = 1 ]; then
 	# With old gccs, or optimization != -O3, we need to suppress some warnings.
 	if [ -n "${1##*-O3*}" ] || [ "$3" != "1" ]; then
-	    F="$F -Wno-error=maybe-uninitialized"
+	    F="$F -Wno-maybe-uninitialized"
 	fi
     fi
     echo "$F"
@@ -66,6 +66,22 @@ default_pytest()
             fi
         fi
     done
+}
+
+require()
+{
+    name="$1"
+    resolution="$2"
+    shift 2
+
+    echo -n "checking for $name... "
+    if "$@" 2>/dev/null; then
+	echo 'found'
+	return
+    fi
+    echo 'not found'
+    echo "$resolution" >&2
+    exit 1
 }
 
 default_valgrind_setting()
@@ -208,6 +224,9 @@ if [ "$ASAN" = "1" ]; then
 	exit 1
     fi
 fi
+
+# Doesn't set a var, but makes sure it exists
+require 'python3-mako' "You need the mako module for python3: see doc/INSTALL.md" python3 -c 'import mako'
 
 rm -f $CONFIG_VAR_FILE.$$
 $CONFIGURATOR --extra-tests --autotools-style --var-file=$CONFIG_VAR_FILE.$$ --header-file=$CONFIG_HEADER --configurator-cc="$CONFIGURATOR_CC" "$CC" ${CWARNFLAGS-$BASE_WARNFLAGS} $CDEBUGFLAGS $COPTFLAGS <<EOF

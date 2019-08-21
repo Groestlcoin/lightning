@@ -128,6 +128,7 @@ static struct command_result *broadcast_and_wait(struct command *cmd,
 	if (!fromwire_hsm_sign_withdrawal_reply(utx, msg, &signed_tx))
 		fatal("HSM gave bad sign_withdrawal_reply %s",
 		      tal_hex(tmpctx, msg));
+	signed_tx->chainparams = utx->tx->chainparams;
 
 	/* Sanity check */
 	bitcoin_txid(signed_tx, &signed_txid);
@@ -197,9 +198,10 @@ static struct command_result *json_prepare_tx(struct command *cmd,
 		if (!bip32_pubkey(cmd->ld->wallet->bip32_base, changekey,
 				  (*utx)->wtx->change_key_index))
 			return command_fail(cmd, LIGHTNINGD, "Keys generation failure");
-	}
+	} else
+		changekey = NULL;
 
-	(*utx)->tx = withdraw_tx(*utx, (*utx)->wtx->utxos,
+	(*utx)->tx = withdraw_tx(*utx, get_chainparams(cmd->ld), (*utx)->wtx->utxos,
 				 (*utx)->destination, (*utx)->wtx->amount,
 				 changekey, (*utx)->wtx->change,
 				 cmd->ld->wallet->bip32_base,
@@ -656,6 +658,8 @@ static struct command_result *json_listfunds(struct command *cmd,
 						   "amount_msat");
 			json_add_txid(response, "funding_txid",
 				      &c->funding_txid);
+			json_add_num(response, "funding_output",
+				      c->funding_outnum);
 			json_object_end(response);
 		}
 	}

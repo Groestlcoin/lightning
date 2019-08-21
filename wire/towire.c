@@ -44,6 +44,38 @@ void towire_u64(u8 **pptr, u64 v)
 	towire(pptr, &l, sizeof(l));
 }
 
+static void towire_tlv_uint(u8 **pptr, u64 v)
+{
+	u8 bytes[8];
+	size_t num_zeroes;
+	be64 val;
+
+	val = cpu_to_be64(v);
+	BUILD_ASSERT(sizeof(val) == sizeof(bytes));
+	memcpy(bytes, &val, sizeof(bytes));
+
+	for (num_zeroes = 0; num_zeroes < sizeof(bytes); num_zeroes++)
+		if (bytes[num_zeroes] != 0)
+			break;
+
+	towire(pptr, bytes + num_zeroes, sizeof(bytes) - num_zeroes);
+}
+
+void towire_tu16(u8 **pptr, u16 v)
+{
+	return towire_tlv_uint(pptr, v);
+}
+
+void towire_tu32(u8 **pptr, u32 v)
+{
+	return towire_tlv_uint(pptr, v);
+}
+
+void towire_tu64(u8 **pptr, u64 v)
+{
+	return towire_tlv_uint(pptr, v);
+}
+
 void towire_double(u8 **pptr, const double *v)
 {
 	towire(pptr, v, sizeof(*v));
@@ -55,20 +87,13 @@ void towire_bool(u8 **pptr, bool v)
 	towire(pptr, &val, sizeof(val));
 }
 
-void towire_var_int(u8 **pptr, const u64 val)
+void towire_bigsize(u8 **pptr, const bigsize_t val)
 {
-	if (val < 0xfd) {
-		towire_u8(pptr, (u8)val);
-	} else if (val <= 0xffff) {
-		towire_u8(pptr, 0xfd);
-		towire_u16(pptr, (u16)val);
-	} else if (val <= 0xffffffff) {
-		towire_u8(pptr, 0xfe);
-		towire_u32(pptr, (u32)val);
-	} else {
-		towire_u8(pptr, 0xff);
-		towire_u64(pptr, val);
-	}
+	u8 buf[BIGSIZE_MAX_LEN];
+	size_t len;
+
+	len = bigsize_put(buf, val);
+	towire(pptr, buf, len);
 }
 
 void towire_pubkey(u8 **pptr, const struct pubkey *pubkey)

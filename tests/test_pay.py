@@ -1,11 +1,12 @@
 from fixtures import *  # noqa: F401,F403
 from flaky import flaky  # noqa: F401
 from lightning import RpcError, Millisatoshi
-from utils import DEVELOPER, wait_for, only_one, sync_blockheight, SLOW_MACHINE, TIMEOUT
+from utils import DEVELOPER, wait_for, only_one, sync_blockheight, SLOW_MACHINE, TIMEOUT, VALGRIND
 
 
 import copy
 import concurrent.futures
+import os
 import pytest
 import random
 import re
@@ -915,7 +916,7 @@ def test_forward_stats(node_factory, bitcoind):
     assert 'received_time' in stats['forwards'][2] and 'resolved_time' not in stats['forwards'][2]
 
 
-@unittest.skipIf(not DEVELOPER, "needs DEVELOPER=1")
+@unittest.skipIf(not DEVELOPER or (VALGRIND and SLOW_MACHINE), "Gossip too slow without DEVELOPER, and too stressful if VALGRIND on slow machines")
 def test_forward_local_failed_stats(node_factory, bitcoind, executor):
     """Check that we track forwarded payments correctly.
 
@@ -997,7 +998,7 @@ def test_forward_local_failed_stats(node_factory, bitcoind, executor):
     payment_hash = l3.rpc.invoice(amount, "first", "desc")['payment_hash']
     route = l1.rpc.getroute(l3.info['id'], amount, 1)['route']
 
-    l2.rpc.close(c23, True, 0)
+    l2.rpc.close(c23, 1)
 
     with pytest.raises(RpcError):
         l1.rpc.sendpay(route, payment_hash)
@@ -1174,7 +1175,7 @@ def test_htlcs_cltv_only_difference(node_factory, bitcoind):
 
     # TODO Remove our reliance on HTLCs failing on startup and the need for
     #      this plugin
-    l4.daemon.opts['plugin'] = 'tests/plugins/fail_htlcs.py'
+    l4.daemon.opts['plugin'] = os.path.join(os.getcwd(), 'tests/plugins/fail_htlcs.py')
 
     # Restarting tail node will stop it ignoring HTLCs (it will actually
     # fail them immediately).
@@ -1644,7 +1645,7 @@ def test_setchannelfee_state(node_factory, bitcoind):
     # Disconnect and unilaterally close from l2 to l1
     l2.rpc.disconnect(l1.info['id'], force=True)
     l1.rpc.disconnect(l2.info['id'], force=True)
-    result = l2.rpc.close(scid, True, 0)
+    result = l2.rpc.close(scid, 1)
     assert result['type'] == 'unilateral'
 
     # wait for l1 to see unilateral close via bitcoin network
@@ -1844,11 +1845,12 @@ def test_setchannelfee_all(node_factory, bitcoind):
     assert result['channels'][1]['short_channel_id'] == scid3
 
 
+@unittest.skipIf(not DEVELOPER, "gossip without DEVELOPER=1 is slow")
 def test_channel_spendable(node_factory, bitcoind):
     """Test that spendable_msat is accurate"""
     sats = 10**6
     l1, l2 = node_factory.line_graph(2, fundamount=sats, wait_for_announce=True,
-                                     opts={'plugin': 'tests/plugins/hold_invoice.py', 'holdtime': str(TIMEOUT / 2)})
+                                     opts={'plugin': os.path.join(os.getcwd(), 'tests/plugins/hold_invoice.py'), 'holdtime': str(TIMEOUT / 2)})
 
     payment_hash = l2.rpc.invoice('any', 'inv', 'for testing')['payment_hash']
 
@@ -1896,12 +1898,13 @@ def test_channel_spendable(node_factory, bitcoind):
     l2.rpc.waitsendpay(payment_hash, TIMEOUT)
 
 
+@unittest.skipIf(not DEVELOPER, "gossip without DEVELOPER=1 is slow")
 def test_channel_spendable_large(node_factory, bitcoind):
     """Test that spendable_msat is accurate for large channels"""
     # This is almost the max allowable spend.
     sats = 4294967
     l1, l2 = node_factory.line_graph(2, fundamount=sats, wait_for_announce=True,
-                                     opts={'plugin': 'tests/plugins/hold_invoice.py', 'holdtime': str(TIMEOUT / 2)})
+                                     opts={'plugin': os.path.join(os.getcwd(), 'tests/plugins/hold_invoice.py'), 'holdtime': str(TIMEOUT / 2)})
 
     payment_hash = l2.rpc.invoice('any', 'inv', 'for testing')['payment_hash']
 

@@ -19,6 +19,7 @@
 #include <lightningd/jsonrpc.h>
 #include <lightningd/lightningd.h>
 #include <lightningd/log.h>
+#include <lightningd/options.h>
 #include <lightningd/pay.h>
 #include <lightningd/peer_control.h>
 #include <lightningd/peer_htlcs.h>
@@ -282,7 +283,7 @@ static void handle_localpay(struct htlc_in *hin,
 	 *
 	 * 1. type: 19 (`final_incorrect_htlc_amount`)
 	 * 2. data:
-	 *    * [`8`:`incoming_htlc_amt`]
+	 *    * [`u64`:`incoming_htlc_amt`]
 	 *
 	 * The amount in the HTLC doesn't match the value in the onion.
 	 */
@@ -295,7 +296,7 @@ static void handle_localpay(struct htlc_in *hin,
 	 *
 	 * 1. type: 18 (`final_incorrect_cltv_expiry`)
 	 * 2. data:
-	 *    * [`4`:`cltv_expiry`]
+	 *    * [`u32`:`cltv_expiry`]
 	 *
 	 * The CLTV expiry in the HTLC doesn't match the value in the onion.
 	 */
@@ -421,10 +422,10 @@ static void htlc_offer_timeout(struct channel *channel)
 		return;
 
 	log_unusual(channel->owner->log,
-		    "Adding HTLC too slow: killing channel");
+		    "Adding HTLC too slow: killing connection");
 	tal_free(channel->owner);
 	channel_set_billboard(channel, false,
-			      "Adding HTLC timed out: killed channel");
+			      "Adding HTLC timed out: killed connection");
 }
 
 enum onion_type send_htlc_out(struct channel *out,
@@ -449,6 +450,12 @@ enum onion_type send_htlc_out(struct channel *out,
 		return WIRE_TEMPORARY_CHANNEL_FAILURE;
 	}
 
+	if (!topology_synced(out->peer->ld->topology)) {
+		log_info(out->log, "Attempt to send HTLC but still syncing"
+			 " with bitcoin network");
+		return WIRE_TEMPORARY_CHANNEL_FAILURE;
+	}
+
 	/* Make peer's daemon own it, catch if it dies. */
 	hout = new_htlc_out(out->owner, out, amount, cltv,
 			    payment_hash, onion_routing_packet, in == NULL, in);
@@ -456,7 +463,7 @@ enum onion_type send_htlc_out(struct channel *out,
 
 	/* Give channel 30 seconds to commit (first) htlc. */
 	if (!out->htlc_timeout)
-		out->htlc_timeout = new_reltimer(&out->peer->ld->timers,
+		out->htlc_timeout = new_reltimer(out->peer->ld->timers,
 						 out, time_from_sec(30),
 						 htlc_offer_timeout,
 						 out);
@@ -710,12 +717,12 @@ static void htlc_accepted_hook_serialize(struct htlc_accepted_hook_payload *p,
 	json_object_start(s, "onion");
 
 	json_add_hex_talarr (s, "payload", rs->raw_payload);
-	if (rs->hop_data.realm == 0x00) {
+	if (rs->type == SPHINX_V0_PAYLOAD) {
 		json_object_start(s, "per_hop_v0");
-		json_add_hex(s, "realm", &rs->hop_data.realm, 1);
-		json_add_short_channel_id(s, "short_channel_id", &rs->hop_data.channel_id);
-		json_add_amount_msat_only(s, "forward_amount", rs->hop_data.amt_forward);
-		json_add_u64(s, "outgoing_cltv_value", rs->hop_data.outgoing_cltv);
+		json_add_string(s, "realm", "00");
+		json_add_short_channel_id(s, "short_channel_id", &rs->payload.v0.channel_id);
+		json_add_amount_msat_only(s, "forward_amount", rs->payload.v0.amt_forward);
+		json_add_u64(s, "outgoing_cltv_value", rs->payload.v0.outgoing_cltv);
 		json_object_end(s);
 	}
 
@@ -727,7 +734,7 @@ static void htlc_accepted_hook_serialize(struct htlc_accepted_hook_payload *p,
 	json_add_amount_msat_only(s, "amount", hin->msat);
 	json_add_u32(s, "cltv_expiry", expiry);
 	json_add_s32(s, "cltv_expiry_relative", expiry - blockheight);
-	json_add_hex(s, "payment_hash", hin->payment_hash.u.u8, sizeof(hin->payment_hash));
+	json_add_sha256(s, "payment_hash", &hin->payment_hash);
 	json_object_end(s);
 }
 
@@ -747,40 +754,36 @@ htlc_accepted_hook_callback(struct htlc_accepted_hook_payload *request,
 	enum htlc_accepted_result result;
 	enum onion_type failure_code;
 	u8 *channel_update;
+	struct hop_data *hop_data;
 	result = htlc_accepted_hook_deserialize(buffer, toks, &payment_preimage, &failure_code, &channel_update);
 
+	hop_data = &rs->payload.v0;
 	switch (result) {
 	case htlc_accepted_continue:
 		if (rs->nextcase == ONION_FORWARD) {
-			struct gossip_resolve *gr =
-			    tal(ld, struct gossip_resolve);
+			struct gossip_resolve *gr = tal(ld, struct gossip_resolve);
 
-			gr->next_onion = tal_steal(gr, request->next_onion);
-			serialize_onionpacket(gr, rs->next);
-			gr->next_channel = rs->hop_data.channel_id;
-			gr->amt_to_forward = rs->hop_data.amt_forward;
-			gr->outgoing_cltv_value = rs->hop_data.outgoing_cltv;
+			gr->next_onion = serialize_onionpacket(gr, rs->next);
+			gr->next_channel = hop_data->channel_id;
+			gr->amt_to_forward = hop_data->amt_forward;
+			gr->outgoing_cltv_value = hop_data->outgoing_cltv;
 			gr->hin = hin;
 
-			req = towire_gossip_get_channel_peer(tmpctx,
-							     &gr->next_channel);
-			log_debug(
-			    channel->log, "Asking gossip to resolve channel %s",
-			    type_to_string(tmpctx, struct short_channel_id,
-					   &gr->next_channel));
+			req = towire_gossip_get_channel_peer(tmpctx, &gr->next_channel);
+			log_debug(channel->log, "Asking gossip to resolve channel %s",
+				  type_to_string(tmpctx, struct short_channel_id,
+						 &gr->next_channel));
 			subd_req(hin, ld->gossip, req, -1, 0,
 				 channel_resolve_reply, gr);
 		} else
-			handle_localpay(hin, hin->cltv_expiry,
-					&hin->payment_hash,
-					rs->hop_data.amt_forward,
-					rs->hop_data.outgoing_cltv);
-
+			handle_localpay(hin, hin->cltv_expiry, &hin->payment_hash,
+					hop_data->amt_forward,
+					hop_data->outgoing_cltv);
 		break;
 	case htlc_accepted_fail:
 		log_debug(channel->log,
 			  "Failing incoming HTLC as instructed by plugin hook");
-		fail_in_htlc(hin, failure_code, NULL, NULL);
+		fail_in_htlc(hin, failure_code, NULL, &hop_data->channel_id);
 		break;
 	case htlc_accepted_resolve:
 		fulfill_htlc(hin, &payment_preimage);
@@ -888,7 +891,7 @@ static bool peer_accepted_htlc(struct channel *channel, u64 id,
 	/* Unknown realm isn't a bad onion, it's a normal failure. */
 	/* FIXME: if we want hooks to handle foreign realms we should
 	 * move this check to the hook callback. */
-	if (rs->hop_data.realm != 0) {
+	if (rs->type != SPHINX_V0_PAYLOAD) {
 		*failcode = WIRE_INVALID_REALM;
 		goto out;
 	}
@@ -1440,6 +1443,18 @@ static bool peer_sending_revocation(struct channel *channel,
 	return true;
 }
 
+struct deferred_commitsig {
+	struct channel *channel;
+	const u8 *msg;
+};
+
+static void retry_deferred_commitsig(struct chain_topology *topo,
+				     struct deferred_commitsig *d)
+{
+	peer_got_commitsig(d->channel, d->msg);
+	tal_free(d);
+}
+
 /* This also implies we're sending revocation */
 void peer_got_commitsig(struct channel *channel, const u8 *msg)
 {
@@ -1455,6 +1470,24 @@ void peer_got_commitsig(struct channel *channel, const u8 *msg)
 	struct bitcoin_tx *tx;
 	size_t i;
 	struct lightningd *ld = channel->peer->ld;
+
+	/* If we're not synced with bitcoin network, we can't accept
+	 * any HTLCs.  We stall at this point, in the hope that it
+	 * won't take long! */
+	if (!topology_synced(ld->topology)) {
+		struct deferred_commitsig *d;
+
+		log_unusual(channel->log,
+			    "Deferring incoming commit until we sync");
+
+		/* If subdaemon dies, we want to forget this. */
+		d = tal(channel->owner, struct deferred_commitsig);
+		d->channel = channel;
+		d->msg = tal_dup_arr(d, u8, msg, tal_count(msg), 0);
+		topology_add_sync_waiter(d, ld->topology,
+					 retry_deferred_commitsig, d);
+		return;
+	}
 
 	if (!fromwire_channel_got_commitsig(msg, msg,
 					    &commitnum,
@@ -1472,6 +1505,7 @@ void peer_got_commitsig(struct channel *channel, const u8 *msg)
 				    tal_hex(channel, msg));
 		return;
 	}
+	tx->chainparams = get_chainparams(ld);
 
 	log_debug(channel->log,
 		  "got commitsig %"PRIu64
@@ -1888,7 +1922,7 @@ void htlcs_notify_new_block(struct lightningd *ld, u32 height)
 	 *...
 	 *   - if an HTLC it has fulfilled is in either node's current commitment
 	 *   transaction, AND is past this fulfillment deadline:
-	 *     - MUST fail the connection.
+	 *     - MUST fail the channel.
 	 */
 	do {
 		struct htlc_in *hin;
@@ -1993,7 +2027,7 @@ void htlcs_reconnect(struct lightningd *ld,
 	struct htlc_in *hin;
 	struct htlc_out *hout;
 	struct htlc_in_map unprocessed;
-	enum onion_type failcode;
+	enum onion_type failcode COMPILER_WANTS_INIT("gcc7.4.0 bad, 8.3 OK");
 
 	/* Any HTLCs which happened to be incoming and weren't forwarded before
 	 * we shutdown/crashed: fail them now.
@@ -2107,6 +2141,61 @@ static const struct json_command dev_ignore_htlcs = {
 AUTODATA(json_command, &dev_ignore_htlcs);
 #endif /* DEVELOPER */
 
+/* Warp this process to ensure the consistent json object structure
+ * between 'listforwards' API and 'forward_event' notification. */
+void json_format_forwarding_object(struct json_stream *response,
+				   const char *fieldname,
+				   const struct forwarding *cur)
+{
+	json_object_start(response, fieldname);
+
+	/* See 6d333f16cc0f3aac7097269bf0985b5fa06d59b4: we may have deleted HTLC. */
+	if (cur->payment_hash)
+		json_add_sha256(response, "payment_hash", cur->payment_hash);
+	json_add_short_channel_id(response, "in_channel", &cur->channel_in);
+
+	/* This can be unknown if we failed before channel lookup */
+	if (cur->channel_out.u64 != 0 || deprecated_apis)
+		json_add_short_channel_id(response, "out_channel",
+					  &cur->channel_out);
+	json_add_amount_msat_compat(response,
+				    cur->msat_in,
+				    "in_msatoshi", "in_msat");
+
+	/* These can be unset (aka zero) if we failed before channel lookup */
+	if (cur->channel_out.u64 != 0 || deprecated_apis) {
+		json_add_amount_msat_compat(response,
+					    cur->msat_out,
+					    "out_msatoshi",  "out_msat");
+		json_add_amount_msat_compat(response,
+					    cur->fee,
+					    "fee", "fee_msat");
+	}
+	json_add_string(response, "status", forward_status_name(cur->status));
+
+	if(cur->failcode != 0) {
+		json_add_num(response, "failcode", cur->failcode);
+		json_add_string(response, "failreason",
+				onion_type_name(cur->failcode));
+	}
+
+#ifdef COMPAT_V070
+		/* If a forwarding doesn't have received_time it was created
+		 * before we added the tracking, do not include it here. */
+	if (cur->received_time.ts.tv_sec) {
+		json_add_timeabs(response, "received_time", cur->received_time);
+		if (cur->resolved_time)
+			json_add_timeabs(response, "resolved_time", *cur->resolved_time);
+	}
+#else
+	json_add_timeabs(response, "received_time", cur->received_time);
+	if (cur->resolved_time)
+		json_add_timeabs(response, "resolved_time", *cur->resolved_time);
+#endif
+	json_object_end(response);
+}
+
+
 static void listforwardings_add_forwardings(struct json_stream *response, struct wallet *wallet)
 {
 	const struct forwarding *forwardings;
@@ -2115,41 +2204,7 @@ static void listforwardings_add_forwardings(struct json_stream *response, struct
 	json_array_start(response, "forwards");
 	for (size_t i=0; i<tal_count(forwardings); i++) {
 		const struct forwarding *cur = &forwardings[i];
-		json_object_start(response, NULL);
-
-		json_add_short_channel_id(response, "in_channel", &cur->channel_in);
-		json_add_short_channel_id(response, "out_channel", &cur->channel_out);
-		json_add_amount_msat_compat(response,
-					    cur->msat_in,
-					    "in_msatoshi", "in_msat");
-		json_add_amount_msat_compat(response,
-					    cur->msat_out,
-					    "out_msatoshi",  "out_msat");
-		json_add_amount_msat_compat(response,
-					    cur->fee,
-					    "fee", "fee_msat");
-		json_add_string(response, "status", forward_status_name(cur->status));
-
-		if(cur->failcode != 0) {
-			json_add_num(response, "failcode", cur->failcode);
-			json_add_string(response, "failreason",
-					 onion_type_name(cur->failcode));
-		}
-
-#ifdef COMPAT_V070
-		/* If a forwarding doesn't have received_time it was created
-		 * before we added the tracking, do not include it here. */
-		if (cur->received_time.ts.tv_sec) {
-			json_add_timeabs(response, "received_time", cur->received_time);
-			if (cur->resolved_time)
-				json_add_timeabs(response, "resolved_time", *cur->resolved_time);
-		}
-#else
-		json_add_timeabs(response, "received_time", cur->received_time);
-		if (cur->resolved_time)
-			json_add_timeabs(response, "resolved_time", *cur->resolved_time);
-#endif
-		json_object_end(response);
+		json_format_forwarding_object(response, NULL, cur);
 	}
 	json_array_end(response);
 

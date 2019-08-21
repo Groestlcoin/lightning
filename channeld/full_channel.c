@@ -187,7 +187,8 @@ static bool sum_offered_msatoshis(struct amount_msat *total,
 	return true;
 }
 
-static void add_htlcs(struct bitcoin_tx ***txs,
+static void add_htlcs(const struct chainparams *chainparams,
+		      struct bitcoin_tx ***txs,
 		      const u8 ***wscripts,
 		      const struct htlc **htlcmap,
 		      const struct channel *channel,
@@ -210,7 +211,7 @@ static void add_htlcs(struct bitcoin_tx ***txs,
 			continue;
 
 		if (htlc_owner(htlc) == side) {
-			tx = htlc_timeout_tx(*txs, &txid, i,
+			tx = htlc_timeout_tx(*txs, chainparams, &txid, i,
 					     htlc->amount,
 					     htlc->expiry.locktime,
 					     channel->config[!side].to_self_delay,
@@ -222,7 +223,7 @@ static void add_htlcs(struct bitcoin_tx ***txs,
 						     &htlc->rhash,
 						     &keyset->self_revocation_key);
 		} else {
-			tx = htlc_success_tx(*txs, &txid, i,
+			tx = htlc_success_tx(*txs, chainparams, &txid, i,
 					     htlc->amount,
 					     channel->config[!side].to_self_delay,
 					     feerate_per_kw,
@@ -245,6 +246,7 @@ static void add_htlcs(struct bitcoin_tx ***txs,
 
 /* FIXME: We could cache these. */
 struct bitcoin_tx **channel_txs(const tal_t *ctx,
+				const struct chainparams *chainparams,
 				const struct htlc ***htlcmap,
 				const u8 ***wscripts,
 				const struct channel *channel,
@@ -266,27 +268,21 @@ struct bitcoin_tx **channel_txs(const tal_t *ctx,
 	gather_htlcs(ctx, channel, side, &committed, NULL, NULL);
 
 	txs = tal_arr(ctx, struct bitcoin_tx *, 1);
-	txs[0] = commit_tx(ctx, &channel->funding_txid,
-		       channel->funding_txout,
-		       channel->funding,
-		       channel->funder,
-		       channel->config[!side].to_self_delay,
-		       &keyset,
-		       channel->view[side].feerate_per_kw,
-		       channel->config[side].dust_limit,
-		       channel->view[side].owed[side],
-		       channel->view[side].owed[!side],
-		       committed,
-		       htlcmap,
-		       commitment_number ^ channel->commitment_number_obscurer,
-		       side);
+	txs[0] = commit_tx(
+	    ctx, chainparams, &channel->funding_txid, channel->funding_txout,
+	    channel->funding, channel->funder,
+	    channel->config[!side].to_self_delay, &keyset,
+	    channel->view[side].feerate_per_kw,
+	    channel->config[side].dust_limit, channel->view[side].owed[side],
+	    channel->view[side].owed[!side], committed, htlcmap,
+	    commitment_number ^ channel->commitment_number_obscurer, side);
 
 	*wscripts = tal_arr(ctx, const u8 *, 1);
 	(*wscripts)[0] = bitcoin_redeem_2of2(*wscripts,
 					     &channel->funding_pubkey[side],
 					     &channel->funding_pubkey[!side]);
 
-	add_htlcs(&txs, wscripts, *htlcmap, channel, &keyset, side);
+	add_htlcs(chainparams, &txs, wscripts, *htlcmap, channel, &keyset, side);
 
 	tal_free(committed);
 	return txs;
@@ -314,10 +310,10 @@ static bool get_room_above_reserve(const struct channel *channel,
 	for (size_t i = 0; i < tal_count(adding); i++)
 		ok &= balance_add_htlc(balance, adding[i], side);
 
-	/* Overflow shouldn't happen, but if it does, complain */
+	/* Can happen if amount completely exceeds capacity */
 	if (!ok) {
-		status_broken("Failed to add %zu remove %zu htlcs",
-			      tal_count(adding), tal_count(removing));
+		status_trace("Failed to add %zu remove %zu htlcs",
+			     tal_count(adding), tal_count(removing));
 		return false;
 	}
 
@@ -371,6 +367,7 @@ static enum channel_add_err add_htlc(struct channel *channel,
 	enum side sender = htlc_state_owner(state), recipient = !sender;
 	const struct htlc **committed, **adding, **removing;
 	const struct channel_view *view;
+	u32 min_concurrent_htlcs;
 
 	htlc = tal(tmpctx, struct htlc);
 
@@ -447,8 +444,16 @@ static enum channel_add_err add_htlc(struct channel *channel,
 	 *     HTLCs to its local commitment transaction...
 	 *     - SHOULD fail the channel.
 	 */
+	/* Also we should not add more htlc's than sender or recipient
+	 * configured.  This mitigates attacks in which a peer can force the
+	 * funder of the channel to pay unnecessary onchain fees during a fee
+	 * spike with large commitment transactions.
+	 */
+	min_concurrent_htlcs = channel->config[recipient].max_accepted_htlcs;
+	if (min_concurrent_htlcs > channel->config[sender].max_accepted_htlcs)
+		min_concurrent_htlcs = channel->config[sender].max_accepted_htlcs;
 	if (tal_count(committed) - tal_count(removing) + tal_count(adding)
-	    > channel->config[recipient].max_accepted_htlcs) {
+	    > min_concurrent_htlcs) {
 		return CHANNEL_ERR_TOO_MANY_HTLCS;
 	}
 

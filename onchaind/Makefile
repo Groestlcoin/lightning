@@ -48,6 +48,7 @@ $(LIGHTNINGD_ONCHAIN_OBJS): $(LIGHTNINGD_HEADERS)
 # Common source we use.
 ONCHAIND_COMMON_OBJS :=				\
 	common/amount.o				\
+	common/bigsize.o			\
 	common/bip32.o				\
 	common/daemon.o				\
 	common/daemon_conn.o			\
@@ -74,10 +75,10 @@ ONCHAIND_COMMON_OBJS :=				\
 	hsmd/gen_hsm_wire.o
 
 onchaind/gen_onchain_wire.h: $(WIRE_GEN) onchaind/onchain_wire.csv
-	$(WIRE_GEN) --header $@ onchain_wire_type < onchaind/onchain_wire.csv > $@
+	$(WIRE_GEN) --page header $@ onchain_wire_type < onchaind/onchain_wire.csv > $@
 
 onchaind/gen_onchain_wire.c: $(WIRE_GEN) onchaind/onchain_wire.csv
-	$(WIRE_GEN) ${@:.c=.h} onchain_wire_type < onchaind/onchain_wire.csv > $@
+	$(WIRE_GEN) --page impl ${@:.c=.h} onchain_wire_type < onchaind/onchain_wire.csv > $@
 
 LIGHTNINGD_ONCHAIN_OBJS := $(LIGHTNINGD_ONCHAIN_SRC:.c=.o) $(LIGHTNINGD_ONCHAIN_GEN_SRC:.c=.o)
 

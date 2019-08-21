@@ -28,6 +28,7 @@
 #include <ccan/strmap/strmap.h>
 #include <ccan/tal/str/str.h>
 #include <common/bech32.h>
+#include <common/configdir.h>
 #include <common/json_command.h>
 #include <common/jsonrpc_errors.h>
 #include <common/memleak.h>
@@ -222,34 +223,6 @@ static const struct json_command stop_command = {
 AUTODATA(json_command, &stop_command);
 
 #if DEVELOPER
-static struct command_result *json_rhash(struct command *cmd,
-					 const char *buffer,
-					 const jsmntok_t *obj UNUSED,
-					 const jsmntok_t *params)
-{
-	struct json_stream *response;
-	struct sha256 *secret;
-
-	if (!param(cmd, buffer, params,
-		   p_req("secret", param_sha256, &secret),
-		   NULL))
-		return command_param_failed();
-
-	/* Hash in place. */
-	sha256(secret, secret, sizeof(*secret));
-	response = json_stream_success(cmd);
-	json_add_hex(response, "rhash", secret, sizeof(*secret));
-	return command_success(cmd, response);
-}
-
-static const struct json_command dev_rhash_command = {
-	"dev-rhash",
-	"developer",
-	json_rhash,
-	"Show SHA256 of {secret}"
-};
-AUTODATA(json_command, &dev_rhash_command);
-
 struct slowcmd {
 	struct command *cmd;
 	unsigned *msec;
@@ -265,53 +238,73 @@ static void slowcmd_finish(struct slowcmd *sc)
 static void slowcmd_start(struct slowcmd *sc)
 {
 	sc->js = json_stream_success(sc->cmd);
-	new_reltimer(&sc->cmd->ld->timers, sc, time_from_msec(*sc->msec),
+	new_reltimer(sc->cmd->ld->timers, sc, time_from_msec(*sc->msec),
 		     slowcmd_finish, sc);
 }
 
-static struct command_result *json_slowcmd(struct command *cmd,
-					   const char *buffer,
-					   const jsmntok_t *obj UNUSED,
-					   const jsmntok_t *params)
+static struct command_result *json_dev(struct command *cmd UNUSED,
+				       const char *buffer,
+				       const jsmntok_t *obj UNNEEDED,
+				       const jsmntok_t *params)
 {
-	struct slowcmd *sc = tal(cmd, struct slowcmd);
+	const char *subcmd;
 
-	sc->cmd = cmd;
-	if (!param(cmd, buffer, params,
-		   p_opt_def("msec", param_number, &sc->msec, 1000),
-		   NULL))
+	subcmd = param_subcommand(cmd, buffer, params,
+				  "crash", "rhash", "slowcmd", NULL);
+	if (!subcmd)
 		return command_param_failed();
 
-	new_reltimer(&cmd->ld->timers, sc, time_from_msec(0), slowcmd_start, sc);
-	return command_still_pending(cmd);
+	if (streq(subcmd, "crash")) {
+		if (!param(cmd, buffer, params,
+			   p_req("subcommand", param_ignore, cmd),
+			   NULL))
+			return command_param_failed();
+		fatal("Crash at user request");
+	} else if (streq(subcmd, "slowcmd")) {
+		struct slowcmd *sc = tal(cmd, struct slowcmd);
+
+		sc->cmd = cmd;
+		if (!param(cmd, buffer, params,
+			   p_req("subcommand", param_ignore, cmd),
+			   p_opt_def("msec", param_number, &sc->msec, 1000),
+			   NULL))
+			return command_param_failed();
+
+		new_reltimer(cmd->ld->timers, sc, time_from_msec(0),
+			     slowcmd_start, sc);
+		return command_still_pending(cmd);
+	} else {
+		assert(streq(subcmd, "rhash"));
+		struct json_stream *response;
+		struct sha256 *secret;
+
+		if (!param(cmd, buffer, params,
+			   p_req("subcommand", param_ignore, cmd),
+			   p_req("secret", param_sha256, &secret),
+			   NULL))
+			return command_param_failed();
+
+		/* Hash in place. */
+		sha256(secret, secret, sizeof(*secret));
+		response = json_stream_success(cmd);
+		json_add_sha256(response, "rhash", secret);
+		return command_success(cmd, response);
+	}
 }
 
-static const struct json_command dev_slowcmd_command = {
-	"dev-slowcmd",
+static const struct json_command dev_command = {
+	"dev",
 	"developer",
-	json_slowcmd,
-	"Torture test for slow commands, optional {msec}"
+	json_dev,
+	"Developer command test multiplexer",
+	.verbose = "dev rhash {secret}\n"
+	"	Show SHA256 of {secret}\n"
+	"dev crash\n"
+	"	Crash lightningd by calling fatal()\n"
+	"dev slowcmd {msec}\n"
+	"	Torture test for slow commands, optional {msec}\n"
 };
-AUTODATA(json_command, &dev_slowcmd_command);
-
-static struct command_result *json_crash(struct command *cmd UNUSED,
-					 const char *buffer,
-					 const jsmntok_t *obj UNNEEDED,
-					 const jsmntok_t *params)
-{
-	if (!param(cmd, buffer, params, NULL))
-		return command_param_failed();
-
-	fatal("Crash at user request");
-}
-
-static const struct json_command dev_crash_command = {
-	"dev-crash",
-	"developer",
-	json_crash,
-	"Crash lightningd by calling fatal()"
-};
-AUTODATA(json_command, &dev_crash_command);
+AUTODATA(json_command, &dev_command);
 #endif /* DEVELOPER */
 
 static size_t num_cmdlist;
@@ -409,6 +402,9 @@ static struct command_result *json_help(struct command *cmd,
 			json_add_help_command(cmd, response, commands[i]);
 	}
 	json_array_end(response);
+
+	/* Tell cli this is simple enough to be formatted flat for humans */
+	json_add_string(response, "format-hint", "simple");
 
 	return command_success(cmd, response);
 }
@@ -876,10 +872,16 @@ static bool jsonrpc_command_add_perm(struct lightningd *ld,
 	return true;
 }
 
+static void destroy_jsonrpc(struct jsonrpc *jsonrpc)
+{
+	strmap_clear(&jsonrpc->usagemap);
+}
+
 void jsonrpc_setup(struct lightningd *ld)
 {
 	struct json_command **commands = get_cmdlist();
 
+	ld->rpc_filename = default_rpcfile(ld);
 	ld->jsonrpc = tal(ld, struct jsonrpc);
 	strmap_init(&ld->jsonrpc->usagemap);
 	ld->jsonrpc->commands = tal_arr(ld->jsonrpc, struct json_command *, 0);
@@ -890,6 +892,7 @@ void jsonrpc_setup(struct lightningd *ld)
 			      commands[i]->name);
 	}
 	ld->jsonrpc->rpc_listener = NULL;
+	tal_add_destructor(ld->jsonrpc, destroy_jsonrpc);
 }
 
 bool command_usage_only(const struct command *cmd)
@@ -947,7 +950,7 @@ void jsonrpc_listen(struct jsonrpc *jsonrpc, struct lightningd *ld)
 		err(1, "Binding rpc socket to '%s'", rpc_filename);
 	umask(old_umask);
 
-	if (listen(fd, 1) != 0)
+	if (listen(fd, 128) != 0)
 		err(1, "Listening on '%s'", rpc_filename);
 	jsonrpc->rpc_listener = io_new_listener(
 		ld->rpc_filename, fd, incoming_jcon_connected, ld);
@@ -956,11 +959,11 @@ void jsonrpc_listen(struct jsonrpc *jsonrpc, struct lightningd *ld)
 
 /**
  * segwit_addr_net_decode - Try to decode a Bech32 address and detect
- * testnet/mainnet/regtest
+ * testnet/mainnet/regtest/signet
  *
  * This processes the address and returns a string if it is a Bech32
  * address specified by BIP173. The string is set whether it is
- * testnet ("tb"),  mainnet ("bc"), or regtest ("bcrt")
+ * testnet ("tb"),  mainnet ("bc"), regtest ("bcrt"), or signet ("sb")
  * It does not check, witness version and program size restrictions.
  *
  *  Out: witness_version: Pointer to an int that will be updated to contain
@@ -987,7 +990,7 @@ static const char *segwit_addr_net_decode(int *witness_version,
 }
 
 enum address_parse_result
-json_tok_address_scriptpubkey(const tal_t *cxt,
+json_tok_address_scriptpubkey(const tal_t *ctx,
 			      const struct chainparams *chainparams,
 			      const char *buffer,
 			      const jsmntok_t *tok, const u8 **scriptpubkey)
@@ -1013,11 +1016,11 @@ json_tok_address_scriptpubkey(const tal_t *cxt,
 
 	if (parsed) {
 		if (addr_version == chainparams->p2pkh_version) {
-			*scriptpubkey = scriptpubkey_p2pkh(cxt, &destination);
+			*scriptpubkey = scriptpubkey_p2pkh(ctx, &destination);
 			return ADDRESS_PARSE_SUCCESS;
 		} else if (addr_version == chainparams->p2sh_version) {
 			*scriptpubkey =
-			    scriptpubkey_p2sh_hash(cxt, &destination.addr);
+			    scriptpubkey_p2sh_hash(ctx, &destination.addr);
 			return ADDRESS_PARSE_SUCCESS;
 		} else {
 			return ADDRESS_PARSE_WRONG_NETWORK;
@@ -1026,7 +1029,7 @@ json_tok_address_scriptpubkey(const tal_t *cxt,
 	}
 
 	/* Generate null-terminated address. */
-	addrz = tal_dup_arr(cxt, char, buffer + tok->start, tok->end - tok->start, 1);
+	addrz = tal_dup_arr(ctx, char, buffer + tok->start, tok->end - tok->start, 1);
 	addrz[tok->end - tok->start] = '\0';
 
 	bip173 = segwit_addr_net_decode(&witness_version, witness_program,
@@ -1041,7 +1044,7 @@ json_tok_address_scriptpubkey(const tal_t *cxt,
 		/* Insert other witness versions here. */
 
 		if (witness_ok) {
-			*scriptpubkey = scriptpubkey_witness_raw(cxt, witness_version,
+			*scriptpubkey = scriptpubkey_witness_raw(ctx, witness_version,
 								 witness_program, witness_program_len);
 			parsed = true;
 			right_network = streq(bip173, chainparams->bip173_name);
@@ -1171,7 +1174,7 @@ static struct command_result *json_check(struct command *cmd,
 	if (params->type == JSMN_OBJECT)
 		name_tok--;
 
-	json_tok_remove(&mod_params, (jsmntok_t *)name_tok, 1);
+	json_tok_remove(&mod_params, mod_params, name_tok, 1);
 
 	cmd->mode = CMD_CHECK;
 	failed = false;

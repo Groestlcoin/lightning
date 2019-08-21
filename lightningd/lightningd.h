@@ -42,6 +42,9 @@ struct config {
 	u32 fee_base;
 	u32 fee_per_satoshi;
 
+	/* htlcs per channel */
+	u32 max_concurrent_htlcs;
+
 	/* How long between changing commit and sending COMMIT message. */
 	u32 commit_time_ms;
 
@@ -76,8 +79,9 @@ struct lightningd {
 	/* The directory to find all the subdaemons. */
 	const char *daemon_dir;
 
-	/* Are we told to run in the background. */
-	bool daemon;
+	/* If we told to run in the background, this is our parent fd, otherwise
+	 * -1. */
+	int daemon_parent_fd;
 
 	int pid_fd;
 
@@ -112,7 +116,7 @@ struct lightningd {
 	u8 *rgb; /* tal_len() == 3. */
 
 	/* Any pending timers. */
-	struct timers timers;
+	struct timers *timers;
 
 	/* Port we're listening on */
 	u16 portnum;
@@ -205,6 +209,16 @@ struct lightningd {
 
 	/* Things we've marked as not leaking. */
 	const void **notleaks;
+
+	/* This is the forced private key for the node. */
+	struct privkey *dev_force_privkey;
+
+	/* This is the forced bip32 seed for the node. */
+	struct secret *dev_force_bip32_seed;
+
+	/* These are the forced channel secrets for the node. */
+	struct secrets *dev_force_channel_secrets;
+	struct sha256 *dev_force_channel_secrets_shaseed;
 #endif /* DEVELOPER */
 
 	/* tor support */
@@ -212,6 +226,9 @@ struct lightningd {
 	bool use_proxy_always;
 	char *tor_service_password;
 	bool pure_tor_setup;
+
+	/* Original directory for deprecated plugin-relative-to-cwd */
+	const char *original_directory;
 
 	struct plugins *plugins;
 };

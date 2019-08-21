@@ -6,6 +6,7 @@ wire-wrongdir:
 
 WIRE_HEADERS_NOGEN := wire/onion_defs.h		\
 		wire/peer_wire.h		\
+		wire/tlvstream.h			\
 		wire/wire.h			\
 		wire/wire_sync.h		\
 		wire/wire_io.h
@@ -16,6 +17,7 @@ WIRE_SRC := wire/wire_sync.c			\
 		wire/wire_io.c			\
 		wire/fromwire.c			\
 		wire/peer_wire.c		\
+		wire/tlvstream.c			\
 		wire/towire.c
 WIRE_HEADERS := $(WIRE_HEADERS_NOGEN) $(WIRE_GEN_HEADERS)
 
@@ -28,16 +30,18 @@ ALL_GEN_HEADERS += $(WIRE_GEN_HEADERS)
 # They may not have the bolts.
 BOLT_EXTRACT=$(LOCAL_BOLTDIR)/tools/extract-formats.py
 
+WIRE_BOLT_DEPS := $(BOLT_DEPS) tools/gen/impl_template tools/gen/header_template
+
 # Explicit command to re-extract CSV from BOLTs.
 extract-bolt-csv: bolt-precheck
-	@$(BOLT_EXTRACT) --message-fields --message-types $(LOCAL_BOLTDIR)/0[127]*.md > wire/extracted_peer_wire_csv
+	@$(BOLT_EXTRACT) $(LOCAL_BOLTDIR)/0[127]*.md > wire/extracted_peer_wire_csv
 	@echo '#include <wire/onion_defs.h>' > wire/extracted_onion_wire_csv
-	@$(BOLT_EXTRACT) --message-fields --message-types $(LOCAL_BOLTDIR)/04*.md >> wire/extracted_onion_wire_csv
+	@$(BOLT_EXTRACT) $(LOCAL_BOLTDIR)/04*.md >> wire/extracted_onion_wire_csv
 
 # Explicit command to add diff of BOLT CSV's to an experimental_csv file
-extract-experimental-bolt-csv:
-	@$(BOLT_EXTRACT) --message-fields --message-types $(LOCAL_BOLTDIR)/0[127]*.md | diff -u wire/extracted_peer_wire_csv - >>wire/extracted_peer_experimental_csv | if [ $$? -lt 0 ];then exit 1;fi
-	@{ echo '#include <wire/onion_defs.h>'; $(BOLT_EXTRACT) --message-fields --message-types $(LOCAL_BOLTDIR)/04*.md; } | diff -u wire/extracted_onion_wire_csv - >>wire/extracted_onion_experimental_csv | if [ $$? -lt 0 ];then exit 1;fi
+extract-experimental-bolt-csv: bolt-precheck
+	@$(BOLT_EXTRACT) $(LOCAL_BOLTDIR)/0[127]*.md | diff -u wire/extracted_peer_wire_csv - >>wire/extracted_peer_experimental_csv | if [ $$? -lt 0 ];then exit 1;fi
+	@{ echo '#include <wire/onion_defs.h>'; $(BOLT_EXTRACT) $(LOCAL_BOLTDIR)/04*.md; } | diff -u wire/extracted_onion_wire_csv - >>wire/extracted_onion_experimental_csv | if [ $$? -lt 0 ];then exit 1;fi
 
 wire/extracted_peer_experimental_csv:
 	@touch $@
@@ -60,17 +64,24 @@ wire/gen_onion_wire_csv: wire/extracted_onion_wire_csv
 	@cp $< $@
 endif
 
-wire/gen_peer_wire.h: wire/gen_peer_wire_csv $(WIRE_GEN)
-	$(WIRE_GEN) --bolt --header $@ wire_type < $< > $@
+# We (may) need to rebuild these if config changes
+wire/gen_peer_wire_csv wire/gen_onion_wire_csv: config.vars
 
-wire/gen_peer_wire.c: wire/gen_peer_wire_csv $(WIRE_GEN)
-	$(WIRE_GEN) --bolt ${@:.c=.h} wire_type < $< > $@
+# tlvs_n1 and n2 are used for test vectors, thus not referenced: expose them
+# for testing and to prevent compile error about them being unused.
+# This will be easier if test vectors are moved to separate files.
+wire/gen_peer_wire.h: wire/gen_peer_wire_csv $(WIRE_BOLT_DEPS) wire/Makefile
+	$(BOLT_GEN) -s --expose-tlv-type=n1 --expose-tlv-type=n2 --page header $@ wire_type < $< > $@
 
-wire/gen_onion_wire.h: wire/gen_onion_wire_csv $(WIRE_GEN)
-	$(WIRE_GEN) --bolt --header $@ onion_type < $< > $@
+wire/gen_peer_wire.c: wire/gen_peer_wire_csv $(WIRE_BOLT_DEPS) wire/Makefile
+	$(BOLT_GEN) -s --expose-tlv-type=n1 --expose-tlv-type=n2 --page impl ${@:.c=.h} wire_type < $< > $@
 
-wire/gen_onion_wire.c: wire/gen_onion_wire_csv $(WIRE_GEN)
-	$(WIRE_GEN) --bolt ${@:.c=.h} onion_type < $< > $@
+# The tlv_payload isn't parsed in a fromwire, so we need to expose it.
+wire/gen_onion_wire.h: wire/gen_onion_wire_csv $(WIRE_BOLT_DEPS) wire/Makefile
+	$(BOLT_GEN) -s --expose-tlv-type=tlv_payload --page header $@ onion_type < $< > $@
+
+wire/gen_onion_wire.c: wire/gen_onion_wire_csv $(WIRE_BOLT_DEPS) wire/Makefile
+	$(BOLT_GEN) -s --expose-tlv-type=tlv_payload --page impl ${@:.c=.h} onion_type < $< > $@
 
 check-source: $(WIRE_SRC:%=check-src-include-order/%) $(WIRE_HEADERS_NOGEN:%=check-hdr-include-order/%)
 

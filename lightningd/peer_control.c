@@ -114,7 +114,6 @@ struct peer *new_peer(struct lightningd *ld, u64 dbid,
 	peer->globalfeatures = peer->localfeatures = NULL;
 	list_head_init(&peer->channels);
 	peer->direction = node_id_idx(&peer->ld->id, &peer->id);
-
 #if DEVELOPER
 	peer->ignore_htlcs = false;
 #endif
@@ -321,7 +320,7 @@ static void
 register_close_command(struct lightningd *ld,
 		       struct command *cmd,
 		       struct channel *channel,
-		       unsigned int timeout,
+		       unsigned int *timeout,
 		       bool force)
 {
 	struct close_command *cc;
@@ -336,8 +335,11 @@ register_close_command(struct lightningd *ld,
 	tal_add_destructor2(channel,
 			    &destroy_close_command_on_channel_destroy,
 			    cc);
-	new_reltimer(&ld->timers, cc, time_from_sec(timeout),
-		     &close_command_timeout, cc);
+	log_debug(ld->log, "close_command: force = %u, timeout = %i",
+		  force, timeout ? *timeout : -1);
+	if (timeout)
+		new_reltimer(ld->timers, cc, time_from_sec(*timeout),
+			     &close_command_timeout, cc);
 }
 
 static bool invalid_last_tx(const struct bitcoin_tx *tx)
@@ -358,9 +360,9 @@ void drop_to_chain(struct lightningd *ld, struct channel *channel,
 	struct bitcoin_txid txid;
 	/* BOLT #2:
 	 *
-	 * - if `next_remote_revocation_number` is greater than expected
+	 * - if `next_revocation_number` is greater than expected
 	 *   above, AND `your_last_per_commitment_secret` is correct for that
-	 *   `next_remote_revocation_number` minus 1:
+	 *   `next_revocation_number` minus 1:
 	 *      - MUST NOT broadcast its commitment transaction.
 	 */
 	if (channel->future_per_commitment_point && !cooperative) {
@@ -391,11 +393,14 @@ void channel_errmsg(struct channel *channel,
 		    struct per_peer_state *pps,
 		    const struct channel_id *channel_id UNUSED,
 		    const char *desc,
+		    bool soft_error,
 		    const u8 *err_for_them)
 {
+	notify_disconnect(channel->peer->ld, &channel->peer->id);
+
 	/* No per_peer_state means a subd crash or disconnection. */
 	if (!pps) {
-		channel_fail_transient(channel, "%s: %s",
+		channel_fail_reconnect(channel, "%s: %s",
 				       channel->owner->name, desc);
 		return;
 	}
@@ -406,7 +411,14 @@ void channel_errmsg(struct channel *channel,
 					     err_for_them,
 					     tal_count(err_for_them), 0);
 
-	notify_disconnect(channel->peer->ld, &channel->peer->id);
+	/* Other implementations chose to ignore errors early on.  Not
+	 * surprisingly, they now spew out spurious errors frequently,
+	 * and we would close the channel on them. */
+	if (soft_error) {
+		channel_fail_reconnect_later(channel, "%s: (ignoring) %s",
+					     channel->owner->name, desc);
+		return;
+	}
 
 	/* BOLT #1:
 	 *
@@ -467,8 +479,7 @@ static void json_add_htlcs(struct lightningd *ld,
 		json_add_amount_msat_compat(response, hin->msat,
 					    "msatoshi", "amount_msat");
 		json_add_u64(response, "expiry", hin->cltv_expiry);
-		json_add_hex(response, "payment_hash",
-			     &hin->payment_hash, sizeof(hin->payment_hash));
+		json_add_sha256(response, "payment_hash", &hin->payment_hash);
 		json_add_string(response, "state",
 				htlc_state_name(hin->hstate));
 		if (htlc_is_trimmed(REMOTE, hin->msat, local_feerate,
@@ -489,8 +500,7 @@ static void json_add_htlcs(struct lightningd *ld,
 		json_add_amount_msat_compat(response, hout->msat,
 					    "msatoshi", "amount_msat");
 		json_add_u64(response, "expiry", hout->cltv_expiry);
-		json_add_hex(response, "payment_hash",
-			     &hout->payment_hash, sizeof(hout->payment_hash));
+		json_add_sha256(response, "payment_hash", &hout->payment_hash);
 		json_add_string(response, "state",
 				htlc_state_name(hout->hstate));
 		if (htlc_is_trimmed(LOCAL, hout->msat, local_feerate,
@@ -831,7 +841,7 @@ peer_connected_hook_cb(struct peer_connected_hook_payload *payload,
 
 #if DEVELOPER
 		if (dev_disconnect_permanent(ld)) {
-			channel_internal_error(channel,
+			channel_fail_permanent(channel,
 					       "dev_disconnect permfail");
 			error = channel->error;
 			goto send_error;
@@ -842,7 +852,10 @@ peer_connected_hook_cb(struct peer_connected_hook_payload *payload,
 		case ONCHAIN:
 		case FUNDING_SPEND_SEEN:
 		case CLOSINGD_COMPLETE:
-			/* Channel is supposed to be active! */
+			/* Channel is supposed to be active!*/
+			abort();
+		case CLOSED:
+			/* Channel should not have been loaded */
 			abort();
 
 		/* We consider this "active" but we only send an error */
@@ -1020,10 +1033,10 @@ static enum watch_result funding_depth_cb(struct lightningd *ld,
 		} else if (!short_channel_id_eq(channel->scid, &scid)) {
 			/* This normally restarts channeld, initialized with updated scid
 			 * and also adds it (at least our halve_chan) to rtable. */
-			channel_fail_transient(channel,
-					        "short_channel_id changed to %s (was %s)",
-					        short_channel_id_to_str(tmpctx, &scid),
-					        short_channel_id_to_str(tmpctx, channel->scid));
+			channel_fail_reconnect(channel,
+					       "short_channel_id changed to %s (was %s)",
+					       short_channel_id_to_str(tmpctx, &scid),
+					       short_channel_id_to_str(tmpctx, channel->scid));
 
 			*channel->scid = scid;
 			wallet_channel_save(ld->wallet, channel);
@@ -1211,17 +1224,85 @@ static struct command_result *json_close(struct command *cmd,
 {
 	const jsmntok_t *idtok;
 	struct peer *peer;
-	/* FIXME: gcc 7.3.0 thinks this might not be initialized. */
-	struct channel *channel = NULL;
+	struct channel *channel COMPILER_WANTS_INIT("gcc 7.3.0 fails, 8.3 OK");
 	unsigned int *timeout;
-	bool *force;
+	bool force = true;
+	bool do_timeout;
 
-	if (!param(cmd, buffer, params,
-		   p_req("id", param_tok, &idtok),
-		   p_opt_def("force", param_bool, &force, false),
-		   p_opt_def("timeout", param_number, &timeout, 30),
-		   NULL))
-		return command_param_failed();
+	/* For generating help, give new-style. */
+	if (!params || !deprecated_apis) {
+		if (!param(cmd, buffer, params,
+			   p_req("id", param_tok, &idtok),
+			   p_opt_def("unilateraltimeout", param_number,
+				     &timeout, 48 * 3600),
+			   NULL))
+			return command_param_failed();
+		do_timeout = (*timeout != 0);
+	} else if (params->type == JSMN_ARRAY) {
+		const jsmntok_t *tok;
+
+		/* Could be new or old style; get as tok. */
+		if (!param(cmd, buffer, params,
+			   p_req("id", param_tok, &idtok),
+			   p_opt("unilateraltimeout_or_force", param_tok, &tok),
+			   p_opt("timeout", param_number, &timeout),
+			   NULL))
+			return command_param_failed();
+
+		if (tok) {
+			/* old-style force bool? */
+			if (json_to_bool(buffer, tok, &force)) {
+				/* Old default timeout */
+				if (!timeout) {
+					timeout = tal(cmd, unsigned int);
+					*timeout = 30;
+				}
+			/* New-style timeout */
+			} else {
+				timeout = tal(cmd, unsigned int);
+				if (!json_to_number(buffer, tok, timeout)) {
+					return command_fail(cmd, JSONRPC2_INVALID_PARAMS,
+							    "Expected unilerataltimeout to be a number");
+				}
+			}
+		}
+
+		/* If they didn't specify timeout, it's the (new) default */
+		if (!timeout) {
+			timeout = tal(cmd, unsigned int);
+			*timeout = 48 * 3600;
+		}
+		do_timeout = true;
+	} else {
+		unsigned int *old_timeout;
+		bool *old_force;
+
+		/* Named parameters are easy to distinguish */
+		if (!param(cmd, buffer, params,
+			   p_req("id", param_tok, &idtok),
+			   p_opt_def("unilateraltimeout", param_number,
+				     &timeout, 48 * 3600),
+			   p_opt("force", param_bool, &old_force),
+			   p_opt("timeout", param_number, &old_timeout),
+			   NULL))
+			return command_param_failed();
+		/* Old style. */
+		if (old_timeout) {
+			*timeout = *old_timeout;
+		}
+		if (old_force) {
+			/* Use old default */
+			if (!old_timeout)
+				*timeout = 30;
+			force = *old_force;
+		}
+
+		/* New style: do_timeout unless it's 0 */
+		if (!old_timeout && !old_force)
+			do_timeout = (*timeout != 0);
+		else
+			do_timeout = true;
+	}
 
 	peer = peer_from_json(cmd->ld, buffer, idtok);
 	if (peer)
@@ -1272,7 +1353,8 @@ static struct command_result *json_close(struct command *cmd,
 	}
 
 	/* Register this command for later handling. */
-	register_close_command(cmd->ld, cmd, channel, *timeout, *force);
+	register_close_command(cmd->ld, cmd, channel,
+			       do_timeout ? timeout : NULL, force);
 
 	/* Wait until close drops down to chain. */
 	return command_still_pending(cmd);
@@ -1291,7 +1373,7 @@ static const struct json_command close_command = {
 };
 AUTODATA(json_command, &close_command);
 
-static void activate_peer(struct peer *peer)
+static void activate_peer(struct peer *peer, u32 delay)
 {
 	u8 *msg;
 	struct channel *channel;
@@ -1301,10 +1383,21 @@ static void activate_peer(struct peer *peer)
 	 * knows to try reconnecting. */
 	channel = peer_active_channel(peer);
 	if (channel && ld->reconnect) {
-		msg = towire_connectctl_connect_to_peer(NULL, &peer->id, 0,
-							&peer->addr);
-		subd_send_msg(ld->connectd, take(msg));
-		channel_set_billboard(channel, false, "Attempting to reconnect");
+		if (delay > 0) {
+			channel_set_billboard(channel, false,
+					      tal_fmt(tmpctx,
+						      "Will attempt reconnect "
+						      "in %u seconds",
+						      delay));
+			delay_then_reconnect(channel, delay, &peer->addr);
+		} else {
+			msg = towire_connectctl_connect_to_peer(NULL,
+								&peer->id, 0,
+								&peer->addr);
+			subd_send_msg(ld->connectd, take(msg));
+			channel_set_billboard(channel, false,
+					      "Attempting to reconnect");
+		}
 	}
 
 	list_for_each(&peer->channels, channel, list) {
@@ -1316,9 +1409,13 @@ static void activate_peer(struct peer *peer)
 void activate_peers(struct lightningd *ld)
 {
 	struct peer *p;
+	/* Avoid thundering herd: after first five, delay by 1 second. */
+	int delay = -5;
 
-	list_for_each(&ld->peers, p, list)
-		activate_peer(p);
+	list_for_each(&ld->peers, p, list) {
+		activate_peer(p, delay > 0 ? delay : 0);
+		delay++;
+	}
 }
 
 /* Pull peers, channels and HTLCs from db, and wire them up. */
@@ -1326,8 +1423,8 @@ void load_channels_from_wallet(struct lightningd *ld)
 {
 	struct peer *peer;
 
-	/* Load peers from database */
-	if (!wallet_channels_load_active(ld->wallet))
+	/* Load channels from database */
+	if (!wallet_init_channels(ld->wallet))
 		fatal("Could not load channels from the database");
 
 	/* This is a poor-man's db join :( */
@@ -1371,7 +1468,7 @@ static struct command_result *json_disconnect(struct command *cmd,
 	channel = peer_active_channel(peer);
 	if (channel) {
 		if (*force) {
-			channel_fail_transient(channel,
+			channel_fail_reconnect(channel,
 					       "disconnect command force=true");
 			return command_success(cmd, json_stream_success(cmd));
 		}
@@ -1454,6 +1551,14 @@ static struct command_result *json_getinfo(struct command *cmd,
 				wallet_total_forward_fees(cmd->ld->wallet),
 				"msatoshi_fees_collected",
 				"fees_collected_msat");
+
+    if (!cmd->ld->topology->bitcoind->synced)
+	    json_add_string(response, "warning_bitcoind_sync",
+			    "Bitcoind is not up-to-date with network.");
+    else if (!topology_synced(cmd->ld->topology))
+	    json_add_string(response, "warning_lightningd_sync",
+			    "Still loading latest blocks from bitcoind.");
+
     return command_success(cmd, response);
 }
 
@@ -1696,7 +1801,7 @@ static struct command_result *json_dev_fail(struct command *cmd,
 				    "Could not find active channel with peer");
 	}
 
-	channel_internal_error(channel, "Failing due to dev-fail command");
+	channel_fail_permanent(channel, "Failing due to dev-fail command");
 	return command_success(cmd, json_stream_success(cmd));
 }
 

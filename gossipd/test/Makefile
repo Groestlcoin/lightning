@@ -1,4 +1,4 @@
-check: gossipd-tests
+check-units: gossipd-tests
 
 # Note that these actually #include everything they need, except ccan/ and bitcoin/.
 # That allows for unit testing of statics, and special effects.
@@ -8,11 +8,18 @@ GOSSIPD_TEST_PROGRAMS := $(GOSSIPD_TEST_OBJS:.o=)
 
 GOSSIPD_TEST_COMMON_OBJS :=			\
 	common/amount.o				\
+	common/bigsize.o			\
 	common/features.o			\
 	common/node_id.o			\
+	common/json.o				\
+	common/json_helpers.o			\
 	common/pseudorand.o			\
 	common/type_to_string.o			\
-	common/utils.o
+	common/utils.o				\
+	wire/gen_peer_wire.o			\
+	wire/fromwire.o				\
+	wire/tlvstream.o			\
+	wire/towire.o
 
 update-mocks: $(GOSSIPD_TEST_SRC:%=update-mocks/%)
 

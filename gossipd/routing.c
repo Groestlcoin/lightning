@@ -2334,7 +2334,16 @@ struct route_hop *get_route(const tal_t *ctx, struct routing_state *rstate,
 			   fuzz, &base_seed, max_hops, &fee);
 
 	/* Now restore the capacity. */
-	for (size_t i = 0; i < tal_count(excluded); i++) {
+	/* Restoring is done in reverse order, in order to properly
+	 * handle the case where a channel is indicated twice in
+	 * our input.
+	 * Entries in `saved_capacity` of that channel beyond the
+	 * first entry will be 0, only the first entry of that
+	 * channel will be the correct capacity.
+	 * By restoring in reverse order we ensure we can restore
+	 * the correct capacity.
+	 */
+	for (ssize_t i = tal_count(excluded) - 1; i >= 0; i--) {
 		struct chan *chan = get_channel(rstate, &excluded[i].scid);
 		if (!chan)
 			continue;
@@ -2476,12 +2485,10 @@ void route_prune(struct routing_state *rstate)
 	/* Anything below this highwater mark ought to be pruned */
 	const s64 highwater = now - rstate->prune_timeout;
 	struct chan **pruned = tal_arr(tmpctx, struct chan *, 0);
-	struct chan *chan;
-	struct unupdated_channel *uc;
 	u64 idx;
 
 	/* Now iterate through all channels and see if it is still alive */
-	for (chan = uintmap_first(&rstate->chanmap, &idx);
+	for (struct chan *chan = uintmap_first(&rstate->chanmap, &idx);
 	     chan;
 	     chan = uintmap_after(&rstate->chanmap, &idx)) {
 		/* Local-only?  Don't prune. */
@@ -2496,10 +2503,10 @@ void route_prune(struct routing_state *rstate)
 			    "Pruning channel %s from network view (ages %"PRIu64" and %"PRIu64"s)",
 			    type_to_string(tmpctx, struct short_channel_id,
 					   &chan->scid),
-			    is_halfchan_defined(&chan->half[0]) ? 0
-			    : now - chan->half[0].bcast.timestamp,
-			    is_halfchan_defined(&chan->half[1]) ? 0
-			    : now - chan->half[1].bcast.timestamp);
+			    is_halfchan_defined(&chan->half[0])
+			    ? now - chan->half[0].bcast.timestamp : 0,
+			    is_halfchan_defined(&chan->half[1])
+			    ? now - chan->half[1].bcast.timestamp : 0);
 
 			/* This may perturb iteration so do outside loop. */
 			tal_arr_expand(&pruned, chan);
@@ -2507,11 +2514,12 @@ void route_prune(struct routing_state *rstate)
 	}
 
 	/* Look for channels we had an announcement for, but no update. */
-	for (uc = uintmap_first(&rstate->unupdated_chanmap, &idx);
+	for (struct unupdated_channel *uc
+		     = uintmap_first(&rstate->unupdated_chanmap, &idx);
 	     uc;
 	     uc = uintmap_after(&rstate->unupdated_chanmap, &idx)) {
 		if (uc->added.ts.tv_sec < highwater) {
-			tal_arr_expand(&pruned, chan);
+			tal_free(uc);
 		}
 	}
 

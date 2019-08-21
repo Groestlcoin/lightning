@@ -2,7 +2,7 @@ from collections import namedtuple
 from fixtures import *  # noqa: F401,F403
 from flaky import flaky  # noqa: F401
 from lightning import RpcError
-from utils import DEVELOPER, only_one, wait_for, sync_blockheight, VALGRIND
+from utils import DEVELOPER, only_one, wait_for, sync_blockheight, VALGRIND, TIMEOUT, SLOW_MACHINE
 from bitcoin.core import CMutableTransaction, CMutableTxOut
 
 import binascii
@@ -132,6 +132,7 @@ def test_bad_opening(node_factory):
     l2.daemon.wait_for_log('to_self_delay 100 larger than 99')
 
 
+@unittest.skipIf(not DEVELOPER, "gossip without DEVELOPER=1 is slow")
 def test_opening_tiny_channel(node_factory):
     # Test custom min-capacity-sat parameters
     #
@@ -587,9 +588,8 @@ def test_shutdown_reconnect(node_factory):
 
     assert l1.bitcoin.rpc.getmempoolinfo()['size'] == 0
 
-    # This should return with an error, then close.
-    with pytest.raises(RpcError, match=r'Channel close negotiation not finished'):
-        l1.rpc.close(chan, False, 0)
+    # This should wait until we're closed.
+    l1.rpc.close(chan)
 
     l1.daemon.wait_for_log(' to CHANNELD_SHUTTING_DOWN')
     l2.daemon.wait_for_log(' to CHANNELD_SHUTTING_DOWN')
@@ -649,9 +649,7 @@ def test_shutdown_awaiting_lockin(node_factory, bitcoind):
     l1.daemon.wait_for_log('sendrawtx exit 0')
     bitcoind.generate_block(10)
 
-    # This should return with an error, then close.
-    with pytest.raises(RpcError, match=r'Channel close negotiation not finished'):
-        l1.rpc.close(chanid, False, 0)
+    l1.rpc.close(chanid)
 
     l1.daemon.wait_for_log('CHANNELD_AWAITING_LOCKIN to CHANNELD_SHUTTING_DOWN')
     l2.daemon.wait_for_log('CHANNELD_AWAITING_LOCKIN to CHANNELD_SHUTTING_DOWN')
@@ -863,9 +861,77 @@ def test_funding_external_wallet_corners(node_factory, bitcoind):
     l1.rpc.fundchannel_start(l2.info['id'], amount)
 
 
+def test_funding_cancel_race(node_factory, bitcoind, executor):
+    l1 = node_factory.get_node()
+
+    if VALGRIND or SLOW_MACHINE:
+        num = 5
+    else:
+        num = 100
+
+    nodes = node_factory.get_nodes(num)
+
+    # Speed up cleanup by not cleaning our test nodes: on my laptop, this goes
+    # from 214 to 15 seconds
+    node_factory.nodes = [l1]
+
+    num_complete = 0
+    num_cancel = 0
+
+    for count, n in enumerate(nodes):
+        l1.rpc.connect(n.info['id'], 'localhost', n.port)
+        l1.rpc.fundchannel_start(n.info['id'], "100000sat")
+
+        # We simply make up txids.  And submit two of each at once.
+        completes = []
+        cancels = []
+
+        # Switch order around.
+        for i in range(4):
+            if (i + count) % 2 == 0:
+                completes.append(executor.submit(l1.rpc.fundchannel_complete, n.info['id'], "9f1844419d2f41532a57fb5ef038cacb602000f7f37b3dae68dc2d047c89048f", 0))
+            else:
+                cancels.append(executor.submit(l1.rpc.fundchannel_cancel, n.info['id']))
+
+        # Only one should succeed.
+        success = False
+        for c in completes:
+            try:
+                c.result(TIMEOUT)
+                num_complete += 1
+                assert not success
+                success = True
+            except RpcError:
+                pass
+
+        # These may both succeed, iff the above didn't.
+        cancelled = False
+        for c in cancels:
+            try:
+                c.result(TIMEOUT)
+                cancelled = True
+                assert not success
+            except RpcError:
+                pass
+
+        if cancelled:
+            num_cancel += 1
+        else:
+            assert success
+
+    print("Cancelled {} complete {}".format(num_cancel, num_complete))
+    assert num_cancel + num_complete == len(nodes)
+
+    # We should have raced at least once!
+    if not VALGRIND:
+        assert num_cancel > 0
+        assert num_complete > 0
+
+
 def test_funding_external_wallet(node_factory, bitcoind):
     l1 = node_factory.get_node()
     l2 = node_factory.get_node()
+    l3 = node_factory.get_node()
 
     l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
     assert(l1.rpc.listpeers()['peers'][0]['id'] == l2.info['id'])
@@ -911,6 +977,11 @@ def test_funding_external_wallet(node_factory, bitcoind):
         node.daemon.wait_for_log(r'State changed from CHANNELD_AWAITING_LOCKIN to CHANNELD_NORMAL')
         channel = node.rpc.listpeers()['peers'][0]['channels'][0]
         assert amount * 1000 == channel['msatoshi_total']
+
+    # Test that we don't crash if peer disconnects after fundchannel_start
+    l2.connect(l3)
+    l2.rpc.fundchannel_start(l3.info["id"], amount)
+    l3.rpc.close(l2.info["id"])
 
 
 def test_lockin_between_restart(node_factory, bitcoind):
@@ -1088,8 +1159,7 @@ def test_update_fee(node_factory, bitcoind):
     l2.pay(l1, 100000000)
 
     # Now shutdown cleanly.
-    with pytest.raises(RpcError, match=r'Channel close negotiation not finished'):
-        l1.rpc.close(chanid, False, 0)
+    l1.rpc.close(chanid)
 
     l1.daemon.wait_for_log(' to CLOSINGD_COMPLETE')
     l2.daemon.wait_for_log(' to CLOSINGD_COMPLETE')
@@ -1109,7 +1179,6 @@ def test_update_fee(node_factory, bitcoind):
 
 @unittest.skipIf(not DEVELOPER, "needs DEVELOPER=1")
 def test_fee_limits(node_factory):
-    # FIXME: Test case where opening denied.
     l1, l2 = node_factory.line_graph(2, opts={'dev-max-fee-multiplier': 5, 'may_reconnect': True}, fundchannel=True)
 
     # L1 asks for stupid low fee (will actually hit the floor of 253)
@@ -1122,6 +1191,12 @@ def test_fee_limits(node_factory):
     # Note: may succeed, may fail with insufficient fee, depending on how
     # groestlcoind feels!
     l1.daemon.wait_for_log('sendrawtx exit')
+
+    # Trying to open a channel with too low a fee-rate is denied
+    l4 = node_factory.get_node()
+    l1.rpc.connect(l4.info['id'], 'localhost', l4.port)
+    with pytest.raises(RpcError, match='They sent error .* feerate_per_kw 253 below minimum'):
+        l1.fund_channel(l4, 10**6)
 
     # Restore to normal.
     l1.stop()
@@ -1244,6 +1319,10 @@ def test_forget_channel(node_factory):
     l1.restart()
     assert len(l1.rpc.listpeers()['peers']) == 0
 
+    # The entry in the channels table should still be there
+    assert l1.db_query("SELECT count(*) as c FROM channels;")[0]['c'] == 1
+    assert l2.db_query("SELECT count(*) as c FROM channels;")[0]['c'] == 1
+
 
 def test_peerinfo(node_factory, bitcoind):
     l1, l2 = node_factory.line_graph(2, fundchannel=False, opts={'may_reconnect': True})
@@ -1280,8 +1359,7 @@ def test_peerinfo(node_factory, bitcoind):
     assert l2.rpc.getpeer(l1.info['id'])['localfeatures'] == lfeatures
 
     # Close the channel to forget the peer
-    with pytest.raises(RpcError, match=r'Channel close negotiation not finished'):
-        l1.rpc.close(chan, False, 0)
+    l1.rpc.close(chan)
 
     wait_for(lambda: not only_one(l1.rpc.listpeers(l2.info['id'])['peers'])['connected'])
     wait_for(lambda: not only_one(l2.rpc.listpeers(l1.info['id'])['peers'])['connected'])
@@ -1508,7 +1586,7 @@ def test_dataloss_protection(node_factory, bitcoind):
     l1 = node_factory.get_node(may_reconnect=True, log_all_io=True,
                                feerates=(7500, 7500, 7500))
     l2 = node_factory.get_node(may_reconnect=True, log_all_io=True,
-                               feerates=(7500, 7500, 7500))
+                               feerates=(7500, 7500, 7500), allow_broken_log=True)
 
     l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
     # l1 should send out WIRE_INIT (0010)

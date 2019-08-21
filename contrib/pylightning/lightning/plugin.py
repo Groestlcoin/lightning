@@ -30,12 +30,15 @@ class Method(object):
      - RPC exposed by RPC passthrough
      - HOOK registered to be called synchronously by lightningd
     """
-    def __init__(self, name, func, mtype=MethodType.RPCMETHOD, category=None):
+    def __init__(self, name, func, mtype=MethodType.RPCMETHOD, category=None,
+                 desc=None, long_desc=None):
         self.name = name
         self.func = func
         self.mtype = mtype
         self.category = category
         self.background = False
+        self.desc = desc
+        self.long_desc = long_desc
 
 
 class Request(dict):
@@ -96,7 +99,7 @@ class Plugin(object):
 
     """
 
-    def __init__(self, stdout=None, stdin=None, autopatch=True):
+    def __init__(self, stdout=None, stdin=None, autopatch=True, dynamic=True):
         self.methods = {'init': Method('init', self._init, MethodType.RPCMETHOD)}
         self.options = {}
 
@@ -115,11 +118,14 @@ class Plugin(object):
         self.rpc_filename = None
         self.lightning_dir = None
         self.rpc = None
+        self.startup = True
+        self.dynamic = dynamic
         self.child_init = None
 
         self.write_lock = RLock()
 
-    def add_method(self, name, func, background=False, category=None):
+    def add_method(self, name, func, background=False, category=None, desc=None,
+                   long_desc=None):
         """Add a plugin method to the dispatch table.
 
         The function will be expected at call time (see `_dispatch`)
@@ -156,7 +162,7 @@ class Plugin(object):
             )
 
         # Register the function with the name
-        method = Method(name, func, MethodType.RPCMETHOD, category)
+        method = Method(name, func, MethodType.RPCMETHOD, category, desc, long_desc)
         method.background = background
         self.methods[name] = method
 
@@ -177,6 +183,19 @@ class Plugin(object):
             raise ValueError(
                 "Topic {} already has a handler".format(topic)
             )
+
+        # Make sure the notification callback has a **kwargs argument so that it
+        # doesn't break if we add more arguments to the call later on. Issue a
+        # warning if it does not.
+        s = inspect.signature(func)
+        kinds = [p.kind for p in s.parameters.values()]
+        if inspect.Parameter.VAR_KEYWORD not in kinds:
+            self.log(
+                "Notification handler {} for notification {} does not have a "
+                "variable keyword argument. It is strongly suggested to add "
+                "`**kwargs` as last parameter to hook and notification "
+                "handlers.".format(func.__name__, topic), level="warn")
+
         self.subscriptions[topic] = func
 
     def subscribe(self, topic):
@@ -216,23 +235,25 @@ class Plugin(object):
         else:
             return self.options[name]['default']
 
-    def async_method(self, method_name, category=None):
+    def async_method(self, method_name, category=None, desc=None, long_desc=None):
         """Decorator to add an async plugin method to the dispatch table.
 
         Internally uses add_method.
         """
         def decorator(f):
-            self.add_method(method_name, f, background=True, category=category)
+            self.add_method(method_name, f, background=True, category=category,
+                            desc=desc, long_desc=long_desc)
             return f
         return decorator
 
-    def method(self, method_name, category=None):
+    def method(self, method_name, category=None, desc=None, long_desc=None):
         """Decorator to add a plugin method to the dispatch table.
 
         Internally uses add_method.
         """
         def decorator(f):
-            self.add_method(method_name, f, background=False, category=category)
+            self.add_method(method_name, f, background=False, category=category,
+                            desc=desc, long_desc=long_desc)
             return f
         return decorator
 
@@ -243,6 +264,19 @@ class Plugin(object):
             raise ValueError(
                 "Method {} was already registered".format(name, self.methods[name])
             )
+
+        # Make sure the hook callback has a **kwargs argument so that it
+        # doesn't break if we add more arguments to the call later on. Issue a
+        # warning if it does not.
+        s = inspect.signature(func)
+        kinds = [p.kind for p in s.parameters.values()]
+        if inspect.Parameter.VAR_KEYWORD not in kinds:
+            self.log(
+                "Hook handler {} for hook {} does not have a variable keyword "
+                "argument. It is strongly suggested to add `**kwargs` as last "
+                "parameter to hook and notification handlers.".format(
+                    func.__name__, name), level="warn")
+
         method = Method(name, func, MethodType.HOOK)
         method.background = background
         self.methods[name] = method
@@ -480,14 +514,17 @@ class Plugin(object):
                 'name': method.name,
                 'category': method.category if method.category else "plugin",
                 'usage': " ".join(args),
-                'description': doc
+                'description': doc if not method.desc else method.desc
             })
+            if method.long_desc:
+                methods[len(methods) - 1]["long_description"] = method.long_desc
 
         return {
             'options': list(self.options.values()),
             'rpcmethods': methods,
             'subscriptions': list(self.subscriptions.keys()),
             'hooks': hooks,
+            'dynamic': self.dynamic
         }
 
     def _init(self, options, configuration, request):
@@ -495,6 +532,7 @@ class Plugin(object):
         self.lightning_dir = configuration['lightning-dir']
         path = os.path.join(self.lightning_dir, self.rpc_filename)
         self.rpc = LightningRpc(path)
+        self.startup = configuration['startup']
         for name, value in options.items():
             self.options[name]['value'] = value
 
