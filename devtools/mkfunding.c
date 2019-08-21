@@ -46,7 +46,7 @@ int main(int argc, char *argv[])
 	const struct utxo **utxomap;
 	struct bitcoin_signature sig;
 	struct bitcoin_txid txid;
-	const struct chainparams *chainparams = chainparams_for_network("bitcoin");
+	const struct chainparams *chainparams = chainparams_for_network("groestlcoin");
 	u8 **witnesses;
 
 	setup_locale();

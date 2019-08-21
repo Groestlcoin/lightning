@@ -159,7 +159,7 @@ static void bcli_failure(struct bitcoind *bitcoind,
 		fatal("%s exited %u (after %u other errors) '%.*s'; "
 		      "we have been retrying command for "
 		      "--bitcoin-retry-timeout=%"PRIu64" seconds; "
-		      "bitcoind setup or our --bitcoin-* configs broken?",
+		      "groestlcoind setup or our --bitcoin-* configs broken?",
 		      bcli_args(tmpctx, bcli),
 		      exitstatus,
 		      bitcoind->error_count,
@@ -1000,7 +1000,7 @@ static bool process_getclientversion(struct bitcoin_cli *bcli)
 	}
 
 	if (version < min_version)
-		fatal("Unsupported bitcoind version? bitcoind version: %"PRIu64","
+		fatal("Unsupported groestlcoind version? groestlcoind version: %"PRIu64","
 		      " supported minimum version: %"PRIu64"",
 		      version, min_version);
 
@@ -1065,17 +1065,17 @@ static void is_bitcoind_synced_yet(struct bitcoind *bitcoind,
 	} else if (headers != blocks) {
 		if (initial)
 			log_unusual(bitcoind->log,
-				    "Waiting for bitcoind to catch up"
+				    "Waiting for groestlcoind to catch up"
 				    " (%u blocks of %u)",
 				    blocks, headers);
 		else
 			log_debug(bitcoind->log,
-				  "Waiting for bitcoind to catch up"
+				  "Waiting for groestlcoind to catch up"
 				  " (%u blocks of %u)",
 				  blocks, headers);
 	} else {
 		if (!initial)
-			log_info(bitcoind->log, "Bitcoind now synced.");
+			log_info(bitcoind->log, "Groestlcoind now synced.");
 		bitcoind->synced = true;
 		return;
 	}
@@ -1186,7 +1186,7 @@ static char* check_blockchain_from_bitcoincli(const tal_t *ctx,
 
 	if(!json_tok_streq(output, valuetok,
 			   bitcoind->chainparams->bip70_name))
-		return tal_fmt(ctx, "Error blockchain for bitcoin-cli?"
+		return tal_fmt(ctx, "Error blockchain for groestlcoin-cli?"
 			       " Should be: %s",
 			       bitcoind->chainparams->bip70_name);
 

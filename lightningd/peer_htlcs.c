@@ -452,7 +452,7 @@ enum onion_type send_htlc_out(struct channel *out,
 
 	if (!topology_synced(out->peer->ld->topology)) {
 		log_info(out->log, "Attempt to send HTLC but still syncing"
-			 " with bitcoin network");
+			 " with groestlcoin network");
 		return WIRE_TEMPORARY_CHANNEL_FAILURE;
 	}
 

@@ -51,10 +51,10 @@ else
 fi
 
 if [ -z "$PATH_TO_BITCOIN" ]; then
-	if [ -d "$HOME/.bitcoin" ]; then
-		PATH_TO_BITCOIN="$HOME/.bitcoin"
+	if [ -d "$HOME/.groestlcoin" ]; then
+		PATH_TO_BITCOIN="$HOME/.groestlcoin"
 	else
-		echo "\$PATH_TO_BITCOIN not set to a .bitcoin dir?" >&2
+		echo "\$PATH_TO_BITCOIN not set to a .groestlcoin dir?" >&2
 		return
 	fi
 fi
@@ -84,7 +84,7 @@ alias bt-cli='bitcoin-cli -regtest'
 
 start_ln() {
 	# Start bitcoind in the background
-	test -f "$PATH_TO_BITCOIN/regtest/bitcoind.pid" || \
+	test -f "$PATH_TO_BITCOIN/regtest/groestlcoind.pid" || \
 		bitcoind -daemon -regtest -txindex
 
 	# Wait for it to start.
@@ -112,9 +112,9 @@ stop_ln() {
 	test ! -f /tmp/l2-regtest/lightningd-regtest.pid || \
 		(kill "$(cat /tmp/l2-regtest/lightningd-regtest.pid)"; \
 		rm /tmp/l2-regtest/lightningd-regtest.pid)
-	test ! -f "$PATH_TO_BITCOIN/regtest/bitcoind.pid" || \
-		(kill "$(cat "$PATH_TO_BITCOIN/regtest/bitcoind.pid")"; \
-		rm "$PATH_TO_BITCOIN/regtest/bitcoind.pid")
+	test ! -f "$PATH_TO_BITCOIN/regtest/groestlcoind.pid" || \
+		(kill "$(cat "$PATH_TO_BITCOIN/regtest/groestlcoind.pid")"; \
+		rm "$PATH_TO_BITCOIN/regtest/groestlcoind.pid")
 }
 
 cleanup_ln() {

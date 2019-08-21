@@ -1,5 +1,5 @@
 # This dockerfile is meant to cross compile with a x64 machine for a arm64v8 host
-# It is using multi stage build: 
+# It is using multi stage build:
 # * downloader: Download litecoin/bitcoin and qemu binaries needed for c-lightning
 # * builder: Cross compile c-lightning dependencies, then c-lightning itself with static linking
 # * final: Copy the binaries required at runtime
@@ -18,32 +18,27 @@ RUN wget -qO /opt/tini "https://github.com/krallin/tini/releases/download/v0.18.
     && echo "7c5463f55393985ee22357d976758aaaecd08defb3c5294d353732018169b019 /opt/tini" | sha256sum -c - \
     && chmod +x /opt/tini
 
-ARG BITCOIN_VERSION=0.17.0
-ENV BITCOIN_TARBALL bitcoin-$BITCOIN_VERSION-aarch64-linux-gnu.tar.gz
-ENV BITCOIN_URL https://bitcoincore.org/bin/bitcoin-core-$BITCOIN_VERSION/$BITCOIN_TARBALL
-ENV BITCOIN_ASC_URL https://bitcoincore.org/bin/bitcoin-core-$BITCOIN_VERSION/SHA256SUMS.asc
+		ENV GROESTLCOIN_VERSION 2.17.2
+		ENV GROESTLCOIN_TARBALL groestlcoin-${GROESTLCOIN_VERSION}-x86_64-linux-gnu.tar.gz
+		ENV GROESTLCOIN_URL https://github.com/Groestlcoin/groestlcoin/releases/download/v$GROESTLCOIN_VERSION/$GROESTLCOIN_TARBALL
+		ENV GROESTLCOIN_ASC_URL https://github.com/Groestlcoin/groestlcoin/releases/download/v$GROESTLCOIN_VERSION/SHA256SUMS.asc
 
-RUN mkdir /opt/bitcoin && cd /opt/bitcoin \
-    && wget -qO $BITCOIN_TARBALL "$BITCOIN_URL" \
-    && wget -qO bitcoin.asc "$BITCOIN_ASC_URL" \
-    && grep $BITCOIN_TARBALL bitcoin.asc | tee SHA256SUMS.asc \
-    && sha256sum -c SHA256SUMS.asc \
-    && BD=bitcoin-$BITCOIN_VERSION/bin \
-    && tar -xzvf $BITCOIN_TARBALL $BD/bitcoin-cli --strip-components=1 \
-    && rm $BITCOIN_TARBALL
-
-ENV LITECOIN_VERSION 0.14.2
-ENV LITECOIN_TARBALL litecoin-$LITECOIN_VERSION-aarch64-linux-gnu.tar.gz
-ENV LITECOIN_URL https://download.litecoin.org/litecoin-$LITECOIN_VERSION/linux/$LITECOIN_TARBALL
-ENV LITECOIN_SHA256 69449c3c8206f75cfdef929562b323326f1d0496f77f82608f9a974cbb2fd373
-
-# install litecoin binaries
-RUN mkdir /opt/litecoin && cd /opt/litecoin \
-    && wget -qO litecoin.tar.gz "$LITECOIN_URL" \
-    && echo "$LITECOIN_SHA256  litecoin.tar.gz" | sha256sum -c - \
-    && BD=litecoin-$LITECOIN_VERSION/bin \
-    && tar -xzvf litecoin.tar.gz $BD/litecoin-cli --strip-components=1 --exclude=*-qt \
-    && rm litecoin.tar.gz
+		RUN mkdir /opt/groestlcoin && cd /opt/groestlcoin \
+		    && wget -qO $GROESTLCOIN_TARBALL "$GROESTLCOIN_URL" \
+		    && for server in $(shuf -e ha.pool.sks-keyservers.net \
+		                             hkp://p80.pool.sks-keyservers.net:80 \
+		                             keyserver.ubuntu.com \
+		                             hkp://keyserver.ubuntu.com:80 \
+		                             pgp.mit.edu) ; do \
+		         gpg --batch --keyserver "$server" --recv-keys "$GROESTLCOIN_PGP_KEY" && break || : ; \
+		       done \
+		    && wget -qO groestlcoin.asc "$GROESTLCOIN_ASC_URL" \
+		    && gpg --verify groestlcoin.asc \
+		    && grep $GROESTLCOIN_TARBALL groestlcoin.asc | tee SHA256SUMS.asc \
+		    && sha256sum -c SHA256SUMS.asc \
+		    && BD=groestlcoin-$GROESTLCOIN_VERSION/bin \
+		    && tar -xzvf $GROESTLCOIN_TARBALL $BD/groestlcoin-cli --strip-components=1 \
+		    && rm $GROESTLCOIN_TARBALL
 
 FROM debian:stretch-slim as builder
 
@@ -96,7 +91,7 @@ FROM arm64v8/debian:stretch-slim as final
 COPY --from=downloader /usr/bin/qemu-aarch64-static /usr/bin/qemu-aarch64-static
 COPY --from=downloader /opt/tini /usr/bin/tini
 RUN apt-get update && apt-get install -y --no-install-recommends socat inotify-tools \
-    && rm -rf /var/lib/apt/lists/* 
+    && rm -rf /var/lib/apt/lists/*
 
 ENV LIGHTNINGD_DATA=/root/.lightning
 ENV LIGHTNINGD_RPC_PORT=9835
@@ -106,8 +101,7 @@ RUN mkdir $LIGHTNINGD_DATA && \
     touch $LIGHTNINGD_DATA/config
 VOLUME [ "/root/.lightning" ]
 COPY --from=builder /tmp/lightning_install/ /usr/local/
-COPY --from=downloader /opt/bitcoin/bin /usr/bin
-COPY --from=downloader /opt/litecoin/bin /usr/bin
+COPY --from=downloader /opt/groestlcoin/bin /usr/bin
 COPY tools/docker-entrypoint.sh entrypoint.sh
 
 EXPOSE 9735 9835

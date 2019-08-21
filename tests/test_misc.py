@@ -115,7 +115,7 @@ def test_bitcoin_failure(node_factory, bitcoind):
 
 
 def test_bitcoin_ibd(node_factory, bitcoind):
-    """Test that we recognize bitcoin in initial download mode"""
+    """Test that we recognize groestlcoin in initial download mode"""
     info = bitcoind.rpc.getblockchaininfo()
     info['initialblockdownload'] = True
 
@@ -131,18 +131,18 @@ def test_bitcoin_ibd(node_factory, bitcoind):
     # "Finish" IDB.
     l1.daemon.rpcproxy.mock_rpc('getblockchaininfo', None)
 
-    l1.daemon.wait_for_log('Bitcoind now synced')
+    l1.daemon.wait_for_log('Groestlcoind now synced')
     assert 'warning_bitcoind_sync' not in l1.rpc.getinfo()
 
 
 def test_lightningd_still_loading(node_factory, bitcoind, executor):
-    """Test that we recognize we haven't got all blocks from bitcoind"""
+    """Test that we recognize we haven't got all blocks from groestlcoind"""
 
     mock_release = Event()
 
     # This is slow enough that we're going to notice.
     def mock_getblock(r):
-        conf_file = os.path.join(bitcoind.bitcoin_dir, 'bitcoin.conf')
+        conf_file = os.path.join(bitcoind.bitcoin_dir, 'groestlcoin.conf')
         brpc = RawProxy(btc_conf_file=conf_file)
         if r['params'][0] == slow_blockid:
             mock_release.wait(TIMEOUT)

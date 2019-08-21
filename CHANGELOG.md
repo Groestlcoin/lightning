@@ -105,7 +105,7 @@ This release named by (C-Lightning Core Team member) Lisa Neigut @niftynei.
 - JSON API: A new parameter is added to `fundchannel`, which now accepts an utxo array to use to fund the channel.
 - Build: Non-developer builds are now done with "-Og" optimization.
 - JSON API: `pay` will no longer return failure until it is no longer retrying; previously it could "timeout" but still make the payment.
-- JSON API: the command objects that `help` outputs now contain a new string field : `category` (can be "bitcoin", "channels", "network", "payment", "plugins", "utility", "developer" for native commands, or any other new category set by a plugin).
+- JSON API: the command objects that `help` outputs now contain a new string field : `category` (can be "groestlcoin", "channels", "network", "payment", "plugins", "utility", "developer" for native commands, or any other new category set by a plugin).
 - Plugin: a plugin can now set the category of a newly created RPC command. This possibility has been added to libplugin.c and pylightning.
 - lightning-cli: the human readable help is now more human and more readable : commands are sorted alphabetically and ordered by categories.
 
