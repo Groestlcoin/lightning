@@ -1,24 +1,8 @@
 FROM debian:stretch-slim as builder
 
-RUN apk add --no-cache \
-     ca-certificates \
-     autoconf \
-     automake \
-     build-base \
-     libressl \
-     libtool \
-     gmp-dev \
-     python \
-     python-dev \
-     python3 \
-     py3-mako \
-     sqlite-dev \
-     wget \
-     git \
-     file \
-     gnupg \
-     swig \
-     zlib-dev
+RUN apt-get update && apt-get install -y --no-install-recommends \
+  ca-certificates autoconf automake build-essential git libtool libgmp-dev \
+  libsqlite3-dev python python3 python3-mako net-tools zlib1g-dev wget gnupg dirmngr gettext
 
 WORKDIR /opt
 
