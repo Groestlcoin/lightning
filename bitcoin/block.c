@@ -89,6 +89,7 @@ void bitcoin_block_blkid(const struct bitcoin_block *b,
 		sha256_le32(&shactx, b->hdr.target);
 		sha256_le32(&shactx, b->hdr.nonce);
 	}
+	groestl512_double(&shactx, &out->shad);
 }
 
 /* We do the same hex-reversing crud as txids. */
