@@ -5,10 +5,10 @@ CWD=$(pwd)
 export SLOW_MACHINE=1
 export CC=${COMPILER:-gcc}
 export DEVELOPER=${DEVELOPER:-1}
+export EXPERIMENTAL_FEATURES=${EXPERIMENTAL_FEATURES:-0}
 export SOURCE_CHECK_ONLY=${SOURCE_CHECK_ONLY:-"false"}
 export COMPAT=${COMPAT:-1}
 export PATH=$CWD/dependencies/bin:"$HOME"/.local/bin:"$PATH"
-export TIMEOUT=180
 export PYTEST_PAR=2
 export PYTHONPATH=$PWD/contrib/pylightning:$PYTHONPATH
 # If we're not in developer mode, tests spend a lot of time waiting for gossip!
@@ -28,8 +28,7 @@ if [ ! -f dependencies/bin/bitcoind ]; then
 fi
 
 pyenv global 3.7.1
-pip3 install --user --quiet mako
-pip3 install --user --quiet -r tests/requirements.txt
+pip3 install --user --quiet -r requirements.txt -r tests/requirements.txt -r doc/requirements.txt
 pip3 install --quiet \
      pytest-test-groups==1.0.3
 
@@ -38,6 +37,12 @@ echo -en 'travis_fold:start:script.1\\r'
 ./configure CC="$CC"
 cat config.vars
 echo -en 'travis_fold:end:script.1\\r'
+
+cat > pytest.ini << EOF
+[pytest]
+addopts=-p no:logging --color=no --force-flaky
+EOF
+
 
 if [ "$SOURCE_CHECK_ONLY" == "false" ]; then
     echo -en 'travis_fold:start:script.2\\r'

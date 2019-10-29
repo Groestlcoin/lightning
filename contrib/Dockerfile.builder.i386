@@ -8,7 +8,6 @@ WORKDIR /build
 
 RUN apt-get -qq update && \
     apt-get -qq install --no-install-recommends --allow-unauthenticated -yy \
-	asciidoc \
 	autoconf \
 	automake \
 	clang \
@@ -24,6 +23,7 @@ RUN apt-get -qq update && \
 	libprotobuf-c-dev \
 	libsqlite3-dev \
 	libgmp-dev \
+	gettext \
 	git \
 	python \
 	python3 \

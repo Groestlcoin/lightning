@@ -47,17 +47,27 @@ There are 4 supported installation options:
 
 ### Starting `lightningd`
 
-In order to start `lightningd` you will need to have a local `groestlcoind`
-node running in either testnet or regtest mode:
+If you want to experiment with `lightningd`, there's a script to set
+up a `groestlcoind` regtest test network of two local lightning nodes,
+which provides a convenient `start_ln` helper:
 
-    groestlcoind -daemon -testnet
+```bash
+. contrib/startup_regtest.sh
+```
 
-Wait until `groestlcoind` has synchronized with the testnet network.
+To test with real groestlcoin,  you will need to have a local `groestlcoind` node running:
 
-Make sure that you do not have `walletbroadcast=0` in your
-`~/.groestlcoin/groestlcoin.conf`, or you may run into trouble.
-Notice that currently pruned nodes are not supported and may result in
-`lightningd` being unable to synchronize with the blockchain.
+```bash
+groestlcoind -daemon
+```
+
+Wait until `groestlcoind` has synchronized with the network.
+
+Make sure that you do not have `walletbroadcast=0` in your `~/.groestlcoin/groestlcoin.conf`, or you may run into trouble.
+Notice that running `lightningd` against a pruned node may cause some issues if not managed carefully, see [below](#pruning) for more information.
+
+
+This creates a `.lightning/` subdirectory in your home directory: see `man -l doc/lightningd.8` (or https://lightning.readthedocs.io/) for more runtime options.
 
 ### Using The JSON-RPC Interface
 
@@ -68,19 +78,21 @@ will offer specific information on that command.
 
 Useful commands:
 
-* [newaddr](doc/lightning-newaddr.7.txt): get a bitcoin address to deposit funds into your lightning node.
-* [listfunds](doc/lightning-listfunds.7.txt): see where your funds are.
-* [connect](doc/lightning-connect.7.txt): connect to another lightning node.
-* [fundchannel](doc/lightning-fundchannel.7.txt): create a channel to another connected node.
-* [invoice](doc/lightning-invoice.7.txt): create an invoice to get paid by another node.
-* [pay](doc/lightning-pay.7.txt): pay someone else's invoice.
-* [plugin](doc/lightning-plugin.7.txt): commands to control extensions.
+* [newaddr](doc/lightning-newaddr.7.md): get a bitcoin address to deposit funds into your lightning node.
+* [listfunds](doc/lightning-listfunds.7.md): see where your funds are.
+* [connect](doc/lightning-connect.7.md): connect to another lightning node.
+* [fundchannel](doc/lightning-fundchannel.7.md): create a channel to another connected node.
+* [invoice](doc/lightning-invoice.7.md): create an invoice to get paid by another node.
+* [pay](doc/lightning-pay.7.md): pay someone else's invoice.
+* [plugin](doc/lightning-plugin.7.md): commands to control extensions.
 
 ### Care And Feeding Of Your New Lightning Node
 
 Once you've started for the first time, there's a script called
 `contrib/bootstrap-node.sh` which will connect you to other nodes on
 the lightning network.
+
+You can encrypt the BIP32 root seed (what is stored in `hsm_secret`) by passing the `--encrypted-hsm` startup argument. You can start `lightningd` with `--encrypted-hsm` on an already existing `lightning-dir` (with a not encrypted `hsm_secret`). If you pass that option, you __will not__ be able to start `lightningd` (with the same wallet) again without the password, so please beware with your password management. Also beware of not feeling too safe with an encrypted `hsm_secret`: unlike for `bitcoind` where the wallet encryption can restrict the usage of some RPC command, `lightningd` always need to access keys from the wallet which is thus __not locked__ (yet), even with an encrypted BIP32 master seed.
 
 There are also numerous plugins available for c-lightning which add
 capabilities: in particular there's a collection at:

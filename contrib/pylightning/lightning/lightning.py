@@ -5,7 +5,7 @@ from math import floor, log10
 import socket
 import warnings
 
-__version__ = "0.0.7.3"
+__version__ = "0.0.7.4"
 
 
 class RpcError(ValueError):
@@ -156,6 +156,9 @@ class Millisatoshi:
     def __mod__(self, other):
         return Millisatoshi(int(self) % other)
 
+    def __radd__(self, other):
+        return Millisatoshi(int(self) + int(other))
+
 
 class UnixDomainSocketRpc(object):
     def __init__(self, socket_path, executor=None, logger=logging, encoder_cls=json.JSONEncoder, decoder=json.JSONDecoder()):
@@ -225,7 +228,9 @@ class UnixDomainSocketRpc(object):
         sock.close()
 
         self.logger.debug("Received response for %s call: %r", method, resp)
-        if "error" in resp:
+        if not isinstance(resp, dict):
+            raise ValueError("Malformed response, response is not a dictionary %s." % resp)
+        elif "error" in resp:
             raise RpcError(method, payload, resp['error'])
         elif "result" not in resp:
             raise ValueError("Malformed response, \"result\" missing.")
@@ -323,31 +328,32 @@ class LightningRpc(UnixDomainSocketRpc):
     def close(self, peer_id, *args, **kwargs):
         """
         Close the channel with peer {id}, forcing a unilateral
-        close after {unilateraltimeout} seconds if non-zero.
+        close after {unilateraltimeout} seconds if non-zero, and
+        the to-local output will be sent to {destination}.
 
         Deprecated usage has {force} and {timeout} args.
         """
-        unilateraltimeout = None
 
         if 'force' in kwargs or 'timeout' in kwargs:
             return self._deprecated_close(peer_id, *args, **kwargs)
 
         # Single arg is ambigious.
-        if len(args) == 1:
+        if len(args) >= 1:
             if isinstance(args[0], bool):
                 return self._deprecated_close(peer_id, *args, **kwargs)
-            unilateraltimeout = args[0]
-        elif len(args) > 1:
-            return self._deprecated_close(peer_id, *args, **kwargs)
+            if len(args) == 2:
+                if args[0] is None and isinstance(args[1], int):
+                    return self._deprecated_close(peer_id, *args, **kwargs)
 
-        if 'unilateraltimeout' in kwargs:
-            unilateraltimeout = kwargs['unilateraltimeout']
+        def _close(peer_id, unilateraltimeout=None, destination=None):
+            payload = {
+                "id": peer_id,
+                "unilateraltimeout": unilateraltimeout,
+                "destination": destination
+            }
+            return self.call("close", payload)
 
-        payload = {
-            "id": peer_id,
-            "unilateraltimeout": unilateraltimeout
-        }
-        return self.call("close", payload)
+        return _close(peer_id, *args, **kwargs)
 
     def connect(self, peer_id, host=None, port=None):
         """
@@ -427,16 +433,6 @@ class LightningRpc(UnixDomainSocketRpc):
         """
         return self.call("dev-memleak")
 
-    def dev_query_scids(self, id, scids):
-        """
-        Ask peer for a particular set of scids
-        """
-        payload = {
-            "id": id,
-            "scids": scids
-        }
-        return self.call("dev-query-scids", payload)
-
     def dev_reenable_commit(self, peer_id):
         """
         Re-enable the commit timer on peer {id}
@@ -503,15 +499,11 @@ class LightningRpc(UnixDomainSocketRpc):
         }
         return self.call("feerates", payload)
 
-    def fundchannel(self, node_id, satoshi, feerate=None, announce=True, minconf=None, utxos=None):
-        """
-        Fund channel with {id} using {satoshi} satoshis with feerate
-        of {feerate} (uses default feerate if unset).
-        If {announce} is False, don't send channel announcements.
-        Only select outputs with {minconf} confirmations.
-        If {utxos} is specified (as a list of 'txid:vout' strings),
-        fund a channel from these specifics utxos.
-        """
+    def _deprecated_fundchannel(self, node_id, satoshi, feerate=None, announce=True, minconf=None, utxos=None):
+        warnings.warn("fundchannel: the 'satoshi' field is renamed 'amount' : expect removal"
+                      " in Mid-2020",
+                      DeprecationWarning)
+
         payload = {
             "id": node_id,
             "satoshi": satoshi,
@@ -522,16 +514,37 @@ class LightningRpc(UnixDomainSocketRpc):
         }
         return self.call("fundchannel", payload)
 
-    def fundchannel_start(self, node_id, satoshi, feerate=None, announce=True):
+    def fundchannel(self, node_id, *args, **kwargs):
         """
-        Start channel funding with {id} for {satoshi} satoshis
-        with feerate of {feerate} (uses default feerate if unset).
+        Fund channel with {id} using {amount} satoshis with feerate
+        of {feerate} (uses default feerate if unset).
         If {announce} is False, don't send channel announcements.
-        Returns a Bech32 {funding_address} for an external wallet
-        to create a funding transaction for. Requires a call to
-        'fundchannel_complete' to complete channel establishment
-        with peer.
+        Only select outputs with {minconf} confirmations.
+        If {utxos} is specified (as a list of 'txid:vout' strings),
+        fund a channel from these specifics utxos.
         """
+
+        if 'satoshi' in kwargs:
+            return self._deprecated_fundchannel(node_id, *args, **kwargs)
+
+        def _fundchannel(node_id, amount, feerate=None, announce=True, minconf=None, utxos=None):
+            payload = {
+                "id": node_id,
+                "amount": amount,
+                "feerate": feerate,
+                "announce": announce,
+                "minconf": minconf,
+                "utxos": utxos
+            }
+            return self.call("fundchannel", payload)
+
+        return _fundchannel(node_id, *args, **kwargs)
+
+    def _deprecated_fundchannel_start(self, node_id, satoshi, feerate=None, announce=True):
+        warnings.warn("fundchannel_start: the 'satoshi' field is renamed 'amount' : expect removal"
+                      " in Mid-2020",
+                      DeprecationWarning)
+
         payload = {
             "id": node_id,
             "satoshi": satoshi,
@@ -539,6 +552,32 @@ class LightningRpc(UnixDomainSocketRpc):
             "announce": announce,
         }
         return self.call("fundchannel_start", payload)
+
+    def fundchannel_start(self, node_id, *args, **kwargs):
+        """
+        Start channel funding with {id} for {amount} satoshis
+        with feerate of {feerate} (uses default feerate if unset).
+        If {announce} is False, don't send channel announcements.
+        Returns a Bech32 {funding_address} for an external wallet
+        to create a funding transaction for. Requires a call to
+        'fundchannel_complete' to complete channel establishment
+        with peer.
+        """
+
+        if 'satoshi' in kwargs:
+            return self._deprecated_fundchannel_start(node_id, *args, **kwargs)
+
+        def _fundchannel_start(node_id, amount, feerate=None, announce=True, close_to=None):
+            payload = {
+                "id": node_id,
+                "amount": amount,
+                "feerate": feerate,
+                "announce": announce,
+                "close_to": close_to,
+            }
+            return self.call("fundchannel_start", payload)
+
+        return _fundchannel_start(node_id, *args, **kwargs)
 
     def fundchannel_cancel(self, node_id):
         """
@@ -592,8 +631,8 @@ class LightningRpc(UnixDomainSocketRpc):
         {cltv} (default 9). If specified search from {fromid} otherwise use
         this node as source. Randomize the route with up to {fuzzpercent}
         (0.0 -> 100.0, default 5.0). {exclude} is an optional array of
-        scid/direction to exclude. Limit the number of hops in the route to
-        {maxhops}.
+        scid/direction or node-id to exclude. Limit the number of hops in the
+        route to {maxhops}.
         """
         payload = {
             "id": node_id,
@@ -800,17 +839,36 @@ class LightningRpc(UnixDomainSocketRpc):
         }
         return self.call("plugin", payload)
 
-    def sendpay(self, route, payment_hash, description=None, msatoshi=None):
-        """
-        Send along {route} in return for preimage of {payment_hash}
-        """
+    def _deprecated_sendpay(self, route, payment_hash, description, msatoshi=None):
+        warnings.warn("sendpay: the 'description' field is renamed 'label' : expect removal"
+                      " in early-2020",
+                      DeprecationWarning)
         payload = {
             "route": route,
             "payment_hash": payment_hash,
-            "description": description,
+            "label": description,
             "msatoshi": msatoshi,
         }
         return self.call("sendpay", payload)
+
+    def sendpay(self, route, payment_hash, *args, **kwargs):
+        """
+        Send along {route} in return for preimage of {payment_hash}
+        """
+
+        if 'description' in kwargs:
+            return self._deprecated_sendpay(route, payment_hash, *args, **kwargs)
+
+        def _sendpay(route, payment_hash, label=None, msatoshi=None):
+            payload = {
+                "route": route,
+                "payment_hash": payment_hash,
+                "label": label,
+                "msatoshi": msatoshi,
+            }
+            return self.call("sendpay", payload)
+
+        return _sendpay(route, payment_hash, *args, **kwargs)
 
     def setchannelfee(self, id, base=None, ppm=None):
         """
@@ -860,7 +918,7 @@ class LightningRpc(UnixDomainSocketRpc):
         }
         return self.call("waitsendpay", payload)
 
-    def withdraw(self, destination, satoshi, feerate=None, minconf=None):
+    def withdraw(self, destination, satoshi, feerate=None, minconf=None, utxos=None):
         """
         Send to {destination} address {satoshi} (or "all")
         amount via Groestlcoin transaction. Only select outputs
@@ -871,19 +929,15 @@ class LightningRpc(UnixDomainSocketRpc):
             "satoshi": satoshi,
             "feerate": feerate,
             "minconf": minconf,
+            "utxos": utxos,
         }
+
         return self.call("withdraw", payload)
 
-    def txprepare(self, destination, satoshi, feerate=None, minconf=None):
-        Synchronize the state of our funds with groestlcoind
-        """
-        Prepare a bitcoin transaction which sends to {destination} address
-        {satoshi} (or "all") amount via Bitcoin transaction. Only select outputs
-        with {minconf} confirmations.
-
-        Outputs will be reserved until you call txdiscard or txsend, or
-        lightningd restarts.
-        """
+    def _deprecated_txprepare(self, destination, satoshi, feerate=None, minconf=None):
+        warnings.warn("txprepare now takes output arg: expect removal"
+                      " in Mid-2020",
+                      DeprecationWarning)
         payload = {
             "destination": destination,
             "satoshi": satoshi,
@@ -891,6 +945,33 @@ class LightningRpc(UnixDomainSocketRpc):
             "minconf": minconf,
         }
         return self.call("txprepare", payload)
+
+    def txprepare(self, *args, **kwargs):
+        """
+        Prepare a groestlcoin transaction which sends to [outputs].
+        The format of output is like [{address1: amount1},
+        {address2: amount2}], or [{address: "all"}]).
+        Only select outputs with {minconf} confirmations.
+
+        Outputs will be reserved until you call txdiscard or txsend, or
+        lightningd restarts.
+        """
+        if 'destination' in kwargs or 'satoshi' in kwargs:
+            return self._deprecated_txprepare(*args, **kwargs)
+
+        if not isinstance(args[0], list):
+            return self._deprecated_txprepare(*args, **kwargs)
+
+        def _txprepare(outputs, feerate=None, minconf=None, utxos=None):
+            payload = {
+                "outputs": outputs,
+                "feerate": feerate,
+                "minconf": minconf,
+                "utxos": utxos,
+            }
+            return self.call("txprepare", payload)
+
+        return _txprepare(*args, **kwargs)
 
     def txdiscard(self, txid):
         """
@@ -910,3 +991,24 @@ class LightningRpc(UnixDomainSocketRpc):
             "txid": txid
         }
         return self.call("txsend", payload)
+
+    def signmessage(self, message):
+        """
+        Sign a message with this node's secret key.
+        """
+        payload = {
+            "message": message
+        }
+        return self.call("signmessage", payload)
+
+    def checkmessage(self, message, zbase, pubkey=None):
+        """
+        Check if a message was signed (with a specific key).
+        Use returned field ['verified'] to get result.
+        """
+        payload = {
+            "message": message,
+            "zbase": zbase,
+            "pubkey": pubkey,
+        }
+        return self.call("checkmessage", payload)

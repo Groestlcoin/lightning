@@ -4,6 +4,7 @@
 #include <ccan/tal/str/str.h>
 #include <common/amount.h>
 #include <common/json_command.h>
+#include <common/json_helpers.h>
 #include <common/json_tok.h>
 #include <common/jsonrpc_errors.h>
 #include <common/param.h>
@@ -183,7 +184,47 @@ struct command_result *param_sat(struct command *cmd, const char *name,
 		return NULL;
 
 	return command_fail(cmd, JSONRPC2_INVALID_PARAMS,
-			    "'%s' should be a satoshi amount, not '%.*s'",
-			    name, tok->end - tok->start, buffer + tok->start);
+			    "%s should be a satoshi amount, not '%.*s'",
+			    name ? name : "amount field",
+			    tok->end - tok->start, buffer + tok->start);
 }
 
+struct command_result *param_sat_or_all(struct command *cmd, const char *name,
+					const char *buffer, const jsmntok_t *tok,
+					struct amount_sat **sat)
+{
+	if (json_tok_streq(buffer, tok, "all")) {
+		*sat = tal(cmd, struct amount_sat);
+		**sat = AMOUNT_SAT(-1ULL);
+		return NULL;
+	}
+	return param_sat(cmd, name, buffer, tok, sat);
+}
+
+struct command_result *param_node_id(struct command *cmd, const char *name,
+		                     const char *buffer, const jsmntok_t *tok,
+				     struct node_id **id)
+{
+	*id = tal(cmd, struct node_id);
+	if (json_to_node_id(buffer, tok, *id))
+		return NULL;
+
+	return command_fail(cmd, JSONRPC2_INVALID_PARAMS,
+			    "'%s' should be a node id, not '%.*s'",
+			    name, json_tok_full_len(tok),
+			    json_tok_full(buffer, tok));
+}
+
+struct command_result *param_channel_id(struct command *cmd, const char *name,
+					const char *buffer, const jsmntok_t *tok,
+					struct channel_id **cid)
+{
+	*cid = tal(cmd, struct channel_id);
+	if (json_to_channel_id(buffer, tok, *cid))
+		return NULL;
+
+	return command_fail(cmd, JSONRPC2_INVALID_PARAMS,
+			    "'%s' should be a channel id, not '%.*s'",
+			    name, json_tok_full_len(tok),
+			    json_tok_full(buffer, tok));
+}

@@ -1,10 +1,21 @@
-FROM debian:stretch-slim as builder
+# This dockerfile is meant to compile a c-lightning x64 image
+# It is using multi stage build:
+# * downloader: Download groestlcoin and qemu binaries needed for c-lightning
+# * builder: Compile c-lightning dependencies, then c-lightning itself with static linking
+# * final: Copy the binaries required at runtime
+# The resulting image uploaded to dockerhub will only contain what is needed for runtime.
+# From the root of the repository, run "docker build -t yourimage:yourtag ."
+FROM debian:stretch-slim as downloader
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-  ca-certificates autoconf automake build-essential git libtool libgmp-dev \
-  libsqlite3-dev python python3 python3-mako net-tools zlib1g-dev wget gnupg dirmngr gettext
+RUN set -ex \
+	&& apt-get update \
+	&& apt-get install -qq --no-install-recommends ca-certificates dirmngr wget
 
 WORKDIR /opt
+
+RUN wget -qO /opt/tini "https://github.com/krallin/tini/releases/download/v0.18.0/tini" \
+    && echo "12d20136605531b09a2c2dac02ccee85e1b874eb322ef6baf7561cd93f93c855 /opt/tini" | sha256sum -c - \
+    && chmod +x /opt/tini
 
 ENV GROESTLCOIN_VERSION 2.17.2
 ENV GROESTLCOIN_TARBALL groestlcoin-${GROESTLCOIN_VERSION}-x86_64-linux-gnu.tar.gz
@@ -29,7 +40,29 @@ RUN mkdir /opt/groestlcoin && cd /opt/groestlcoin \
     && tar -xzvf $GROESTLCOIN_TARBALL $BD/groestlcoin-cli --strip-components=1 \
     && rm $GROESTLCOIN_TARBALL
 
+FROM debian:stretch-slim as builder
+
 ENV LIGHTNINGD_VERSION=master
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    autoconf \
+    automake \
+    build-essential \
+    git \
+    libtool \
+    python \
+    python3 \
+    python3-mako \
+    wget \
+    gnupg \
+    dirmngr \
+    git \
+    gettext \
+    unzip \
+    tclsh \
+    libsqlite3-dev \
+    libgmp-dev \
+    zlib1g-dev
 
 WORKDIR /opt/lightningd
 COPY . /tmp/lightning
@@ -37,16 +70,21 @@ RUN git clone --recursive /tmp/lightning . && \
     git checkout $(git --work-tree=/tmp/lightning --git-dir=/tmp/lightning/.git rev-parse HEAD)
 
 ARG DEVELOPER=0
-RUN ./configure --prefix=/tmp/lightning_install && make -j3 DEVELOPER=${DEVELOPER} && make install
+RUN ./configure --prefix=/tmp/lightning_install --enable-static && make -j3 DEVELOPER=${DEVELOPER} && make install
 
-FROM debian:stretch-slim
-
-RUN apt-get update && apt-get install -y \
-	autoconf automake build-essential git libtool libgmp-dev \
-	libsqlite3-dev python python3 net-tools zlib1g-dev jq bc
+FROM debian:stretch-slim as final
+COPY --from=downloader /opt/tini /usr/bin/tini
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    socat \
+    inotify-tools \
+    libgmp10 \
+    libsqlite3-0 \
+    zlib1g \
+    && rm -rf /var/lib/apt/lists/*
 
 ENV LIGHTNINGD_DATA=/root/.lightning
 ENV LIGHTNINGD_RPC_PORT=9835
+ENV LIGHTNINGD_PORT=9735
 
 RUN mkdir $LIGHTNINGD_DATA && \
     touch $LIGHTNINGD_DATA/config
@@ -57,4 +95,4 @@ COPY --from=builder /opt/groestlcoin/bin /usr/bin
 COPY tools/docker-entrypoint.sh entrypoint.sh
 
 EXPOSE 9735 9835
-ENTRYPOINT  [ "/sbin/tini", "-g", "--", "./entrypoint.sh" ]
+ENTRYPOINT  [ "/usr/bin/tini", "-g", "--", "./entrypoint.sh" ]

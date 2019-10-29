@@ -1,6 +1,6 @@
 DEVTOOLS_SRC := devtools/gen_print_wire.c devtools/gen_print_onion_wire.c devtools/print_wire.c
 DEVTOOLS_OBJS := $(DEVTOOLS_SRC:.c=.o)
-DEVTOOLS := devtools/bolt11-cli devtools/decodemsg devtools/onion devtools/dump-gossipstore devtools/gossipwith devtools/create-gossipstore devtools/mkcommit devtools/mkfunding
+DEVTOOLS := devtools/bolt11-cli devtools/decodemsg devtools/onion devtools/dump-gossipstore devtools/gossipwith devtools/create-gossipstore devtools/mkcommit devtools/mkfunding devtools/mkclose devtools/mkgossip devtools/mkencoded devtools/checkchannels devtools/mkquery devtools/lightning-checkmessage
 DEVTOOLS_TOOL_SRC := $(DEVTOOLS:=.c)
 DEVTOOLS_TOOL_OBJS := $(DEVTOOLS_TOOL_SRC:.c=.o)
 
@@ -14,10 +14,14 @@ DEVTOOLS_COMMON_OBJS :=				\
 	common/bigsize.o			\
 	common/bolt11.o				\
 	common/crypto_state.o			\
-	common/decode_short_channel_ids.o	\
+	common/decode_array.o			\
+	common/features.o			\
+	common/gossip_rcvd_filter.o		\
 	common/hash_u5.o			\
+	common/memleak.o			\
 	common/node_id.o			\
 	common/per_peer_state.o			\
+	common/pseudorand.o			\
 	common/json.o				\
 	common/json_helpers.o			\
 	common/type_to_string.o			\
@@ -65,6 +69,18 @@ devtools/gen_print_onion_wire.o: devtools/gen_print_onion_wire.h devtools/print_
 devtools/mkcommit: $(DEVTOOLS_COMMON_OBJS) $(CCAN_OBJS) $(BITCOIN_OBJS) common/derive_basepoints.o common/keyset.o common/key_derive.o common/initial_commit_tx.o common/permute_tx.o wire/fromwire.o wire/towire.o wire/tlvstream.o devtools/mkcommit.o channeld/full_channel.o common/initial_channel.o common/htlc_state.o common/pseudorand.o common/htlc_tx.o channeld/commit_tx.o common/htlc_trim.o
 
 devtools/mkfunding: $(DEVTOOLS_COMMON_OBJS) $(CCAN_OBJS) $(BITCOIN_OBJS) wire/fromwire.o wire/towire.o wire/tlvstream.o common/funding_tx.o common/utxo.o common/permute_tx.o common/key_derive.o devtools/mkfunding.o
+
+devtools/mkclose: $(DEVTOOLS_COMMON_OBJS) $(CCAN_OBJS) $(BITCOIN_OBJS) wire/fromwire.o wire/towire.o wire/tlvstream.o devtools/mkclose.o
+
+devtools/mkgossip: $(DEVTOOLS_COMMON_OBJS) $(CCAN_OBJS) $(BITCOIN_OBJS) wire/fromwire.o wire/towire.o wire/tlvstream.o common/funding_tx.o common/utxo.o common/permute_tx.o common/key_derive.o devtools/mkgossip.o
+
+devtools/mkencoded: $(DEVTOOLS_COMMON_OBJS) $(CCAN_OBJS) $(BITCOIN_OBJS) wire/fromwire.o wire/towire.o wire/tlvstream.o devtools/mkencoded.o
+
+devtools/checkchannels: $(DEVTOOLS_COMMON_OBJS) $(CCAN_OBJS) $(BITCOIN_OBJS) common/configdir.o wire/fromwire.o wire/towire.o wire/tlvstream.o devtools/checkchannels.o
+
+devtools/mkquery: $(DEVTOOLS_COMMON_OBJS) $(CCAN_OBJS) $(BITCOIN_OBJS) wire/fromwire.o wire/towire.o wire/tlvstream.o devtools/mkquery.o
+
+devtools/lightning-checkmessage: $(DEVTOOLS_COMMON_OBJS) $(CCAN_OBJS) $(BITCOIN_OBJS) wire/fromwire.o wire/towire.o wire/tlvstream.o devtools/lightning-checkmessage.o
 
 # Make sure these depend on everything.
 ALL_PROGRAMS += $(DEVTOOLS)

@@ -4,6 +4,7 @@
 #include <ccan/tal/str/str.h>
 #include <common/addr.h>
 #include <common/channel_config.h>
+#include <common/features.h>
 #include <common/funding_tx.h>
 #include <common/json_command.h>
 #include <common/jsonrpc_errors.h>
@@ -25,6 +26,7 @@
 #include <lightningd/log.h>
 #include <lightningd/notification.h>
 #include <lightningd/opening_control.h>
+#include <lightningd/options.h>
 #include <lightningd/peer_control.h>
 #include <lightningd/plugin_hook.h>
 #include <lightningd/subd.h>
@@ -75,6 +77,7 @@ struct funding_channel {
 	struct amount_msat push;
 	struct amount_sat funding;
 	u8 channel_flags;
+	const u8 *our_upfront_shutdown_script;
 
 	/* Variables we need to compose fields in cmd's response */
 	const char *hextx;
@@ -163,11 +166,13 @@ wallet_commit_channel(struct lightningd *ld,
 		      u8 channel_flags,
 		      struct channel_info *channel_info,
 		      u32 feerate,
+		      const u8 *our_upfront_shutdown_script,
 		      const u8 *remote_upfront_shutdown_script)
 {
 	struct channel *channel;
 	struct amount_msat our_msat;
 	s64 final_key_idx;
+	bool option_static_remotekey;
 
 	/* Get a key to use for closing outputs from this tx */
 	final_key_idx = wallet_get_newindex(ld);
@@ -196,6 +201,26 @@ wallet_commit_channel(struct lightningd *ld,
 	/* old_remote_per_commit not valid yet, copy valid one. */
 	channel_info->old_remote_per_commit = channel_info->remote_per_commit;
 
+	/* BOLT #2:
+	 * 1. type: 35 (`funding_signed`)
+	 * 2. data:
+	 *     * [`channel_id`:`channel_id`]
+	 *     * [`signature`:`signature`]
+	 *
+	 * #### Requirements
+	 *
+	 * Both peers:
+	 *   - if `option_static_remotekey` was negotiated:
+	 *     - `option_static_remotekey` applies to all commitment
+	 *       transactions
+	 *   - otherwise:
+	 *     - `option_static_remotekey` does not apply to any commitment
+	 *        transactions
+	 */
+	/* i.e. We set it now for the channel permanently. */
+	option_static_remotekey
+		= feature_negotiated(uc->peer->features, OPT_STATIC_REMOTEKEY);
+
 	channel = new_channel(uc->peer, uc->dbid,
 			      NULL, /* No shachain yet */
 			      CHANNELD_AWAITING_LOCKIN,
@@ -223,7 +248,8 @@ wallet_commit_channel(struct lightningd *ld,
 			      remote_commit_sig,
 			      NULL, /* No HTLC sigs yet */
 			      channel_info,
-			      NULL, /* No remote_shutdown_scriptpubkey yet */
+			      NULL, /* No shutdown_scriptpubkey[REMOTE] yet */
+			      our_upfront_shutdown_script,
 			      final_key_idx, false,
 			      NULL, /* No commit sent yet */
 			      /* If we're fundee, could be a little before this
@@ -237,29 +263,13 @@ wallet_commit_channel(struct lightningd *ld,
 			      NULL,
 			      ld->config.fee_base,
 			      ld->config.fee_per_satoshi,
-			      remote_upfront_shutdown_script);
+			      remote_upfront_shutdown_script,
+			      option_static_remotekey);
 
 	/* Now we finally put it in the database. */
 	wallet_channel_insert(ld->wallet, channel);
 
 	return channel;
-}
-
-static void funding_broadcast_failed(struct channel *channel,
-				     int exitstatus, const char *msg)
-{
-	struct funding_channel *fc = channel->peer->uncommitted_channel->fc;
-	struct command *cmd = fc->cmd;
-
-	/* Massage output into shape so it doesn't kill the JSON serialization */
-	char *output = tal_strjoin(cmd, tal_strsplit(cmd, msg, "\n", STR_NO_EMPTY), " ", STR_NO_TRAIL);
-	was_pending(command_fail(cmd, FUNDING_BROADCAST_FAIL,
-			"Error broadcasting funding transaction: %s", output));
-
-	/* Frees fc too */
-	tal_free(fc->uc);
-
-	/* Keep in state CHANNELD_AWAITING_LOCKIN until (manual) broadcast */
 }
 
 static void funding_success(struct channel *channel)
@@ -271,7 +281,8 @@ static void funding_success(struct channel *channel)
 	/* Well, those cancels didn't work! */
 	for (size_t i = 0; i < tal_count(fc->cancels); i++)
 		was_pending(command_fail(fc->cancels[i], LIGHTNINGD,
-					 "Funding succeeded before cancel"));
+					 "Funding succeeded before cancel. "
+					 "Try fundchannel_cancel again."));
 
 	response = json_stream_success(cmd);
 	json_add_string(response, "channel_id",
@@ -280,35 +291,9 @@ static void funding_success(struct channel *channel)
 	was_pending(command_success(cmd, response));
 }
 
-static void funding_broadcast_success(struct channel *channel)
-{
-	struct json_stream *response;
-	struct funding_channel *fc = channel->peer->uncommitted_channel->fc;
-	struct command *cmd = fc->cmd;
-
-	response = json_stream_success(cmd);
-	json_add_string(response, "tx", fc->hextx);
-	json_add_txid(response, "txid", &channel->funding_txid);
-	json_add_string(response, "channel_id",
-					type_to_string(tmpctx, struct channel_id, &fc->cid));
-	was_pending(command_success(cmd, response));
-
-	/* Frees fc too */
-	tal_free(fc->uc);
-}
-
-static void funding_broadcast_failed_or_success(struct channel *channel,
-				     int exitstatus, const char *msg)
-{
-	if (exitstatus == 0) {
-		funding_broadcast_success(channel);
-	} else {
-		funding_broadcast_failed(channel, exitstatus, msg);
-	}
-}
-
 static void funding_started_success(struct funding_channel *fc,
-				    u8 *scriptPubkey)
+				    u8 *scriptPubkey,
+				    bool supports_shutdown)
 {
 	struct json_stream *response;
 	struct command *cmd = fc->cmd;
@@ -318,8 +303,12 @@ static void funding_started_success(struct funding_channel *fc,
 	out = encode_scriptpubkey_to_addr(cmd,
 				          get_chainparams(cmd->ld)->bip173_name,
 					  scriptPubkey);
-	if (out)
+	if (out) {
 		json_add_string(response, "funding_address", out);
+		json_add_hex_talarr(response, "scriptpubkey", scriptPubkey);
+		if (fc->our_upfront_shutdown_script)
+			json_add_hex_talarr(response, "close_to", fc->our_upfront_shutdown_script);
+	}
 
 	/* Clear this so cancel doesn't think it's still in progress */
 	fc->cmd = NULL;
@@ -331,9 +320,11 @@ static void opening_funder_start_replied(struct subd *openingd, const u8 *resp,
 					 struct funding_channel *fc)
 {
 	u8 *funding_scriptPubkey;
+	bool supports_shutdown_script;
 
 	if (!fromwire_opening_funder_start_reply(resp, resp,
-						 &funding_scriptPubkey)) {
+						 &funding_scriptPubkey,
+						 &supports_shutdown_script)) {
 		log_broken(fc->uc->log,
 			   "bad OPENING_FUNDER_REPLY %s",
 			   tal_hex(resp, resp));
@@ -343,7 +334,12 @@ static void opening_funder_start_replied(struct subd *openingd, const u8 *resp,
 		goto failed;
 	}
 
-	funding_started_success(fc, funding_scriptPubkey);
+	/* If we're not using the upfront shutdown script, forget it */
+	if (!supports_shutdown_script)
+		fc->our_upfront_shutdown_script =
+			tal_free(fc->our_upfront_shutdown_script);
+
+	funding_started_success(fc, funding_scriptPubkey, supports_shutdown_script);
 
 	/* Mark that we're in-flight */
 	fc->inflight = true;
@@ -354,129 +350,6 @@ failed:
 	fc->uc->openingd = NULL;
 	/* Frees fc too, and tmpctx */
 	tal_free(fc->uc);
-}
-
-static bool compose_and_broadcast_tx(struct lightningd *ld,
-				     const u8 *resp,
-				     struct funding_channel *fc,
-				     struct channel_info *channel_info,
-				     struct channel *channel,
-				     struct bitcoin_txid *expected_txid,
-				     u32 feerate)
-{
-	u8 *msg;
-	struct pubkey changekey;
-	u16 funding_outnum;
-	struct bitcoin_tx *fundingtx;
-	struct amount_sat change;
-	struct bitcoin_txid funding_txid;
-	const struct chainparams *chainparams = get_chainparams(ld);
-
-	/* Generate the funding tx. */
-	if (!amount_sat_eq(fc->wtx->change, AMOUNT_SAT(0))
-	    && !bip32_pubkey(ld->wallet->bip32_base,
-			     &changekey, fc->wtx->change_key_index))
-		fatal("Error deriving change key %u", fc->wtx->change_key_index);
-
-	fundingtx = funding_tx(tmpctx, chainparams, &funding_outnum,
-			       fc->wtx->utxos, fc->wtx->amount,
-			       &fc->uc->local_funding_pubkey,
-			       &channel_info->remote_fundingkey,
-			       fc->wtx->change, &changekey,
-			       ld->wallet->bip32_base);
-
-	log_debug(fc->uc->log, "Funding tx has %zi inputs, %zu outputs:",
-		  fundingtx->wtx->num_inputs,
-		  fundingtx->wtx->num_outputs);
-
-	for (size_t i = 0; i < fundingtx->wtx->num_inputs; i++) {
-		struct bitcoin_txid tmptxid;
-		bitcoin_tx_input_get_txid(fundingtx, i, &tmptxid);
-		log_debug(fc->uc->log, "%zi: %s (%s) %s\n",
-			  i,
-			  type_to_string(tmpctx, struct amount_sat,
-					 &fc->wtx->utxos[i]->amount),
-			  fc->wtx->utxos[i]->is_p2sh ? "P2SH" : "SEGWIT",
-			  type_to_string(tmpctx, struct bitcoin_txid,
-					 &tmptxid));
-	}
-
-	bitcoin_txid(fundingtx, &funding_txid);
-
-	if (!bitcoin_txid_eq(&funding_txid, expected_txid)) {
-		log_broken(fc->uc->log,
-			   "Funding txid mismatch:"
-			   " amount %s change %s"
-			   " changeidx %u"
-			   " localkey %s remotekey %s",
-			   type_to_string(tmpctx, struct amount_sat,
-					  &fc->wtx->amount),
-			   type_to_string(tmpctx, struct amount_sat,
-					  &fc->wtx->change),
-			   fc->wtx->change_key_index,
-			   type_to_string(fc, struct pubkey,
-					  &fc->uc->local_funding_pubkey),
-			   type_to_string(fc, struct pubkey,
-					  &channel_info->remote_fundingkey));
-		was_pending(command_fail(fc->cmd, JSONRPC2_INVALID_PARAMS,
-					 "Funding txid mismatch:"
-					 " amount %s change %s"
-					 " changeidx %u"
-					 " localkey %s remotekey %s",
-					 type_to_string(tmpctx,
-							struct amount_sat,
-							&fc->wtx->amount),
-					 type_to_string(tmpctx,
-							struct amount_sat,
-							&fc->wtx->change),
-					 fc->wtx->change_key_index,
-					 type_to_string(fc, struct pubkey,
-							&fc->uc->local_funding_pubkey),
-					 type_to_string(fc, struct pubkey,
-							&channel_info->remote_fundingkey)));
-		return false;
-	}
-
-	/* Get HSM to sign the funding tx. */
-	log_debug(channel->log, "Getting HSM to sign funding tx");
-
-	msg = towire_hsm_sign_funding(tmpctx, channel->funding,
-				      fc->wtx->change,
-				      fc->wtx->change_key_index,
-				      &fc->uc->local_funding_pubkey,
-				      &channel_info->remote_fundingkey,
-				      fc->wtx->utxos);
-
-	if (!wire_sync_write(ld->hsm_fd, take(msg)))
-		fatal("Could not write to HSM: %s", strerror(errno));
-
-	msg = wire_sync_read(fc, ld->hsm_fd);
-	if (!fromwire_hsm_sign_funding_reply(tmpctx, msg, &fundingtx))
-		fatal("HSM gave bad sign_funding_reply %s",
-		      tal_hex(msg, resp));
-	fundingtx->chainparams = chainparams;
-
-	/* Extract the change output and add it to the DB */
-	wallet_extract_owned_outputs(ld->wallet, fundingtx, NULL, &change);
-
-	/* Make sure we recognize our change output by its scriptpubkey in
-	 * future. This assumes that we have only two outputs, may not be true
-	 * if we add support for multifundchannel */
-	if (fundingtx->wtx->num_outputs == 2)
-		txfilter_add_scriptpubkey(ld->owned_txfilter, bitcoin_tx_output_get_script(tmpctx, fundingtx, !funding_outnum));
-
-
-	/* Send it out and watch for confirms. */
-	broadcast_tx(ld->topology, channel, fundingtx, funding_broadcast_failed_or_success);
-
-	/* Mark consumed outputs as spent */
-	wallet_confirm_utxos(ld->wallet, fc->wtx->utxos);
-	wallet_transaction_annotate(ld->wallet, &funding_txid,
-				    TX_CHANNEL_FUNDING, channel->dbid);
-
-	/* We need these to compose cmd's response in funding_broadcast_success */
-	fc->hextx = tal_hex(fc, linearize_tx(fc->cmd, fundingtx));
-	return true;
 }
 
 static void opening_funder_finished(struct subd *openingd, const u8 *resp,
@@ -540,6 +413,7 @@ static void opening_funder_finished(struct subd *openingd, const u8 *resp,
 					fc->channel_flags,
 					&channel_info,
 					feerate,
+					fc->our_upfront_shutdown_script,
 					remote_upfront_shutdown_script);
 	if (!channel) {
 		was_pending(command_fail(fc->cmd, LIGHTNINGD,
@@ -553,25 +427,8 @@ static void opening_funder_finished(struct subd *openingd, const u8 *resp,
 	/* Needed for the success statement */
 	derive_channel_id(&fc->cid, &channel->funding_txid, funding_txout);
 
-	/* Was this an external wallet initiation ? */
-	if (fc->inflight) {
-		funding_success(channel);
-
-		peer_start_channeld(channel, pps, NULL, false);
-		goto cleanup;
-	}
-
-	if (!compose_and_broadcast_tx(ld, resp, fc, &channel_info,
-				      channel, &funding_txid,
-				      feerate))
-		goto cleanup;
-
-	/* Start normal channel daemon. */
+	funding_success(channel);
 	peer_start_channeld(channel, pps, NULL, false);
-
-	subd_release_channel(openingd, fc->uc);
-	fc->uc->openingd = NULL;
-	return;
 
 cleanup:
 	subd_release_channel(openingd, fc->uc);
@@ -652,6 +509,7 @@ static void opening_fundee_finished(struct subd *openingd,
 					channel_flags,
 					&channel_info,
 					feerate,
+					NULL,
 					remote_upfront_shutdown_script);
 	if (!channel) {
 		uncommitted_channel_disconnect(uc, "Commit channel failed");
@@ -659,14 +517,14 @@ static void opening_fundee_finished(struct subd *openingd,
 	}
 
 	log_debug(channel->log, "Watching funding tx %s",
-		     type_to_string(reply, struct bitcoin_txid,
-				    &channel->funding_txid));
+		  type_to_string(reply, struct bitcoin_txid,
+				 &channel->funding_txid));
 
 	channel_watch_funding(ld, channel);
 
 	/* Tell plugins about the success */
 	notify_channel_opened(ld, &channel->peer->id, &channel->funding,
-			   &channel->funding_txid, &channel->remote_funding_locked);
+			      &channel->funding_txid, &channel->remote_funding_locked);
 
 	/* On to normal operation! */
 	peer_start_channeld(channel, pps, funding_signed, false);
@@ -1029,7 +887,6 @@ static unsigned int openingd_msg(struct subd *openingd,
 
 	/* We send these! */
 	case WIRE_OPENING_INIT:
-	case WIRE_OPENING_FUNDER:
 	case WIRE_OPENING_FUNDER_START:
 	case WIRE_OPENING_FUNDER_COMPLETE:
 	case WIRE_OPENING_FUNDER_CANCEL:
@@ -1095,7 +952,7 @@ void peer_start_openingd(struct peer *peer,
 	uc->minimum_depth = peer->ld->config.anchor_confirms;
 
 	msg = towire_opening_init(NULL,
-				  &get_chainparams(peer->ld)->genesis_blockhash,
+				  chainparams,
 				  &uc->our_config,
 				  max_to_self_delay,
 				  min_effective_htlc_capacity,
@@ -1104,8 +961,11 @@ void peer_start_openingd(struct peer *peer,
 				  uc->minimum_depth,
 				  feerate_min(peer->ld, NULL),
 				  feerate_max(peer->ld, NULL),
-				  peer->localfeatures,
-				  send_msg);
+				  peer->features,
+				  feature_negotiated(peer->features,
+						     OPT_STATIC_REMOTEKEY),
+				  send_msg,
+				  IFDEV(peer->ld->dev_fast_gossip, false));
 	subd_send_msg(uc->openingd, take(msg));
 }
 
@@ -1163,7 +1023,7 @@ static struct command_result *json_fund_channel_complete(struct command *cmd,
 }
 
 /**
- * json_fund_channel_cancel - Entrypoint for cancelling an in flight channel-funding
+ * json_fund_channel_cancel - Entrypoint for cancelling a channel which funding isn't broadcast
  */
 static struct command_result *json_fund_channel_cancel(struct command *cmd,
 						       const char *buffer,
@@ -1173,10 +1033,12 @@ static struct command_result *json_fund_channel_cancel(struct command *cmd,
 
 	struct node_id *id;
 	struct peer *peer;
+	const jsmntok_t *cidtok;
 	u8 *msg;
 
 	if (!param(cmd, buffer, params,
 		   p_req("id", param_node_id, &id),
+		   p_opt("channel_id", param_tok, &cidtok),
 		   NULL))
 		return command_param_failed();
 
@@ -1185,44 +1047,22 @@ static struct command_result *json_fund_channel_cancel(struct command *cmd,
 		return command_fail(cmd, LIGHTNINGD, "Unknown peer");
 	}
 
-	if (!peer->uncommitted_channel) {
-		return command_fail(cmd, LIGHTNINGD, "Peer not connected");
+	if (peer->uncommitted_channel) {
+		if(!peer->uncommitted_channel->fc || !peer->uncommitted_channel->fc->inflight)
+			return command_fail(cmd, LIGHTNINGD, "No channel funding in progress.");
+
+		/* Make sure this gets notified if we succeed or cancel */
+		tal_arr_expand(&peer->uncommitted_channel->fc->cancels, cmd);
+		msg = towire_opening_funder_cancel(NULL);
+		subd_send_msg(peer->uncommitted_channel->openingd, take(msg));
+		return command_still_pending(cmd);
 	}
 
-	if (!peer->uncommitted_channel->fc || !peer->uncommitted_channel->fc->inflight)
-		return command_fail(cmd, LIGHTNINGD, "No channel funding in progress.");
-
-	/**
-	 * there's a question of 'state machinery' here. as is, we're not checking
-	 * to see if you've already called `complete` -- we expect you
-	 * the caller to EITHER pick 'complete' or 'cancel'.
-	 * but if for some reason you've decided to test your luck, how much
-	 * 'handling' can we do for that case? the easiest thing to do is to
-	 * say "sorry you've already called complete", we can't cancel this.
-	 *
-	 * there's also the state you might end up in where you've called
-	 * complete (and it's completed and been passed off to channeld) but
-	 * you've decided (for whatever reason) not to broadcast the transaction
-	 * so your channels have ended up in this 'waiting' state. neither of us
-	 * are actually out any amount of cash, but it'd be nice if there's a way
-	 * to signal to c-lightning (+ your peer) that this channel is dead on arrival.
-	 * ... but also if you then broadcast this tx you'd be in trouble cuz we're
-	 * both going to forget about it. the meta question here is how 'undoable'
-	 * should we make any of this. how much tools do we give you, reader?
-	 *
-	 * for now, let's settle for the EITHER / OR case and disregard the larger
-	 * question about 'how long cancelable'.
-	 */
-
-	/* Make sure this gets notified if we succeed or cancel */
-	tal_arr_expand(&peer->uncommitted_channel->fc->cancels, cmd);
-	msg = towire_opening_funder_cancel(NULL);
-	subd_send_msg(peer->uncommitted_channel->openingd, take(msg));
-	return command_still_pending(cmd);
+	return cancel_channel_before_broadcast(cmd, buffer, peer, cidtok);
 }
 
 /**
- * json_fund_channel_start - Entrypoint for funding an externally funded channel
+ * json_fund_channel_start - Entrypoint for funding a channel
  */
 static struct command_result *json_fund_channel_start(struct command *cmd,
 						      const char *buffer,
@@ -1244,118 +1084,50 @@ static struct command_result *json_fund_channel_start(struct command *cmd,
 	fc->cancels = tal_arr(fc, struct command *, 0);
 	fc->uc = NULL;
 	fc->inflight = false;
-	if (!param(fc->cmd, buffer, params,
-		   p_req("id", param_node_id, &id),
-		   p_req("satoshi", param_sat, &amount),
-		   p_opt("feerate", param_feerate, &feerate_per_kw),
-		   p_opt_def("announce", param_bool, &announce_channel, true),
-		   NULL))
-		return command_param_failed();
+
+	/* For generating help, give new-style. */
+	if (!params || !deprecated_apis || params->type == JSMN_ARRAY) {
+		if (!param(fc->cmd, buffer, params,
+			   p_req("id", param_node_id, &id),
+			   p_req("amount", param_sat, &amount),
+			   p_opt("feerate", param_feerate, &feerate_per_kw),
+			   p_opt_def("announce", param_bool, &announce_channel, true),
+			   p_opt("close_to", param_bitcoin_address, &fc->our_upfront_shutdown_script),
+			   NULL))
+			return command_param_failed();
+	} else {
+		/* For json object type when allow deprecated api, 'check' command
+		 * can't find the error if we don't set 'amount' nor 'satoshi'.
+		 */
+		struct amount_sat *satoshi;
+		if (!param(fc->cmd, buffer, params,
+			   p_req("id", param_node_id, &id),
+			   p_opt("amount", param_sat, &amount),
+			   p_opt("satoshi", param_sat, &satoshi),
+			   p_opt("feerate", param_feerate, &feerate_per_kw),
+			   p_opt_def("announce", param_bool, &announce_channel, true),
+			   NULL))
+			return command_param_failed();
+
+		if (!amount) {
+			if (satoshi)
+				amount = satoshi;
+			else
+				return command_fail(cmd, JSONRPC2_INVALID_PARAMS,
+						    "Need set 'amount' field");
+		}
+
+		/* No upfront shutdown script option for deprecated API */
+		fc->our_upfront_shutdown_script = NULL;
+	}
 
 	if (amount_sat_greater(*amount, max_funding_satoshi))
-                return command_fail(cmd, FUND_MAX_EXCEEDED,
+		return command_fail(cmd, FUND_MAX_EXCEEDED,
 				    "Amount exceeded %s",
 				    type_to_string(tmpctx, struct amount_sat,
 						   &max_funding_satoshi));
 
 	fc->funding = *amount;
-	if (!feerate_per_kw) {
-		feerate_per_kw = tal(cmd, u32);
-		*feerate_per_kw = opening_feerate(cmd->ld->topology);
-		if (!*feerate_per_kw) {
-			return command_fail(cmd, LIGHTNINGD,
-					    "Cannot estimate fees");
-		}
-	}
-
-	if (*feerate_per_kw < feerate_floor()) {
-		return command_fail(cmd, LIGHTNINGD,
-				    "Feerate below feerate floor");
-	}
-
-	if (!topology_synced(cmd->ld->topology)) {
-		return command_fail(cmd, FUNDING_STILL_SYNCING_BITCOIN,
-				    "Still syncing with groestlcoin network");
-	}
-
-	peer = peer_by_id(cmd->ld, id);
-	if (!peer) {
-		return command_fail(cmd, LIGHTNINGD, "Unknown peer");
-	}
-
-	channel = peer_active_channel(peer);
-	if (channel) {
-		return command_fail(cmd, LIGHTNINGD, "Peer already %s",
-				    channel_state_name(channel));
-	}
-
-	if (!peer->uncommitted_channel) {
-		return command_fail(cmd, LIGHTNINGD, "Peer not connected");
-	}
-
-	if (peer->uncommitted_channel->fc) {
-		return command_fail(cmd, LIGHTNINGD, "Already funding channel");
-	}
-
-	fc->push = AMOUNT_MSAT(0);
-	fc->channel_flags = OUR_CHANNEL_FLAGS;
-	if (!*announce_channel) {
-		fc->channel_flags &= ~CHANNEL_FLAGS_ANNOUNCE_CHANNEL;
-		log_info(peer->ld->log, "Will open private channel with node %s",
-			type_to_string(fc, struct node_id, id));
-	}
-
-	assert(!amount_sat_greater(*amount, max_funding_satoshi));
-	peer->uncommitted_channel->fc = tal_steal(peer->uncommitted_channel, fc);
-	fc->uc = peer->uncommitted_channel;
-
-	msg = towire_opening_funder_start(NULL,
-					  *amount,
-					  fc->push,
-					  *feerate_per_kw,
-					  fc->channel_flags);
-
-	subd_send_msg(peer->uncommitted_channel->openingd, take(msg));
-	return command_still_pending(cmd);
-}
-
-/**
- * json_fund_channel - Entrypoint for funding a channel
- */
-static struct command_result *json_fund_channel(struct command *cmd,
-						const char *buffer,
-						const jsmntok_t *obj UNNEEDED,
-						const jsmntok_t *params)
-{
-	struct command_result *res;
-	struct funding_channel * fc = tal(cmd, struct funding_channel);
-	struct node_id *id;
-	struct peer *peer;
-	struct channel *channel;
-	u32 *feerate_per_kw, *minconf, maxheight;
-	bool *announce_channel;
-	u8 *msg;
-	struct amount_sat max_funding_satoshi;
-	const struct utxo **chosen_utxos;
-
-	max_funding_satoshi = get_chainparams(cmd->ld)->max_funding;
-
-	fc->cmd = cmd;
-	fc->cancels = tal_arr(fc, struct command *, 0);
-	fc->uc = NULL;
-	fc->inflight = false;
-	fc->wtx = tal(fc, struct wallet_tx);
-	wtx_init(cmd, fc->wtx, max_funding_satoshi);
-	if (!param(fc->cmd, buffer, params,
-		   p_req("id", param_node_id, &id),
-		   p_req("satoshi", param_wtx, fc->wtx),
-		   p_opt("feerate", param_feerate, &feerate_per_kw),
-		   p_opt_def("announce", param_bool, &announce_channel, true),
-		   p_opt_def("minconf", param_number, &minconf, 1),
-		   p_opt("utxos", param_utxos, &chosen_utxos),
-		   NULL))
-		return command_param_failed();
-
 	if (!feerate_per_kw) {
 		feerate_per_kw = tal(cmd, u32);
 		*feerate_per_kw = opening_feerate(cmd->ld->topology);
@@ -1403,48 +1175,25 @@ static struct command_result *json_fund_channel(struct command *cmd,
 			type_to_string(fc, struct node_id, id));
 	}
 
-	maxheight = minconf_to_maxheight(*minconf, cmd->ld);
-	if (chosen_utxos)
-		res = wtx_from_utxos(fc->wtx, *feerate_per_kw,
-				BITCOIN_SCRIPTPUBKEY_P2WSH_LEN, maxheight, chosen_utxos);
-	else
-		res = wtx_select_utxos(fc->wtx, *feerate_per_kw,
-				BITCOIN_SCRIPTPUBKEY_P2WSH_LEN, maxheight);
-	if (res)
-		return res;
-
-	assert(!amount_sat_greater(fc->wtx->amount, max_funding_satoshi));
-	/* Stash total amount in fc as well, as externally funded
-	 * channels don't have a wtx */
-	fc->funding = fc->wtx->amount;
-
+	assert(!amount_sat_greater(*amount, max_funding_satoshi));
 	peer->uncommitted_channel->fc = tal_steal(peer->uncommitted_channel, fc);
 	fc->uc = peer->uncommitted_channel;
 
-	msg = towire_opening_funder(NULL,
-				    fc->wtx->amount,
-				    fc->push,
-				    *feerate_per_kw,
-				    fc->wtx->change,
-				    fc->wtx->change_key_index,
-				    fc->channel_flags,
-				    fc->wtx->utxos,
-				    cmd->ld->wallet->bip32_base);
+	/* Needs to be stolen away from cmd */
+	if (fc->our_upfront_shutdown_script)
+		fc->our_upfront_shutdown_script
+			= tal_steal(fc, fc->our_upfront_shutdown_script);
 
-	/* Openingd will either succeed, or fail, or tell us the other side
-	 * funded first. */
+	msg = towire_opening_funder_start(NULL,
+					  *amount,
+					  fc->push,
+					  fc->our_upfront_shutdown_script,
+					  *feerate_per_kw,
+					  fc->channel_flags);
+
 	subd_send_msg(peer->uncommitted_channel->openingd, take(msg));
 	return command_still_pending(cmd);
 }
-
-static const struct json_command fund_channel_command = {
-	"fundchannel",
-	"channels",
-	json_fund_channel,
-	"Fund channel with {id} using {satoshi} (or 'all') satoshis, at optional "
-	"{feerate}. Only use outputs that have {minconf} confirmations."
-};
-AUTODATA(json_command, &fund_channel_command);
 
 static const struct json_command fund_channel_start_command = {
     "fundchannel_start",

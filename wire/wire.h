@@ -88,6 +88,8 @@ void towire_wirestring(u8 **pptr, const char *str);
 void towire_siphash_seed(u8 **cursor, const struct siphash_seed *seed);
 
 void towire_bip32_key_version(u8 **cursor, const struct bip32_key_version *version);
+void towire_bitcoin_tx_output(u8 **pptr, const struct bitcoin_tx_output *output);
+void towire_chainparams(u8 **cursor, const struct chainparams *chainparams);
 
 const u8 *fromwire(const u8 **cursor, size_t *max, void *copy, size_t n);
 u8 fromwire_u8(const u8 **cursor, size_t *max);
@@ -138,4 +140,10 @@ void fromwire_siphash_seed(const u8 **cursor, size_t *max,
 			   struct siphash_seed *seed);
 void fromwire_bip32_key_version(const u8 **cursor, size_t *max,
 				struct bip32_key_version *version);
+struct bitcoin_tx_output *fromwire_bitcoin_tx_output(const tal_t *ctx,
+						     const u8 **cursor, size_t *max);
+
+void fromwire_chainparams(const u8 **cursor, size_t *max,
+			  const struct chainparams **chainparams);
+
 #endif /* LIGHTNING_WIRE_WIRE_H */

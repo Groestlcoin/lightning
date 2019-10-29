@@ -16,6 +16,7 @@
 #include <lightningd/log_status.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/types.h>
 #include <wally_bip32.h>
 #include <wire/wire_sync.h>
@@ -80,8 +81,6 @@ void hsm_init(struct lightningd *ld)
 {
 	u8 *msg;
 	int fds[2];
-	struct bitcoin_blkid chainhash;
-	chainhash = get_chainparams(ld)->genesis_blockhash;
 
 	/* We actually send requests synchronously: only status is async. */
 	if (socketpair(AF_LOCAL, SOCK_STREAM, 0, fds) != 0)
@@ -94,24 +93,33 @@ void hsm_init(struct lightningd *ld)
 	if (!ld->hsm)
 		err(1, "Could not subd hsm");
 
+	/* If hsm_secret is encrypted and the --encrypted-hsm startup option is
+	 * not passed, don't let hsmd use the first 32 bytes of the cypher as the
+	 * actual secret. */
+	if (!ld->config.keypass) {
+		struct stat st;
+		if (stat("hsm_secret", &st) == 0 && st.st_size > 32)
+			errx(1, "hsm_secret is encrypted, you need to pass the "
+			        "--encrypted-hsm startup option.");
+	}
+
 	ld->hsm_fd = fds[0];
 	if (!wire_sync_write(ld->hsm_fd, towire_hsm_init(tmpctx,
 							 &ld->topology->bitcoind->chainparams->bip32_key_version,
-							 &chainhash,
-#if DEVELOPER
-							 ld->dev_force_privkey,
-							 ld->dev_force_bip32_seed,
-							 ld->dev_force_channel_secrets,
-							 ld->dev_force_channel_secrets_shaseed
-#else
-							 NULL, NULL, NULL, NULL
-#endif
-				     )))
+							 chainparams,
+							 ld->config.keypass,
+							 IFDEV(ld->dev_force_privkey, NULL),
+							 IFDEV(ld->dev_force_bip32_seed, NULL),
+							 IFDEV(ld->dev_force_channel_secrets, NULL),
+							 IFDEV(ld->dev_force_channel_secrets_shaseed, NULL))))
 		err(1, "Writing init msg to hsm");
 
 	ld->wallet->bip32_base = tal(ld->wallet, struct ext_key);
 	msg = wire_sync_read(tmpctx, ld->hsm_fd);
 	if (!fromwire_hsm_init_reply(msg,
-				     &ld->id, ld->wallet->bip32_base))
+				     &ld->id, ld->wallet->bip32_base)) {
+		if (ld->config.keypass)
+			errx(1, "Wrong password for encrypted hsm_secret.");
 		errx(1, "HSM did not give init reply");
+	}
 }

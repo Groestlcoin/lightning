@@ -28,7 +28,7 @@
 #include <common/bech32_util.h>
 #include <common/cryptomsg.h>
 #include <common/daemon_conn.h>
-#include <common/decode_short_channel_ids.h>
+#include <common/decode_array.h>
 #include <common/features.h>
 #include <common/memleak.h>
 #include <common/ping.h>
@@ -148,6 +148,9 @@ struct daemon {
 
 	/* File descriptors to listen on once we're activated. */
 	struct listen_fd *listen_fds;
+
+	/* Allow to define the default behavior of tot services calls*/
+	bool use_v3_autotor;
 };
 
 /* Peers we're trying to reach: we iterate through addrs until we succeed
@@ -280,13 +283,12 @@ static void connected_to_peer(struct daemon *daemon,
  * Every peer also has read-only access to the gossip_store, which is handed
  * out by gossipd too, and also a "gossip_state" indicating where we're up to.
  *
- * The 'localfeatures' is a field in the `init` message, indicating properties
- * when you're connected to it like we are: there are also 'globalfeatures'
- * which specify requirements to route a payment through a node.
+ * 'features' is a field in the `init` message, indicating properties of the
+ * node.
  */
 static bool get_gossipfds(struct daemon *daemon,
 			  const struct node_id *id,
-			  const u8 *localfeatures,
+			  const u8 *features,
 			  struct per_peer_state *pps)
 {
 	bool gossip_queries_feature, initial_routing_sync, success;
@@ -295,13 +297,13 @@ static bool get_gossipfds(struct daemon *daemon,
 	/*~ The way features generally work is that both sides need to offer it;
 	 * we always offer `gossip_queries`, but this check is explicit. */
 	gossip_queries_feature
-		= local_feature_negotiated(localfeatures, LOCAL_GOSSIP_QUERIES);
+		= feature_negotiated(features, OPT_GOSSIP_QUERIES);
 
-	/*~ `initial_routing_sync is supported by every node, since it was in
+	/*~ `initial_routing_sync` is supported by every node, since it was in
 	 * the initial lightning specification: it means the peer wants the
 	 * backlog of existing gossip. */
 	initial_routing_sync
-		= feature_offered(localfeatures, LOCAL_INITIAL_ROUTING_SYNC);
+		= feature_offered(features, OPT_INITIAL_ROUTING_SYNC);
 
 	/*~ We do this communication sync, since gossipd is our friend and
 	 * it's easier.  If gossipd fails, we fail. */
@@ -318,7 +320,7 @@ static bool get_gossipfds(struct daemon *daemon,
 			      "Failed parsing msg gossipctl: %s",
 			      tal_hex(tmpctx, msg));
 
-	/* Gossipd might run out of file descriptors, so it tell us, and we
+	/* Gossipd might run out of file descriptors, so it tells us, and we
 	 * give up on connecting this peer. */
 	if (!success) {
 		status_broken("Gossipd did not give us an fd: losing peer %s",
@@ -340,8 +342,7 @@ struct peer_reconnected {
 	struct node_id id;
 	struct wireaddr_internal addr;
 	struct crypto_state cs;
-	const u8 *globalfeatures;
-	const u8 *localfeatures;
+	const u8 *features;
 };
 
 /*~ For simplicity, lightningd only ever deals with a single connection per
@@ -353,14 +354,13 @@ static struct io_plan *retry_peer_connected(struct io_conn *conn,
 	struct io_plan *plan;
 
 	/*~ As you can see, we've had issues with this code before :( */
-	status_trace("peer %s: processing now old peer gone",
+	status_debug("peer %s: processing now old peer gone",
 		     type_to_string(tmpctx, struct node_id, &pr->id));
 
 	/*~ Usually the pattern is to return this directly, but we have to free
 	 * our temporary structure. */
 	plan = peer_connected(conn, pr->daemon, &pr->id, &pr->addr, &pr->cs,
-			      take(pr->globalfeatures),
-			      take(pr->localfeatures));
+			      take(pr->features));
 	tal_free(pr);
 	return plan;
 }
@@ -372,13 +372,12 @@ static struct io_plan *peer_reconnected(struct io_conn *conn,
 					const struct node_id *id,
 					const struct wireaddr_internal *addr,
 					const struct crypto_state *cs,
-					const u8 *globalfeatures TAKES,
-					const u8 *localfeatures TAKES)
+					const u8 *features TAKES)
 {
 	u8 *msg;
 	struct peer_reconnected *pr;
 
-	status_trace("peer %s: reconnect",
+	status_debug("peer %s: reconnect",
 		     type_to_string(tmpctx, struct node_id, id));
 
 	/* Tell master to kill it: will send peer_disconnect */
@@ -392,22 +391,18 @@ static struct io_plan *peer_reconnected(struct io_conn *conn,
 	pr->cs = *cs;
 	pr->addr = *addr;
 
-	/*~ Note that tal_dup_arr() will do handle the take() of
-	 * globalfeatures and localfeatures (turning it into a simply
-	 * tal_steal() in those cases). */
-	pr->globalfeatures
-		= tal_dup_arr(pr, u8, globalfeatures, tal_count(globalfeatures), 0);
-	pr->localfeatures
-		= tal_dup_arr(pr, u8, localfeatures, tal_count(localfeatures), 0);
+	/*~ Note that tal_dup_arr() will do handle the take() of features
+	 * (turning it into a simply tal_steal() in those cases). */
+	pr->features = tal_dup_arr(pr, u8, features, tal_count(features), 0);
 
 	/*~ ccan/io supports waiting on an address: in this case, the key in
 	 * the peer set.  When someone calls `io_wake()` on that address, it
 	 * will call retry_peer_connected above. */
 	return io_wait(conn, node_set_get(&daemon->peers, id),
-		       /*~ The notleak() wrapper is a DEVELOPER-mode hack so
-			* that our memory leak detection doesn't consider 'pr'
-			* (which is not referenced from our code) to be a
-			* memory leak. */
+			/*~ The notleak() wrapper is a DEVELOPER-mode hack so
+			 * that our memory leak detection doesn't consider 'pr'
+			 * (which is not referenced from our code) to be a
+			 * memory leak. */
 		       retry_peer_connected, notleak(pr));
 }
 
@@ -418,43 +413,34 @@ struct io_plan *peer_connected(struct io_conn *conn,
 			       const struct node_id *id,
 			       const struct wireaddr_internal *addr,
 			       const struct crypto_state *cs,
-			       const u8 *globalfeatures TAKES,
-			       const u8 *localfeatures TAKES)
+			       const u8 *features TAKES)
 {
 	u8 *msg;
 	struct per_peer_state *pps;
 
 	if (node_set_get(&daemon->peers, id))
-		return peer_reconnected(conn, daemon, id, addr, cs,
-					globalfeatures, localfeatures);
+		return peer_reconnected(conn, daemon, id, addr, cs, features);
 
 	/* We've successfully connected. */
 	connected_to_peer(daemon, conn, id);
 
 	/* We promised we'd take it by marking it TAKEN above; prepare to free it. */
-	if (taken(globalfeatures))
-		tal_steal(tmpctx, globalfeatures);
-	if (taken(localfeatures))
-		tal_steal(tmpctx, localfeatures);
+	if (taken(features))
+		tal_steal(tmpctx, features);
 
 	/* This contains the per-peer state info; gossipd fills in pps->gs */
 	pps = new_per_peer_state(tmpctx, cs);
-#if DEVELOPER
-	/* Overridden by lightningd, but initialize to keep valgrind happy */
-	pps->dev_gossip_broadcast_msec = 0;
-#endif
 
 	/* If gossipd can't give us a file descriptor, we give up connecting. */
-	if (!get_gossipfds(daemon, id, localfeatures, pps))
+	if (!get_gossipfds(daemon, id, features, pps))
 		return io_close(conn);
 
 	/* Create message to tell master peer has connected. */
-	msg = towire_connect_peer_connected(NULL, id, addr, pps,
-					    globalfeatures, localfeatures);
+	msg = towire_connect_peer_connected(NULL, id, addr, pps, features);
 
 	/*~ daemon_conn is a message queue for inter-daemon communication: we
 	 * queue up the `connect_peer_connected` message to tell lightningd
-	 * we have connected, and give the the peer and gossip fds. */
+	 * we have connected, and give the peer and gossip fds. */
 	daemon_conn_send(daemon->master, take(msg));
 	/* io_conn_fd() extracts the fd from ccan/io's io_conn */
 	daemon_conn_send_fd(daemon->master, io_conn_fd(conn));
@@ -484,7 +470,7 @@ static struct io_plan *handshake_in_success(struct io_conn *conn,
 {
 	struct node_id id;
 	node_id_from_pubkey(&id, id_key);
-	status_trace("Connect IN from %s",
+	status_debug("Connect IN from %s",
 		     type_to_string(tmpctx, struct node_id, &id));
 	return peer_exchange_initmsg(conn, daemon, cs, &id, addr);
 }
@@ -499,7 +485,7 @@ static struct io_plan *connection_in(struct io_conn *conn, struct daemon *daemon
 
 	/* The cast here is a weird Berkeley sockets API feature... */
 	if (getpeername(io_conn_fd(conn), (struct sockaddr *)&s, &len) != 0) {
-		status_trace("Failed to get peername for incoming conn: %s",
+		status_debug("Failed to get peername for incoming conn: %s",
 			     strerror(errno));
 		return io_close(conn);
 	}
@@ -545,7 +531,7 @@ static struct io_plan *handshake_out_success(struct io_conn *conn,
 
 	node_id_from_pubkey(&id, key);
 	connect->connstate = "Exchanging init messages";
-	status_trace("Connect OUT to %s",
+	status_debug("Connect OUT to %s",
 		     type_to_string(tmpctx, struct node_id, &id));
 	return peer_exchange_initmsg(conn, connect->daemon, cs, &id, addr);
 }
@@ -563,7 +549,7 @@ struct io_plan *connection_out(struct io_conn *conn, struct connecting *connect)
 	}
 
 	/* FIXME: Timeout */
-	status_trace("Connected out for %s",
+	status_debug("Connected out for %s",
 		     type_to_string(tmpctx, struct node_id, &connect->id));
 
 	connect->connstate = "Cryptographic handshake";
@@ -604,7 +590,7 @@ static void PRINTF_FMT(5,6)
 					       addrhint);
 	daemon_conn_send(daemon->master, take(msg));
 
-	status_trace("Failed connected out for %s: %s",
+	status_debug("Failed connected out for %s: %s",
 		     type_to_string(tmpctx, struct node_id, id),
 		     err);
 }
@@ -840,7 +826,7 @@ static int make_listen_fd(int domain, void *addr, socklen_t len, bool mayfail)
 			status_failed(STATUS_FAIL_INTERNAL_ERROR,
 				      "Failed to create %u socket: %s",
 				      domain, strerror(errno));
-		status_trace("Failed to create %u socket: %s",
+		status_debug("Failed to create %u socket: %s",
 			     domain, strerror(errno));
 		return -1;
 	}
@@ -856,7 +842,7 @@ static int make_listen_fd(int domain, void *addr, socklen_t len, bool mayfail)
 			status_failed(STATUS_FAIL_INTERNAL_ERROR,
 				      "Failed to bind on %u socket: %s",
 				      domain, strerror(errno));
-		status_trace("Failed to create %u socket: %s",
+		status_debug("Failed to create %u socket: %s",
 			     domain, strerror(errno));
 		goto fail;
 	}
@@ -887,7 +873,7 @@ static bool handle_wireaddr_listen(struct daemon *daemon,
 		/* We might fail if IPv6 bound to port first */
 		fd = make_listen_fd(AF_INET, &addr, sizeof(addr), mayfail);
 		if (fd >= 0) {
-			status_trace("Created IPv4 listener on port %u",
+			status_debug("Created IPv4 listener on port %u",
 				     wireaddr->port);
 			add_listen_fd(daemon, fd, mayfail);
 			return true;
@@ -897,7 +883,7 @@ static bool handle_wireaddr_listen(struct daemon *daemon,
 		wireaddr_to_ipv6(wireaddr, &addr6);
 		fd = make_listen_fd(AF_INET6, &addr6, sizeof(addr6), mayfail);
 		if (fd >= 0) {
-			status_trace("Created IPv6 listener on port %u",
+			status_debug("Created IPv6 listener on port %u",
 				     wireaddr->port);
 			add_listen_fd(daemon, fd, mayfail);
 			return true;
@@ -1042,7 +1028,7 @@ static struct wireaddr_internal *setup_listeners(const tal_t *ctx,
 			unlink(wa.u.sockname);
 			fd = make_listen_fd(AF_UNIX, &addrun, sizeof(addrun),
 					    false);
-			status_trace("Created socket listener on file %s",
+			status_debug("Created socket listener on file %s",
 				     addrun.sun_path);
 			add_listen_fd(daemon, fd, false);
 			/* We don't announce socket names, though we allow
@@ -1119,14 +1105,16 @@ static struct wireaddr_internal *setup_listeners(const tal_t *ctx,
 				tor_autoservice(tmpctx,
 						&proposed_wireaddr[i].u.torservice,
 						tor_password,
-						binding);
+						binding,
+						daemon->use_v3_autotor);
 			continue;
 		};
 		add_announcable(announcable,
 				tor_autoservice(tmpctx,
 						&proposed_wireaddr[i].u.torservice,
 						tor_password,
-						binding));
+						binding,
+						daemon->use_v3_autotor));
 	}
 
 	/* Sort and uniquify. */
@@ -1158,7 +1146,8 @@ static struct io_plan *connect_init(struct io_conn *conn,
 		&proposed_listen_announce,
 		&proxyaddr, &daemon->use_proxy_always,
 		&daemon->dev_allow_localhost, &daemon->use_dns,
-		&tor_password)) {
+		&tor_password,
+		&daemon->use_v3_autotor)) {
 		/* This is a helper which prints the type expected and the actual
 		 * message, then exits (it should never be called!). */
 		master_badmsg(WIRE_CONNECTCTL_INIT, msg);
@@ -1173,7 +1162,7 @@ static struct io_plan *connect_init(struct io_conn *conn,
 	/* Resolve Tor proxy address if any: we need an addrinfo to connect()
 	 * to. */
 	if (proxyaddr) {
-		status_trace("Proxy address: %s",
+		status_debug("Proxy address: %s",
 			     fmt_wireaddr(tmpctx, proxyaddr));
 		daemon->proxyaddr = wireaddr_to_addrinfo(daemon, proxyaddr);
 		tal_free(proxyaddr);
@@ -1181,7 +1170,7 @@ static struct io_plan *connect_init(struct io_conn *conn,
 		daemon->proxyaddr = NULL;
 
 	if (broken_resolver(daemon)) {
-		status_trace("Broken DNS resolver detected, will check for "
+		status_debug("Broken DNS resolver detected, will check for "
 			     "dummy replies");
 	}
 
@@ -1243,15 +1232,25 @@ static struct io_plan *connect_activate(struct io_conn *conn,
 	return daemon_conn_read_next(conn, daemon->master);
 }
 
-/*~ This is where we'd put a BOLT #10 reference, but it doesn't exist :( */
-static const char *seedname(const tal_t *ctx, const struct node_id *id)
+/* BOLT #10:
+ *
+ * The DNS seed:
+ *   ...
+ *   - upon receiving a _node_ query:
+ *     - MUST select the record matching the `node_id`, if any, AND return all
+ *       addresses associated with that node.
+ */
+static const char **seednames(const tal_t *ctx, const struct node_id *id)
 {
 	char bech32[100];
 	u5 *data = tal_arr(ctx, u5, 0);
+	const char **seednames = tal_arr(ctx, const char *, 0);
 
 	bech32_push_bits(&data, id->k, ARRAY_SIZE(id->k)*8);
 	bech32_encode(bech32, "ln", data, tal_count(data), sizeof(bech32));
-	return tal_fmt(ctx, "%s.lseed.bitcoinstats.com", bech32);
+	/* This is cdecker's seed */
+	tal_arr_expand(&seednames, tal_fmt(seednames, "%s.lseed.bitcoinstats.com", bech32));
+	return seednames;
 }
 
 /*~ As a last resort, we do a DNS lookup to the lightning DNS seed to
@@ -1265,22 +1264,25 @@ static void add_seed_addrs(struct wireaddr_internal **addrs,
 			   const struct node_id *id,
 			   struct sockaddr *broken_reply)
 {
-	struct wireaddr_internal a;
-	const char *addr;
+	struct wireaddr *new_addrs;
+	const char **hostnames = seednames(tmpctx, id);
 
-	addr = seedname(tmpctx, id);
-	status_trace("Resolving %s", addr);
-
-	a.itype = ADDR_INTERNAL_WIREADDR;
-	/* FIXME: wireaddr_from_hostname should return multiple addresses. */
-	if (!wireaddr_from_hostname(&a.u.wireaddr, addr, DEFAULT_PORT, NULL,
-				    broken_reply, NULL)) {
-		status_trace("Could not resolve %s", addr);
-	} else {
-		status_trace("Resolved %s to %s", addr,
-			     type_to_string(tmpctx, struct wireaddr,
-					    &a.u.wireaddr));
-		tal_arr_expand(addrs, a);
+	for (size_t i = 0; i < tal_count(hostnames); i++) {
+		status_debug("Resolving %s", hostnames[i]);
+		new_addrs = wireaddr_from_hostname(tmpctx, hostnames[i], DEFAULT_PORT,
+		                                   NULL, broken_reply, NULL);
+		if (new_addrs) {
+			for (size_t j = 0; j < tal_count(new_addrs); j++) {
+				struct wireaddr_internal a;
+				a.itype = ADDR_INTERNAL_WIREADDR;
+				a.u.wireaddr = new_addrs[j];
+				status_debug("Resolved %s to %s", hostnames[i],
+				             type_to_string(tmpctx, struct wireaddr,
+				                            &a.u.wireaddr));
+				tal_arr_expand(addrs, a);
+			}
+		} else
+			status_debug("Could not resolve %s", hostnames[i]);
 	}
 }
 
@@ -1351,13 +1353,16 @@ static void try_connect_peer(struct daemon *daemon,
 			/* You're allowed to use names with proxies; in fact it's
 			 * a good idea. */
 			struct wireaddr_internal unresolved;
-			wireaddr_from_unresolved(&unresolved,
-						 seedname(tmpctx, id),
-						 DEFAULT_PORT);
-			tal_arr_expand(&addrs, unresolved);
+			const char **hostnames = seednames(tmpctx, id);
+			for (size_t i = 0; i < tal_count(hostnames); i++) {
+				wireaddr_from_unresolved(&unresolved,
+				                         hostnames[i],
+				                         DEFAULT_PORT);
+				tal_arr_expand(&addrs, unresolved);
+			}
 		} else if (daemon->use_dns) {
 			add_seed_addrs(&addrs, id,
-				       daemon->broken_resolver_response);
+			               daemon->broken_resolver_response);
 		}
 	}
 
@@ -1386,7 +1391,7 @@ static void try_connect_peer(struct daemon *daemon,
 	list_add_tail(&daemon->connecting, &connect->list);
 	tal_add_destructor(connect, destroy_connecting);
 
-	/* Now we kick it off by trying connect->addrs[connect->addrnum] */
+	/* Now we kick it off by recursively trying connect->addrs[connect->addrnum] */
 	try_connect_one_addr(connect);
 }
 
@@ -1447,7 +1452,6 @@ static struct io_plan *dev_connect_memleak(struct io_conn *conn,
 
 	/* Now delete daemon and those which it has pointers to. */
 	memleak_remove_referenced(memtable, daemon);
-	memleak_remove_htable(memtable, &daemon->peers.raw);
 
 	found_leak = dump_memleak(memtable);
 	daemon_conn_send(daemon->master,
@@ -1534,6 +1538,15 @@ static void master_gone(struct daemon_conn *master UNUSED)
 	exit(2);
 }
 
+/*~ This is a hook used by the memleak code (if DEVELOPER=1): it can't see
+ * pointers inside hash tables, so we give it a hint here. */
+#if DEVELOPER
+static void memleak_daemon_cb(struct htable *memtable, struct daemon *daemon)
+{
+	memleak_remove_htable(memtable, &daemon->peers.raw);
+}
+#endif /* DEVELOPER */
+
 int main(int argc, char *argv[])
 {
 	setup_locale();
@@ -1546,6 +1559,7 @@ int main(int argc, char *argv[])
 	/* Allocate and set up our simple top-level structure. */
 	daemon = tal(NULL, struct daemon);
 	node_set_init(&daemon->peers);
+	memleak_add_helper(daemon, memleak_daemon_cb);
 	list_head_init(&daemon->connecting);
 	daemon->listen_fds = tal_arr(daemon, struct listen_fd, 0);
 	/* stdin == control */

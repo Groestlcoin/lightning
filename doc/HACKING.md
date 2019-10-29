@@ -91,7 +91,7 @@ Here's a list of parts, with notes:
 Debugging
 ---------
 
-You can build c-lightning with DEVELOPER=1 to use dev commands listed in ``cli/lightning-cli help``. ``./configure --enable-developer`` will do that. You can log console messages with log_info() in lightningd and status_trace() in other subdaemons.
+You can build c-lightning with DEVELOPER=1 to use dev commands listed in ``cli/lightning-cli help``. ``./configure --enable-developer`` will do that. You can log console messages with log_info() in lightningd and status_debug() in other subdaemons.
 
 You can debug crashing subdaemons with the argument
 `--dev-debugger=channeld`, where `channeld` is the subdaemon name.  It
@@ -212,6 +212,11 @@ There are three kinds of tests:
   You can also append `-k TESTNAME` to run a single test.  Environment variables
   `DEBUG_SUBD=<subdaemon>` and `TIMEOUT=<seconds>` can be useful for debugging
   subdaemons on individual tests.
+
+* **pylightning tests** - will check contrib pylightning for codestyle and run
+  the tests in `contrib/pylightning/tests` afterwards:
+
+  `make check-python`.
 
 Our Travis CI instance (see `.travis.yml`) runs all these for each
 pull request.

@@ -6,7 +6,9 @@
 #include <bitcoin/script.h>
 #include <bitcoin/tx.h>
 #include <ccan/array_size/array_size.h>
+#include <ccan/cast/cast.h>
 #include <ccan/io/io.h>
+#include <ccan/mem/mem.h>
 #include <ccan/noerr/noerr.h>
 #include <ccan/str/str.h>
 #include <ccan/take/take.h>
@@ -85,18 +87,11 @@ static void copy_to_parent_log(const char *prefix,
 		log_(parent_log, level, false, "%s %s", prefix, str);
 }
 
-static void peer_update_features(struct peer *peer,
-				 const u8 *globalfeatures TAKES,
-				 const u8 *localfeatures TAKES)
+static void peer_update_features(struct peer *peer, const u8 *features TAKES)
 {
-	tal_free(peer->globalfeatures);
-	tal_free(peer->localfeatures);
-	peer->globalfeatures = tal_dup_arr(peer, u8,
-					   globalfeatures,
-					   tal_count(globalfeatures), 0);
-	peer->localfeatures = tal_dup_arr(peer, u8,
-					  localfeatures,
-					  tal_count(localfeatures), 0);
+	tal_free(peer->features);
+	peer->features = tal_dup_arr(peer, u8,
+				     features, tal_count(features), 0);
 }
 
 struct peer *new_peer(struct lightningd *ld, u64 dbid,
@@ -111,7 +106,7 @@ struct peer *new_peer(struct lightningd *ld, u64 dbid,
 	peer->id = *id;
 	peer->uncommitted_channel = NULL;
 	peer->addr = *addr;
-	peer->globalfeatures = peer->localfeatures = NULL;
+	peer->features = NULL;
 	list_head_init(&peer->channels);
 	peer->direction = node_id_idx(&peer->ld->id, &peer->id);
 #if DEVELOPER
@@ -224,7 +219,7 @@ static void sign_last_tx(struct channel *channel)
 				 &sig, &channel->channel_info.remote_fundingkey,
 				 &channel->local_funding_pubkey);
 
-	bitcoin_tx_input_set_witness(channel->last_tx, 0, witness);
+	bitcoin_tx_input_set_witness(channel->last_tx, 0, take(witness));
 }
 
 static void remove_sig(struct bitcoin_tx *signed_tx)
@@ -441,9 +436,18 @@ void channel_errmsg(struct channel *channel,
 	 *    - MUST fail the channel referred to by the error message,
 	 *      if that channel is with the sending node.
 	 */
-	channel_fail_permanent(channel, "%s: %s ERROR %s",
-			       channel->owner->name,
-			       err_for_them ? "sent" : "received", desc);
+
+	/* We should immediately forget the channel if we receive error during
+	 * CHANNELD_AWAITING_LOCKIN if we are fundee. */
+	if (!err_for_them && channel->funder == REMOTE
+	    && channel->state == CHANNELD_AWAITING_LOCKIN)
+		channel_fail_forget(channel, "%s: %s ERROR %s",
+				    channel->owner->name,
+				    err_for_them ? "sent" : "received", desc);
+	else
+		channel_fail_permanent(channel, "%s: %s ERROR %s",
+				       channel->owner->name,
+				       err_for_them ? "sent" : "received", desc);
 }
 
 struct peer_connected_hook_payload {
@@ -786,8 +790,11 @@ peer_connected_serialize(struct peer_connected_hook_payload *payload,
 	json_add_string(
 	    stream, "addr",
 	    type_to_string(stream, struct wireaddr_internal, &payload->addr));
-	json_add_hex_talarr(stream, "globalfeatures", p->globalfeatures);
-	json_add_hex_talarr(stream, "localfeatures", p->localfeatures);
+	if (deprecated_apis) {
+		json_add_hex_talarr(stream, "globalfeatures", NULL);
+		json_add_hex_talarr(stream, "localfeatures", p->features);
+	}
+	json_add_hex_talarr(stream, "features", p->features);
 	json_object_end(stream); /* .peer */
 }
 
@@ -915,7 +922,7 @@ void peer_connected(struct lightningd *ld, const u8 *msg,
 		    int peer_fd, int gossip_fd, int gossip_store_fd)
 {
 	struct node_id id;
-	u8 *globalfeatures, *localfeatures;
+	u8 *features;
 	struct peer *peer;
 	struct peer_connected_hook_payload *hook_payload;
 
@@ -924,15 +931,9 @@ void peer_connected(struct lightningd *ld, const u8 *msg,
 	if (!fromwire_connect_peer_connected(hook_payload, msg,
 					     &id, &hook_payload->addr,
 					     &hook_payload->pps,
-					     &globalfeatures, &localfeatures))
+					     &features))
 		fatal("Connectd gave bad CONNECT_PEER_CONNECTED message %s",
 		      tal_hex(msg, msg));
-
-#if DEVELOPER
-	/* Override broaedcast interval from our config */
-	hook_payload->pps->dev_gossip_broadcast_msec
-		= ld->config.broadcast_interval_msec;
-#endif
 
 	per_peer_state_set_fds(hook_payload->pps,
 			       peer_fd, gossip_fd, gossip_store_fd);
@@ -949,7 +950,7 @@ void peer_connected(struct lightningd *ld, const u8 *msg,
 	tal_steal(peer, hook_payload);
 	hook_payload->peer = peer;
 
-	peer_update_features(peer, globalfeatures, localfeatures);
+	peer_update_features(peer, features);
 
 	/* Can't be opening, since we wouldn't have sent peer_disconnected. */
 	assert(!peer->uncommitted_channel);
@@ -964,13 +965,16 @@ static bool check_funding_tx(const struct bitcoin_tx *tx,
 			     const struct channel *channel)
 {
 	u8 *wscript;
+	struct amount_asset asset =
+	    bitcoin_tx_output_get_amount(tx, channel->funding_outnum);
+
+	if (!amount_asset_is_main(&asset))
+		return false;
 
 	if (channel->funding_outnum >= tx->wtx->num_outputs)
 		return false;
 
-	if (!amount_sat_eq(bitcoin_tx_output_get_amount(tx,
-							channel->funding_outnum),
-			   channel->funding))
+	if (!amount_sat_eq(amount_asset_to_sat(&asset), channel->funding))
 		return false;
 
 	wscript = bitcoin_redeem_2of2(tmpctx,
@@ -1012,8 +1016,8 @@ static enum watch_result funding_depth_cb(struct lightningd *ld,
 	if ((min_depth_reached && !channel->scid) || (depth && channel->scid)) {
 		struct txlocator *loc;
 
-		wallet_transaction_annotate(ld->wallet, txid,
-					    TX_CHANNEL_FUNDING, channel->dbid);
+		wallet_annotate_txout(ld->wallet, txid, channel->funding_outnum,
+				      TX_CHANNEL_FUNDING, channel->dbid);
 		loc = wallet_transaction_locate(tmpctx, ld->wallet, txid);
 		if (!mk_short_channel_id(&scid,
 					 loc->blkheight, loc->index,
@@ -1111,10 +1115,12 @@ static void json_add_peer(struct lightningd *ld,
 					       struct wireaddr_internal,
 					       &p->addr));
 		json_array_end(response);
-		json_add_hex_talarr(response, "globalfeatures",
-				    p->globalfeatures);
-		json_add_hex_talarr(response, "localfeatures",
-				    p->localfeatures);
+		if (deprecated_apis) {
+			json_add_hex_talarr(response, "globalfeatures", NULL);
+			json_add_hex_talarr(response, "localfeatures",
+					    p->features);
+		}
+		json_add_hex_talarr(response, "features", p->features);
 	}
 
 	json_array_start(response, "channels");
@@ -1194,8 +1200,7 @@ command_find_channel(struct command *cmd,
 				    "Channel ID not found: '%.*s'",
 				    tok->end - tok->start,
 				    buffer + tok->start);
-	} else if (json_to_short_channel_id(buffer, tok, &scid,
-					    deprecated_apis)) {
+	} else if (json_to_short_channel_id(buffer, tok, &scid)) {
 		list_for_each(&ld->peers, peer, list) {
 			*channel = peer_active_channel(peer);
 			if (!*channel)
@@ -1217,6 +1222,61 @@ command_find_channel(struct command *cmd,
 	}
 }
 
+/* param_tok_timeout_or_force and param_tok_dest_or_timeout are made to
+ * support 'check' command for array type parameters.
+ *
+ * But the parameters are mixed with the old style and new style(like
+ * close {id} {force} {destination}), 'check' is unable to tell the error.
+ */
+static struct command_result *param_tok_timeout_or_force(
+					struct command *cmd, const char *name,
+					const char *buffer, const jsmntok_t * tok,
+					const jsmntok_t **out)
+{
+	if (command_check_only(cmd)) {
+		unsigned int timeout;
+		bool force;
+		if (!json_to_bool(buffer, tok, &force)) {
+			if (!json_to_number(buffer, tok, &timeout))
+				return command_fail(cmd, JSONRPC2_INVALID_PARAMS,
+						    "Expected unilerataltimeout to be a number");
+		}
+		return NULL;
+	}
+
+	*out = tok;
+	return NULL;
+}
+
+static struct command_result *param_tok_dest_or_timeout(
+					struct command *cmd, const char *name,
+					const char *buffer, const jsmntok_t * tok,
+					const jsmntok_t **out)
+{
+	if (command_check_only(cmd)) {
+		unsigned int timeout;
+		const u8 *script;
+		if (!json_to_number(buffer, tok, &timeout)) {
+			enum address_parse_result res;
+			res = json_to_address_scriptpubkey(cmd,
+							   get_chainparams(cmd->ld),
+							   buffer, tok,
+							   &script);
+			if (res == ADDRESS_PARSE_UNRECOGNIZED)
+				return command_fail(cmd, JSONRPC2_INVALID_PARAMS,
+						    "Could not parse destination address");
+			else if (res == ADDRESS_PARSE_WRONG_NETWORK)
+				return command_fail(cmd, JSONRPC2_INVALID_PARAMS,
+						    "Destination address is not on network %s",
+						    get_chainparams(cmd->ld)->network_name);
+		}
+		return NULL;
+	}
+
+	*out = tok;
+	return NULL;
+}
+
 static struct command_result *json_close(struct command *cmd,
 					 const char *buffer,
 					 const jsmntok_t *obj UNNEEDED,
@@ -1225,9 +1285,12 @@ static struct command_result *json_close(struct command *cmd,
 	const jsmntok_t *idtok;
 	struct peer *peer;
 	struct channel *channel COMPILER_WANTS_INIT("gcc 7.3.0 fails, 8.3 OK");
-	unsigned int *timeout;
+	unsigned int *timeout = NULL;
 	bool force = true;
 	bool do_timeout;
+	const u8 *close_to_script = NULL;
+	unsigned int *old_timeout;
+	bool *old_force, close_script_set;
 
 	/* For generating help, give new-style. */
 	if (!params || !deprecated_apis) {
@@ -1235,66 +1298,123 @@ static struct command_result *json_close(struct command *cmd,
 			   p_req("id", param_tok, &idtok),
 			   p_opt_def("unilateraltimeout", param_number,
 				     &timeout, 48 * 3600),
+			   p_opt("destination", param_bitcoin_address,
+				 &close_to_script),
 			   NULL))
 			return command_param_failed();
 		do_timeout = (*timeout != 0);
 	} else if (params->type == JSMN_ARRAY) {
-		const jsmntok_t *tok;
+		const jsmntok_t *firsttok, *secondtok;
+		bool old_style;
 
 		/* Could be new or old style; get as tok. */
-		if (!param(cmd, buffer, params,
+ 		if (!param(cmd, buffer, params,
 			   p_req("id", param_tok, &idtok),
-			   p_opt("unilateraltimeout_or_force", param_tok, &tok),
-			   p_opt("timeout", param_number, &timeout),
+			   p_opt("unilateraltimeout_or_force",
+				 param_tok_timeout_or_force, &firsttok),
+			   p_opt("destination_or_timeout",
+				 param_tok_dest_or_timeout, &secondtok),
 			   NULL))
 			return command_param_failed();
 
-		if (tok) {
+		if (firsttok) {
 			/* old-style force bool? */
-			if (json_to_bool(buffer, tok, &force)) {
+			if (json_to_bool(buffer, firsttok, &force)) {
+				old_style = true;
+				timeout = tal(cmd, unsigned int);
+
 				/* Old default timeout */
-				if (!timeout) {
-					timeout = tal(cmd, unsigned int);
+				if (!secondtok)
 					*timeout = 30;
+				else {
+					if (!json_to_number(buffer, secondtok, timeout))
+						return command_fail(cmd, JSONRPC2_INVALID_PARAMS,
+								    "close: Expected timeout to be a number. "
+								    "This argument ordering is deprecated!");
 				}
 			/* New-style timeout */
 			} else {
+				old_style = false;
 				timeout = tal(cmd, unsigned int);
-				if (!json_to_number(buffer, tok, timeout)) {
+				if (!json_to_number(buffer, firsttok, timeout))
 					return command_fail(cmd, JSONRPC2_INVALID_PARAMS,
 							    "Expected unilerataltimeout to be a number");
+
+				if (secondtok) {
+					enum address_parse_result res;
+					res = json_to_address_scriptpubkey(cmd,
+									   get_chainparams(cmd->ld),
+									   buffer, secondtok,
+									   &close_to_script);
+					if (res == ADDRESS_PARSE_UNRECOGNIZED)
+						return command_fail(cmd, JSONRPC2_INVALID_PARAMS,
+								    "Could not parse destination address");
+					else if (res == ADDRESS_PARSE_WRONG_NETWORK)
+						return command_fail(cmd, JSONRPC2_INVALID_PARAMS,
+								    "Destination address is not on network %s",
+								    get_chainparams(cmd->ld)->network_name);
 				}
 			}
-		}
+		} else if (secondtok) {
+			unsigned int *tmp_timeout = tal(tmpctx, unsigned int);
+
+			if (json_to_number(buffer, secondtok, tmp_timeout)) {
+				old_style = true;
+				timeout = tal_steal(cmd, tmp_timeout);
+			} else {
+				old_style = false;
+				enum address_parse_result res;
+
+				res = json_to_address_scriptpubkey(cmd,
+								   get_chainparams(cmd->ld),
+								   buffer, secondtok,
+								   &close_to_script);
+				if (res == ADDRESS_PARSE_UNRECOGNIZED)
+					return command_fail(cmd, JSONRPC2_INVALID_PARAMS,
+							    "Could not parse destination address");
+				else if (res == ADDRESS_PARSE_WRONG_NETWORK)
+					return command_fail(cmd, JSONRPC2_INVALID_PARAMS,
+							    "Destination address is not on network %s",
+							    get_chainparams(cmd->ld)->network_name);
+			}
+		} else
+			old_style = false;
 
 		/* If they didn't specify timeout, it's the (new) default */
 		if (!timeout) {
 			timeout = tal(cmd, unsigned int);
 			*timeout = 48 * 3600;
 		}
-		do_timeout = true;
+		/* New style: do_timeout unless it's 0 */
+		if (!old_style)
+			do_timeout = (*timeout != 0);
+		else
+			do_timeout = true;
 	} else {
-		unsigned int *old_timeout;
-		bool *old_force;
-
 		/* Named parameters are easy to distinguish */
 		if (!param(cmd, buffer, params,
 			   p_req("id", param_tok, &idtok),
 			   p_opt_def("unilateraltimeout", param_number,
 				     &timeout, 48 * 3600),
+			   p_opt("destination", param_bitcoin_address,
+				 &close_to_script),
 			   p_opt("force", param_bool, &old_force),
 			   p_opt("timeout", param_number, &old_timeout),
 			   NULL))
 			return command_param_failed();
-		/* Old style. */
-		if (old_timeout) {
-			*timeout = *old_timeout;
-		}
-		if (old_force) {
-			/* Use old default */
-			if (!old_timeout)
-				*timeout = 30;
-			force = *old_force;
+
+		/* Old style has lower priority. */
+		if (!close_to_script) {
+			/* Old style. */
+			if (old_timeout) {
+				*timeout = *old_timeout;
+			}
+			if (old_force) {
+				/* Use old default */
+				if (!old_timeout)
+					*timeout = 30;
+				force = *old_force;
+			}
 		}
 
 		/* New style: do_timeout unless it's 0 */
@@ -1326,35 +1446,81 @@ static struct command_result *json_close(struct command *cmd,
 				    "Peer has no active channel");
 	}
 
+
+	/* If we've set a local shutdown script for this peer, and it's not the
+	 * default upfront script, try to close to a different channel.
+	 * Error is an operator error */
+	if (close_to_script && channel->shutdown_scriptpubkey[LOCAL]
+			&& !memeq(close_to_script,
+				  tal_count(close_to_script),
+				  channel->shutdown_scriptpubkey[LOCAL],
+				  tal_count(channel->shutdown_scriptpubkey[LOCAL]))) {
+		u8 *default_close_to = p2wpkh_for_keyidx(tmpctx, cmd->ld,
+							 channel->final_key_idx);
+		if (!memeq(default_close_to, tal_count(default_close_to),
+			   channel->shutdown_scriptpubkey[LOCAL],
+			   tal_count(channel->shutdown_scriptpubkey[LOCAL]))) {
+			return command_fail(cmd, JSONRPC2_INVALID_PARAMS,
+					    "Destination address %s does not match "
+					    "previous shutdown script %s",
+					    tal_hex(tmpctx, channel->shutdown_scriptpubkey[LOCAL]),
+					    tal_hex(tmpctx, close_to_script));
+		} else {
+			channel->shutdown_scriptpubkey[LOCAL] =
+				tal_free(channel->shutdown_scriptpubkey[LOCAL]);
+			channel->shutdown_scriptpubkey[LOCAL] =
+				tal_steal(channel, close_to_script);
+			close_script_set = true;
+		}
+	} else if (close_to_script && !channel->shutdown_scriptpubkey[LOCAL]) {
+		channel->shutdown_scriptpubkey[LOCAL]
+			= tal_steal(channel, cast_const(u8 *, close_to_script));
+		close_script_set = true;
+	} else if (!channel->shutdown_scriptpubkey[LOCAL]) {
+		channel->shutdown_scriptpubkey[LOCAL]
+			= p2wpkh_for_keyidx(channel, cmd->ld, channel->final_key_idx);
+		/* We don't save the default to disk */
+		close_script_set = false;
+	} else
+		close_script_set = false;
+
+
 	/* Normal case.
 	 * We allow states shutting down and sigexchange; a previous
 	 * close command may have timed out, and this current command
 	 * will continue waiting for the effects of the previous
 	 * close command. */
-	if (channel->state != CHANNELD_NORMAL &&
-	    channel->state != CHANNELD_AWAITING_LOCKIN &&
-	    channel->state != CHANNELD_SHUTTING_DOWN &&
-	    channel->state != CLOSINGD_SIGEXCHANGE) {
-		return command_fail(cmd, LIGHTNINGD, "Channel is in state %s",
-				    channel_state_name(channel));
-	}
 
 	/* If normal or locking in, transition to shutting down
 	 * state.
 	 * (if already shutting down or sigexchange, just keep
 	 * waiting) */
-	if (channel->state == CHANNELD_NORMAL || channel->state == CHANNELD_AWAITING_LOCKIN) {
-		channel_set_state(channel,
-				  channel->state, CHANNELD_SHUTTING_DOWN);
-
-		if (channel->owner)
-			subd_send_msg(channel->owner,
-				      take(towire_channel_send_shutdown(channel)));
+	switch (channel->state) {
+		case CHANNELD_NORMAL:
+		case CHANNELD_AWAITING_LOCKIN:
+			channel_set_state(channel,
+					  channel->state, CHANNELD_SHUTTING_DOWN);
+			/* fallthrough */
+		case CHANNELD_SHUTTING_DOWN:
+			if (channel->owner)
+				subd_send_msg(channel->owner,
+					      take(towire_channel_send_shutdown(NULL,
+						   channel->shutdown_scriptpubkey[LOCAL])));
+			break;
+		case CLOSINGD_SIGEXCHANGE:
+			break;
+		default:
+			return command_fail(cmd, LIGHTNINGD, "Channel is in state %s",
+					    channel_state_name(channel));
 	}
 
 	/* Register this command for later handling. */
 	register_close_command(cmd->ld, cmd, channel,
 			       do_timeout ? timeout : NULL, force);
+
+	/* If we set `channel->shutdown_scriptpubkey[LOCAL]`, save it. */
+	if (close_script_set)
+		wallet_channel_save(cmd->ld->wallet, channel);
 
 	/* Wait until close drops down to chain. */
 	return command_still_pending(cmd);
@@ -1366,10 +1532,8 @@ static const struct json_command close_command = {
 	json_close,
 	"Close the channel with {id} "
 	"(either peer ID, channel ID, or short channel ID). "
-	"If {force} (default false) is true, force a unilateral close "
-	"after {timeout} seconds (default 30), "
-	"otherwise just schedule a mutual close later and fail after "
-	"timing out."
+	"Force a unilateral close after {unilateraltimeout} seconds (default 48h). "
+	"If {destination} address is provided, will be used as output address."
 };
 AUTODATA(json_command, &close_command);
 
@@ -1419,7 +1583,7 @@ void activate_peers(struct lightningd *ld)
 }
 
 /* Pull peers, channels and HTLCs from db, and wire them up. */
-void load_channels_from_wallet(struct lightningd *ld)
+struct htlc_in_map *load_channels_from_wallet(struct lightningd *ld)
 {
 	struct peer *peer;
 
@@ -1442,7 +1606,7 @@ void load_channels_from_wallet(struct lightningd *ld)
 	}
 
 	/* Now connect HTLC pointers together */
-	htlcs_reconnect(ld, &ld->htlcs_in, &ld->htlcs_out);
+	return htlcs_reconnect(ld, &ld->htlcs_in, &ld->htlcs_out);
 }
 
 static struct command_result *json_disconnect(struct command *cmd,
@@ -1917,6 +2081,7 @@ static struct command_result *json_dev_forget_channel(struct command *cmd,
 	struct peer *peer;
 	struct channel *channel;
 	struct short_channel_id *scid;
+	struct channel_id *find_cid, cid;
 	struct dev_forget_channel_cmd *forget = tal(cmd, struct dev_forget_channel_cmd);
 	forget->cmd = cmd;
 
@@ -1924,6 +2089,7 @@ static struct command_result *json_dev_forget_channel(struct command *cmd,
 	if (!param(cmd, buffer, params,
 		   p_req("id", param_node_id, &peerid),
 		   p_opt("short_channel_id", param_short_channel_id, &scid),
+		   p_opt("channel_id", param_channel_id, &find_cid),
 		   p_opt_def("force", param_bool, &force, false),
 		   NULL))
 		return command_param_failed();
@@ -1937,6 +2103,14 @@ static struct command_result *json_dev_forget_channel(struct command *cmd,
 
 	forget->channel = NULL;
 	list_for_each(&peer->channels, channel, list) {
+		/* Check for channel id first */
+		if (find_cid) {
+			derive_channel_id(&cid, &channel->funding_txid,
+					  channel->funding_outnum);
+
+			if (!channel_id_eq(find_cid, &cid))
+				continue;
+		}
 		if (scid) {
 			if (!channel->scid)
 				continue;

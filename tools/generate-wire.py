@@ -115,9 +115,12 @@ class Field(object):
         return ', const {} *{}'.format(type_name, self.name)
 
     def arg_desc_from(self):
+        type_name = self.type_obj.type_name()
+        if self.type_obj.is_const_ptr_ptr_type():
+            return ', const {} **{}'.format(type_name, self.name)
+
         if self.len_field_of:
             return ''
-        type_name = self.type_obj.type_name()
         if self.is_array():
             return ', {} {}[{}]'.format(type_name, self.name, self.count)
         ptrs = '*'
@@ -216,6 +219,8 @@ class Type(FieldSet):
         'bitcoin_tx',
         'wirestring',
         'per_peer_state',
+        'bitcoin_tx_output',
+        'exclude_entry',
     ]
 
     # Some BOLT types are re-typed based on their field name
@@ -241,6 +246,12 @@ class Type(FieldSet):
         'point': 'pubkey',
         # FIXME: omits 'pad'
     }
+
+    # Types that are const pointer-to-pointers, such as chainparams, i.e.,
+    # they set a reference to some const entry.
+    const_ptr_ptr_types = [
+        'chainparams'
+    ]
 
     @staticmethod
     def true_type(type_name, field_name=None, outer_name=None):
@@ -306,6 +317,9 @@ class Type(FieldSet):
     def is_subtype(self):
         return bool(self.fields)
 
+    def is_const_ptr_ptr_type(self):
+        return self.name in self.const_ptr_ptr_types
+
     def is_truncated(self):
         return self.name in self.truncated_typedefs
 
@@ -342,6 +356,7 @@ class Message(FieldSet):
         self.struct_prefix = struct_prefix
         self.enumname = None
         self.msg_comments = comments
+        self.if_token = None
 
     def has_option(self):
         return self.option is not None
@@ -354,6 +369,9 @@ class Message(FieldSet):
         if self.struct_prefix:
             return self.struct_prefix + "_" + self.name
         return self.name
+
+    def add_if(self, if_token):
+        self.if_token = if_token
 
 
 class Tlv(object):
@@ -504,6 +522,7 @@ def main(options, args=None, output=sys.stdout, lines=None):
     genline = next_line(args, lines)
 
     comment_set = []
+    token_name = None
 
     # Create a new 'master' that serves as the coordinator for the file generation
     master = Master()
@@ -516,7 +535,11 @@ def main(options, args=None, output=sys.stdout, lines=None):
             if not bool(line):
                 master.add_comments(comment_set)
                 comment_set = []
+                token_name = None
                 continue
+
+            if len(tokens) > 2:
+                token_name = tokens[1]
 
             if token_type == 'subtype':
                 subtype, _, _ = master.add_type(tokens[1])
@@ -576,6 +599,13 @@ def main(options, args=None, output=sys.stdout, lines=None):
                     raise ValueError('Unknown message type {}. {}:{}'.format(tokens[1], ln, line))
                 type_obj, collapse, optional = master.add_type(tokens[3], tokens[2], tokens[1])
 
+                if collapse:
+                    count = 1
+                elif len(tokens) < 5:
+                    raise ValueError('problem with parsing {}:{}'.format(ln, line))
+                else:
+                    count = tokens[4]
+
                 # if this is an 'extension' field*, we want to add a new 'message' type
                 # in the future, extensions will be handled as TLV's
                 #
@@ -584,18 +614,24 @@ def main(options, args=None, output=sys.stdout, lines=None):
                 #   differently. for the sake of clarity here, for bolt-wire messages,
                 #   we'll refer to 'optional' message fields as 'extensions')
                 #
-                if bool(tokens[5:]):  # is an extension field
+                if tokens[5:] == []:
+                    msg.add_data_field(tokens[2], type_obj, count, comments=list(comment_set),
+                                       optional=optional)
+                else:  # is one or more extension fields
                     if optional:
                         raise ValueError("Extension fields cannot be optional. {}:{}"
                                          .format(ln, line))
-                    extension_name = "{}_{}".format(tokens[1], tokens[5])
                     orig_msg = msg
-                    msg = master.find_message(extension_name)
-                    if not msg:
-                        msg = copy.deepcopy(orig_msg)
-                        msg.enumname = msg.name
-                        msg.name = extension_name
-                        master.add_extension_msg(msg.name, msg)
+                    for extension in tokens[5:]:
+                        extension_name = "{}_{}".format(tokens[1], extension)
+                        msg = master.find_message(extension_name)
+                        if not msg:
+                            msg = copy.deepcopy(orig_msg)
+                            msg.enumname = msg.name
+                            msg.name = extension_name
+                            master.add_extension_msg(msg.name, msg)
+                        msg.add_data_field(tokens[2], type_obj, count, comments=list(comment_set), optional=optional)
+
                     # If this is a print_wire page, add the extension fields to the
                     # original message, so we can print them if present.
                     if options.print_wire:
@@ -604,17 +640,14 @@ def main(options, args=None, output=sys.stdout, lines=None):
                                                 comments=list(comment_set),
                                                 optional=optional)
 
-                if collapse:
-                    count = 1
-                else:
-                    count = tokens[4]
-
-                msg.add_data_field(tokens[2], type_obj, count, comments=list(comment_set),
-                                   optional=optional)
-
                 comment_set = []
             elif token_type.startswith('#include'):
                 master.add_include(token_type)
+            elif token_type.startswith('#if'):
+                msg = master.find_message(token_name)
+                if (msg):
+                    if_token = token_type[token_type.index(' ') + 1:]
+                    msg.add_if(if_token)
             elif token_type.startswith('#'):
                 comment_set.append(token_type[1:])
             else:

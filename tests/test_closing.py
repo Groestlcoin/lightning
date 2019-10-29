@@ -1,7 +1,7 @@
 from fixtures import *  # noqa: F401,F403
 from flaky import flaky
 from lightning import RpcError
-from utils import only_one, sync_blockheight, wait_for, DEVELOPER, TIMEOUT, VALGRIND, SLOW_MACHINE
+from utils import only_one, sync_blockheight, wait_for, DEVELOPER, TIMEOUT, VALGRIND, SLOW_MACHINE, COMPAT
 
 import os
 import queue
@@ -12,9 +12,10 @@ import unittest
 
 
 @unittest.skipIf(not DEVELOPER, "Too slow without --dev-groestlcoind-poll")
-def test_closing(node_factory, bitcoind):
+def test_closing(node_factory, bitcoind, chainparams):
     l1, l2 = node_factory.line_graph(2)
     chan = l1.get_channel_scid(l2)
+    fee = 5430 if not chainparams['elements'] else 8955
 
     l1.pay(l2, 200000000)
 
@@ -29,7 +30,7 @@ def test_closing(node_factory, bitcoind):
 
     # Only wait for the channels to activate with DEVELOPER=1,
     # otherwise it's going to take too long because of the missing
-    # --dev-broadcast-interval
+    # --dev-fast-gossip
     if DEVELOPER:
         wait_for(lambda: len(l1.getactivechannels()) == 2)
         wait_for(lambda: len(l2.getactivechannels()) == 2)
@@ -61,7 +62,7 @@ def test_closing(node_factory, bitcoind):
 
     billboard = only_one(l1.rpc.listpeers(l2.info['id'])['peers'][0]['channels'])['status']
     assert billboard == [
-        'CLOSINGD_SIGEXCHANGE:We agreed on a closing fee of 5430 satoshi for tx:{}'.format(closetxid),
+        'CLOSINGD_SIGEXCHANGE:We agreed on a closing fee of {} satoshi for tx:{}'.format(fee, closetxid),
     ]
     bitcoind.generate_block(1)
 
@@ -73,14 +74,14 @@ def test_closing(node_factory, bitcoind):
     assert closetxid in set([o['txid'] for o in l2.rpc.listfunds()['outputs']])
 
     wait_for(lambda: only_one(l1.rpc.listpeers(l2.info['id'])['peers'][0]['channels'])['status'] == [
-        'CLOSINGD_SIGEXCHANGE:We agreed on a closing fee of 5430 satoshi for tx:{}'.format(closetxid),
+        'CLOSINGD_SIGEXCHANGE:We agreed on a closing fee of {} satoshi for tx:{}'.format(fee, closetxid),
         'ONCHAIN:Tracking mutual close transaction',
         'ONCHAIN:All outputs resolved: waiting 99 more blocks before forgetting channel'
     ])
 
     bitcoind.generate_block(9)
     wait_for(lambda: only_one(l1.rpc.listpeers(l2.info['id'])['peers'][0]['channels'])['status'] == [
-        'CLOSINGD_SIGEXCHANGE:We agreed on a closing fee of 5430 satoshi for tx:{}'.format(closetxid),
+        'CLOSINGD_SIGEXCHANGE:We agreed on a closing fee of {} satoshi for tx:{}'.format(fee, closetxid),
         'ONCHAIN:Tracking mutual close transaction',
         'ONCHAIN:All outputs resolved: waiting 90 more blocks before forgetting channel'
     ])
@@ -144,54 +145,67 @@ def test_closing_id(node_factory):
     wait_for(lambda: not only_one(l2.rpc.listpeers(l1.info['id'])['peers'])['connected'])
 
 
-@unittest.skipIf(not DEVELOPER, "needs dev-rescan-outputs")
 def test_closing_torture(node_factory, executor, bitcoind):
-    l1, l2 = node_factory.get_nodes(2)
+    # We set up N-to-N fully-connected mesh, then try
+    # closing them all at once.
     amount = 10**6
 
-    # Before the fix was applied, 15 would often pass.
-    # However, increasing the number of tries would
-    # take longer in VALGRIND mode, triggering a CI
-    # failure since the test does not print any
-    # output.
-    # On my laptop, VALGRIND is about 4x slower than native, hence
-    # the approximations below:
-
-    iterations = 50
+    num_nodes = 10  # => 55 channels (36 seconds on my laptop)
     if VALGRIND:
-        iterations //= 4
+        num_nodes -= 4  # => 21 (135 seconds)
     if SLOW_MACHINE:
-        iterations //= 2
+        num_nodes -= 1  # => 45/15 (37/95 seconds)
 
-    for i in range(iterations):
-        # Reduce probability that spurious sendrawtx error will occur
-        l1.rpc.dev_rescan_outputs()
+    nodes = node_factory.get_nodes(num_nodes)
 
-        # Create a channel.
-        l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
-        l1.fund_channel(l2, amount)
-        scid = l1.get_channel_scid(l2)
+    # Make sure bitcoind has plenty of utxos
+    bitcoind.generate_block(num_nodes)
 
-        # Get it confirmed.
-        l1.bitcoin.generate_block(6)
+    # Give them all plenty of UTXOs, make sure they see them
+    for i in range(len(nodes)):
+        for j in range(i + 1, len(nodes)):
+            addr = nodes[i].rpc.newaddr()['bech32']
+            bitcoind.rpc.sendtoaddress(addr, (amount + 1000000) / 10**8)
+    bitcoind.generate_block(1)
+    sync_blockheight(bitcoind, nodes)
 
-        # Wait for it to go to CHANNELD_NORMAL
-        l1.wait_channel_active(scid)
-        l2.wait_channel_active(scid)
+    txs = []
+    for i in range(len(nodes)):
+        for j in range(i + 1, len(nodes)):
+            nodes[i].rpc.connect(nodes[j].info['id'], 'localhost', nodes[j].port)
+            txs.append(nodes[i].rpc.fundchannel(nodes[j].info['id'], amount)['txid'])
 
-        # Start closers: can take a long time under valgrind!
-        c1 = executor.submit(l1.rpc.close, l2.info['id'])
-        c2 = executor.submit(l2.rpc.close, l1.info['id'])
-        # Wait for close to finish
-        c1.result(TIMEOUT)
-        c2.result(TIMEOUT)
+    # Make sure they're all in, then lock them in.
+    bitcoind.generate_block(1, wait_for_mempool=txs)
 
-        wait_for(lambda: len(bitcoind.rpc.getrawmempool(False)) == 1)
+    # Wait for them all to be CHANNELD_NORMAL
+    for n in nodes:
+        wait_for(lambda: all(p['channels'][0]['state'] == 'CHANNELD_NORMAL' for p in n.rpc.listpeers()['peers']))
 
-        # Get close confirmed
-        l1.bitcoin.generate_block(100)
-        wait_for(lambda: len(l1.rpc.listpeers()['peers']) == 0)
-        wait_for(lambda: len(l2.rpc.listpeers()['peers']) == 0)
+    # Start closers: can take a long time under valgrind!
+    futures = []
+    for i in range(len(nodes)):
+        for j in range(i + 1, len(nodes)):
+            futures.append(executor.submit(nodes[i].rpc.close, nodes[j].info['id']))
+            futures.append(executor.submit(nodes[j].rpc.close, nodes[i].info['id']))
+
+    # Wait for close to finish
+    close_txs = set()
+    for f in futures:
+        # If one side completes closing, we'll get an error here 'Peer has no active channel'
+        try:
+            close_txs.add(f.result(TIMEOUT)['txid'])
+        except RpcError as err:
+            assert err.error['message'] == 'Peer has no active channel'
+
+    # Should have one close for each open.
+    assert len(close_txs) == len(txs)
+    # Get closes confirmed
+    bitcoind.generate_block(100, wait_for_mempool=list(close_txs))
+
+    # And make sure they hangup.
+    for n in nodes:
+        wait_for(lambda: n.rpc.listpeers()['peers'] == [])
 
 
 @unittest.skipIf(SLOW_MACHINE and VALGRIND, "slow test")
@@ -284,7 +298,104 @@ def test_closing_negotiation_reconnect(node_factory, bitcoind):
 
 
 @unittest.skipIf(not DEVELOPER, "needs DEVELOPER=1")
-def test_penalty_inhtlc(node_factory, bitcoind, executor):
+def test_closing_specified_destination(node_factory, bitcoind):
+    l1, l2, l3, l4 = node_factory.get_nodes(4)
+
+    l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
+    l1.rpc.connect(l3.info['id'], 'localhost', l3.port)
+    l1.rpc.connect(l4.info['id'], 'localhost', l4.port)
+
+    chan12 = l1.fund_channel(l2, 10**6)
+    chan13 = l1.fund_channel(l3, 10**6)
+    chan14 = l1.fund_channel(l4, 10**6)
+
+    l1.pay(l2, 100000000)
+    l1.pay(l3, 100000000)
+    l1.pay(l4, 100000000)
+
+    bitcoind.generate_block(5)
+    addr = 'bcrt1qeyyk6sl5pr49ycpqyckvmttus5ttj25pd0zpvg'
+    l1.rpc.close(chan12, None, addr)
+    l1.rpc.call('close', {'id': chan13, 'destination': addr})
+    l1.rpc.call('close', [chan14, None, addr])
+
+    l1.daemon.wait_for_logs([' to CLOSINGD_SIGEXCHANGE'] * 3)
+
+    # Both nodes should have disabled the channel in their view
+    wait_for(lambda: len(l1.getactivechannels()) == 0)
+
+    assert bitcoind.rpc.getmempoolinfo()['size'] == 3
+
+    # Now grab the close transaction
+    closetxid = bitcoind.rpc.getrawmempool(False)
+    assert len(closetxid) == 3
+
+    idindex = {}
+    for n in [l2, l3, l4]:
+        billboard = only_one(l1.rpc.listpeers(n.info['id'])['peers'][0]['channels'])['status']
+        idindex[n] = [i for i in range(3) if billboard == [
+            'CLOSINGD_SIGEXCHANGE:We agreed on a closing fee of 5430 satoshi for tx:{}'.format(closetxid[i]),
+        ]][0]
+        assert idindex[n] in range(3)
+
+    bitcoind.generate_block(1)
+    sync_blockheight(bitcoind, [l1, l2, l3, l4])
+
+    # l1 can't spent the output to addr.
+    assert not l1.daemon.is_in_log(r'Owning output.* \(SEGWIT\).* txid %s.* CONFIRMED' % closetxid[0])
+    assert not l1.daemon.is_in_log(r'Owning output.* \(SEGWIT\).* txid %s.* CONFIRMED' % closetxid[1])
+    assert not l1.daemon.is_in_log(r'Owning output.* \(SEGWIT\).* txid %s.* CONFIRMED' % closetxid[2])
+    # Check the txid has at least 1 confirmation
+    l2.daemon.wait_for_log(r'Owning output.* \(SEGWIT\).* txid %s.* CONFIRMED' % closetxid[idindex[l2]])
+    l3.daemon.wait_for_log(r'Owning output.* \(SEGWIT\).* txid %s.* CONFIRMED' % closetxid[idindex[l3]])
+    l4.daemon.wait_for_log(r'Owning output.* \(SEGWIT\).* txid %s.* CONFIRMED' % closetxid[idindex[l4]])
+
+    for n in [l2, l3, l4]:
+        # Make sure both nodes have grabbed their close tx funds
+        outputs = n.rpc.listfunds()['outputs']
+        assert closetxid[idindex[n]] in set([o['txid'] for o in outputs])
+        output_num2 = [o for o in outputs if o['txid'] == closetxid[idindex[n]]][0]['output']
+        output_num1 = 0 if output_num2 == 1 else 1
+        # Check the another address is addr
+        assert addr == bitcoind.rpc.gettxout(closetxid[idindex[n]], output_num1)['scriptPubKey']['addresses'][0]
+        assert 1 == bitcoind.rpc.gettxout(closetxid[idindex[n]], output_num1)['confirmations']
+
+
+@unittest.skipIf(not COMPAT, "needs COMPAT=1")
+def test_deprecated_closing_compat(node_factory, bitcoind):
+    """ The old-style close command is:
+        close {id} {force} {timeout}
+    """
+    l1, l2 = node_factory.get_nodes(2, opts=[{'allow-deprecated-apis': True}, {}])
+    addr = 'bcrt1qeyyk6sl5pr49ycpqyckvmttus5ttj25pd0zpvg'
+    nodeid = l2.info['id']
+
+    l1.rpc.check(command_to_check='close', id=nodeid)
+    # New-style
+    l1.rpc.check(command_to_check='close', id=nodeid, unilateraltimeout=10, destination=addr)
+    l1.rpc.check(command_to_check='close', id=nodeid, unilateraltimeout=0)
+    l1.rpc.check(command_to_check='close', id=nodeid, destination=addr)
+    # Old-style
+    l1.rpc.check(command_to_check='close', id=nodeid, force=False)
+    l1.rpc.check(command_to_check='close', id=nodeid, force=False, timeout=10)
+    l1.rpc.check(command_to_check='close', id=nodeid, timeout=10)
+
+    l1.rpc.call('check', ['close', nodeid])
+    # Array(new-style)
+    l1.rpc.call('check', ['close', nodeid, 10])
+    l1.rpc.call('check', ['close', nodeid, 0, addr])
+    l1.rpc.call('check', ['close', nodeid, None, addr])
+    # Array(old-style)
+    l1.rpc.call('check', ['close', nodeid, True, 10])
+    l1.rpc.call('check', ['close', nodeid, False])
+    l1.rpc.call('check', ['close', nodeid, None, 10])
+    # Not new-style nor old-style
+    with pytest.raises(RpcError, match=r'Expected unilerataltimeout to be a number'):
+        l1.rpc.call('check', ['close', nodeid, "Given enough eyeballs, all bugs are shallow."])
+
+
+@unittest.skipIf(not DEVELOPER, "needs DEVELOPER=1")
+def test_penalty_inhtlc(node_factory, bitcoind, executor, chainparams):
     """Test penalty transaction with an incoming HTLC"""
     # We suppress each one after first commit; HTLC gets added not fulfilled.
     # Feerates identical so we don't get gratuitous commit to update them
@@ -351,12 +462,13 @@ def test_penalty_inhtlc(node_factory, bitcoind, executor):
     outputs = l2.rpc.listfunds()['outputs']
     assert [o['status'] for o in outputs] == ['confirmed'] * 2
     # Allow some lossage for fees.
+    slack = 27000 if chainparams['elements'] else 15000
     assert sum(o['value'] for o in outputs) < 10**6
-    assert sum(o['value'] for o in outputs) > 10**6 - 15000
+    assert sum(o['value'] for o in outputs) > 10**6 - slack
 
 
 @unittest.skipIf(not DEVELOPER, "needs DEVELOPER=1")
-def test_penalty_outhtlc(node_factory, bitcoind, executor):
+def test_penalty_outhtlc(node_factory, bitcoind, executor, chainparams):
     """Test penalty transaction with an outgoing HTLC"""
     # First we need to get funds to l2, so suppress after second.
     # Feerates identical so we don't get gratuitous commit to update them
@@ -430,8 +542,9 @@ def test_penalty_outhtlc(node_factory, bitcoind, executor):
     outputs = l2.rpc.listfunds()['outputs']
     assert [o['status'] for o in outputs] == ['confirmed'] * 3
     # Allow some lossage for fees.
+    slack = 27000 if chainparams['elements'] else 15000
     assert sum(o['value'] for o in outputs) < 10**6
-    assert sum(o['value'] for o in outputs) > 10**6 - 15000
+    assert sum(o['value'] for o in outputs) > 10**6 - slack
 
 
 @unittest.skipIf(not DEVELOPER, "needs DEVELOPER=1")
@@ -1482,7 +1595,7 @@ def test_permfail(node_factory, bitcoind):
         addr = txout['scriptPubKey']['addresses'][0]
         assert(addr == o['address'])
 
-    addr = l1.bitcoin.rpc.getnewaddress()
+    addr = l1.bitcoin.getnewaddress()
     l1.rpc.withdraw(addr, "all")
 
 
@@ -1537,10 +1650,13 @@ def test_option_upfront_shutdown_script(node_factory, bitcoind):
     wait_for(lambda: [c['state'] for c in only_one(l2.rpc.listpeers()['peers'])['channels']] == ['ONCHAIN', 'ONCHAIN'])
 
     # Figure out what address it will try to use.
-    keyidx = int(l1.db_query("SELECT val FROM vars WHERE name='bip32_max_index';")[0]['val'])
+    keyidx = int(l1.db_query("SELECT intval FROM vars WHERE name='bip32_max_index';")[0]['intval'])
 
-    # Expect 1 for change address, 1 for the channel final address.
-    addr = l1.rpc.call('dev-listaddrs', [keyidx + 2])['addresses'][-1]
+    # Expect 1 for change address, 1 for the channel final address,
+    # which are discarded as the 'scratch' tx that the fundchannel
+    # plugin makes, plus 1 for the funding address of the actual
+    # funding tx.
+    addr = l1.rpc.call('dev-listaddrs', [keyidx + 3])['addresses'][-1]
 
     # Now, if we specify upfront and it's OK, all good.
     l1.stop()

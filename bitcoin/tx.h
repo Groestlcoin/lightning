@@ -51,7 +51,7 @@ void bitcoin_txid(const struct bitcoin_tx *tx, struct bitcoin_txid *txid);
 u8 *linearize_tx(const tal_t *ctx, const struct bitcoin_tx *tx);
 
 /* Get weight of tx in Sipa. */
-size_t measure_tx_weight(const struct bitcoin_tx *tx);
+size_t bitcoin_tx_weight(const struct bitcoin_tx *tx);
 
 /* Allocate a tx: you just need to fill in inputs and outputs (they're
  * zeroed with inputs' sequence_number set to FFFFFFFF) */
@@ -74,13 +74,17 @@ bool bitcoin_txid_to_hex(const struct bitcoin_txid *txid,
 /* Internal de-linearization functions. */
 struct bitcoin_tx *pull_bitcoin_tx(const tal_t *ctx,
 				   const u8 **cursor, size_t *max);
-
+/* Add one output to tx. */
 int bitcoin_tx_add_output(struct bitcoin_tx *tx, const u8 *script,
-			  struct amount_sat *amount);
+			  struct amount_sat amount);
+
+/* Add mutiple output to tx. */
+int bitcoin_tx_add_multi_outputs(struct bitcoin_tx *tx,
+				 struct bitcoin_tx_output **outputs);
 
 int bitcoin_tx_add_input(struct bitcoin_tx *tx, const struct bitcoin_txid *txid,
 			 u32 outnum, u32 sequence,
-			 const struct amount_sat *amount, u8 *script);
+			 struct amount_sat amount, u8 *script);
 
 
 /**
@@ -91,7 +95,7 @@ int bitcoin_tx_add_input(struct bitcoin_tx *tx, const struct bitcoin_txid *txid,
  * existing output.
  */
 void bitcoin_tx_output_set_amount(struct bitcoin_tx *tx, int outnum,
-				  struct amount_sat *amount);
+				  struct amount_sat amount);
 
 /**
  * Helper to get the script of a script's output as a tal_arr
@@ -106,8 +110,8 @@ const u8 *bitcoin_tx_output_get_script(const tal_t *ctx, const struct bitcoin_tx
 /**
  * Helper to just get an amount_sat for the output amount.
  */
-struct amount_sat bitcoin_tx_output_get_amount(const struct bitcoin_tx *tx,
-					       int outnum);
+struct amount_asset bitcoin_tx_output_get_amount(const struct bitcoin_tx *tx,
+						 int outnum);
 
 /**
  * Set the input witness.
@@ -116,7 +120,7 @@ struct amount_sat bitcoin_tx_output_get_amount(const struct bitcoin_tx *tx,
  * itself, we need a way to attach a witness to an existing input.
  */
 void bitcoin_tx_input_set_witness(struct bitcoin_tx *tx, int innum,
-				  u8 **witness);
+				  u8 **witness TAKES);
 
 /**
  * Set the input script on the given input.
@@ -143,5 +147,17 @@ void bitcoin_tx_input_get_txid(const struct bitcoin_tx *tx, int innum,
  * both transactions serialize to two identical representations.
  */
 bool bitcoin_tx_check(const struct bitcoin_tx *tx);
+
+/**
+ * Add an explicit fee output if necessary.
+ *
+ * An explicit fee output is only necessary if we are using an elements
+ * transaction, and we have a non-zero fee. This method may be called multiple
+ * times.
+ *
+ * Returns the position of the fee output, or -1 in the case of non-elements
+ * transactions.
+ */
+int elements_tx_add_fee_output(struct bitcoin_tx *tx);
 
 #endif /* LIGHTNING_BITCOIN_TX_H */

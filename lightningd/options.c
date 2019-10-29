@@ -13,6 +13,7 @@
 #include <ccan/tal/str/str.h>
 #include <common/configdir.h>
 #include <common/derive_basepoints.h>
+#include <common/features.h>
 #include <common/json_command.h>
 #include <common/jsonrpc_errors.h>
 #include <common/memleak.h>
@@ -31,17 +32,24 @@
 #include <lightningd/options.h>
 #include <lightningd/plugin.h>
 #include <lightningd/subd.h>
+#include <sodium.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <termios.h>
 #include <unistd.h>
 #include <wire/wire.h>
 
 bool deprecated_apis = true;
 static bool opt_table_alloced = false;
+
+/* Declare opt_add_addr here, because we we call opt_add_addr
+ * and opt_announce_addr vice versa
+*/
+static char *opt_add_addr(const char *arg, struct lightningd *ld);
 
 /* Tal wrappers for opt. */
 static void *opt_allocfn(size_t size)
@@ -148,21 +156,17 @@ static char *opt_add_addr_withtype(const char *arg,
 
 }
 
-static char *opt_add_addr(const char *arg, struct lightningd *ld)
-{
-	return opt_add_addr_withtype(arg, ld, ADDR_LISTEN_AND_ANNOUNCE, true);
-}
-
-static char *opt_add_bind_addr(const char *arg, struct lightningd *ld)
-{
-	return opt_add_addr_withtype(arg, ld, ADDR_LISTEN, true);
-}
-
 static char *opt_add_announce_addr(const char *arg, struct lightningd *ld)
 {
 	const struct wireaddr *wn;
 	size_t n = tal_count(ld->proposed_wireaddr);
-	char *err = opt_add_addr_withtype(arg, ld, ADDR_ANNOUNCE, false);
+	char *err;
+
+	/* Check for autotor and reroute the call to --addr  */
+	if (strstarts(arg, "autotor:"))
+		return opt_add_addr(arg, ld);
+
+	err = opt_add_addr_withtype(arg, ld, ADDR_ANNOUNCE, false);
 	if (err)
 		return err;
 
@@ -192,6 +196,46 @@ static char *opt_add_announce_addr(const char *arg, struct lightningd *ld)
 	return NULL;
 }
 
+static char *opt_add_addr(const char *arg, struct lightningd *ld)
+{
+	struct wireaddr_internal addr;
+
+	/* handle in case you used the addr option with an .onion */
+	if (parse_wireaddr_internal(arg, &addr, 0, true, false, true, NULL)) {
+		if (addr.itype == ADDR_INTERNAL_WIREADDR && (
+			addr.u.wireaddr.type == ADDR_TYPE_TOR_V2 ||
+			addr.u.wireaddr.type == ADDR_TYPE_TOR_V3)) {
+				log_unusual(ld->log, "You used `--addr=%s` option with an .onion address, please use"
+							" `--announce-addr` ! You are lucky in this node live some wizards and"
+							" fairies, we have done this for you and announce, Be as hidden as wished",
+							arg);
+				return opt_add_announce_addr(arg, ld);
+		}
+	}
+	/* the intended call */
+	return opt_add_addr_withtype(arg, ld, ADDR_LISTEN_AND_ANNOUNCE, true);
+}
+
+static char *opt_add_bind_addr(const char *arg, struct lightningd *ld)
+{
+	struct wireaddr_internal addr;
+
+	/* handle in case you used the bind option with an .onion */
+	if (parse_wireaddr_internal(arg, &addr, 0, true, false, true, NULL)) {
+		if (addr.itype == ADDR_INTERNAL_WIREADDR && (
+			addr.u.wireaddr.type == ADDR_TYPE_TOR_V2 ||
+			addr.u.wireaddr.type == ADDR_TYPE_TOR_V3)) {
+				log_unusual(ld->log, "You used `--bind-addr=%s` option with an .onion address,"
+							" You are lucky in this node live some wizards and"
+							" fairies, we have done this for you and don't announce, Be as hidden as wished",
+							arg);
+				return NULL;
+		}
+	}
+	/* the intended call */
+	return opt_add_addr_withtype(arg, ld, ADDR_LISTEN, true);
+}
+
 static void opt_show_u64(char buf[OPT_SHOW_LEN], const u64 *u)
 {
 	snprintf(buf, OPT_SHOW_LEN, "%"PRIu64, *u);
@@ -210,7 +254,10 @@ static char *opt_set_network(const char *arg, struct lightningd *ld)
 {
 	assert(arg != NULL);
 
-	ld->topology->bitcoind->chainparams = chainparams_for_network(arg);
+	/* Set the global chainparams instance */
+	chainparams = chainparams_for_network(arg);
+
+	ld->topology->bitcoind->chainparams = chainparams;
 	if (!ld->topology->bitcoind->chainparams)
 		return tal_fmt(NULL, "Unknown network name '%s'", arg);
 	return NULL;
@@ -321,6 +368,59 @@ static char *opt_clear_plugins(struct lightningd *ld)
 	return NULL;
 }
 
+/* Prompt the user to enter a password, from which will be derived the key used
+ * for `hsm_secret` encryption.
+ * The algorithm used to derive the key is Argon2(id), to which libsodium
+ * defaults. However argon2id-specific constants are used in case someone runs it
+ * with a libsodium version which default constants differs (typically <1.0.9).
+ */
+static char *opt_set_hsm_password(struct lightningd *ld)
+{
+	struct termios current_term, temp_term;
+	char *passwd = NULL;
+	size_t passwd_size = 0;
+	u8 salt[16] = "c-lightning\0\0\0\0\0";
+	ld->encrypted_hsm = true;
+
+	ld->config.keypass = tal(NULL, struct secret);
+	/* Don't swap the encryption key ! */
+	if (sodium_mlock(ld->config.keypass->data,
+	                 sizeof(ld->config.keypass->data)) != 0)
+		return "Could not lock hsm_secret encryption key memory.";
+
+	/* Get the password from stdin, but don't echo it. */
+	if (tcgetattr(fileno(stdin), &current_term) != 0)
+		return "Could not get current terminal options.";
+	temp_term = current_term;
+	temp_term.c_lflag &= ~ECHO;
+	if (tcsetattr(fileno(stdin), TCSAFLUSH, &temp_term) != 0)
+		return "Could not disable password echoing.";
+	printf("Enter hsm_secret password : ");
+	if (getline(&passwd, &passwd_size, stdin) < 0)
+		return "Could not read password from stdin.";
+	if(passwd[strlen(passwd) - 1] == '\n')
+		passwd[strlen(passwd) - 1] = '\0';
+	if (tcsetattr(fileno(stdin), TCSAFLUSH, &current_term) != 0)
+		return "Could not restore terminal options.";
+	printf("\n");
+
+	/* Derive the key from the password. */
+	if (strlen(passwd) < crypto_pwhash_argon2id_PASSWD_MIN)
+		return "Password too short to be able to derive a key from it.";
+	if (strlen(passwd) > crypto_pwhash_argon2id_PASSWD_MAX)
+		return "Password too long to be able to derive a key from it.";
+	if (crypto_pwhash(ld->config.keypass->data, sizeof(ld->config.keypass->data),
+	                  passwd, strlen(passwd), salt,
+	                  /* INTERACTIVE needs 64 MiB of RAM, MODERATE needs 256,
+	                   * and SENSITIVE needs 1024. */
+	                  crypto_pwhash_argon2id_OPSLIMIT_MODERATE,
+	                  crypto_pwhash_argon2id_MEMLIMIT_MODERATE,
+	                  crypto_pwhash_ALG_ARGON2ID13) != 0)
+		return "Could not derive a key from the password.";
+	free(passwd);
+	return NULL;
+}
+
 #if DEVELOPER
 static char *opt_subprocess_debug(const char *optarg, struct lightningd *ld)
 {
@@ -397,9 +497,6 @@ static void dev_register_opts(struct lightningd *ld)
 			   "Disable automatic reconnect-attempts by this node, but accept incoming");
 	opt_register_noarg("--dev-fail-on-subdaemon-fail", opt_set_bool,
 			   &ld->dev_subdaemon_fail, opt_hidden);
-	opt_register_arg("--dev-broadcast-interval=<ms>", opt_set_uintval,
-			 opt_show_uintval, &ld->config.broadcast_interval_msec,
-			 "Time between gossip broadcasts in milliseconds");
 	opt_register_arg("--dev-disconnect=<filename>", opt_subd_dev_disconnect,
 			 NULL, ld, "File containing disconnection points");
 	opt_register_noarg("--dev-allow-localhost", opt_set_bool,
@@ -416,10 +513,12 @@ static void dev_register_opts(struct lightningd *ld)
 			 "fee fluctuations, large values may result in large "
 			 "fees.");
 
-	opt_register_arg(
-	    "--dev-channel-update-interval=<s>", opt_set_u32, opt_show_u32,
-	    &ld->config.channel_update_interval,
-	    "Time in seconds between channel updates for our own channels.");
+	opt_register_noarg("--dev-fast-gossip", opt_set_bool,
+			   &ld->dev_fast_gossip,
+			   "Make gossip broadcast 1 second, etc");
+	opt_register_noarg("--dev-fast-gossip-prune", opt_set_bool,
+			   &ld->dev_fast_gossip_prune,
+			   "Make gossip pruning 30 seconds");
 
 	opt_register_arg("--dev-gossip-time", opt_set_u32, opt_show_u32,
 			 &ld->dev_gossip_time,
@@ -473,16 +572,6 @@ static const struct config testnet_config = {
 	/* Take 0.001% */
 	.fee_per_satoshi = 1,
 
-	/* BOLT #7:
-	 *
-	 *   - SHOULD flush outgoing gossip messages once every 60
-	 *     seconds, independently of the arrival times of the messages.
-	 */
-	.broadcast_interval_msec = 60000,
-
-	/* Send a keepalive update at least every week, prune every twice that */
-	.channel_update_interval = 1209600/2,
-
 	/* Testnet sucks */
 	.ignore_fee_limits = true,
 
@@ -496,6 +585,8 @@ static const struct config testnet_config = {
 
 	/* Sets min_effective_htlc_capacity - at 1000$/BTC this is 10ct */
 	.min_capacity_sat = 10000,
+
+	.use_v3_autotor = true,
 };
 
 /* aka. "Dude, where's my coins?" */
@@ -542,16 +633,6 @@ static const struct config mainnet_config = {
 	/* Take 0.001% */
 	.fee_per_satoshi = 10,
 
-	/* BOLT #7:
-	 *
-	 *   - SHOULD flush outgoing gossip messages once every 60
-	 *     seconds, independently of the arrival times of the messages.
-	 */
-	.broadcast_interval_msec = 60000,
-
-	/* Send a keepalive update at least every week, prune every twice that */
-	.channel_update_interval = 1209600/2,
-
 	/* Mainnet should have more stable fees */
 	.ignore_fee_limits = false,
 
@@ -565,6 +646,8 @@ static const struct config mainnet_config = {
 
 	/* Sets min_effective_htlc_capacity - at 1000$/BTC this is 10ct */
 	.min_capacity_sat = 10000,
+
+	.use_v3_autotor = true,
 };
 
 
@@ -641,7 +724,8 @@ static void config_log_stderr_exit(const char *fmt, ...)
 
 /**
  * We turn the config file into cmdline arguments. @early tells us
- * whether to parse early options only, or the non-early options.
+ * whether to parse early options only (and ignore any unknown ones),
+ * or the non-early options.
  */
 static void opt_parse_from_config(struct lightningd *ld, bool early)
 {
@@ -664,8 +748,6 @@ static void opt_parse_from_config(struct lightningd *ld, bool early)
 		if ((errno != ENOENT) || (ld->config_filename != NULL))
 			fatal("Opening and reading %s: %s",
 			      filename, strerror(errno));
-		/* Now we can set up defaults, since no config file. */
-		setup_default_config(ld);
 		return;
 	}
 
@@ -701,12 +783,7 @@ static void opt_parse_from_config(struct lightningd *ld, bool early)
 						config_log_stderr_exit);
 			}
 		}
-
-		/* Now we can set up defaults, depending on whether testnet or
-		 * not */
-		setup_default_config(ld);
 	} else {
-
 		for (i = 0; i < tal_count(all_args); i++) {
 			if (all_args[i] != NULL) {
 				config_parse_line_number = i + 1;
@@ -725,6 +802,14 @@ static char *test_subdaemons_and_exit(struct lightningd *ld)
 	test_subdaemons(ld);
 	exit(0);
 	return NULL;
+}
+
+static char *list_features_and_exit(struct lightningd *ld)
+{
+	const char **features = list_supported_features(ld);
+	for (size_t i = 0; i < tal_count(features); i++)
+		printf("%s\n", features[i]);
+	exit(0);
 }
 
 static char *opt_lightningd_usage(struct lightningd *ld)
@@ -783,28 +868,44 @@ static char *opt_ignore_talstr(const char *arg, char **p)
 static char *opt_set_conf(const char *arg, struct lightningd *ld)
 {
 	/* This is a pass-through if arg is absolute */
+	tal_free(ld->config_filename);
 	ld->config_filename = path_join(ld, path_cwd(tmpctx), arg);
 	return NULL;
 }
 
-/* Just enough parsing to find config file. */
+/* Just enough parsing to find config file, and other maintenance options
+ * which don't want us to create the lightning dir */
 static void handle_minimal_config_opts(struct lightningd *ld,
 				       int argc, char *argv[])
 {
+	/* First, they could specify a config, which specifies a lightning dir */
 	opt_register_early_arg("--conf=<file>", opt_set_conf, NULL,
 			       ld,
-			       "Specify configuration file. Relative paths will be prefixed by lightning-dir location. (default: config)");
+			       "Specify configuration file (default: <lightning-dir>/config)");
 
-	ld->config_dir = default_configdir(ld);
+	ld->config_dir = NULL;
 	opt_register_early_arg("--lightning-dir=<dir>",
-			       opt_set_talstr, opt_show_charp,
+			       opt_set_talstr, NULL,
 			       &ld->config_dir,
 			       "Set working directory. All other files are relative to this");
+
+	/* List features immediately, before doing anything interesting */
+	opt_register_early_noarg("--list-features-only",
+				 list_features_and_exit,
+				 ld, opt_hidden);
 
 	/* Handle --version (and exit) here too: don't create lightning-dir for this */
 	opt_register_version();
 
 	opt_early_parse_incomplete(argc, argv, opt_log_stderr_exit);
+
+	/* Corner case: if they specified a config filename, and didn't set
+	 * set lightning-dir, read config file to get it! */
+	if (ld->config_filename && !ld->config_dir)
+		opt_parse_from_config(ld, true);
+
+	if (!ld->config_dir)
+		ld->config_dir = default_configdir(ld);
 
 	/* Now, reset and ignore those options from now on. */
 	opt_free_table();
@@ -812,11 +913,18 @@ static void handle_minimal_config_opts(struct lightningd *ld,
 
 	opt_register_early_arg("--conf=<file>", opt_ignore_talstr, NULL,
 			       &ld->config_filename,
-			       "Specify configuration file. Relative paths will be prefixed by lightning-dir location. (default: config)");
+			       "Specify configuration file (default: <lightning-dir>/config)");
 	opt_register_early_arg("--lightning-dir=<dir>",
 			       opt_ignore_talstr, opt_show_charp,
 			       &ld->config_dir,
 			       "Set working directory. All other files are relative to this");
+
+	ld->config_dir = path_join(ld, path_cwd(tmpctx), take(ld->config_dir));
+
+	ld->wallet_dsn = tal_fmt(ld, "sqlite3://%s/lightningd.sqlite3", ld->config_dir);
+	opt_register_early_arg("--wallet", opt_set_talstr, NULL,
+			       &ld->wallet_dsn,
+			       "Location of the wallet database.");
 }
 
 static void register_opts(struct lightningd *ld)
@@ -977,6 +1085,13 @@ static void register_opts(struct lightningd *ld)
 	opt_register_noarg("--disable-dns", opt_set_invbool, &ld->config.use_dns,
 			   "Disable DNS lookups of peers");
 
+	opt_register_noarg("--enable-autotor-v2-mode", opt_set_invbool, &ld->config.use_v3_autotor,
+			   "Try to get a v2 onion address from the Tor service call, default is v3");
+
+	opt_register_noarg("--encrypted-hsm", opt_set_hsm_password, ld,
+	                   "Set the password to encrypt hsm_secret with. If no password is passed through command line, "
+	                   "you will be prompted to enter it.");
+
 	opt_register_logging(ld);
 	opt_register_version();
 
@@ -1061,16 +1176,15 @@ void handle_early_opts(struct lightningd *ld, int argc, char *argv[])
 	 *  mimic this API here, even though they're on separate lines.*/
 	register_opts(ld);
 
-	/* Load defaults. The actual values loaded here will be overwritten
-	 * later by opt_parse_from_config. */
-	setup_default_config(ld);
-
 	/* Now look inside config file, but only handle the early
 	 * options (testnet, plugins etc), others may be added on-demand */
 	opt_parse_from_config(ld, true);
 
 	/* Early cmdline options now override config file options. */
 	opt_early_parse_incomplete(argc, argv, opt_log_stderr_exit);
+
+	/* Now we know what network we're on, initialize defaults. */
+	setup_default_config(ld);
 }
 
 void handle_opts(struct lightningd *ld, int argc, char *argv[])
@@ -1137,7 +1251,9 @@ static void add_config(struct lightningd *ld,
 	const char *answer = NULL;
 
 	if (opt->type & OPT_NOARG) {
-		if (opt->cb == (void *)opt_usage_and_exit
+		if (opt->desc == opt_hidden) {
+			/* Ignore hidden options (deprecated) */
+		} else if (opt->cb == (void *)opt_usage_and_exit
 		    || opt->cb == (void *)version_and_exit
 		    /* These two show up as --network= */
 		    || opt->cb == (void *)opt_set_testnet
@@ -1162,6 +1278,8 @@ static void add_config(struct lightningd *ld,
 			answer = tal_fmt(name0, "%s",
 					 ld->daemon_parent_fd == -1
 					 ? "false" : "true");
+		} else if (opt->cb == (void *)opt_set_hsm_password) {
+			json_add_bool(response, "encrypted-hsm", ld->encrypted_hsm);
 		} else {
 			/* Insert more decodes here! */
 			assert(!"A noarg option was added but was not handled");

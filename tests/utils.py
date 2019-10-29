@@ -8,12 +8,14 @@ from lightning import LightningRpc
 import json
 import logging
 import lzma
+import math
 import os
 import random
 import re
 import shutil
 import sqlite3
 import string
+import struct
 import subprocess
 import threading
 import time
@@ -39,9 +41,17 @@ with open('config.vars') as configfile:
 
 DEVELOPER = os.getenv("DEVELOPER", config['DEVELOPER']) == "1"
 EXPERIMENTAL_FEATURES = os.getenv("EXPERIMENTAL_FEATURES", config['EXPERIMENTAL_FEATURES']) == "1"
-TIMEOUT = int(os.getenv("TIMEOUT", "120"))
+
+# Gossip can be slow without DEVELOPER.
+if DEVELOPER:
+    DEFAULT_TIMEOUT = 60
+else:
+    DEFAULT_TIMEOUT = 180
+
+TIMEOUT = int(os.getenv("TIMEOUT", str(DEFAULT_TIMEOUT)))
 VALGRIND = os.getenv("VALGRIND", config['VALGRIND']) == "1"
 SLOW_MACHINE = os.getenv("SLOW_MACHINE", "0") == "1"
+COMPAT = os.getenv("COMPAT", config['COMPAT']) == "1"
 
 
 def wait_for(success, timeout=TIMEOUT):
@@ -56,12 +66,12 @@ def wait_for(success, timeout=TIMEOUT):
         raise ValueError("Error waiting for {}", success)
 
 
-def write_config(filename, opts, regtest_opts=None):
+def write_config(filename, opts, regtest_opts=None, section_name='regtest'):
     with open(filename, 'w') as f:
         for k, v in opts.items():
             f.write("{}={}\n".format(k, v))
         if regtest_opts:
-            f.write("[regtest]\n")
+            f.write("[{}]\n".format(section_name))
             for k, v in regtest_opts.items():
                 f.write("{}={}\n".format(k, v))
 
@@ -91,7 +101,7 @@ def get_tx_p2wsh_outnum(bitcoind, tx, amount):
     for out in decoded['vout']:
         if out['scriptPubKey']['type'] == 'witness_v0_scripthash':
             if out['value'] == Decimal(amount) / 10**8:
-                    return out['n']
+                return out['n']
 
     return None
 
@@ -119,11 +129,15 @@ class TailableProc(object):
         # pass it to the log matcher and not print it to stdout).
         self.log_filter = lambda line: False
 
-    def start(self):
+    def start(self, stdin=None, stdout=None, stderr=None):
         """Start the underlying process and start monitoring it.
         """
         logging.debug("Starting '%s'", " ".join(self.cmd_line))
-        self.proc = subprocess.Popen(self.cmd_line, stdout=subprocess.PIPE, env=self.env)
+        self.proc = subprocess.Popen(self.cmd_line,
+                                     stdin=stdin,
+                                     stdout=stdout if stdout else subprocess.PIPE,
+                                     stderr=stderr,
+                                     env=self.env)
         self.thread = threading.Thread(target=self.tail)
         self.thread.daemon = True
         self.thread.start()
@@ -176,6 +190,8 @@ class TailableProc(object):
                 self.logs_cond.notifyAll()
         self.running = False
         self.proc.stdout.close()
+        if self.proc.stderr:
+            self.proc.stderr.close()
 
     def is_in_log(self, regex, start=0):
         """Look for `regex` in the logs."""
@@ -295,9 +311,9 @@ class BitcoinD(TailableProc):
         # For after 0.16.1 (eg. 3f398d7a17f136cd4a67998406ca41a124ae2966), this
         # needs its own [regtest] section.
         BITCOIND_REGTEST = {'rpcport': rpcport}
-        btc_conf_file = os.path.join(bitcoin_dir, 'groestlcoin.conf')
-        write_config(btc_conf_file, BITCOIND_CONFIG, BITCOIND_REGTEST)
-        self.rpc = SimpleBitcoinProxy(btc_conf_file=btc_conf_file)
+        self.conf_file = os.path.join(bitcoin_dir, 'groestlcoin.conf')
+        write_config(self.conf_file, BITCOIND_CONFIG, BITCOIND_REGTEST)
+        self.rpc = SimpleBitcoinProxy(btc_conf_file=self.conf_file)
         self.proxies = []
 
     def start(self):
@@ -377,6 +393,55 @@ class BitcoinD(TailableProc):
         self.wait_for_log(r'UpdateTip: new best=.* height={}'.format(final_len))
         return hashes
 
+    def getnewaddress(self):
+        return self.rpc.getnewaddress()
+
+
+class ElementsD(BitcoinD):
+    def __init__(self, bitcoin_dir="/tmp/bitcoind-test", rpcport=None):
+        config = BITCOIND_CONFIG.copy()
+        if 'regtest' in config:
+            del config['regtest']
+
+        config['chain'] = 'liquid-regtest'
+        BitcoinD.__init__(self, bitcoin_dir, rpcport)
+
+        self.cmd_line = [
+            'elementsd',
+            '-datadir={}'.format(bitcoin_dir),
+            '-printtoconsole',
+            '-server',
+            '-logtimestamps',
+            '-nolisten',
+            '-validatepegin=0',
+            '-con_blocksubsidy=5000000000',
+        ]
+        conf_file = os.path.join(bitcoin_dir, 'elements.conf')
+        config['rpcport'] = self.rpcport
+        BITCOIND_REGTEST = {'rpcport': self.rpcport}
+        write_config(conf_file, config, BITCOIND_REGTEST, section_name='liquid-regtest')
+        self.conf_file = conf_file
+        self.rpc = SimpleBitcoinProxy(btc_conf_file=self.conf_file)
+        self.prefix = 'elementsd'
+
+    def generate_block(self, numblocks=1, wait_for_mempool=0):
+        if wait_for_mempool:
+            if isinstance(wait_for_mempool, str):
+                wait_for_mempool = [wait_for_mempool]
+            if isinstance(wait_for_mempool, list):
+                wait_for(lambda: all(txid in self.rpc.getrawmempool() for txid in wait_for_mempool))
+            else:
+                wait_for(lambda: len(self.rpc.getrawmempool()) >= wait_for_mempool)
+        # As of 0.16, generate() is removed; use generatetoaddress.
+        return self.rpc.generate(numblocks)
+
+    def getnewaddress(self):
+        """Need to get an address and then make it unconfidential
+        """
+        addr = self.rpc.getnewaddress()
+        info = self.rpc.getaddressinfo(addr)
+        return info['unconfidential']
+
 
 class LightningD(TailableProc):
     def __init__(self, lightning_dir, bitcoindproxy, port=9735, random_hsm=False, node_id=0):
@@ -394,7 +459,7 @@ class LightningD(TailableProc):
             'lightning-dir': lightning_dir,
             'addr': '127.0.0.1:{}'.format(port),
             'allow-deprecated-apis': 'false',
-            'network': 'regtest',
+            'network': config.get('TEST_NETWORK', 'regtest'),
             'ignore-fee-limits': 'false',
             'bitcoin-rpcuser': BITCOIND_CONFIG['rpcuser'],
             'bitcoin-rpcpassword': BITCOIND_CONFIG['rpcpassword'],
@@ -412,7 +477,7 @@ class LightningD(TailableProc):
             with open(os.path.join(lightning_dir, 'hsm_secret'), 'wb') as f:
                 f.write(seed)
         if DEVELOPER:
-            self.opts['dev-broadcast-interval'] = 1000
+            self.opts['dev-fast-gossip'] = None
             self.opts['dev-bitcoind-poll'] = 1
         self.prefix = 'lightningd-%d' % (node_id)
 
@@ -437,10 +502,12 @@ class LightningD(TailableProc):
 
         return self.cmd_prefix + [self.executable] + opts
 
-    def start(self):
+    def start(self, stdin=None, stdout=None, stderr=None,
+              wait_for_initialized=True):
         self.opts['bitcoin-rpcport'] = self.rpcproxy.rpcport
-        TailableProc.start(self)
-        self.wait_for_log("Server started with public key")
+        TailableProc.start(self, stdin, stdout, stderr)
+        if wait_for_initialized:
+            self.wait_for_log("Server started with public key")
         logging.info("LightningD started")
 
     def wait(self, timeout=10):
@@ -454,7 +521,9 @@ class LightningD(TailableProc):
 
 
 class LightningNode(object):
-    def __init__(self, daemon, rpc, btc, executor, may_fail=False, may_reconnect=False, allow_broken_log=False):
+    def __init__(self, daemon, rpc, btc, executor, may_fail=False,
+                 may_reconnect=False, allow_broken_log=False,
+                 allow_bad_gossip=False, db=None):
         self.rpc = rpc
         self.daemon = daemon
         self.bitcoin = btc
@@ -462,9 +531,11 @@ class LightningNode(object):
         self.may_fail = may_fail
         self.may_reconnect = may_reconnect
         self.allow_broken_log = allow_broken_log
+        self.allow_bad_gossip = allow_bad_gossip
+        self.db = db
 
     def connect(self, remote_node):
-            self.rpc.connect(remote_node.info['id'], '127.0.0.1', remote_node.daemon.port)
+        self.rpc.connect(remote_node.info['id'], '127.0.0.1', remote_node.daemon.port)
 
     def is_connected(self, remote_node):
         return remote_node.info['id'] in [p['id'] for p in self.rpc.listpeers()['peers']]
@@ -501,28 +572,8 @@ class LightningNode(object):
     def getactivechannels(self):
         return [c for c in self.rpc.listchannels()['channels'] if c['active']]
 
-    def db_query(self, query, use_copy=True):
-        orig = os.path.join(self.daemon.lightning_dir, "lightningd.sqlite3")
-        if use_copy:
-            copy = os.path.join(self.daemon.lightning_dir, "lightningd-copy.sqlite3")
-            shutil.copyfile(orig, copy)
-            db = sqlite3.connect(copy)
-        else:
-            db = sqlite3.connect(orig)
-
-        db.row_factory = sqlite3.Row
-        c = db.cursor()
-        c.execute(query)
-        rows = c.fetchall()
-
-        result = []
-        for row in rows:
-            result.append(dict(zip(row.keys(), row)))
-
-        db.commit()
-        c.close()
-        db.close()
-        return result
+    def db_query(self, query):
+        return self.db.query(query)
 
     # Assumes node is stopped!
     def db_manip(self, query):
@@ -758,11 +809,42 @@ class LightningNode(object):
 
         wait_for(lambda: txid in self.bitcoin.rpc.getrawmempool())
 
+    def query_gossip(self, querytype, *args, filters=[]):
+        """Generate a gossip query, feed it into this node and get responses
+        in hex"""
+        query = subprocess.run(['devtools/mkquery',
+                                querytype] + [str(a) for a in args],
+                               check=True,
+                               timeout=TIMEOUT,
+                               stdout=subprocess.PIPE).stdout.strip()
+        out = subprocess.run(['devtools/gossipwith',
+                              '--timeout-after={}'.format(int(math.sqrt(TIMEOUT) * 1000)),
+                              '{}@localhost:{}'.format(self.info['id'],
+                                                       self.port),
+                              query],
+                             check=True,
+                             timeout=TIMEOUT, stdout=subprocess.PIPE).stdout
+
+        def passes_filters(hmsg, filters):
+            for f in filters:
+                if hmsg.startswith(f):
+                    return False
+            return True
+
+        msgs = []
+        while len(out):
+            length = struct.unpack('>H', out[0:2])[0]
+            hmsg = out[2:2 + length].hex()
+            if passes_filters(hmsg, filters):
+                msgs.append(out[2:2 + length].hex())
+            out = out[2 + length:]
+        return msgs
+
 
 class NodeFactory(object):
     """A factory to setup and start `lightningd` daemons.
     """
-    def __init__(self, testname, bitcoind, executor, directory):
+    def __init__(self, testname, bitcoind, executor, directory, db_provider):
         self.testname = testname
         self.next_id = 1
         self.nodes = []
@@ -770,6 +852,7 @@ class NodeFactory(object):
         self.bitcoind = bitcoind
         self.directory = directory
         self.lock = threading.Lock()
+        self.db_provider = db_provider
 
     def split_options(self, opts):
         """Split node options from cli options
@@ -787,6 +870,7 @@ class NodeFactory(object):
             'log_all_io',
             'feerates',
             'wait_for_bitcoind_sync',
+            'allow_bad_gossip'
         ]
         node_opts = {k: v for k, v in opts.items() if k in node_opt_keys}
         cli_opts = {k: v for k, v in opts.items() if k not in node_opt_keys}
@@ -830,7 +914,7 @@ class NodeFactory(object):
                  may_reconnect=False, random_hsm=False,
                  feerates=(15000, 7500, 3750), start=True, log_all_io=False,
                  dbfile=None, node_id=None, allow_broken_log=False,
-                 wait_for_bitcoind_sync=True):
+                 wait_for_bitcoind_sync=True, allow_bad_gossip=False):
         if not node_id:
             node_id = self.get_node_id()
 
@@ -870,10 +954,17 @@ class NodeFactory(object):
         if options is not None:
             daemon.opts.update(options)
 
+        # Get the DB backend DSN we should be using for this test and this node.
+        db = self.db_provider.get_db(lightning_dir, self.testname, node_id)
+        dsn = db.get_dsn()
+        if dsn is not None:
+            daemon.opts['wallet'] = dsn
+
         rpc = LightningRpc(socket_path, self.executor)
 
         node = LightningNode(daemon, rpc, self.bitcoind, self.executor, may_fail=may_fail,
-                             may_reconnect=may_reconnect, allow_broken_log=allow_broken_log)
+                             may_reconnect=may_reconnect, allow_broken_log=allow_broken_log,
+                             allow_bad_gossip=allow_bad_gossip, db=db)
 
         # Regtest estimatefee are unusable, so override.
         node.set_feerates(feerates, False)
@@ -966,6 +1057,7 @@ class NodeFactory(object):
     def killall(self, expected_successes):
         """Returns true if every node we expected to succeed actually succeeded"""
         unexpected_fail = False
+        err_msgs = []
         for i in range(len(self.nodes)):
             leaks = None
             # leak detection upsets VALGRIND by reading uninitialized mem.
@@ -984,9 +1076,10 @@ class NodeFactory(object):
                     unexpected_fail = True
 
             if leaks is not None and len(leaks) != 0:
-                raise Exception("Node {} has memory leaks: {}".format(
+                unexpected_fail = True
+                err_msgs.append("Node {} has memory leaks: {}".format(
                     self.nodes[i].daemon.lightning_dir,
                     json.dumps(leaks, sort_keys=True, indent=4)
                 ))
 
-        return not unexpected_fail
+        return not unexpected_fail, err_msgs

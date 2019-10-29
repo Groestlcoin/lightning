@@ -58,8 +58,8 @@ struct unreleased_tx {
 	struct list_node list;
 	/* All the utxos. */
 	struct wallet_tx *wtx;
-	/* Scriptpubkey this pays to. */
-	const u8 *destination;
+	/* Outputs(scriptpubkey and satoshi) this pays to. */
+	struct bitcoin_tx_output **outputs;
 	/* The tx itself (unsigned initially) */
 	struct bitcoin_tx *tx;
 	struct bitcoin_txid txid;
@@ -219,6 +219,11 @@ enum wallet_payment_status {
 	PAYMENT_FAILED = 2
 };
 
+struct tx_annotation {
+	enum wallet_tx_type type;
+	struct short_channel_id channel;
+};
+
 static inline enum wallet_payment_status wallet_payment_status_in_db(enum wallet_payment_status w)
 {
 	switch (w) {
@@ -295,12 +300,21 @@ struct wallet_transaction {
 	u32 blockheight;
 	u32 txindex;
 	u8 *rawtx;
-	enum wallet_tx_type type;
-	u64 channel_id;
+
+	/* Fully parsed transaction */
+	const struct bitcoin_tx *tx;
+
+	struct tx_annotation annotation;
+
+	/* tal_arr containing the annotation types, if any, for the respective
+	 * inputs and outputs. 0 if there are no annotations for the
+	 * element. */
+	struct tx_annotation *input_annotations;
+	struct tx_annotation *output_annotations;
 };
 
 /**
- * wallet_new - Constructor for a new sqlite3 based wallet
+ * wallet_new - Constructor for a new DB based wallet
  *
  * This is guaranteed to either return a valid wallet, or abort with
  * `fatal` if it cannot be initialized.
@@ -358,6 +372,7 @@ struct utxo **wallet_get_unconfirmed_closeinfo_utxos(const tal_t *ctx,
 						     struct wallet *w);
 
 const struct utxo **wallet_select_coins(const tal_t *ctx, struct wallet *w,
+					bool with_change,
 					struct amount_sat value,
 					const u32 feerate_per_kw,
 					size_t outscriptlen,
@@ -1054,6 +1069,12 @@ void wallet_utxoset_add(struct wallet *w, const struct bitcoin_tx *tx,
 void wallet_transaction_add(struct wallet *w, const struct bitcoin_tx *tx,
 			    const u32 blockheight, const u32 txindex);
 
+void wallet_annotate_txout(struct wallet *w, const struct bitcoin_txid *txid,
+			   int outnum, enum wallet_tx_type type, u64 channel);
+
+void wallet_annotate_txin(struct wallet *w, const struct bitcoin_txid *txid,
+			  int innum, enum wallet_tx_type type, u64 channel);
+
 /**
  * Annotate a transaction in the DB with its type and channel referemce.
  *
@@ -1065,6 +1086,16 @@ void wallet_transaction_add(struct wallet *w, const struct bitcoin_tx *tx,
 void wallet_transaction_annotate(struct wallet *w,
 				 const struct bitcoin_txid *txid,
 				 enum wallet_tx_type type, u64 channel_id);
+
+/**
+ * Get the type of a transaction we are watching by its
+ * txid.
+ *
+ * Returns false if the transaction was not stored in DB.
+ * Returns true if the transaction exists and sets the `type` parameter.
+ */
+bool wallet_transaction_type(struct wallet *w, const struct bitcoin_txid *txid,
+			     enum wallet_tx_type *type);
 
 /**
  * Get the confirmation height of a transaction we are watching by its
@@ -1162,7 +1193,7 @@ void free_unreleased_txs(struct wallet *w);
  *
  * @param ctx: allocation context for the returned list
  * @param wallet: Wallet to load from.
- * @return A tal_arr of wallet transactions
+ * @return A tal_arr of wallet annotated transactions
  */
 struct wallet_transaction *wallet_transactions_get(struct wallet *w, const tal_t *ctx);
 

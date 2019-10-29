@@ -64,12 +64,6 @@ struct command_result *param_pubkey(struct command *cmd, const char *name,
 struct command_result *param_txid(struct command *cmd, const char *name,
 				  const char *buffer, const jsmntok_t *tok,
 				  struct bitcoin_txid **txid);
-/* Makes sure *id is valid. */
-struct command_result *param_node_id(struct command *cmd,
-					       const char *name,
-					       const char *buffer,
-					       const jsmntok_t *tok,
-					       struct node_id **id);
 
 struct command_result *param_short_channel_id(struct command *cmd,
 					      const char *name,
@@ -202,7 +196,7 @@ enum address_parse_result {
 /* Return result of address parsing and fills in *scriptpubkey
  * allocated off ctx if ADDRESS_PARSE_SUCCESS
  */
-enum address_parse_result json_tok_address_scriptpubkey(const tal_t *ctx,
+enum address_parse_result json_to_address_scriptpubkey(const tal_t *ctx,
 			     const struct chainparams *chainparams,
 			     const char *buffer,
 			     const jsmntok_t *tok, const u8 **scriptpubkey);
@@ -216,5 +210,11 @@ void json_add_time(struct json_stream *result, const char *fieldname,
 
 void json_add_sha256(struct json_stream *result, const char *fieldname,
 		     const struct sha256 *hash);
+
+struct command_result *param_bitcoin_address(struct command *cmd,
+					     const char *name,
+					     const char *buffer,
+					     const jsmntok_t *tok,
+					     const u8 **scriptpubkey);
 
 #endif /* LIGHTNING_LIGHTNINGD_JSON_H */

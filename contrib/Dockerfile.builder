@@ -8,7 +8,6 @@ WORKDIR /build
 
 RUN apt-get -qq update && \
     apt-get -qq install --no-install-recommends --allow-unauthenticated -yy \
-	asciidoc \
 	autoconf \
 	automake \
 	clang \
@@ -36,6 +35,7 @@ RUN apt-get -qq update && \
 	shellcheck \
 	libxml2-utils \
 	wget \
+	gettext \
 	xsltproc \
 	zlib1g-dev && \
 	rm -rf /var/lib/apt/lists/*

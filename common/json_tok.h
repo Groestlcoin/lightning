@@ -4,6 +4,8 @@
 #include "config.h"
 #include <ccan/short_types/short_types.h>
 #include <common/json.h>
+#include <common/node_id.h>
+#include <wire/wire.h>
 
 struct amount_msat;
 struct amount_sat;
@@ -74,6 +76,25 @@ struct command_result *param_sat(struct command *cmd, const char *name,
 				 const char *buffer, const jsmntok_t *tok,
 				 struct amount_sat **sat);
 
+/* Extract satoshi amount from this string. */
+/* If the string is "all", set amonut as AMOUNT_SAT(-1ULL). */
+struct command_result *param_sat_or_all(struct command *cmd, const char *name,
+					const char *buffer, const jsmntok_t *tok,
+					struct amount_sat **sat);
+
+
+/* Extract node_id from this string. Makes sure *id is valid. */
+struct command_result *param_node_id(struct command *cmd,
+				     const char *name,
+				     const char *buffer,
+				     const jsmntok_t *tok,
+				     struct node_id **id);
+
+struct command_result *param_channel_id(struct command *cmd,
+					const char *name,
+					const char *buffer,
+					const jsmntok_t *tok,
+					struct channel_id **cid);
 /*
  * Set the address of @out to @tok.  Used as a callback by handlers that
  * want to unmarshal @tok themselves.
@@ -89,4 +110,5 @@ struct command_result *param_tok(struct command *cmd, const char *name,
 struct command_result *param_ignore(struct command *cmd, const char *name,
 				    const char *buffer, const jsmntok_t *tok,
 				    const void *unused);
+
 #endif /* LIGHTNING_COMMON_JSON_TOK_H */

@@ -1,6 +1,7 @@
 #include <assert.h>
 #include <ccan/crc32c/crc32c.h>
 #include <common/features.h>
+#include <common/gossip_rcvd_filter.h>
 #include <common/gossip_store.h>
 #include <common/per_peer_state.h>
 #include <common/status.h>
@@ -122,6 +123,12 @@ u8 *gossip_store_next(const tal_t *ctx, struct per_peer_state *pps)
 						 0, SEEK_CUR) - msglen,
 				      tal_hex(tmpctx, msg));
 
+		/* Don't send back gossip they sent to us! */
+		if (gossip_rcvd_filter_del(pps->grf, msg)) {
+			msg = tal_free(msg);
+			continue;
+		}
+
 		/* Ignore gossipd internal messages. */
 		type = fromwire_peektype(msg);
 		if (type != WIRE_CHANNEL_ANNOUNCEMENT
@@ -140,10 +147,10 @@ u8 *gossip_store_next(const tal_t *ctx, struct per_peer_state *pps)
 void gossip_store_switch_fd(struct per_peer_state *pps,
 			    int newfd, u64 offset_shorter)
 {
-	u64 cur = lseek(pps->gossip_store_fd, SEEK_CUR, 0);
+	u64 cur = lseek(pps->gossip_store_fd, 0, SEEK_CUR);
 
 	/* If we're already at end (common), we know where to go in new one. */
-	if (cur == lseek(pps->gossip_store_fd, SEEK_END, 0)) {
+	if (cur == lseek(pps->gossip_store_fd, 0, SEEK_END)) {
 		status_debug("gossip_store at end, new fd moved to %"PRIu64,
 			     cur - offset_shorter);
 		assert(cur > offset_shorter);

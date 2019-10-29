@@ -6,7 +6,6 @@
 #include <common/permute_tx.h>
 #include <common/status.h>
 #include <common/type_to_string.h>
-#include <common/utils.h>
 #include <inttypes.h>
 
 /* BOLT #3:
@@ -175,7 +174,7 @@ struct bitcoin_tx *initial_commit_tx(const tal_t *ctx,
 		u8 *wscript = to_self_wscript(tmpctx, to_self_delay, keyset);
 		amount = amount_msat_to_sat_round_down(self_pay);
 		int pos = bitcoin_tx_add_output(
-		    tx, scriptpubkey_p2wsh(tx, wscript), &amount);
+		    tx, scriptpubkey_p2wsh(tx, wscript), amount);
 		assert(pos == n);
 		n++;
 	}
@@ -197,7 +196,7 @@ struct bitcoin_tx *initial_commit_tx(const tal_t *ctx,
 		amount = amount_msat_to_sat_round_down(other_pay);
 		int pos = bitcoin_tx_add_output(
 		    tx, scriptpubkey_p2wpkh(tx, &keyset->other_payment_key),
-		    &amount);
+		    amount);
 		assert(pos == n);
 		n++;
 	}
@@ -236,8 +235,9 @@ struct bitcoin_tx *initial_commit_tx(const tal_t *ctx,
 	 *    * `txin[0]` script bytes: 0
 	 */
 	sequence = (0x80000000 | ((obscured_commitment_number>>24) & 0xFFFFFF));
-	bitcoin_tx_add_input(tx, funding_txid, funding_txout, sequence, &funding, NULL);
+	bitcoin_tx_add_input(tx, funding_txid, funding_txout, sequence, funding, NULL);
 
+	elements_tx_add_fee_output(tx);
 	assert(bitcoin_tx_check(tx));
 
 	return tx;

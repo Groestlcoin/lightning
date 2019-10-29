@@ -15,7 +15,7 @@ CCANDIR := ccan
 
 # Where we keep the BOLT RFCs
 BOLTDIR := ../lightning-rfc/
-BOLTVERSION := 8b2cf0054660bece9e1004f42a500c6a1a77efd3
+BOLTVERSION := 2afe3559e89520ba28b24ff5739491313217ae13
 
 -include config.vars
 
@@ -52,7 +52,7 @@ endif
 
 # Timeout shortly before the 600 second travis silence timeout
 # (method=thread to support xdist)
-PYTEST_OPTS := -v --timeout=550 --timeout_method=thread -p no:logging --duration=0
+PYTEST_OPTS := -v --timeout=550 --timeout_method=thread -p no:logging
 
 # This is where we add new features as bitcoin adds them.
 FEATURES :=
@@ -188,17 +188,25 @@ BOLT_DEPS := $(BOLT_GEN)
 
 ALL_PROGRAMS =
 
-CPPFLAGS = -DBINTOPKGLIBEXECDIR="\"$(shell sh tools/rel.sh $(bindir) $(pkglibexecdir))\""
-CFLAGS = $(CPPFLAGS) $(CWARNFLAGS) $(CDEBUGFLAGS) $(COPTFLAGS) -I $(CCANDIR) $(EXTERNAL_INCLUDE_FLAGS) -I . -I/usr/local/include $(FEATURES) $(COVFLAGS) $(DEV_CFLAGS) -DSHACHAIN_BITS=48 -DJSMN_PARENT_LINKS $(PIE_CFLAGS) $(COMPAT_CFLAGS)
+CPPFLAGS += -DBINTOPKGLIBEXECDIR="\"$(shell sh tools/rel.sh $(bindir) $(pkglibexecdir))\""
+CFLAGS = $(CPPFLAGS) $(CWARNFLAGS) $(CDEBUGFLAGS) $(COPTFLAGS) -I $(CCANDIR) $(EXTERNAL_INCLUDE_FLAGS) -I . -I/usr/local/include $(FEATURES) $(COVFLAGS) $(DEV_CFLAGS) -DSHACHAIN_BITS=48 -DJSMN_PARENT_LINKS $(PIE_CFLAGS) $(COMPAT_CFLAGS) -DBUILD_ELEMENTS=1
 
 # We can get configurator to run a different compile cmd to cross-configure.
 CONFIGURATOR_CC := $(CC)
 
-LDFLAGS = $(PIE_LDFLAGS) $(SANITIZER_FLAGS) $(COPTFLAGS)
+LDFLAGS += $(PIE_LDFLAGS) $(SANITIZER_FLAGS) $(COPTFLAGS)
 ifeq ($(STATIC),1)
+# For MacOS, Jacob Rapoport <jacob@rumblemonkey.com> changed this to:
+#  -L/usr/local/lib -Wl,-lgmp -lsqlite3 -lz -Wl,-lm -lpthread -ldl $(COVFLAGS)
+# But that doesn't static link.
 LDLIBS = -L/usr/local/lib -Wl,-dn -lgmp -lsqlite3 -lz -Wl,-dy -lm -lpthread -ldl $(COVFLAGS)
 else
 LDLIBS = -L/usr/local/lib -lm -lgmp -lsqlite3 -lz $(COVFLAGS)
+endif
+
+# If we have the postgres client library we need to link against it as well
+ifeq ($(HAVE_POSTGRES),1)
+LDLIBS += -lpq
 endif
 
 default: all-programs all-test-programs
@@ -430,6 +438,7 @@ clean:
 	find . -name '*gcno' -delete
 	find . -name '*.nccout' -delete
 
+update-mocks: $(ALL_GEN_HEADERS)
 update-mocks/%: %
 	@MAKE=$(MAKE) tools/update-mocks.sh "$*"
 
@@ -490,7 +499,7 @@ PKGLIBEXEC_PROGRAMS = \
 	       lightningd/lightning_hsmd \
 	       lightningd/lightning_onchaind \
 	       lightningd/lightning_openingd
-PLUGINS=plugins/pay plugins/autoclean
+PLUGINS=plugins/pay plugins/autoclean plugins/fundchannel
 
 install-program: installdirs $(BIN_PROGRAMS) $(PKGLIBEXEC_PROGRAMS) $(PLUGINS)
 	@$(NORMAL_INSTALL)
@@ -549,7 +558,7 @@ uninstall:
 	  rm -f $(DESTDIR)$(docdir)/`basename $$f`; \
 	done
 
-installcheck:
+installcheck: all-programs
 	@rm -rf testinstall || true
 	$(MAKE) DESTDIR=$$(pwd)/testinstall install
 	testinstall$(bindir)/lightningd --test-daemons-only --lightning-dir=testinstall

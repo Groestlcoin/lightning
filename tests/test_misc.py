@@ -1,5 +1,7 @@
 from bitcoin.rpc import RawProxy
+from decimal import Decimal
 from fixtures import *  # noqa: F401,F403
+from fixtures import TEST_NETWORK
 from flaky import flaky  # noqa: F401
 from lightning import RpcError
 from threading import Event
@@ -61,6 +63,7 @@ def test_names(node_factory):
                                   .format(key, alias, color))
 
 
+@unittest.skipIf(os.getenv('TEST_DB_PROVIDER', 'sqlite3') != 'sqlite3', "This migration is based on a sqlite3 snapshot")
 def test_db_upgrade(node_factory):
     l1 = node_factory.get_node()
     l1.stop()
@@ -156,6 +159,9 @@ def test_lightningd_still_loading(node_factory, bitcoind, executor):
     l1, l2 = node_factory.line_graph(2, opts={'may_reconnect': True, 'wait_for_bitcoind_sync': False})
     # Extra funds, for second channel attempt.
     bitcoind.rpc.sendtoaddress(l1.rpc.newaddr()['bech32'], 1.0)
+    bitcoind.generate_block(2)
+    sync_blockheight(bitcoind, [l1])
+
     # Balance l1<->l2 channel
     l1.pay(l2, 10**9 // 2)
 
@@ -247,7 +253,7 @@ def test_ping(node_factory):
                                .format(l2.info['version']))
 
 
-@unittest.skipIf(not DEVELOPER, "needs DEVELOPER=1 for --dev-broadcast-interval")
+@unittest.skipIf(not DEVELOPER, "needs --dev-disconnect")
 def test_htlc_sig_persistence(node_factory, bitcoind, executor):
     """Interrupt a payment between two peers, then fail and recover funds using the HTLC sig.
     """
@@ -422,7 +428,7 @@ def test_htlc_in_timeout(node_factory, bitcoind, executor):
 
 
 @unittest.skipIf(not DEVELOPER, "needs DEVELOPER=1")
-def test_bech32_funding(node_factory):
+def test_bech32_funding(node_factory, chainparams):
     # Don't get any funds from previous runs.
     l1 = node_factory.get_node(random_hsm=True)
     l2 = node_factory.get_node(random_hsm=True)
@@ -433,7 +439,7 @@ def test_bech32_funding(node_factory):
     # fund a bech32 address and then open a channel with it
     res = l1.openchannel(l2, 20000, 'bech32')
     address = res['address']
-    assert address[0:4] == "grsrt"
+    assert address.startswith(chainparams['bip173_prefix'])
 
     # probably overly paranoid checking
     wallettxid = res['wallettxid']
@@ -449,22 +455,187 @@ def test_bech32_funding(node_factory):
     assert only_one(fundingtx['vin'])['txid'] == res['wallettxid']
 
 
-    # Make sure groestlcoind received the withdrawal
+def test_withdraw(node_factory, bitcoind, chainparams):
+    amount = 1000000
+    # Don't get any funds from previous runs.
+    l1 = node_factory.get_node(random_hsm=True)
+    l2 = node_factory.get_node(random_hsm=True)
+    addr = l1.rpc.newaddr()['bech32']
 
-    waddr = 'grsrt1qccn808860ygrqq98e6ltplxu8hvjk08ngwkdpr'
-        l1.rpc.withdraw('xx1qccn808860ygrqq98e6ltplxu8hvjk08ngwkdpr', 2 * amount)
-        l1.rpc.withdraw('tgrs1pcn808860ygrqq98e6ltplxu8hvjk08ngwkdpr', 2 * amount)
-        l1.rpc.withdraw('tgrs1qccn808860ygrqq98e6ltplxu8hvjk08nxxxxxx', 2 * amount)
-    # FIXME GENERATE REAL P2WSH ADDR
-    waddr = 'grsrt1qpc4mnd3zfzjnyyyxj97yxcastjh7cx7m3ex6pn33quse9qleqsjsnakslv'
-        l1.rpc.withdraw('xx1qpc4mnd3zfzjnyyyxj97yxcastjh7cx7m3ex6pn33quse9qleqsjsnakslv', 2 * amount)
-        l1.rpc.withdraw('tgrs1ppc4mnd3zfzjnyyyxj97yxcastjh7cx7m3ex6pn33quse9qleqsjsnakslv', 2 * amount)
-        l1.rpc.withdraw('tgrs1qpc4mnd3zfzjnyyyxj97yxcastjh7cx7m3ex6pn33quse9qleqsjsxxxxxx', 2 * amount)
-        l1.rpc.withdraw('GRS13W508D6QEJXTDG4Y5R3ZARVARY0C5XW7KN40WF2', 2 * amount)
-        l1.rpc.withdraw('GRS1QR508D6QEJXTDG4Y5R3ZARVARYV98GJ9P', 2 * amount)
-        l1.rpc.withdraw('tgrs1qrp33g0q5c5txsp9arysrx4k6zdkfs4nce4xj0gdcccefvpysxf3q0sL5k7', 2 * amount)
-        l1.rpc.withdraw('tgrs1qrp33g0q5c5txsp9arysrx4k6zdkfs4nce4xj0gdcccefvpysxf3pjxtptv', 2 * amount)
-    # Previous runs with same groestlcoind can leave funds!
+    # Add some funds to withdraw later
+    for i in range(10):
+        l1.bitcoin.rpc.sendtoaddress(addr, amount / 10**8 + 0.01)
+
+    bitcoind.generate_block(1)
+    wait_for(lambda: len(l1.rpc.listfunds()['outputs']) == 10)
+
+    # Reach around into the db to check that outputs were added
+    assert l1.db_query('SELECT COUNT(*) as c FROM outputs WHERE status=0')[0]['c'] == 10
+
+    waddr = l1.bitcoin.getnewaddress()
+    # Now attempt to withdraw some (making sure we collect multiple inputs)
+    with pytest.raises(RpcError):
+        l1.rpc.withdraw('not an address', amount)
+    with pytest.raises(RpcError):
+        l1.rpc.withdraw(waddr, 'not an amount')
+    with pytest.raises(RpcError):
+        l1.rpc.withdraw(waddr, -amount)
+    with pytest.raises(RpcError, match=r'Cannot afford transaction'):
+        l1.rpc.withdraw(waddr, amount * 100)
+
+    out = l1.rpc.withdraw(waddr, 2 * amount)
+
+    # Make sure bitcoind received the withdrawal
+    unspent = l1.bitcoin.rpc.listunspent(0)
+    withdrawal = [u for u in unspent if u['txid'] == out['txid']]
+
+    assert(withdrawal[0]['amount'] == Decimal('0.02'))
+
+    # Now make sure two of them were marked as spent
+    assert l1.db_query('SELECT COUNT(*) as c FROM outputs WHERE status=2')[0]['c'] == 2
+
+    # Now send some money to l2.
+    # lightningd uses P2SH-P2WPKH
+    waddr = l2.rpc.newaddr('bech32')['bech32']
+    l1.rpc.withdraw(waddr, 2 * amount)
+    bitcoind.generate_block(1)
+
+    # Make sure l2 received the withdrawal.
+    wait_for(lambda: len(l2.rpc.listfunds()['outputs']) == 1)
+    outputs = l2.db_query('SELECT value FROM outputs WHERE status=0;')
+    assert only_one(outputs)['value'] == 2 * amount
+
+    # Now make sure an additional two of them were marked as spent
+    assert l1.db_query('SELECT COUNT(*) as c FROM outputs WHERE status=2')[0]['c'] == 4
+
+    if chainparams['name'] != 'regtest':
+        return
+
+    # Simple test for withdrawal to P2WPKH
+    # Address from: https://bc-2.jp/tools/bech32demo/index.html
+    waddr = 'bcrt1qw508d6qejxtdg4y5r3zarvary0c5xw7kygt080'
+    with pytest.raises(RpcError):
+        l1.rpc.withdraw('xx1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx', 2 * amount)
+    with pytest.raises(RpcError):
+        l1.rpc.withdraw('tb1pw508d6qejxtdg4y5r3zarvary0c5xw7kdl9fad', 2 * amount)
+    with pytest.raises(RpcError):
+        l1.rpc.withdraw('tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxxxxxx', 2 * amount)
+    l1.rpc.withdraw(waddr, 2 * amount)
+    bitcoind.generate_block(1)
+    # Now make sure additional two of them were marked as spent
+    assert l1.db_query('SELECT COUNT(*) as c FROM outputs WHERE status=2')[0]['c'] == 6
+
+    # Simple test for withdrawal to P2WSH
+    # Address from: https://bc-2.jp/tools/bech32demo/index.html
+    waddr = 'bcrt1qrp33g0q5c5txsp9arysrx4k6zdkfs4nce4xj0gdcccefvpysxf3qzf4jry'
+    with pytest.raises(RpcError):
+        l1.rpc.withdraw('xx1qrp33g0q5c5txsp9arysrx4k6zdkfs4nce4xj0gdcccefvpysxf3q0sl5k7', 2 * amount)
+    with pytest.raises(RpcError):
+        l1.rpc.withdraw('tb1prp33g0q5c5txsp9arysrx4k6zdkfs4nce4xj0gdcccefvpysxf3qsm03tq', 2 * amount)
+    with pytest.raises(RpcError):
+        l1.rpc.withdraw('tb1qrp33g0q5c5txsp9arysrx4k6zdkfs4nce4xj0gdcccefvpysxf3qxxxxxx', 2 * amount)
+    l1.rpc.withdraw(waddr, 2 * amount)
+    bitcoind.generate_block(1)
+    # Now make sure additional two of them were marked as spent
+    assert l1.db_query('SELECT COUNT(*) as c FROM outputs WHERE status=2')[0]['c'] == 8
+
+    # failure testing for invalid SegWit addresses, from BIP173
+    # HRP character out of range
+    with pytest.raises(RpcError):
+        l1.rpc.withdraw(' 1nwldj5', 2 * amount)
+    # overall max length exceeded
+    with pytest.raises(RpcError):
+        l1.rpc.withdraw('an84characterslonghumanreadablepartthatcontainsthenumber1andtheexcludedcharactersbio1569pvx', 2 * amount)
+    # No separator character
+    with pytest.raises(RpcError):
+        l1.rpc.withdraw('pzry9x0s0muk', 2 * amount)
+    # Empty HRP
+    with pytest.raises(RpcError):
+        l1.rpc.withdraw('1pzry9x0s0muk', 2 * amount)
+    # Invalid witness version
+    with pytest.raises(RpcError):
+        l1.rpc.withdraw('BC13W508D6QEJXTDG4Y5R3ZARVARY0C5XW7KN40WF2', 2 * amount)
+    # Invalid program length for witness version 0 (per BIP141)
+    with pytest.raises(RpcError):
+        l1.rpc.withdraw('BC1QR508D6QEJXTDG4Y5R3ZARVARYV98GJ9P', 2 * amount)
+    # Mixed case
+    with pytest.raises(RpcError):
+        l1.rpc.withdraw('tb1qrp33g0q5c5txsp9arysrx4k6zdkfs4nce4xj0gdcccefvpysxf3q0sL5k7', 2 * amount)
+    # Non-zero padding in 8-to-5 conversion
+    with pytest.raises(RpcError):
+        l1.rpc.withdraw('tb1qrp33g0q5c5txsp9arysrx4k6zdkfs4nce4xj0gdcccefvpysxf3pjxtptv', 2 * amount)
+
+    # Should have 6 outputs available.
+    assert l1.db_query('SELECT COUNT(*) as c FROM outputs WHERE status=0')[0]['c'] == 6
+
+    # Test withdrawal to self.
+    l1.rpc.withdraw(l1.rpc.newaddr('bech32')['bech32'], 'all', minconf=0)
+    bitcoind.generate_block(1)
+    assert l1.db_query('SELECT COUNT(*) as c FROM outputs WHERE status=0')[0]['c'] == 1
+
+    l1.rpc.withdraw(waddr, 'all', minconf=0)
+    assert l1.db_query('SELECT COUNT(*) as c FROM outputs WHERE status=0')[0]['c'] == 0
+
+    # This should fail, can't even afford fee.
+    with pytest.raises(RpcError, match=r'Cannot afford transaction'):
+        l1.rpc.withdraw(waddr, 'all')
+
+
+def test_minconf_withdraw(node_factory, bitcoind):
+    """Issue 2518: ensure that ridiculous confirmation levels don't overflow
+
+    The number of confirmations is used to compute a maximum height that is to
+    be accepted. If the current height is smaller than the number of
+    confirmations we wrap around and just select everything. The fix is to
+    clamp the maxheight parameter to a positive small number.
+
+    """
+    amount = 1000000
+    # Don't get any funds from previous runs.
+    l1 = node_factory.get_node(random_hsm=True)
+    addr = l1.rpc.newaddr()['bech32']
+
+    # Add some funds to withdraw later
+    for i in range(10):
+        l1.bitcoin.rpc.sendtoaddress(addr, amount / 10**8 + 0.01)
+
+    bitcoind.generate_block(1)
+
+    wait_for(lambda: len(l1.rpc.listfunds()['outputs']) == 10)
+    with pytest.raises(RpcError):
+        l1.rpc.withdraw(destination=addr, satoshi=10000, feerate='normal', minconf=9999999)
+
+
+def test_addfunds_from_block(node_factory, bitcoind):
+    """Send funds to the daemon without telling it explicitly
+    """
+    # Previous runs with same bitcoind can leave funds!
+    l1 = node_factory.get_node(random_hsm=True)
+
+    addr = l1.rpc.newaddr()['bech32']
+    bitcoind.rpc.sendtoaddress(addr, 0.1)
+    bitcoind.generate_block(1)
+
+    wait_for(lambda: len(l1.rpc.listfunds()['outputs']) == 1)
+
+    outputs = l1.db_query('SELECT value FROM outputs WHERE status=0;')
+    assert only_one(outputs)['value'] == 10000000
+
+    # The address we detect must match what was paid to.
+    output = only_one(l1.rpc.listfunds()['outputs'])
+    assert output['address'] == addr
+
+    # Send all our money to a P2WPKH address this time.
+    addr = l1.rpc.newaddr("bech32")['bech32']
+    l1.rpc.withdraw(addr, "all")
+    bitcoind.generate_block(1)
+    time.sleep(1)
+
+    # The address we detect must match what was paid to.
+    output = only_one(l1.rpc.listfunds()['outputs'])
+    assert output['address'] == addr
+
+
 def test_io_logging(node_factory, executor):
     l1 = node_factory.get_node(options={'log-level': 'io'})
     l2 = node_factory.get_node()
@@ -558,13 +729,13 @@ def test_address(node_factory):
     l2.rpc.connect(l1.info['id'], l1.daemon.opts['addr'])
 
 
-def test_listconfigs(node_factory, bitcoind):
+def test_listconfigs(node_factory, bitcoind, chainparams):
     l1 = node_factory.get_node()
 
     configs = l1.rpc.listconfigs()
     # See utils.py
     assert configs['allow-deprecated-apis'] is False
-    assert configs['network'] == 'regtest'
+    assert configs['network'] == chainparams['name']
     assert configs['ignore-fee-limits'] is False
 
     # Test one at a time.
@@ -859,8 +1030,9 @@ def test_funding_reorg_private(node_factory, bitcoind):
     """Change funding tx height after lockin, between node restart.
     """
     # Rescan to detect reorg at restart and may_reconnect so channeld
-    # will restart
-    opts = {'funding-confirms': 2, 'rescan': 10, 'may_reconnect': True}
+    # will restart.  Reorg can cause bad gossip msg.
+    opts = {'funding-confirms': 2, 'rescan': 10, 'may_reconnect': True,
+            'allow_bad_gossip': True}
     l1, l2 = node_factory.line_graph(2, fundchannel=False, opts=opts)
     l1.fundwallet(10000000)
     sync_blockheight(bitcoind, [l1])                # height 102
@@ -886,9 +1058,8 @@ def test_funding_reorg_private(node_factory, bitcoind):
     wait_for(lambda: [c['active'] for c in l2.rpc.listchannels('106x1x0')['channels']] == [False, False])
     wait_for(lambda: [c['active'] for c in l2.rpc.listchannels('108x1x0')['channels']] == [True, True])
 
-    l1.rpc.close(l2.info['id'])                     # to ignore `Bad gossip order` error in killall
-    wait_for(lambda: len(bitcoind.rpc.getrawmempool()) > 0)
-    bitcoind.generate_block(1)
+    l1.rpc.close(l2.info['id'])
+    bitcoind.generate_block(1, True)
     l1.daemon.wait_for_log(r'Deleting channel')
     l2.daemon.wait_for_log(r'Deleting channel')
 
@@ -897,8 +1068,8 @@ def test_funding_reorg_private(node_factory, bitcoind):
 def test_funding_reorg_remote_lags(node_factory, bitcoind):
     """Nodes may disagree about short_channel_id before channel announcement
     """
-    # may_reconnect so channeld will restart
-    opts = {'funding-confirms': 1, 'may_reconnect': True}
+    # may_reconnect so channeld will restart; bad gossip can happen due to reorg
+    opts = {'funding-confirms': 1, 'may_reconnect': True, 'allow_bad_gossip': True}
     l1, l2 = node_factory.line_graph(2, fundchannel=False, opts=opts)
     l1.fundwallet(10000000)
     sync_blockheight(bitcoind, [l1])                # height 102
@@ -909,8 +1080,8 @@ def test_funding_reorg_remote_lags(node_factory, bitcoind):
 
     # Make l2 temporary blind for blocks > 107
     def no_more_blocks(req):
-            return {"result": None,
-                    "error": {"code": -8, "message": "Block height out of range"}, "id": req['id']}
+        return {"result": None,
+                "error": {"code": -8, "message": "Block height out of range"}, "id": req['id']}
 
     l2.daemon.rpcproxy.mock_rpc('getblockhash', no_more_blocks)
 
@@ -932,7 +1103,7 @@ def test_funding_reorg_remote_lags(node_factory, bitcoind):
         'CHANNELD_NORMAL:Reconnected, and reestablished.',
         'CHANNELD_NORMAL:Funding transaction locked. Channel announced.'])
 
-    l1.rpc.close(l2.info['id'])                     # to ignore `Bad gossip order` error in killall
+    l1.rpc.close(l2.info['id'])
     bitcoind.generate_block(1, True)
     l1.daemon.wait_for_log(r'Deleting channel')
     l2.daemon.wait_for_log(r'Deleting channel')
@@ -982,12 +1153,11 @@ def test_reserve_enforcement(node_factory, executor):
     l2.stop()
 
     # They should both aim for 1%.
-    reserves = l2.db_query('SELECT channel_reserve_satoshis FROM channel_configs')
+    reserves = l2.db.query('SELECT channel_reserve_satoshis FROM channel_configs')
     assert reserves == [{'channel_reserve_satoshis': 10**6 // 100}] * 2
 
     # Edit db to reduce reserve to 0 so it will try to violate it.
-    l2.db_query('UPDATE channel_configs SET channel_reserve_satoshis=0',
-                use_copy=False)
+    l2.db.execute('UPDATE channel_configs SET channel_reserve_satoshis=0')
 
     l2.start()
     wait_for(lambda: only_one(l2.rpc.listpeers(l1.info['id'])['peers'])['connected'])
@@ -1030,7 +1200,7 @@ def test_htlc_send_timeout(node_factory, bitcoind):
     timedout = False
     while not timedout:
         try:
-            l2.daemon.wait_for_log(r'channeld-{} chan #[0-9]*:\[IN\] 0101'.format(l3.info['id']), timeout=30)
+            l2.daemon.wait_for_log(r'channeld-{} chan #[0-9]*:\[IN\] '.format(l3.info['id']), timeout=30)
         except TimeoutError:
             timedout = True
 
@@ -1330,25 +1500,25 @@ def test_bad_onion(node_factory, bitcoind):
     assert err.value.error['data']['erring_channel'] == route[1]['channel']
 
 
-def test_newaddr(node_factory):
+def test_newaddr(node_factory, chainparams):
     l1 = node_factory.get_node()
     p2sh = l1.rpc.newaddr('p2sh-segwit')
     assert 'bech32' not in p2sh
-    assert p2sh['p2sh-segwit'].startswith('2')
+    assert p2sh['p2sh-segwit'].startswith(chainparams['p2sh_prefix'])
     bech32 = l1.rpc.newaddr('bech32')
     assert 'p2sh-segwit' not in bech32
-    assert bech32['bech32'].startswith('bcrt1')
+    assert bech32['bech32'].startswith(chainparams['bip173_prefix'])
     both = l1.rpc.newaddr('all')
-    assert both['p2sh-segwit'].startswith('2')
-    assert both['bech32'].startswith('bcrt1')
+    assert both['p2sh-segwit'].startswith(chainparams['p2sh_prefix'])
+    assert both['bech32'].startswith(chainparams['bip173_prefix'])
 
 
-def test_newaddr_deprecated(node_factory):
+def test_newaddr_deprecated(node_factory, chainparams):
     l1 = node_factory.get_node(options={'allow-deprecated-apis': True})
     p2sh = l1.rpc.newaddr('p2sh-segwit')
-    assert p2sh['address'].startswith('2')
+    assert p2sh['address'].startswith(chainparams['p2sh_prefix'])
     bech32 = l1.rpc.newaddr('bech32')
-    assert bech32['address'].startswith('bcrt1')
+    assert bech32['address'].startswith(chainparams['bip173_prefix'])
 
 
 def test_bitcoind_fail_first(node_factory, bitcoind, executor):
@@ -1387,6 +1557,7 @@ def test_bitcoind_fail_first(node_factory, bitcoind, executor):
 
 
 @unittest.skipIf(not DEVELOPER, "needs --dev-force-bip32-seed")
+@unittest.skipIf(TEST_NETWORK != 'regtest', "Addresses are network specific")
 def test_dev_force_bip32_seed(node_factory):
     l1 = node_factory.get_node(options={'dev-force-bip32-seed': '0000000000000000000000000000000000000000000000000000000000000001'})
     # First is m/0/0/1 ..
@@ -1451,3 +1622,79 @@ def test_dev_demux(node_factory):
 
     with pytest.raises(RpcError):
         l1.rpc.call('dev', {'subcommand': 'crash'})
+
+
+def test_list_features_only(node_factory):
+    features = subprocess.check_output(['lightningd/lightningd',
+                                        '--list-features-only']).decode('utf-8').splitlines()
+    expected = ['option_data_loss_protect/odd',
+                'option_upfront_shutdown_script/odd',
+                'option_gossip_queries/odd',
+                'option_gossip_queries_ex/odd',
+                'option_static_remotekey/odd']
+    assert features == expected
+
+
+def test_relative_config_dir(node_factory):
+    l1 = node_factory.get_node(start=False)
+    initial_dir = os.getcwd()
+    lndir = l1.daemon.opts.get("lightning-dir")[:-1]
+    *root_dir, l1.daemon.opts["lightning-dir"] = lndir.split('/')
+    os.chdir('/'.join(root_dir))
+    l1.daemon.executable = os.path.join(initial_dir, l1.daemon.executable)
+    l1.start()
+    assert os.path.isabs(l1.rpc.listconfigs()["lightning-dir"])
+    l1.stop()
+    os.chdir(initial_dir)
+
+
+def test_signmessage(node_factory):
+    l1, l2 = node_factory.line_graph(2, wait_for_announce=True)
+
+    corpus = [[None,
+               "this is a test!",
+               l1.rpc.signmessage("this is a test!")['zbase'],
+               l1.info['id']]]
+
+    # Other contributions from LND users!
+    corpus += [
+        ['@bitconner',
+         "is this compatible?",
+         'rbgfioj114mh48d8egqx8o9qxqw4fmhe8jbeeabdioxnjk8z3t1ma1hu1fiswpakgucwwzwo6ofycffbsqusqdimugbh41n1g698hr9t',
+         '02b80cabdf82638aac86948e4c06e82064f547768dcef977677b9ea931ea75bab5'],
+        ['@duck1123',
+         'hi',
+         'rnrphcjswusbacjnmmmrynh9pqip7sy5cx695h6mfu64iac6qmcmsd8xnsyczwmpqp9shqkth3h4jmkgyqu5z47jfn1q7gpxtaqpx4xg',
+         '02de60d194e1ca5947b59fe8e2efd6aadeabfb67f2e89e13ae1a799c1e08e4a43b'],
+        ['@jochemin',
+         'hi',
+         'ry8bbsopmduhxy3dr5d9ekfeabdpimfx95kagdem7914wtca79jwamtbw4rxh69hg7n6x9ty8cqk33knbxaqftgxsfsaeprxkn1k48p3',
+         '022b8ece90ee891cbcdac0c1cc6af46b73c47212d8defbce80265ac81a6b794931'],
+    ]
+
+    for c in corpus:
+        print("Shout out to {}".format(c[0]))
+        assert subprocess.check_output(['devtools/lightning-checkmessage',
+                                        c[1], c[2]]).decode('utf-8') == "Signature claims to be from key {}\n".format(c[3])
+
+        subprocess.run(['devtools/lightning-checkmessage', c[1], c[2], c[3]], check=True)
+
+        with pytest.raises(subprocess.CalledProcessError):
+            subprocess.run(['devtools/lightning-checkmessage',
+                            c[1] + "modified", c[2], c[3]], check=True)
+
+        assert l1.rpc.checkmessage(c[1], c[2], c[3])['verified']
+        assert not l1.rpc.checkmessage(c[1] + "modified", c[2], c[3])['verified']
+        checknokey = l1.rpc.checkmessage(c[1], c[2])
+        # Of course, we know our own pubkey
+        if c[3] == l1.info['id']:
+            assert checknokey['verified']
+        else:
+            assert not checknokey['verified']
+        assert checknokey['pubkey'] == c[3]
+
+    # l2 knows about l1, so it can validate it.
+    zm = l1.rpc.signmessage(message="message for you")['zbase']
+    checknokey = l2.rpc.checkmessage(message="message for you", zbase=zm)
+    assert checknokey['pubkey'] == l1.info['id']
+    assert checknokey['verified']

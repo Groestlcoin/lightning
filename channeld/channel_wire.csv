@@ -5,7 +5,7 @@
 
 # Begin!  (passes gossipd-client fd)
 msgtype,channel_init,1000
-msgdata,channel_init,chain_hash,bitcoin_blkid,
+msgdata,channel_init,chainparams,chainparams,
 msgdata,channel_init,funding_txid,bitcoin_txid,
 msgdata,channel_init,funding_txout,u16,
 msgdata,channel_init,funding_satoshi,amount_sat,
@@ -48,6 +48,7 @@ msgdata,channel_init,fulfilled_sides,enum side,num_fulfilled
 msgdata,channel_init,num_failed,u16,
 msgdata,channel_init,failed,failed_htlc,num_failed
 msgdata,channel_init,failed_sides,enum side,num_failed
+msgdata,channel_init,failheight,u32,
 msgdata,channel_init,local_funding_locked,bool,
 msgdata,channel_init,remote_funding_locked,bool,
 msgdata,channel_init,funding_short_id,short_channel_id,
@@ -67,7 +68,8 @@ msgdata,channel_init,upfront_shutdown_script_len,u16,
 msgdata,channel_init,upfront_shutdown_script,u8,upfront_shutdown_script_len
 msgdata,channel_init,remote_ann_node_sig,?secp256k1_ecdsa_signature,
 msgdata,channel_init,remote_ann_bitcoin_sig,?secp256k1_ecdsa_signature,
-msgdata,channel_init,announce_delay,u32,
+msgdata,channel_init,option_static_remotekey,bool,
+msgdata,channel_init,dev_fast_gossip,bool,
 
 # master->channeld funding hit new depth(funding locked if >= lock depth)
 msgtype,channel_funding_depth,1002
@@ -97,6 +99,7 @@ msgdata,channel_fulfill_htlc,fulfilled_htlc,fulfilled_htlc,
 # Main daemon says HTLC failed
 msgtype,channel_fail_htlc,1006
 msgdata,channel_fail_htlc,failed_htlc,failed_htlc,
+msgdata,channel_fail_htlc,failheight,u32,
 
 # When we receive funding_locked.
 msgtype,channel_got_funding_locked,1019
@@ -156,6 +159,8 @@ msgtype,channel_got_revoke_reply,1122
 
 # Tell peer to shut down channel.
 msgtype,channel_send_shutdown,1023
+msgdata,channel_send_shutdown,shutdown_len,u16,
+msgdata,channel_send_shutdown,shutdown_scriptpubkey,u8,shutdown_len
 
 # Peer told us that channel is shutting down
 msgtype,channel_got_shutdown,1024
@@ -183,7 +188,8 @@ msgdata,channel_dev_memleak_reply,leak,bool,
 
 # Peer presented proof it was from the future.
 msgtype,channel_fail_fallen_behind,1028
-msgdata,channel_fail_fallen_behind,remote_per_commitment_point,pubkey,
+# This is NULL if option_static_remotekey.
+msgdata,channel_fail_fallen_behind,remote_per_commitment_point,?pubkey,
 
 # Handle a channel specific feerate base ppm configuration
 msgtype,channel_specific_feerates,1029
@@ -194,3 +200,10 @@ msgdata,channel_specific_feerates,feerate_ppm,u32,
 msgtype,channel_got_announcement,1017
 msgdata,channel_got_announcement,remote_ann_node_sig,secp256k1_ecdsa_signature,
 msgdata,channel_got_announcement,remote_ann_bitcoin_sig,secp256k1_ecdsa_signature,
+
+# Ask channeld to send a error message. Used in forgetting channel case.
+msgtype,channel_send_error,1008
+msgdata,channel_send_error,reason,wirestring,
+
+# Tell master channeld has sent the error message.
+msgtype,channel_send_error_reply,1108

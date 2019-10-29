@@ -15,6 +15,7 @@
 #include <gossipd/gen_gossip_store.h>
 #include <gossipd/gen_gossip_wire.h>
 #include <stdio.h>
+#include <sys/stat.h>
 #include <sys/uio.h>
 #include <unistd.h>
 #include <wire/gen_peer_wire.h>
@@ -48,12 +49,47 @@ struct gossip_store {
 	/* Disable compaction if we encounter an error during a prior
 	 * compaction */
 	bool disable_compaction;
+
+	/* Timestamp of store when we opened it (0 if we created it) */
+	u32 timestamp;
 };
 
 static void gossip_store_destroy(struct gossip_store *gs)
 {
 	close(gs->fd);
 }
+
+#if HAVE_PWRITEV
+static ssize_t gossip_pwritev(int fd, const struct iovec *iov, int iovcnt,
+			      off_t offset)
+{
+	return pwritev(fd, iov, iovcnt, offset);
+}
+#else /* Hello MacOS! */
+static ssize_t gossip_pwritev(int fd, const struct iovec *iov, int iovcnt,
+			      off_t offset)
+{
+	u8 *buf;
+	size_t len;
+	ssize_t ret;
+
+	/* Make a temporary linear buffer to fall back to pwrite() */
+	len = 0;
+	for (size_t i = 0; i < iovcnt; i++)
+		len += iov[i].iov_len;
+
+	buf = tal_arr(NULL, u8, len);
+	len = 0;
+	for (size_t i = 0; i < iovcnt; i++) {
+		memcpy(buf + len, iov[i].iov_base, iov[i].iov_len);
+		len += iov[i].iov_len;
+	}
+
+	ret = pwrite(fd, buf, len, offset);
+	tal_free(buf);
+	return ret;
+}
+#endif /* !HAVE_PWRITEV */
 
 static bool append_msg(int fd, const u8 *msg, u32 timestamp, u64 *len)
 {
@@ -71,7 +107,7 @@ static bool append_msg(int fd, const u8 *msg, u32 timestamp, u64 *len)
 	iov[0].iov_len = sizeof(hdr);
 	iov[1].iov_base = (void *)msg;
 	iov[1].iov_len = msglen;
-	if (pwritev(fd, iov, ARRAY_SIZE(iov), *len) != sizeof(hdr) + msglen)
+	if (gossip_pwritev(fd, iov, ARRAY_SIZE(iov), *len) != sizeof(hdr) + msglen)
 		return false;
 	*len += sizeof(hdr) + msglen;
 	return true;
@@ -79,16 +115,24 @@ static bool append_msg(int fd, const u8 *msg, u32 timestamp, u64 *len)
 
 /* Read gossip store entries, copy non-deleted ones.  This code is written
  * as simply and robustly as possible! */
-static void gossip_store_compact_offline(void)
+static u32 gossip_store_compact_offline(void)
 {
 	size_t count = 0, deleted = 0;
 	int old_fd, new_fd;
 	struct gossip_hdr hdr;
 	u8 version;
+	struct stat st;
 
 	old_fd = open(GOSSIP_STORE_FILENAME, O_RDONLY);
 	if (old_fd == -1)
-		return;
+		return 0;
+
+	if (fstat(old_fd, &st) != 0) {
+		status_broken("Could not stat gossip_store: %s",
+			      strerror(errno));
+		goto close_old;
+	}
+
 	new_fd = open(GOSSIP_STORE_TEMP_FILENAME, O_RDWR|O_TRUNC|O_CREAT, 0600);
 	if (new_fd < 0) {
 		status_broken(
@@ -150,13 +194,14 @@ static void gossip_store_compact_offline(void)
 	}
 	status_debug("gossip_store_compact_offline: %zu deleted, %zu copied",
 		     deleted, count);
-	return;
+	return st.st_mtime;
 
 close_and_delete:
 	close(new_fd);
 close_old:
 	close(old_fd);
 	unlink(GOSSIP_STORE_TEMP_FILENAME);
+	return 0;
 }
 
 struct gossip_store *gossip_store_new(struct routing_state *rstate,
@@ -165,7 +210,7 @@ struct gossip_store *gossip_store_new(struct routing_state *rstate,
 	struct gossip_store *gs = tal(rstate, struct gossip_store);
 	gs->count = gs->deleted = 0;
 	gs->writable = true;
-	gossip_store_compact_offline();
+	gs->timestamp = gossip_store_compact_offline();
 	gs->fd = open(GOSSIP_STORE_FILENAME, O_RDWR|O_CREAT, 0600);
 	if (gs->fd < 0)
 		status_failed(STATUS_FAIL_INTERNAL_ERROR,
@@ -321,7 +366,7 @@ bool gossip_store_compact(struct gossip_store *gs)
 	if (gs->disable_compaction)
 		return false;
 
-	status_trace(
+	status_debug(
 	    "Compacting gossip_store with %zu entries, %zu of which are stale",
 	    gs->count, gs->deleted);
 
@@ -419,7 +464,7 @@ bool gossip_store_compact(struct gossip_store *gs)
 			      " %s",
 			      strerror(errno));
 
-	status_trace(
+	status_debug(
 	    "Compaction completed: dropped %zu messages, new count %zu, len %"PRIu64,
 	    deleted, count, len);
 	gs->count = count;
@@ -435,7 +480,7 @@ bool gossip_store_compact(struct gossip_store *gs)
 unlink_disable:
 	unlink(GOSSIP_STORE_TEMP_FILENAME);
 disable:
-	status_trace("Encountered an error while compacting, disabling "
+	status_debug("Encountered an error while compacting, disabling "
 		     "future compactions.");
 	gs->disable_compaction = true;
 	return false;
@@ -592,7 +637,7 @@ int gossip_store_readonly_fd(struct gossip_store *gs)
 	return fd;
 }
 
-bool gossip_store_load(struct routing_state *rstate, struct gossip_store *gs)
+u32 gossip_store_load(struct routing_state *rstate, struct gossip_store *gs)
 {
 	struct gossip_hdr hdr;
 	u32 msglen, checksum;
@@ -602,8 +647,6 @@ bool gossip_store_load(struct routing_state *rstate, struct gossip_store *gs)
 	size_t stats[] = {0, 0, 0, 0};
 	struct timeabs start = time_now();
 	const u8 *chan_ann = NULL;
-	bool contents_ok;
-	u32 last_timestamp = 0;
 	u64 chan_ann_off = 0; /* Spurious gcc-9 (Ubuntu 9-20190402-1ubuntu1) 9.0.1 20190402 (experimental) warning */
 
 	gs->writable = false;
@@ -643,7 +686,8 @@ bool gossip_store_load(struct routing_state *rstate, struct gossip_store *gs)
 			if (!routing_add_channel_announcement(rstate,
 							      take(chan_ann),
 							      satoshis,
-							      chan_ann_off)) {
+							      chan_ann_off,
+							      NULL)) {
 				bad = "Bad channel_announcement";
 				goto badmsg;
 			}
@@ -658,9 +702,6 @@ bool gossip_store_load(struct routing_state *rstate, struct gossip_store *gs)
 			/* Save for channel_amount (next msg) */
 			chan_ann = tal_steal(gs, msg);
 			chan_ann_off = gs->len;
-			/* If we have a channel_announcement, that's a reasonable
-			 * timestamp to use. */
-			last_timestamp = be32_to_cpu(hdr.timestamp);
 			break;
 		case WIRE_GOSSIP_STORE_PRIVATE_UPDATE:
 			if (!fromwire_gossip_store_private_update(tmpctx, msg, &msg)) {
@@ -670,7 +711,8 @@ bool gossip_store_load(struct routing_state *rstate, struct gossip_store *gs)
 			/* fall thru */
 		case WIRE_CHANNEL_UPDATE:
 			if (!routing_add_channel_update(rstate,
-							take(msg), gs->len)) {
+							take(msg), gs->len,
+							NULL)) {
 				bad = "Bad channel_update";
 				goto badmsg;
 			}
@@ -678,7 +720,8 @@ bool gossip_store_load(struct routing_state *rstate, struct gossip_store *gs)
 			break;
 		case WIRE_NODE_ANNOUNCEMENT:
 			if (!routing_add_node_announcement(rstate,
-							   take(msg), gs->len)) {
+							   take(msg), gs->len,
+							   NULL, NULL)) {
 				bad = "Bad node_announcement";
 				goto badmsg;
 			}
@@ -710,8 +753,6 @@ bool gossip_store_load(struct routing_state *rstate, struct gossip_store *gs)
 	if (bad)
 		goto corrupt;
 
-	/* If last timestamp is within 24 hours, say we're OK. */
-	contents_ok = (last_timestamp >= time_now().ts.tv_sec - 24*3600);
 	goto out;
 
 badmsg:
@@ -731,14 +772,14 @@ corrupt:
 	remove_all_gossip(rstate);
 	gs->count = gs->deleted = 0;
 	gs->len = 1;
-	contents_ok = false;
+	gs->timestamp = 0;
 out:
 	gs->writable = true;
-	status_trace("total store load time: %"PRIu64" msec",
+	status_debug("total store load time: %"PRIu64" msec",
 		     time_to_msec(time_between(time_now(), start)));
-	status_trace("gossip_store: Read %zu/%zu/%zu/%zu cannounce/cupdate/nannounce/cdelete from store (%zu deleted) in %"PRIu64" bytes",
+	status_debug("gossip_store: Read %zu/%zu/%zu/%zu cannounce/cupdate/nannounce/cdelete from store (%zu deleted) in %"PRIu64" bytes",
 		     stats[0], stats[1], stats[2], stats[3], gs->deleted,
 		     gs->len);
 
-	return contents_ok;
+	return gs->timestamp;
 }

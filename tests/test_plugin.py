@@ -94,11 +94,11 @@ def test_plugin_dir(node_factory):
 
 
 def test_plugin_slowinit(node_factory):
-    """Tests the 'plugin' RPC command when init is slow"""
+    """Tests that the 'plugin' RPC command times out if plugin doesnt respond"""
     n = node_factory.get_node()
 
-    n.rpc.plugin_start(os.path.join(os.getcwd(), "tests/plugins/slow_init.py"))
-    n.daemon.wait_for_log("slow_init.py initializing")
+    with pytest.raises(RpcError, match="Timed out while waiting for plugin response"):
+        n.rpc.plugin_start(os.path.join(os.getcwd(), "tests/plugins/slow_init.py"))
 
     # It's not actually configured yet, see what happens;
     # make sure 'rescan' and 'list' controls dont crash
@@ -116,42 +116,47 @@ def test_plugin_command(node_factory):
     assert(len(cmd) == 0)
 
     # Add the 'contrib/plugins' test dir
-    time.sleep(2)
     n.rpc.plugin_startdir(directory=os.path.join(os.getcwd(), "contrib/plugins"))
-    n.daemon.wait_for_log(r"Plugin helloworld.py initialized")
     # Make sure that the 'hello' command from the helloworld.py plugin
     # is now available.
     cmd = [hlp for hlp in n.rpc.help()["help"] if "hello" in hlp["command"]]
     assert(len(cmd) == 1)
 
-    # Make sure 'rescan' and 'list' controls dont crash
+    # Make sure 'rescan' and 'list' subcommands dont crash
     n.rpc.plugin_rescan()
     n.rpc.plugin_list()
-    time.sleep(1)
 
     # Make sure the plugin behaves normally after stop and restart
-    n.rpc.plugin_stop(plugin="helloworld.py")
+    assert("Successfully stopped helloworld.py." == n.rpc.plugin_stop(plugin="helloworld.py")[''])
     n.daemon.wait_for_log(r"Killing plugin: helloworld.py")
-    time.sleep(1)
     n.rpc.plugin_start(plugin=os.path.join(os.getcwd(), "contrib/plugins/helloworld.py"))
     n.daemon.wait_for_log(r"Plugin helloworld.py initialized")
     assert("Hello world" == n.rpc.call(method="hello"))
 
     # Now stop the helloworld plugin
-    n.rpc.plugin_stop(plugin="helloworld.py")
+    assert("Successfully stopped helloworld.py." == n.rpc.plugin_stop(plugin="helloworld.py")[''])
     n.daemon.wait_for_log(r"Killing plugin: helloworld.py")
-    time.sleep(1)
     # Make sure that the 'hello' command from the helloworld.py plugin
     # is not available anymore.
     cmd = [hlp for hlp in n.rpc.help()["help"] if "hello" in hlp["command"]]
     assert(len(cmd) == 0)
 
-    # Test that we cannot stop a plugin with 'dynamic' set to False in
+    # Test that we cannot start a plugin with 'dynamic' set to False in
     # getmanifest
-    n.rpc.plugin_start(plugin=os.path.join(os.getcwd(), "tests/plugins/static.py"))
-    n.daemon.wait_for_log(r"Static plugin initialized.")
-    with pytest.raises(RpcError, match=r"plugin cannot be managed when lightningd is up"):
-        n.rpc.plugin_stop(plugin="static.py")
+    with pytest.raises(RpcError, match=r"Not a dynamic plugin"):
+        n.rpc.plugin_start(plugin=os.path.join(os.getcwd(), "tests/plugins/static.py"))
+
+    # Test that we cannot stop a started plugin with 'dynamic' flag set to
+    # False
+    n2 = node_factory.get_node(options={
+        "plugin": os.path.join(os.getcwd(), "tests/plugins/static.py")
+    })
+    with pytest.raises(RpcError, match=r"static.py cannot be managed when lightningd is up"):
+        n2.rpc.plugin_stop(plugin="static.py")
+
+    # Test that we don't crash when starting a broken plugin
+    with pytest.raises(RpcError, match=r"Timed out while waiting for plugin response"):
+        n2.rpc.plugin_start(plugin=os.path.join(os.getcwd(), "tests/plugins/broken.py"))
 
 
 def test_plugin_disable(node_factory):
@@ -290,6 +295,7 @@ def test_async_rpcmethod(node_factory, executor):
     assert [r.result() for r in results] == [42] * len(results)
 
 
+@unittest.skipIf(os.getenv('TEST_DB_PROVIDER', 'sqlite3') != 'sqlite3', "Only sqlite3 implements the db_write_hook currently")
 def test_db_hook(node_factory, executor):
     """This tests the db hook."""
     dbfile = os.path.join(node_factory.directory, "dblog.sqlite3")
@@ -299,12 +305,11 @@ def test_db_hook(node_factory, executor):
     # It should see the db being created, and sometime later actually get
     # initted.
     # This precedes startup, so needle already past
-    assert l1.daemon.is_in_log('plugin-dblog.py deferring 1 commands')
+    assert l1.daemon.is_in_log(r'plugin-dblog.py deferring \d+ commands')
     l1.daemon.logsearch_start = 0
     l1.daemon.wait_for_log('plugin-dblog.py replaying pre-init data:')
-    l1.daemon.wait_for_log('plugin-dblog.py PRAGMA foreign_keys = ON;')
     l1.daemon.wait_for_log('plugin-dblog.py CREATE TABLE version \\(version INTEGER\\)')
-    l1.daemon.wait_for_log('plugin-dblog.py initialized')
+    l1.daemon.wait_for_log("plugin-dblog.py initialized.* 'startup': True")
 
     l1.stop()
 
@@ -427,10 +432,16 @@ def test_htlc_accepted_hook_fail(node_factory):
     ], wait_for_announce=True)
 
     # This must fail
-    inv = l2.rpc.invoice(1000, "lbl", "desc")['bolt11']
+    phash = l2.rpc.invoice(1000, "lbl", "desc")['payment_hash']
+    route = l1.rpc.getroute(l2.info['id'], 1000, 1)['route']
+
+    # Here shouldn't use `pay` command because l2 rejects with WIRE_TEMPORARY_NODE_FAILURE,
+    # then it will be excluded when l1 try another pay attempt.
+    # Note if the destination is excluded, the route result is undefined.
+    l1.rpc.sendpay(route, phash)
     with pytest.raises(RpcError) as excinfo:
-        l1.rpc.pay(inv)
-    assert excinfo.value.error['data']['failcode'] == 16399
+        l1.rpc.waitsendpay(phash)
+    assert excinfo.value.error['data']['failcode'] == 0x2002
     assert excinfo.value.error['data']['erring_index'] == 1
 
     # And the invoice must still be unpaid
@@ -440,7 +451,7 @@ def test_htlc_accepted_hook_fail(node_factory):
     # Now try with forwarded HTLCs: l2 should still fail them
     # This must fail
     inv = l3.rpc.invoice(1000, "lbl", "desc")['bolt11']
-    with pytest.raises(RpcError) as excinfo:
+    with pytest.raises(RpcError):
         l1.rpc.pay(inv)
 
     # And the invoice must still be unpaid
@@ -479,8 +490,14 @@ def test_htlc_accepted_hook_direct_restart(node_factory, executor):
     f1 = executor.submit(l1.rpc.pay, i1)
 
     l2.daemon.wait_for_log(r'Holding onto an incoming htlc for 10 seconds')
+    needle = l2.daemon.logsearch_start
     l2.restart()
 
+    # Now it should try again, *after* initializing.
+    # This may be before "Server started with public key" swallowed by restart()
+    l2.daemon.logsearch_start = needle + 1
+    l2.daemon.wait_for_log(r'hold_htlcs.py initializing')
+    l2.daemon.wait_for_log(r'Holding onto an incoming htlc for 10 seconds')
     f1.result()
 
 
@@ -500,7 +517,14 @@ def test_htlc_accepted_hook_forward_restart(node_factory, executor):
 
     l2.daemon.wait_for_log(r'Holding onto an incoming htlc for 10 seconds')
 
+    needle = l2.daemon.logsearch_start
     l2.restart()
+
+    # Now it should try again, *after* initializing.
+    # This may be before "Server started with public key" swallowed by restart()
+    l2.daemon.logsearch_start = needle + 1
+    l2.daemon.wait_for_log(r'hold_htlcs.py initializing')
+    l2.daemon.wait_for_log(r'Holding onto an incoming htlc for 10 seconds')
 
     # Grab the file where the plugin wrote the onion and read it in for some
     # additional checks
@@ -649,14 +673,34 @@ def test_forward_event_notification(node_factory, bitcoind, executor):
     bitcoind.generate_block(100)
     sync_blockheight(bitcoind, [l2])
 
-    stats = l2.rpc.listforwards()
+    stats = l2.rpc.listforwards()['forwards']
+    assert len(stats) == 3
+    plugin_stats = l2.rpc.call('listforwards_plugin')['forwards']
+    assert len(plugin_stats) == 6
 
-    assert l2.rpc.call('recordcheck', {'payment_hash': payment_hash13, 'status': 'offered', 'dbforward': stats['forwards'][0]})
-    assert l2.rpc.call('recordcheck', {'payment_hash': payment_hash13, 'status': 'settled', 'dbforward': stats['forwards'][0]})
-    assert l2.rpc.call('recordcheck', {'payment_hash': payment_hash14, 'status': 'offered', 'dbforward': stats['forwards'][1]})
-    assert l2.rpc.call('recordcheck', {'payment_hash': payment_hash14, 'status': 'failed', 'dbforward': stats['forwards'][1]})
-    assert l2.rpc.call('recordcheck', {'payment_hash': payment_hash15, 'status': 'offered', 'dbforward': stats['forwards'][2]})
-    assert l2.rpc.call('recordcheck', {'payment_hash': payment_hash15, 'status': 'local_failed', 'dbforward': stats['forwards'][2]})
+    # use stats to build what we expect went to plugin.
+    expect = stats[0].copy()
+    # First event won't have conclusion.
+    del expect['resolved_time']
+    expect['status'] = 'offered'
+    assert plugin_stats[0] == expect
+    expect = stats[0].copy()
+    assert plugin_stats[1] == expect
+
+    expect = stats[1].copy()
+    del expect['resolved_time']
+    expect['status'] = 'offered'
+    assert plugin_stats[2] == expect
+    expect = stats[1].copy()
+    assert plugin_stats[3] == expect
+
+    expect = stats[2].copy()
+    del expect['failcode']
+    del expect['failreason']
+    expect['status'] = 'offered'
+    assert plugin_stats[4] == expect
+    expect = stats[2].copy()
+    assert plugin_stats[5] == expect
 
 
 def test_plugin_deprecated_relpath(node_factory):
@@ -676,3 +720,34 @@ def test_plugin_deprecated_relpath(node_factory):
     assert l1.daemon.is_in_log('DEPRECATED WARNING.*plugin={}'
                                .format(os.path.join(os.getcwd(),
                                                     'tests/plugins/millisatoshis.py')))
+
+
+def test_sendpay_notifications(node_factory, bitcoind):
+    """ test 'sendpay_success' and 'sendpay_failure' notifications
+    """
+    amount = 10**8
+    opts = [{'plugin': os.path.join(os.getcwd(), 'tests/plugins/sendpay_notifications.py')},
+            {},
+            {'may_reconnect': False}]
+    l1, l2, l3 = node_factory.line_graph(3, opts=opts, wait_for_announce=True)
+    chanid23 = l2.get_channel_scid(l3)
+
+    payment_hash1 = l3.rpc.invoice(amount, "first", "desc")['payment_hash']
+    payment_hash2 = l3.rpc.invoice(amount, "second", "desc")['payment_hash']
+    route = l1.rpc.getroute(l3.info['id'], amount, 1)['route']
+
+    l1.rpc.sendpay(route, payment_hash1)
+    response1 = l1.rpc.waitsendpay(payment_hash1)
+
+    l2.rpc.close(chanid23, 1)
+
+    l1.rpc.sendpay(route, payment_hash2)
+    with pytest.raises(RpcError) as err:
+        l1.rpc.waitsendpay(payment_hash2)
+
+    results = l1.rpc.call('listsendpays_plugin')
+    assert len(results['sendpay_success']) == 1
+    assert len(results['sendpay_failure']) == 1
+
+    assert results['sendpay_success'][0] == response1
+    assert results['sendpay_failure'][0] == err.value.error

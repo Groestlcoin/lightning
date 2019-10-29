@@ -1,5 +1,6 @@
 from concurrent import futures
-from utils import NodeFactory, BitcoinD
+from db import SqliteDbProvider, PostgresDbProvider
+from utils import NodeFactory, BitcoinD, ElementsD
 
 import logging
 import os
@@ -14,6 +15,7 @@ with open('config.vars') as configfile:
     config = dict([(line.rstrip().split('=', 1)) for line in configfile])
 
 VALGRIND = os.getenv("VALGRIND", config['VALGRIND']) == "1"
+TEST_NETWORK = os.getenv("TEST_NETWORK", config['TEST_NETWORK'])
 DEVELOPER = os.getenv("DEVELOPER", config['DEVELOPER']) == "1"
 TEST_DEBUG = os.getenv("TEST_DEBUG", "0") == "1"
 
@@ -29,7 +31,9 @@ __attempts = {}
 
 @pytest.fixture(scope="session")
 def test_base_dir():
-    directory = tempfile.mkdtemp(prefix='ltests-')
+    d = os.getenv("TEST_DIR", "/tmp")
+
+    directory = tempfile.mkdtemp(prefix='ltests-', dir=d)
     print("Running tests in {}".format(directory))
 
     yield directory
@@ -57,7 +61,7 @@ def directory(request, test_base_dir, test_name):
     # determine whether we succeeded or failed. Outcome can be None if the
     # failure occurs during the setup phase, hence the use to getattr instead
     # of accessing it directly.
-    outcome = getattr(request.node, 'rep_call', None)
+    outcome = getattr(request.node, 'rep_call', None).outcome
     failed = not outcome or request.node.has_errors or outcome != 'passed'
 
     if not failed:
@@ -71,9 +75,17 @@ def test_name(request):
     yield request.function.__name__
 
 
+network_daemons = {
+    'regtest': BitcoinD,
+    'liquid-regtest': ElementsD,
+}
+
+
 @pytest.fixture
-def bitcoind(directory):
-    bitcoind = BitcoinD(bitcoin_dir=directory)
+def bitcoind(directory, teardown_checks):
+    chaind = network_daemons[config.get('TEST_NETWORK', 'regtest')]
+    bitcoind = chaind(bitcoin_dir=directory)
+
     try:
         bitcoind.start()
     except Exception:
@@ -109,58 +121,81 @@ def bitcoind(directory):
     bitcoind.proc.wait()
 
 
+class TeardownErrors(object):
+    def __init__(self):
+        self.errors = []
+        self.node_errors = []
+
+    def add_error(self, msg):
+        self.errors.append(msg)
+
+    def add_node_error(self, node, msg):
+        self.node_errors.append((node.daemon.prefix, msg))
+
+    def __str__(self):
+        node_errors = [" - {}: {}".format(*e) for e in self.node_errors]
+        errors = [" - {}".format(e) for e in self.errors]
+
+        errors = ["\nNode errors:"] + node_errors + ["Global errors:"] + errors
+        return "\n".join(errors)
+
+    def has_errors(self):
+        return len(self.errors) > 0 or len(self.node_errors) > 0
+
+
 @pytest.fixture
-def node_factory(request, directory, test_name, bitcoind, executor):
-    nf = NodeFactory(test_name, bitcoind, executor, directory=directory)
+def teardown_checks(request):
+    """A simple fixture to collect errors during teardown.
+
+    We need to collect the errors and raise them as the very last step in the
+    fixture tree, otherwise some fixtures may not be cleaned up
+    correctly. Require this fixture in all other fixtures that need to either
+    cleanup before reporting an error or want to add an error that is to be
+    reported.
+
+    """
+    errors = TeardownErrors()
+    yield errors
+
+    if errors.has_errors():
+        # Format a nice list of everything that went wrong and raise an exception
+        request.node.has_errors = True
+        raise ValueError(str(errors))
+
+
+@pytest.fixture
+def node_factory(request, directory, test_name, bitcoind, executor, db_provider, teardown_checks):
+    nf = NodeFactory(
+        test_name,
+        bitcoind,
+        executor,
+        directory=directory,
+        db_provider=db_provider,
+    )
+
     yield nf
-    err_count = 0
-    ok = nf.killall([not n.may_fail for n in nf.nodes])
+    ok, errs = nf.killall([not n.may_fail for n in nf.nodes])
 
-    def check_errors(request, err_count, msg):
-        """Just a simple helper to format a message, set flags on request and then raise
-        """
-        if err_count:
-            request.node.has_errors = True
-            raise ValueError(msg.format(err_count))
+    for e in errs:
+        teardown_checks.add_error(e)
 
-    if VALGRIND:
-        for node in nf.nodes:
-            err_count += printValgrindErrors(node)
-        check_errors(request, err_count, "{} nodes reported valgrind errors")
+    def map_node_error(nodes, f, msg):
+        for n in nodes:
+            if n and f(n):
+                teardown_checks.add_node_error(n, msg)
 
-    for node in nf.nodes:
-        err_count += printCrashLog(node)
-    check_errors(request, err_count, "{} nodes had crash.log files")
-
-    for node in [n for n in nf.nodes if not n.allow_broken_log]:
-        err_count += checkBroken(node)
-    check_errors(request, err_count, "{} nodes had BROKEN messages")
-
-    for node in nf.nodes:
-        err_count += checkReconnect(node)
-    check_errors(request, err_count, "{} nodes had unexpected reconnections")
-
-    for node in nf.nodes:
-        err_count += checkBadGossip(node)
-    check_errors(request, err_count, "{} nodes had bad gossip messages")
-
-    for node in nf.nodes:
-        err_count += checkBadReestablish(node)
-    check_errors(request, err_count, "{} nodes had bad reestablish")
-
-    for node in nf.nodes:
-        err_count += checkBadHSMRequest(node)
-    if err_count:
-        raise ValueError("{} nodes had bad hsm requests".format(err_count))
-
-    for node in nf.nodes:
-        err_count += checkMemleak(node)
-    if err_count:
-        raise ValueError("{} nodes had memleak messages".format(err_count))
+    map_node_error(nf.nodes, printValgrindErrors, "reported valgrind errors")
+    map_node_error(nf.nodes, printCrashLog, "had crash.log files")
+    map_node_error(nf.nodes, lambda n: not n.allow_broken_log and n.daemon.is_in_log(r'\*\*BROKEN\*\*'), "had BROKEN messages")
+    map_node_error(nf.nodes, checkReconnect, "had unexpected reconnections")
+    map_node_error(nf.nodes, checkBadGossip, "had bad gossip messages")
+    map_node_error(nf.nodes, lambda n: n.daemon.is_in_log('Bad reestablish'), "had bad reestablish")
+    map_node_error(nf.nodes, lambda n: n.daemon.is_in_log('bad hsm request'), "had bad hsm requests")
+    map_node_error(nf.nodes, lambda n: n.daemon.is_in_log(r'Accessing a null column'), "Accessing a null column")
+    map_node_error(nf.nodes, checkMemleak, "had memleak messages")
 
     if not ok:
-        request.node.has_errors = True
-        raise Exception("At least one lightning exited with unexpected non-zero return code")
+        teardown_checks.add_error("At least one lightning exited with unexpected non-zero return code")
 
 
 def getValgrindErrors(node):
@@ -214,6 +249,8 @@ def checkReconnect(node):
 
 
 def checkBadGossip(node):
+    if node.allow_bad_gossip:
+        return 0
     # We can get bad gossip order from inside error msgs.
     if node.daemon.is_in_log('Bad gossip order from (?!error)'):
         # This can happen if a node sees a node_announce after a channel
@@ -229,6 +266,8 @@ def checkBadGossip(node):
 
 
 def checkBroken(node):
+    if node.allow_broken_log:
+        return 0
     # We can get bad gossip order from inside error msgs.
     if node.daemon.is_in_log(r'\*\*BROKEN\*\*'):
         return 1
@@ -253,8 +292,49 @@ def checkMemleak(node):
     return 0
 
 
+# Mapping from TEST_DB_PROVIDER env variable to class to be used
+providers = {
+    'sqlite3': SqliteDbProvider,
+    'postgres': PostgresDbProvider,
+}
+
+
+@pytest.fixture(scope="session")
+def db_provider(test_base_dir):
+    provider = providers[os.getenv('TEST_DB_PROVIDER', 'sqlite3')](test_base_dir)
+    provider.start()
+    yield provider
+    provider.stop()
+
+
 @pytest.fixture
-def executor():
+def executor(teardown_checks):
     ex = futures.ThreadPoolExecutor(max_workers=20)
     yield ex
     ex.shutdown(wait=False)
+
+
+@pytest.fixture
+def chainparams():
+    chainparams = {
+        'regtest': {
+            "bip173_prefix": "bcrt",
+            "elements": False,
+            "name": "regtest",
+            "p2sh_prefix": '2',
+            "elements": False,
+            "example_addr": "bcrt1qeyyk6sl5pr49ycpqyckvmttus5ttj25pd0zpvg",
+            "feeoutput": False,
+        },
+        'liquid-regtest': {
+            "bip173_prefix": "ert",
+            "elements": True,
+            "name": "liquid-regtest",
+            "p2sh_prefix": 'X',
+            "elements": True,
+            "example_addr": "ert1qq8adjz4u6enf0cjey9j8yt0y490tact9fahkwf",
+            "feeoutput": True,
+        }
+    }
+
+    return chainparams[config['TEST_NETWORK']]

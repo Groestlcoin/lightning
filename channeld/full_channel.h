@@ -24,6 +24,7 @@
  * @remote_basepoints: remote basepoints.
  * @local_fundingkey: local funding key
  * @remote_fundingkey: remote funding key
+ * @option_static_remotekey: use `option_static_remotekey`.
  * @funder: which side initiated it.
  *
  * Returns state, or NULL if malformed.
@@ -42,6 +43,7 @@ struct channel *new_full_channel(const tal_t *ctx,
 				 const struct basepoints *remote_basepoints,
 				 const struct pubkey *local_funding_pubkey,
 				 const struct pubkey *remote_funding_pubkey,
+				 bool option_static_remotekey,
 				 enum side funder);
 
 /**
@@ -236,6 +238,7 @@ size_t num_channel_htlcs(const struct channel *channel);
  * @fulfilled_sides: sides for ids in @fulfilled
  * @failed: htlcs of those which are failed
  * @failed_sides: sides for ids in @failed
+ * @failheight: block number which htlcs failed at.
  *
  * This is used for restoring a channel state.
  */
@@ -245,14 +248,15 @@ bool channel_force_htlcs(struct channel *channel,
 			 const struct fulfilled_htlc *fulfilled,
 			 const enum side *fulfilled_sides,
 			 const struct failed_htlc **failed,
-			 const enum side *failed_sides);
+			 const enum side *failed_sides,
+			 u32 failheight);
 
 /**
  * dump_htlcs: debugging dump of all HTLCs
  * @channel: the channel
  * @prefix: the prefix to prepend to each line.
  *
- * Uses status_trace() on every HTLC.
+ * Uses status_debug() on every HTLC.
  */
 void dump_htlcs(const struct channel *channel, const char *prefix);
 

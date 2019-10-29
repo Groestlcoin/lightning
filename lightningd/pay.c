@@ -12,6 +12,7 @@
 #include <lightningd/jsonrpc.h>
 #include <lightningd/lightningd.h>
 #include <lightningd/log.h>
+#include <lightningd/notification.h>
 #include <lightningd/options.h>
 #include <lightningd/peer_control.h>
 #include <lightningd/peer_htlcs.h>
@@ -25,6 +26,8 @@ struct routing_failure {
 	struct node_id erring_node;
 	struct short_channel_id erring_channel;
 	int channel_dir;
+	/* If remote sent us a message, this is it. */
+	const u8 *msg;
 };
 
 /* sendpay command */
@@ -71,9 +74,8 @@ add_waitsendpay_waiter(struct lightningd *ld,
 }
 
 /* Outputs fields, not a separate object*/
-static void
-json_add_payment_fields(struct json_stream *response,
-			const struct wallet_payment *t)
+void json_add_payment_fields(struct json_stream *response,
+			     const struct wallet_payment *t)
 {
 	json_add_u64(response, "id", t->id);
 	json_add_sha256(response, "payment_hash", &t->payment_hash);
@@ -99,11 +101,8 @@ json_add_payment_fields(struct json_stream *response,
 		json_add_hex(response, "payment_preimage",
 			     t->payment_preimage,
 			     sizeof(*t->payment_preimage));
-	if (t->label) {
-		if (deprecated_apis)
-			json_add_string(response, "description", t->label);
+	if (t->label)
 		json_add_string(response, "label", t->label);
-	}
 	if (t->bolt11)
 		json_add_string(response, "bolt11", t->bolt11);
 }
@@ -115,6 +114,7 @@ static struct command_result *sendpay_success(struct command *cmd,
 
 	assert(payment->status == PAYMENT_COMPLETE);
 
+	notify_sendpay_success(cmd->ld, payment);
 	response = json_stream_success(cmd);
 	json_add_payment_fields(response, payment);
 	return command_success(cmd, response);
@@ -126,7 +126,8 @@ json_add_routefail_info(struct json_stream *js,
 			enum onion_type failcode,
 			const struct node_id *erring_node,
 			const struct short_channel_id *erring_channel,
-			int channel_dir)
+			int channel_dir,
+			const u8 *msg)
 {
 	const char *failcodename = onion_type_name(failcode);
 
@@ -138,37 +139,66 @@ json_add_routefail_info(struct json_stream *js,
 	json_add_node_id(js, "erring_node", erring_node);
 	json_add_short_channel_id(js, "erring_channel", erring_channel);
 	json_add_num(js, "erring_direction", channel_dir);
+	if (msg)
+		json_add_hex_talarr(js, "raw_message", msg);
+}
+
+void json_sendpay_fail_fields(struct json_stream *js,
+			      const struct wallet_payment *payment,
+			      int pay_errcode,
+			      const u8 *onionreply,
+			      const struct routing_failure *fail)
+{
+	/* "immediate_routing_failure" is before payment creation. */
+	if (payment)
+		json_add_payment_fields(js, payment);
+	if (pay_errcode == PAY_UNPARSEABLE_ONION)
+		json_add_hex_talarr(js, "onionreply", onionreply);
+	else
+		json_add_routefail_info(js,
+					fail->erring_index,
+					fail->failcode,
+					&fail->erring_node,
+					&fail->erring_channel,
+					fail->channel_dir,
+					fail->msg);
 }
 
 /* onionreply used if pay_errcode == PAY_UNPARSEABLE_ONION */
 static struct command_result *
 sendpay_fail(struct command *cmd,
+	     const struct wallet_payment *payment,
 	     int pay_errcode,
 	     const u8 *onionreply,
 	     const struct routing_failure *fail,
 	     const char *details)
 {
 	struct json_stream *data;
+	char *errmsg;
 
-	if (pay_errcode == PAY_UNPARSEABLE_ONION) {
-		data = json_stream_fail(cmd, PAY_UNPARSEABLE_ONION,
-					"Malformed error reply");
-		json_add_hex_talarr(data, "onionreply", onionreply);
-		json_object_end(data);
-		return command_failed(cmd, data);
+	if (pay_errcode == PAY_UNPARSEABLE_ONION)
+		errmsg = "Malformed error reply";
+	else {
+		assert(fail);
+		errmsg = tal_fmt(tmpctx, "failed: %s (%s)",
+				 onion_type_name(fail->failcode),
+				 details);
 	}
 
-	assert(fail);
+	notify_sendpay_failure(cmd->ld,
+			       payment,
+			       pay_errcode,
+			       onionreply,
+			       fail,
+			       errmsg);
+
 	data = json_stream_fail(cmd, pay_errcode,
-				tal_fmt(tmpctx, "failed: %s (%s)",
-					onion_type_name(fail->failcode),
-					details));
-	json_add_routefail_info(data,
-				fail->erring_index,
-				fail->failcode,
-				&fail->erring_node,
-				&fail->erring_channel,
-				fail->channel_dir);
+				errmsg);
+	json_sendpay_fail_fields(data,
+				 payment,
+				 pay_errcode,
+				 onionreply,
+				 fail);
 	json_object_end(data);
 	return command_failed(cmd, data);
 }
@@ -187,6 +217,7 @@ json_sendpay_in_progress(struct command *cmd,
 
 static void tell_waiters_failed(struct lightningd *ld,
 				const struct sha256 *payment_hash,
+				const struct wallet_payment *payment,
 				int pay_errcode,
 				const u8 *onionreply,
 				const struct routing_failure *fail,
@@ -200,7 +231,8 @@ static void tell_waiters_failed(struct lightningd *ld,
 		if (!sha256_eq(payment_hash, &pc->payment_hash))
 			continue;
 
-		sendpay_fail(pc->cmd, pay_errcode, onionreply, fail, details);
+		sendpay_fail(pc->cmd, payment,
+			     pay_errcode, onionreply, fail, details);
 	}
 }
 
@@ -254,6 +286,7 @@ immediate_routing_failure(const tal_t *ctx,
 	routing_failure->erring_node = ld->id;
 	routing_failure->erring_channel = *channel0;
 	routing_failure->channel_dir = node_id_idx(&ld->id, dstid);
+	routing_failure->msg = NULL;
 
 	return routing_failure;
 }
@@ -277,6 +310,7 @@ local_routing_failure(const tal_t *ctx,
 	routing_failure->erring_channel = payment->route_channels[0];
 	routing_failure->channel_dir = node_id_idx(&ld->id,
 						   &payment->route_nodes[0]);
+	routing_failure->msg = NULL;
 
 	log_debug(hout->key.channel->log, "local_routing_failure: %u (%s)",
 		  hout->failcode, onion_type_name(hout->failcode));
@@ -368,6 +402,8 @@ remote_routing_failure(const tal_t *ctx,
 	routing_failure->erring_node = *erring_node;
 	routing_failure->erring_channel = *erring_channel;
 	routing_failure->channel_dir = dir;
+	routing_failure->msg = tal_dup_arr(routing_failure, u8, failure->msg,
+					   tal_count(failure->msg), 0);
 
 	return routing_failure;
 }
@@ -466,6 +502,8 @@ void payment_failed(struct lightningd *ld, const struct htlc_out *hout,
 				 hout->key.id,
 				 reply->origin_index,
 				 failcode, onion_type_name(failcode));
+			log_debug(hout->key.channel->log, "failmsg: %s",
+				  tal_hex(tmpctx, reply->msg));
 			fail = remote_routing_failure(tmpctx, ld,
 						      payment, reply,
 						      hout->key.channel->log,
@@ -489,11 +527,11 @@ void payment_failed(struct lightningd *ld, const struct htlc_out *hout,
 				    failmsg,
 				    fail ? fail->channel_dir : 0);
 
-	tell_waiters_failed(ld, &hout->payment_hash, pay_errcode,
-			    hout->failuremsg, fail, failmsg);
+	tell_waiters_failed(ld, &hout->payment_hash, payment,
+			    pay_errcode, hout->failuremsg, fail, failmsg);
 }
 
-/* Wait for a payment. If cmd is deleted, then json_waitsendpay_on_resolve
+/* Wait for a payment. If cmd is deleted, then wait_payment()
  * no longer be called.
  * Return callback if we called already, otherwise NULL. */
 static struct command_result *wait_payment(struct lightningd *ld,
@@ -546,7 +584,9 @@ static struct command_result *wait_payment(struct lightningd *ld,
 					    "Payment failure reason unknown");
 		} else if (failonionreply) {
 			/* failed to parse returned onion error */
-			return sendpay_fail(cmd, PAY_UNPARSEABLE_ONION,
+			return sendpay_fail(cmd,
+					    payment,
+					    PAY_UNPARSEABLE_ONION,
 					    failonionreply,
 					    NULL, faildetail);
 		} else {
@@ -559,7 +599,10 @@ static struct command_result *wait_payment(struct lightningd *ld,
 			fail->erring_node = *failnode;
 			fail->erring_channel = *failchannel;
 			fail->channel_dir = faildirection;
+			/* FIXME: We don't store this! */
+			fail->msg = NULL;
 			return sendpay_fail(cmd,
+					    payment,
 					    faildestperm
 					    ? PAY_DESTINATION_PERM_FAIL
 					    : PAY_TRY_OTHER_ROUTE,
@@ -673,7 +716,8 @@ send_payment(struct lightningd *ld,
 
 		json_add_routefail_info(data, 0, WIRE_UNKNOWN_NEXT_PEER,
 					&ld->id, &route[0].channel_id,
-					node_id_idx(&ld->id, &route[0].nodeid));
+					node_id_idx(&ld->id, &route[0].nodeid),
+					NULL);
 		json_object_end(data);
 		return command_failed(cmd, data);
 	}
@@ -697,8 +741,8 @@ send_payment(struct lightningd *ld,
 						 &route[0].channel_id,
 						 &channel->peer->id);
 
-		return sendpay_fail(cmd, PAY_TRY_OTHER_ROUTE, NULL,
-				    fail, "First peer not ready");
+		return sendpay_fail(cmd, payment, PAY_TRY_OTHER_ROUTE,
+				    NULL, fail, "First peer not ready");
 	}
 
 	/* Copy channels used along the route. */
@@ -760,44 +804,42 @@ static struct command_result *json_sendpay(struct command *cmd,
 	struct sha256 *rhash;
 	struct route_hop *route;
 	struct amount_msat *msat;
-	const char *b11str, *label;
+	const char *b11str, *label = NULL;
 	struct command_result *res;
 
-	/* If by array, or 'check' command, use 'label' as param name */
-	if (!params || params->type == JSMN_ARRAY) {
+	/* For generating help, give new-style. */
+	if (!params || !deprecated_apis) {
 		if (!param(cmd, buffer, params,
 			   p_req("route", param_array, &routetok),
 			   p_req("payment_hash", param_sha256, &rhash),
 			   p_opt("label", param_escaped_string, &label),
+			   p_opt("msatoshi", param_msat, &msat),
+			   p_opt("bolt11", param_string, &b11str),
+			   NULL))
+			return command_param_failed();
+	} else if (params->type == JSMN_ARRAY) {
+		if (!param(cmd, buffer, params,
+			   p_req("route", param_array, &routetok),
+			   p_req("payment_hash", param_sha256, &rhash),
+			   p_opt("label_or_description", param_escaped_string, &label),
 			   p_opt("msatoshi", param_msat, &msat),
 			   p_opt("bolt11", param_string, &b11str),
 			   NULL))
 			return command_param_failed();
 	} else {
-		const char *description_deprecated;
-
-		/* If by keyword, treat description and label as
-		 * separate parameters. */
+		const char *desc = NULL;
 		if (!param(cmd, buffer, params,
 			   p_req("route", param_array, &routetok),
 			   p_req("payment_hash", param_sha256, &rhash),
 			   p_opt("label", param_escaped_string, &label),
-			   p_opt("description", param_escaped_string,
-				 &description_deprecated),
+			   p_opt("description", param_escaped_string, &desc),
 			   p_opt("msatoshi", param_msat, &msat),
 			   p_opt("bolt11", param_string, &b11str),
 			   NULL))
 			return command_param_failed();
 
-		if (description_deprecated) {
-			if (!deprecated_apis)
-				return command_fail(cmd, JSONRPC2_INVALID_PARAMS,
-						    "Deprecated parameter description, use label");
-			if (label)
-				return command_fail(cmd, JSONRPC2_INVALID_PARAMS,
-						    "Cannot specify both description and label");
-			label = description_deprecated;
-		}
+		if (!label && desc)
+			label = desc;
 	}
 
 	if (routetok->size == 0)
@@ -984,15 +1026,6 @@ static struct command_result *json_listsendpays(struct command *cmd,
 
 	return command_success(cmd, response);
 }
-
-static const struct json_command listpayments_command = {
-	"listpayments",
-	"payment",
-	json_listsendpays,
-	"Show outgoing payments",
-	true /* deprecated, use new name */
-};
-AUTODATA(json_command, &listpayments_command);
 
 static const struct json_command listsendpays_command = {
 	"listsendpays",

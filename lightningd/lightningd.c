@@ -76,6 +76,8 @@
 #include <lightningd/options.h>
 #include <onchaind/onchain_wire.h>
 #include <signal.h>
+#include <sodium.h>
+#include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -118,6 +120,8 @@ static struct lightningd *new_lightningd(const tal_t *ctx)
 	ld->dev_subdaemon_fail = false;
 	ld->dev_allow_localhost = false;
 	ld->dev_gossip_time = 0;
+	ld->dev_fast_gossip = false;
+	ld->dev_fast_gossip_prune = false;
 	ld->dev_force_privkey = NULL;
 	ld->dev_force_bip32_seed = NULL;
 	ld->dev_force_channel_secrets = NULL;
@@ -141,7 +145,7 @@ static struct lightningd *new_lightningd(const tal_t *ctx)
 	list_head_init(&ld->peers);
 
 	/*~ These are hash tables of incoming and outgoing HTLCs (contracts),
-	 * defined as `struct htlc_in` and `struct htlc_out`in htlc_end.h.
+	 * defined as `struct htlc_in` and `struct htlc_out` in htlc_end.h.
 	 * The hash tables are declared there using the very ugly
 	 * HTABLE_DEFINE_TYPE macro.  The key is the channel the HTLC is in
 	 * and the 64-bit htlc-id which is unique for that channel and
@@ -220,16 +224,21 @@ static struct lightningd *new_lightningd(const tal_t *ctx)
 	ld->original_directory = path_cwd(ld);
 
 	/*~ We run a number of plugins (subprocesses that we talk JSON-RPC with)
-	 *alongside this process. This allows us to have an easy way for users
-	 *to add their own tools without having to modify the c-lightning source
-	 *code. Here we initialize the context that will keep track and control
-	 *the plugins.
+	 * alongside this process. This allows us to have an easy way for users
+	 * to add their own tools without having to modify the c-lightning source
+	 * code. Here we initialize the context that will keep track and control
+	 * the plugins.
 	 */
 	ld->plugins = plugins_new(ld, ld->log_book, ld);
 	ld->plugins->startup = true;
 
 	/*~ This is set when a JSON RPC command comes in to shut us down. */
 	ld->stop_conn = NULL;
+
+	/*~ This is used to signal that `hsm_secret` is encrypted, and will
+	 * be set to `true` if the `--encrypted` option is passed at startup.
+	 */
+	ld->encrypted_hsm = false;
 
 	return ld;
 }
@@ -543,9 +552,8 @@ static void pidfile_create(const struct lightningd *ld)
 	int pid_fd;
 	char *pid;
 
-	/* Create PID file: relative to .config dir unless absolute. */
-	pid_fd = open(path_join(tmpctx, ld->config_dir, ld->pidfile),
-		      O_WRONLY|O_CREAT, 0640);
+	/* Create PID file: relative to .config dir. */
+	pid_fd = open(ld->pidfile, O_WRONLY|O_CREAT, 0640);
 	if (pid_fd < 0)
 		err(1, "Failed to open PID file");
 
@@ -572,11 +580,7 @@ static void pidfile_create(const struct lightningd *ld)
  * extra sanity checks, and it's also a good point to free the tmpctx. */
 static int io_poll_lightningd(struct pollfd *fds, nfds_t nfds, int timeout)
 {
-	/*~ In particular, we should *not* have left a database transaction
-	 * open! */
-	db_assert_no_outstanding_statements();
-
-	/* The other checks and freeing tmpctx are common to all daemons. */
+	/* These checks and freeing tmpctx are common to all daemons. */
 	return daemon_poll(fds, nfds, timeout);
 }
 
@@ -590,6 +594,7 @@ void notify_new_block(struct lightningd *ld, u32 block_height)
 	/* Inform our subcomponents individually. */
 	htlcs_notify_new_block(ld, block_height);
 	channel_notify_new_block(ld, block_height);
+	gossip_notify_new_block(ld, block_height);
 }
 
 static void on_sigint(int _ UNUSED)
@@ -632,6 +637,12 @@ int main(int argc, char *argv[])
 	int stop_fd;
 	struct timers *timers;
 	const char *stop_response;
+	struct htlc_in_map *unprocessed_htlcs;
+	struct rlimit nofile = {1024, 1024};
+
+	/*~ Make sure that we limit ourselves to something reasonable. Modesty
+	 *  is a virtue. */
+	setrlimit(RLIMIT_NOFILE, &nofile);
 
 	/*~ What happens in strange locales should stay there. */
 	setup_locale();
@@ -659,6 +670,10 @@ int main(int argc, char *argv[])
 	 * valgrind will warn us if we make decisions based on uninitialized
 	 * variables. */
 	ld = new_lightningd(NULL);
+
+	/*~ The global chainparams is needed to init subdaemons, and defaults
+	 * to testnet. */
+	chainparams = chainparams_for_network("testnet");
 
 	/* Figure out where our daemons are first. */
 	ld->daemon_dir = find_daemon_dir(ld, argv[0]);
@@ -705,6 +720,11 @@ int main(int argc, char *argv[])
 	 * doesn't really make sense, but we can't call it the Badly-named
 	 * Daemon Software Module. */
 	hsm_init(ld);
+
+	/*~ If hsm_secret is encrypted, we don't need its encryption key
+	 * anymore. Note that sodium_munlock() also zeroes the memory.*/
+	if (ld->config.keypass)
+		sodium_munlock(ld->config.keypass->data, sizeof(ld->config.keypass->data));
 
 	/*~ Our default color and alias are derived from our node id, so we
 	 * can only set those now (if not set by config options). */
@@ -769,7 +789,7 @@ int main(int argc, char *argv[])
 	 *  topology is initialized since some decisions rely on being able to
 	 *  know the blockheight. */
 	db_begin_transaction(ld->wallet->db);
-	load_channels_from_wallet(ld);
+	unprocessed_htlcs = load_channels_from_wallet(ld);
 	db_commit_transaction(ld->wallet->db);
 
 	/*~ Create RPC socket: now lightning-cli can send us JSON RPC commands
@@ -779,6 +799,11 @@ int main(int argc, char *argv[])
 	/*~ Now that the rpc path exists, we can start the plugins and they
 	 * can start talking to us. */
 	plugins_config(ld->plugins);
+
+	/*~ Process any HTLCs we were in the middle of when we exited, now
+	 * that plugins (who might want to know via htlc_accepted hook) are
+	 * active. */
+	htlcs_resubmit(ld, unprocessed_htlcs);
 
 	/*~ Activate connect daemon.  Needs to be after the initialization of
 	 * chaintopology, otherwise peers may connect and ask for

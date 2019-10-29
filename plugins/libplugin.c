@@ -1,3 +1,4 @@
+#include <bitcoin/chainparams.h>
 #include <ccan/err/err.h>
 #include <ccan/intmap/intmap.h>
 #include <ccan/json_out/json_out.h>
@@ -33,6 +34,8 @@ static struct timers timers;
 static size_t in_timer;
 
 bool deprecated_apis;
+
+const struct chainparams *chainparams;
 
 struct plugin_timer {
 	struct timer timer;
@@ -261,6 +264,13 @@ struct command_result *command_done_err(struct command *cmd,
 
 	finish_and_send_json(STDOUT_FILENO, jout);
 	return end_cmd(cmd);
+}
+
+struct command_result *command_err_raw(struct command *cmd,
+				       const char *json_str)
+{
+	return command_done_raw(cmd, "error",
+				json_str, strlen(json_str));
 }
 
 struct command_result *timer_complete(void)
@@ -516,10 +526,10 @@ static struct command_result *handle_init(struct command *init_cmd,
 					  void (*init)(struct plugin_conn *,
 						       const char *buf, const jsmntok_t *))
 {
-	const jsmntok_t *configtok, *rpctok, *dirtok, *opttok, *t;
+	const jsmntok_t *configtok, *rpctok, *dirtok, *opttok, *nettok, *t;
 	struct sockaddr_un addr;
 	size_t i;
-	char *dir;
+	char *dir, *network;
 	struct json_out *param_obj;
 
 	configtok = json_delve(buf, params, ".configuration");
@@ -529,6 +539,10 @@ static struct command_result *handle_init(struct command *init_cmd,
 	dir = json_strdup(tmpctx, buf, dirtok);
 	if (chdir(dir) != 0)
 		plugin_err("chdir to %s: %s", dir, strerror(errno));
+
+	nettok = json_delve(buf, configtok, ".network");
+	network = json_strdup(tmpctx, buf, nettok);
+	chainparams = chainparams_for_network(network);
 
 	rpctok = json_delve(buf, configtok, ".rpc-file");
 	rpc_conn.fd = socket(AF_UNIX, SOCK_STREAM, 0);
@@ -629,7 +643,7 @@ static void setup_command_usage(const struct plugin_command *commands,
 
 		usage_cmd->methodname = commands[i].name;
 		res = commands[i].handle(usage_cmd, NULL, NULL);
-		assert(res == NULL);
+		assert(res == &complete);
 		assert(strmap_get(&usagemap, commands[i].name));
 	}
 }

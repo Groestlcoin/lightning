@@ -124,7 +124,8 @@ static void fail_in_htlc(struct htlc_in *hin,
 	else
 		failed_htlc.scid = NULL;
 	subd_send_msg(hin->key.channel->owner,
-		      take(towire_channel_fail_htlc(NULL, &failed_htlc)));
+		      take(towire_channel_fail_htlc(NULL, &failed_htlc,
+						    get_block_height(hin->key.channel->owner->ld->topology))));
 }
 
 /* This is used for cases where we can immediately fail the HTLC. */
@@ -309,7 +310,7 @@ static void handle_localpay(struct htlc_in *hin,
 	 *
 	 *   - if the `cltv_expiry` value is unreasonably near the present:
 	 *     - MUST fail the HTLC.
-	 *     - MUST return a `final_expiry_too_soon` error.
+	 *     - MUST return an `incorrect_or_unknown_payment_details` error.
 	 */
 	if (get_block_height(ld->topology) + ld->config.cltv_final
 	    > cltv_expiry) {
@@ -318,7 +319,7 @@ static void handle_localpay(struct htlc_in *hin,
 			  cltv_expiry,
 			  get_block_height(ld->topology),
 			  ld->config.cltv_final);
-		failcode = WIRE_FINAL_EXPIRY_TOO_SOON;
+		failcode = WIRE_INCORRECT_OR_UNKNOWN_PAYMENT_DETAILS;
 		goto fail;
 	}
 
@@ -522,6 +523,13 @@ static void forward_htlc(struct htlc_in *hin,
 	if (!check_cltv(hin, cltv_expiry, outgoing_cltv_value,
 			ld->config.cltv_expiry_delta)) {
 		failcode = WIRE_INCORRECT_CLTV_EXPIRY;
+		goto fail;
+	}
+
+	if (amount_msat_greater(amt_to_forward,
+				get_chainparams(ld)->max_payment)) {
+		/* ENOWUMBO! */
+		failcode = WIRE_REQUIRED_CHANNEL_FEATURE_MISSING;
 		goto fail;
 	}
 
@@ -1335,8 +1343,10 @@ void peer_sending_commitsig(struct channel *channel, const u8 *msg)
 		channel->next_htlc_id += num_local_added;
 	}
 
-	/* Update their feerate. */
-	channel->channel_info.feerate_per_kw[REMOTE] = feerate;
+	/* Update remote feerate if we are funder. */
+	if (channel->funder == LOCAL)
+		channel->channel_info.feerate_per_kw[REMOTE] = feerate;
+
 	if (feerate > channel->max_possible_feerate)
 		channel->max_possible_feerate = feerate;
 	if (feerate < channel->min_possible_feerate)
@@ -1384,7 +1394,7 @@ static bool channel_added_their_htlc(struct channel *channel,
 
 	/* FIXME: Our wire generator can't handle optional elems in arrays,
 	 * so we translate all-zero-shared-secret to NULL. */
-	if (memeqzero(shared_secret, sizeof(&shared_secret)))
+	if (memeqzero(shared_secret, sizeof(*shared_secret)))
 		shared_secret = NULL;
 
 	/* This stays around even if we fail it immediately: it *is*
@@ -1538,12 +1548,13 @@ void peer_got_commitsig(struct channel *channel, const u8 *msg)
 		}
 	}
 
-	/* Update both feerates: if we're funder, REMOTE should already be
-	 * that feerate, if we're not, we're about to ACK anyway. */
-	channel->channel_info.feerate_per_kw[LOCAL]
-		= channel->channel_info.feerate_per_kw[REMOTE]
-		= feerate;
-
+	/* Update both feerates if we're not funder (for funder, receiving
+	 * commitment_signed doesn't alter fees). */
+	if (channel->funder == REMOTE) {
+		channel->channel_info.feerate_per_kw[LOCAL]
+			= channel->channel_info.feerate_per_kw[REMOTE]
+			= feerate;
+	}
 	if (feerate > channel->max_possible_feerate)
 		channel->max_possible_feerate = feerate;
 	if (feerate < channel->min_possible_feerate)
@@ -1650,9 +1661,10 @@ void peer_got_revoke(struct channel *channel, const u8 *msg)
 		return;
 	}
 
-	/* Update feerate: if we are funder, their revoke_and_ack has set
+	/* Update feerate if we are funder, their revoke_and_ack has set
 	 * this for local feerate. */
-	channel->channel_info.feerate_per_kw[LOCAL] = feerate;
+	if (channel->funder == LOCAL)
+		channel->channel_info.feerate_per_kw[LOCAL] = feerate;
 
 	/* FIXME: Check per_commitment_secret -> per_commit_point */
 	update_per_commit_point(channel, &next_per_commitment_point);
@@ -2017,17 +2029,18 @@ static void fixup_hout(struct lightningd *ld, struct htlc_out *hout)
  * For each outgoing HTLC find the incoming HTLC that triggered it. If
  * we are the origin of the transfer then we cannot resolve the
  * incoming HTLC in which case we just leave it `NULL`.
+ *
+ * Returns a map of any htlcs we need to retry.
  */
-void htlcs_reconnect(struct lightningd *ld,
-		     struct htlc_in_map *htlcs_in,
-		     struct htlc_out_map *htlcs_out)
+struct htlc_in_map *htlcs_reconnect(struct lightningd *ld,
+				    struct htlc_in_map *htlcs_in,
+				    struct htlc_out_map *htlcs_out)
 {
 	struct htlc_in_map_iter ini;
 	struct htlc_out_map_iter outi;
 	struct htlc_in *hin;
 	struct htlc_out *hout;
-	struct htlc_in_map unprocessed;
-	enum onion_type failcode COMPILER_WANTS_INIT("gcc7.4.0 bad, 8.3 OK");
+	struct htlc_in_map *unprocessed = tal(NULL, struct htlc_in_map);
 
 	/* Any HTLCs which happened to be incoming and weren't forwarded before
 	 * we shutdown/crashed: fail them now.
@@ -2035,11 +2048,11 @@ void htlcs_reconnect(struct lightningd *ld,
 	 * Note that since we do local processing synchronously, so this never
 	 * captures local payments.  But if it did, it would be a tiny corner
 	 * case. */
-	htlc_in_map_init(&unprocessed);
+	htlc_in_map_init(unprocessed);
 	for (hin = htlc_in_map_first(htlcs_in, &ini); hin;
 	     hin = htlc_in_map_next(htlcs_in, &ini)) {
 		if (hin->hstate == RCVD_ADD_ACK_REVOCATION)
-			htlc_in_map_add(&unprocessed, hin);
+			htlc_in_map_add(unprocessed, hin);
 	}
 
 	for (hout = htlc_out_map_first(htlcs_out, &outi); hout;
@@ -2080,12 +2093,22 @@ void htlcs_reconnect(struct lightningd *ld,
 #endif
 
 		if (hout->in)
-			htlc_in_map_del(&unprocessed, hout->in);
+			htlc_in_map_del(unprocessed, hout->in);
 	}
 
+	return unprocessed;
+}
+
+void htlcs_resubmit(struct lightningd *ld, struct htlc_in_map *unprocessed)
+{
+	struct htlc_in *hin;
+	struct htlc_in_map_iter ini;
+	enum onion_type failcode COMPILER_WANTS_INIT("gcc7.4.0 bad, 8.3 OK");
+
 	/* Now fail any which were stuck. */
-	for (hin = htlc_in_map_first(&unprocessed, &ini); hin;
-	     hin = htlc_in_map_next(&unprocessed, &ini)) {
+	for (hin = htlc_in_map_first(unprocessed, &ini);
+	     hin;
+	     hin = htlc_in_map_next(unprocessed, &ini)) {
 		log_unusual(hin->key.channel->log,
 			    "Replaying old unprocessed HTLC #%"PRIu64,
 			    hin->key.id);
@@ -2101,9 +2124,9 @@ void htlcs_reconnect(struct lightningd *ld,
 	}
 
 	/* Don't leak memory! */
-	htlc_in_map_clear(&unprocessed);
+	htlc_in_map_clear(unprocessed);
+	tal_free(unprocessed);
 }
-
 
 #if DEVELOPER
 static struct command_result *json_dev_ignore_htlcs(struct command *cmd,
