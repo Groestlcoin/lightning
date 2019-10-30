@@ -91,7 +91,7 @@ RUN mkdir $LIGHTNINGD_DATA && \
 
 VOLUME [ "/root/.lightning" ]
 COPY --from=builder /tmp/lightning_install/ /usr/local/
-COPY --from=builder /opt/groestlcoin/bin /usr/bin
+COPY --from=downloader /opt/groestlcoin/bin /usr/bin
 COPY tools/docker-entrypoint.sh entrypoint.sh
 
 EXPOSE 9735 9835
