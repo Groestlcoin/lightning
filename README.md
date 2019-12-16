@@ -21,7 +21,7 @@ c-lightning is a lighweight, highly customizable and [standard compliant][std] i
 [![Irc][IRC]][IRC-link]
 [![Documentation Status](https://readthedocs.org/projects/lightning/badge/?version=docs)][docs]
 
-This implementation has been in production use on the Bitcoin mainnet since early 2018, with the launch of the [Blockstream Store][blockstream-store-blog].
+This implementation has been in production use on the Groestlcoin mainnet since early 2018.
 We recommend getting started by experimenting on `testnet` (or `regtest`), but the implementation is considered stable and can be safely used on mainnet.
 
 Any help testing the implementation, reporting bugs, or helping with outstanding issues is very welcome.
@@ -78,7 +78,7 @@ will offer specific information on that command.
 
 Useful commands:
 
-* [newaddr](doc/lightning-newaddr.7.md): get a bitcoin address to deposit funds into your lightning node.
+* [newaddr](doc/lightning-newaddr.7.md): get a groestlcoin address to deposit funds into your lightning node.
 * [listfunds](doc/lightning-listfunds.7.md): see where your funds are.
 * [connect](doc/lightning-connect.7.md): connect to another lightning node.
 * [fundchannel](doc/lightning-fundchannel.7.md): create a channel to another connected node.
@@ -92,7 +92,7 @@ Once you've started for the first time, there's a script called
 `contrib/bootstrap-node.sh` which will connect you to other nodes on
 the lightning network.
 
-You can encrypt the BIP32 root seed (what is stored in `hsm_secret`) by passing the `--encrypted-hsm` startup argument. You can start `lightningd` with `--encrypted-hsm` on an already existing `lightning-dir` (with a not encrypted `hsm_secret`). If you pass that option, you __will not__ be able to start `lightningd` (with the same wallet) again without the password, so please beware with your password management. Also beware of not feeling too safe with an encrypted `hsm_secret`: unlike for `bitcoind` where the wallet encryption can restrict the usage of some RPC command, `lightningd` always need to access keys from the wallet which is thus __not locked__ (yet), even with an encrypted BIP32 master seed.
+You can encrypt the BIP32 root seed (what is stored in `hsm_secret`) by passing the `--encrypted-hsm` startup argument. You can start `lightningd` with `--encrypted-hsm` on an already existing `lightning-dir` (with a not encrypted `hsm_secret`). If you pass that option, you __will not__ be able to start `lightningd` (with the same wallet) again without the password, so please beware with your password management. Also beware of not feeling too safe with an encrypted `hsm_secret`: unlike for `groestlcoind` where the wallet encryption can restrict the usage of some RPC command, `lightningd` always need to access keys from the wallet which is thus __not locked__ (yet), even with an encrypted BIP32 master seed.
 
 There are also numerous plugins available for c-lightning which add
 capabilities: in particular there's a collection at:
@@ -118,7 +118,6 @@ lightning-cli newaddr
 
 Confirm `lightningd` got funds by:
 
-```bash
 # Returns an array of on-chain funds.
 lightning-cli listfunds
 ```
@@ -173,11 +172,11 @@ To use a configuration file, create a file named `config` within your lightning 
 
 ### Pruning
 
-c-lightning requires JSON-RPC access to a fully synchronized `bitcoind` in order to synchronize with the Bitcoin network.
-Access to ZeroMQ is not required and `bitcoind` does not need to be run with `txindex` like other implementations.
-The lightning daemon will poll `bitcoind` for new blocks that it hasn't processed yet, thus synchronizing itself with `bitcoind`.
-If `bitcoind` prunes a block that c-lightning has not processed yet, e.g., c-lightning was not running for a prolonged period, then `bitcoind` will not be able to serve the missing blocks, hence c-lightning will not be able to synchronize anymore and will be stuck.
-In order to avoid this situation you should be monitoring the gap between c-lightning's blockheight using `lightning-cli getinfo` and `bitcoind`'s blockheight using `bitcoin-cli getblockchaininfo`.
+c-lightning requires JSON-RPC access to a fully synchronized `groestlcoind` in order to synchronize with the Groestlcoin network.
+Access to ZeroMQ is not required and `groestlcoind` does not need to be run with `txindex` like other implementations.
+The lightning daemon will poll `groestlcoind` for new blocks that it hasn't processed yet, thus synchronizing itself with `groestlcoind`.
+If `groestlcoind` prunes a block that c-lightning has not processed yet, e.g., c-lightning was not running for a prolonged period, then `groestlcoind` will not be able to serve the missing blocks, hence c-lightning will not be able to synchronize anymore and will be stuck.
+In order to avoid this situation you should be monitoring the gap between c-lightning's blockheight using `lightning-cli getinfo` and `groestlcoind`'s blockheight using `groestlcoin-cli getblockchaininfo`.
 If the two blockheights drift apart it might be necessary to intervene.
 
 ### Developers
