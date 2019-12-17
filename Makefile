@@ -15,7 +15,7 @@ CCANDIR := ccan
 
 # Where we keep the BOLT RFCs
 BOLTDIR := ../lightning-rfc/
-BOLTVERSION := 2afe3559e89520ba28b24ff5739491313217ae13
+BOLTVERSION := 35f6376f2050191081b148fb540f604092be59e1
 
 -include config.vars
 
@@ -47,7 +47,7 @@ endif
 
 ifeq ($(COMPAT),1)
 # We support compatibility with pre-0.6.
-COMPAT_CFLAGS=-DCOMPAT_V052=1 -DCOMPAT_V060=1 -DCOMPAT_V061=1 -DCOMPAT_V062=1 -DCOMPAT_V070=1
+COMPAT_CFLAGS=-DCOMPAT_V052=1 -DCOMPAT_V060=1 -DCOMPAT_V061=1 -DCOMPAT_V062=1 -DCOMPAT_V070=1 -DCOMPAT_V073=1
 endif
 
 # Timeout shortly before the 600 second travis silence timeout
@@ -263,7 +263,7 @@ ifeq ($(PYTEST),)
 	exit 1
 else
 # Explicitly hand DEVELOPER and VALGRIND so you can override on make cmd line.
-	PYTHONPATH=`pwd`/contrib/pylightning:$$PYTHONPATH TEST_DEBUG=1 DEVELOPER=$(DEVELOPER) VALGRIND=$(VALGRIND) $(PYTEST) tests/ $(PYTEST_OPTS)
+	PYTHONPATH=`pwd`/contrib/pyln-client:`pwd`/contrib/pyln-testing:`pwd`/contrib/pylightning:$$PYTHONPATH TEST_DEBUG=1 DEVELOPER=$(DEVELOPER) VALGRIND=$(VALGRIND) $(PYTEST) tests/ $(PYTEST_OPTS)
 endif
 
 # Keep includes in alpha order.
@@ -316,7 +316,7 @@ check-python:
 	@# W503: line break before binary operator
 	@flake8 --ignore=E501,E731,W503 --exclude=contrib/pylightning/lightning/__init__.py ${PYSRC}
 
-	PYTHONPATH=contrib/pylightning:$$PYTHONPATH $(PYTEST) contrib/pylightning/
+	PYTHONPATH=contrib/pyln-client:$$PYTHONPATH $(PYTEST) contrib/pyln-client/
 
 check-includes:
 	@tools/check-includes.sh

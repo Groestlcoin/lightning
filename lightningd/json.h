@@ -26,17 +26,13 @@ struct json_escape;
 struct json_stream;
 struct pubkey;
 struct node_id;
-struct route_hop;
 struct sha256;
+struct preimage;
 struct short_channel_id;
 struct wallet_payment;
 struct wallet_tx;
 struct wireaddr;
 struct wireaddr_internal;
-
-/* Output a route array. */
-void json_add_route(struct json_stream *r, char const *n,
-		    const struct route_hop *hops, size_t hops_len);
 
 /* '"fieldname" : "0289abcdef..."' or "0289abcdef..." if fieldname is NULL */
 void json_add_pubkey(struct json_stream *response,
@@ -211,10 +207,17 @@ void json_add_time(struct json_stream *result, const char *fieldname,
 void json_add_sha256(struct json_stream *result, const char *fieldname,
 		     const struct sha256 *hash);
 
+void json_add_preimage(struct json_stream *result, const char *fieldname,
+		     const struct preimage *preimage);
+
 struct command_result *param_bitcoin_address(struct command *cmd,
 					     const char *name,
 					     const char *buffer,
 					     const jsmntok_t *tok,
 					     const u8 **scriptpubkey);
+
+/* Add any json token */
+void json_add_tok(struct json_stream *result, const char *fieldname,
+                  const jsmntok_t *tok, const char *buffer);
 
 #endif /* LIGHTNING_LIGHTNINGD_JSON_H */

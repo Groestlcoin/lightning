@@ -353,6 +353,7 @@ void peer_start_channeld(struct channel *channel,
 	channel_set_owner(channel,
 			  new_channel_subd(ld,
 					   "lightning_channeld", channel,
+					   &channel->peer->id,
 					   channel->log, true,
 					   channel_wire_type_name,
 					   channel_msg,
@@ -428,7 +429,7 @@ void peer_start_channeld(struct channel *channel,
 				      channel->minimum_depth,
 				      &channel->our_config,
 				      &channel->channel_info.their_config,
-				      channel->channel_info.feerate_per_kw,
+				      channel->channel_info.fee_states,
 				      feerate_min(ld, NULL),
 				      feerate_max(ld, NULL),
 				      &channel->last_sig,
@@ -539,7 +540,7 @@ is_fundee_should_forget(struct lightningd *ld,
 	 *
 	 * A non-funding node (fundee):
 	 *   - SHOULD forget the channel if it does not see the
-	 * funding transaction after a reasonable timeout.
+	 * correct funding transaction after a reasonable timeout.
 	 */
 
 	/* Only applies if we are fundee. */

@@ -39,11 +39,14 @@
 #include <lightningd/log.h>
 #include <lightningd/memdump.h>
 #include <lightningd/options.h>
+#include <lightningd/plugin_hook.h>
 #include <stdio.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/un.h>
+#include <wallet/db.h>
+
 
 /* Dummy structure. */
 struct command_result {
@@ -102,7 +105,6 @@ struct json_connection {
 struct jsonrpc {
 	struct io_listener *rpc_listener;
 	struct json_command **commands;
-	struct log *log;
 
 	/* Map from json command names to usage strings: we don't put this inside
 	 * struct json_command as it's good practice to have those const. */
@@ -528,7 +530,7 @@ void json_stream_log_suppress_for_cmd(struct json_stream *js,
 {
 	const char *nm = cmd->json_cmd->name;
 	const char *s = tal_fmt(tmpctx, "Suppressing logging of %s command", nm);
-	log_io(cmd->jcon->log, LOG_IO_OUT, s, NULL, 0);
+	log_io(cmd->jcon->log, LOG_IO_OUT, NULL, s, NULL, 0);
 	json_stream_log_suppress(js, strdup(nm));
 
 }
@@ -575,6 +577,165 @@ struct json_stream *json_stream_fail(struct command *cmd,
 	return r;
 }
 
+static struct command_result *command_exec(struct json_connection *jcon,
+                                           struct command *cmd,
+                                           const char *buffer,
+                                           const jsmntok_t *request,
+                                           const jsmntok_t *params)
+{
+	struct command_result *res;
+
+	res = cmd->json_cmd->dispatch(cmd, buffer, request, params);
+
+	assert(res == &param_failed
+	       || res == &complete
+	       || res == &pending
+	       || res == &unknown);
+
+	/* If they didn't complete it, they must call command_still_pending.
+	 * If they completed it, it's freed already. */
+	if (res == &pending)
+		assert(cmd->pending);
+
+	list_for_each(&jcon->commands, cmd, list)
+		assert(cmd->pending);
+
+	return res;
+}
+
+/* A plugin hook to take over (fail/alter) RPC commands */
+struct rpc_command_hook_payload {
+	struct command *cmd;
+	const char *buffer;
+	const jsmntok_t *request;
+};
+
+static void rpc_command_hook_serialize(struct rpc_command_hook_payload *p,
+                                       struct json_stream *s)
+{
+	json_object_start(s, "rpc_command");
+	json_add_tok(s, "rpc_command", p->request, p->buffer);
+	json_object_end(s);
+}
+
+static void replace_command(struct rpc_command_hook_payload *p,
+			    const char *buffer,
+			    const jsmntok_t *replacetok)
+{
+	const jsmntok_t *method = NULL, *params = NULL;
+	const char *bad;
+
+	/* Must contain "method", "params" and "id" */
+	if (replacetok->type != JSMN_OBJECT) {
+		bad = "'replace' must be an object";
+		goto fail;
+	}
+
+	method = json_get_member(buffer, replacetok, "method");
+	if (!method) {
+		bad = "missing 'method'";
+		goto fail;
+	}
+	params = json_get_member(buffer, replacetok, "params");
+	if (!params) {
+		bad = "missing 'params'";
+		goto fail;
+	}
+	if (!json_get_member(buffer, replacetok, "id")) {
+		bad = "missing 'id'";
+		goto fail;
+	}
+
+	p->cmd->json_cmd = find_cmd(p->cmd->ld->jsonrpc, buffer, method);
+	if (!p->cmd->json_cmd) {
+		bad = tal_fmt(tmpctx, "redirected to unknown method '%.*s'",
+			      method->end - method->start,
+			      buffer + method->start);
+		goto fail;
+	}
+
+	was_pending(command_exec(p->cmd->jcon, p->cmd, buffer, replacetok,
+				 params));
+	return;
+
+fail:
+	was_pending(command_fail(p->cmd, JSONRPC2_INVALID_REQUEST,
+				 "Bad response to 'rpc_command' hook: %s", bad));
+}
+
+static void
+rpc_command_hook_callback(struct rpc_command_hook_payload *p,
+                          const char *buffer, const jsmntok_t *resulttok)
+{
+	const jsmntok_t *tok, *params, *custom_return, *tok_continue;
+	struct json_stream *response;
+	bool exec;
+
+	params = json_get_member(p->buffer, p->request, "params");
+
+	/* If no plugin registered, just continue command execution. Same if
+	 * the registered plugin tells us to do so. */
+	if (buffer == NULL)
+	    return was_pending(command_exec(p->cmd->jcon, p->cmd, p->buffer,
+		                                p->request, params));
+	else {
+		tok_continue = json_get_member(buffer, resulttok, "continue");
+		if (tok_continue && json_to_bool(buffer, tok_continue, &exec) && exec)
+			return was_pending(command_exec(p->cmd->jcon, p->cmd, p->buffer,
+			                                p->request, params));
+	}
+
+	/* If the registered plugin did not respond with continue,
+	 * it wants either to replace the request... */
+	tok = json_get_member(buffer, resulttok, "replace");
+	if (tok)
+		return replace_command(p, buffer, tok);
+
+	/* ...or return a custom JSONRPC response. */
+	tok = json_get_member(buffer, resulttok, "return");
+	if (tok) {
+		custom_return = json_get_member(buffer, tok, "result");
+		if (custom_return) {
+			response = json_start(p->cmd);
+			json_add_tok(response, "result", custom_return, buffer);
+			json_object_compat_end(response);
+			return was_pending(command_raw_complete(p->cmd, response));
+		}
+
+		custom_return = json_get_member(buffer, tok, "error");
+		if (custom_return) {
+			int code;
+			const char *errmsg;
+			if (!json_to_int(buffer, json_get_member(buffer, custom_return, "code"),
+			                 &code))
+				return was_pending(command_fail(p->cmd, JSONRPC2_INVALID_REQUEST,
+				                                "Bad response to 'rpc_command' hook: "
+				                                "'error' object does not contain a code."));
+			errmsg = json_strdup(tmpctx, buffer,
+			                     json_get_member(buffer, custom_return, "message"));
+			if (!errmsg)
+				return was_pending(command_fail(p->cmd, JSONRPC2_INVALID_REQUEST,
+				                                "Bad response to 'rpc_command' hook: "
+				                                "'error' object does not contain a message."));
+			response = json_stream_fail_nodata(p->cmd, code, errmsg);
+			return was_pending(command_failed(p->cmd, response));
+		}
+	}
+
+	was_pending(command_fail(p->cmd, JSONRPC2_INVALID_REQUEST,
+	                         "Bad response to 'rpc_command' hook."));
+}
+
+REGISTER_PLUGIN_HOOK(rpc_command, rpc_command_hook_callback,
+                     struct rpc_command_hook_payload *,
+                     rpc_command_hook_serialize,
+                     struct rpc_command_hook_payload *);
+
+static void call_rpc_command_hook(struct rpc_command_hook_payload *p)
+{
+	plugin_hook_call_rpc_command(p->cmd->ld, p, p);
+}
+
 /* We return struct command_result so command_fail return value has a natural
  * sink; we don't actually use the result. */
 static struct command_result *
@@ -582,7 +743,7 @@ parse_request(struct json_connection *jcon, const jsmntok_t tok[])
 {
 	const jsmntok_t *method, *id, *params;
 	struct command *c;
-	struct command_result *res;
+	struct rpc_command_hook_payload *rpc_hook;
 
 	if (tok[0].type != JSMN_OBJECT) {
 		json_command_malformed(jcon, "null",
@@ -641,22 +802,18 @@ parse_request(struct json_connection *jcon, const jsmntok_t tok[])
 				    jcon->buffer + method->start);
 	}
 
-	db_begin_transaction(jcon->ld->wallet->db);
-	res = c->json_cmd->dispatch(c, jcon->buffer, tok, params);
-	db_commit_transaction(jcon->ld->wallet->db);
+	rpc_hook = tal(c, struct rpc_command_hook_payload);
+	rpc_hook->cmd = c;
+	/* Duplicate since we might outlive the connection */
+	rpc_hook->buffer = tal_dup_arr(rpc_hook, char, jcon->buffer,
+	                               tal_count(jcon->buffer), 0);
+	rpc_hook->request = tal_dup_arr(rpc_hook, const jsmntok_t, tok,
+	                                tal_count(tok), 0);
+	/* Prevent a race between was_pending and still_pending */
+	new_reltimer(c->ld->timers, rpc_hook, time_from_msec(1),
+	             call_rpc_command_hook, rpc_hook);
 
-	assert(res == &param_failed
-	       || res == &complete
-	       || res == &pending
-	       || res == &unknown);
-
-	/* If they didn't complete it, they must call command_still_pending.
-	 * If they completed it, it's freed already. */
-	if (res == &pending)
-		assert(c->pending);
-	list_for_each(&jcon->commands, c, list)
-		assert(c->pending);
-	return res;
+	return command_still_pending(c);
 }
 
 /* Mutual recursion */
@@ -705,7 +862,7 @@ static struct io_plan *read_json(struct io_conn *conn,
 	bool valid;
 
 	if (jcon->len_read)
-		log_io(jcon->log, LOG_IO_IN, "",
+		log_io(jcon->log, LOG_IO_IN, NULL, "",
 		       jcon->buffer + jcon->used, jcon->len_read);
 
 	/* Resize larger if we're full. */
@@ -780,8 +937,8 @@ static struct io_plan *jcon_connected(struct io_conn *conn,
 	list_head_init(&jcon->commands);
 
 	/* We want to log on destruction, so we free this in destructor. */
-	jcon->log = new_log(ld->log_book, ld->log_book, "%sjcon fd %i:",
-			    log_prefix(ld->log), io_conn_fd(conn));
+	jcon->log = new_log(ld->log_book, ld->log_book, NULL, "jsonrpc#%i",
+			    io_conn_fd(conn));
 
 	tal_add_destructor(jcon, destroy_jcon);
 
@@ -884,11 +1041,9 @@ void jsonrpc_setup(struct lightningd *ld)
 {
 	struct json_command **commands = get_cmdlist();
 
-	ld->rpc_filename = default_rpcfile(ld);
 	ld->jsonrpc = tal(ld, struct jsonrpc);
 	strmap_init(&ld->jsonrpc->usagemap);
 	ld->jsonrpc->commands = tal_arr(ld->jsonrpc, struct json_command *, 0);
-	ld->jsonrpc->log = new_log(ld->jsonrpc, ld->log_book, "jsonrpc");
 	for (size_t i=0; i<num_cmdlist; i++) {
 		if (!jsonrpc_command_add_perm(ld, ld->jsonrpc, commands[i]))
 			fatal("Cannot add duplicate command %s",
@@ -958,7 +1113,6 @@ void jsonrpc_listen(struct jsonrpc *jsonrpc, struct lightningd *ld)
 		err(1, "Listening on '%s'", rpc_filename);
 	jsonrpc->rpc_listener = io_new_listener(
 		ld->rpc_filename, fd, incoming_jcon_connected, ld);
-	log_debug(jsonrpc->log, "Listening on '%s'", ld->rpc_filename);
 }
 
 static struct command_result *param_command(struct command *cmd,

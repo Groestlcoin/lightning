@@ -10,7 +10,6 @@
 #include <common/timeout.h>
 #include <common/utils.h>
 #include <lightningd/invoice.h>
-#include <lightningd/log.h>
 #include <sodium/randombytes.h>
 #include <string.h>
 
@@ -32,8 +31,6 @@ struct invoice_waiter {
 struct invoices {
 	/* The database connection to use. */
 	struct db *db;
-	/* The log to report to. */
-	struct log *log;
 	/* The timers object to use for expirations. */
 	struct timers *timers;
 	/* Waiters waiting for invoices to be paid, expired, or deleted. */
@@ -119,6 +116,9 @@ static struct invoice_details *wallet_stmt2invoice_details(const tal_t *ctx,
 	else
 		dtl->description = NULL;
 
+	dtl->features = tal_dup_arr(dtl, u8,
+				    db_column_blob(stmt, 11),
+				    db_column_bytes(stmt, 11), 0);
 	return dtl;
 }
 
@@ -140,13 +140,11 @@ static void install_expiration_timer(struct invoices *invoices);
 
 struct invoices *invoices_new(const tal_t *ctx,
 			      struct db *db,
-			      struct log *log,
 			      struct timers *timers)
 {
 	struct invoices *invs = tal(ctx, struct invoices);
 
 	invs->db = db;
-	invs->log = log;
 	invs->timers = timers;
 
 	list_head_init(&invs->waiters);
@@ -258,6 +256,7 @@ bool invoices_create(struct invoices *invoices,
 		     u64 expiry,
 		     const char *b11enc,
 		     const char *description,
+		     const u8 *features,
 		     const struct preimage *r,
 		     const struct sha256 *rhash)
 {
@@ -284,11 +283,11 @@ bool invoices_create(struct invoices *invoices,
 		"            ( payment_hash, payment_key, state"
 		"            , msatoshi, label, expiry_time"
 		"            , pay_index, msatoshi_received"
-		"            , paid_timestamp, bolt11, description)"
+		"            , paid_timestamp, bolt11, description, features)"
 		"     VALUES ( ?, ?, ?"
 		"            , ?, ?, ?"
 		"            , NULL, NULL"
-		"            , NULL, ?, ?);"));
+		"            , NULL, ?, ?, ?);"));
 
 	db_bind_sha256(stmt, 0, rhash);
 	db_bind_preimage(stmt, 1, r);
@@ -301,6 +300,7 @@ bool invoices_create(struct invoices *invoices,
 	db_bind_u64(stmt, 5, expiry_time);
 	db_bind_text(stmt, 6, b11enc);
 	db_bind_text(stmt, 7, description);
+	db_bind_blob(stmt, 8, features, tal_bytelen(features));
 
 	db_exec_prepared_v2(stmt);
 
@@ -440,6 +440,7 @@ bool invoices_iterate(struct invoices *invoices,
 						       ", paid_timestamp"
 						       ", bolt11"
 						       ", description"
+						       ", features"
 						       " FROM invoices;"));
 		db_query_prepared(stmt);
 		it->p = stmt;
@@ -627,6 +628,7 @@ const struct invoice_details *invoices_get_details(const tal_t *ctx,
 					       ", paid_timestamp"
 					       ", bolt11"
 					       ", description"
+					       ", features"
 					       " FROM invoices"
 					       " WHERE id = ?;"));
 	db_bind_u64(stmt, 0, invoice.id);

@@ -7,15 +7,20 @@ lightningd-config - Lightning daemon configuration file
 
 .SH DESCRIPTION
 
-When \fBlightningd\fR(8) starts up, it reads a configuration file\. By default
-that is \fIconfig\fR in the \fB\.lightning\fR subdirectory of the home
-directory (if it exists), but that can be changed by the
-\fI--lightning-dir\fR or \fI--conf\fR options on the \fBlightningd\fR(8) command line\.
+When \fBlightningd\fR(8) starts up it usually reads a general configuration
+file (default: \fB$HOME/\.lightning/config\fR) then a network-specific
+configuration file (default: \fB$HOME/\.lightning/testnet/config\fR)\.  This can
+be changed: see \fI--conf\fR and \fI--lightning-dir\fR\.
 
 
-Configuration file options are processed first, then command line
-options: later options override earlier ones except \fIaddr\fR options which
+General configuration files are processed first, then network-specific
+ones, then command line options: later options override earlier ones
+except \fIaddr\fR options and \fIlog-level\fR with subsystems, which
 accumulate\.
+
+
+\fIinclude \fR followed by a filename includes another configuration file at that
+point, relative to the current configuration file\.
 
 
 All these options are mirrored as commandline arguments to
@@ -60,6 +65,7 @@ Bitcoin control options:
 
  \fBnetwork\fR=\fINETWORK\fR
 Select the network parameters (\fIbitcoin\fR, \fItestnet\fR, or \fIregtest\fR)\.
+This is not valid within the per-network configuration file\.
 
 
  \fBtestnet\fR
@@ -112,16 +118,62 @@ wrong\.
 
  \fBlightning-dir\fR=\fIDIR\fR
 Sets the working directory\. All files (except \fI--conf\fR and
-\fI--lightning-dir\fR on the command line) are relative to this\.
+\fI--lightning-dir\fR on the command line) are relative to this\.  This
+is only valid on the command-line, or in a configuration file specified
+by \fI--conf\fR\.
 
 
  \fBpid-file\fR=\fIPATH\fR
 Specify pid file to write to\.
 
 
- \fBlog-level\fR=\fILEVEL\fR
+ \fBlog-level\fR=\fILEVEL\fR[:\fISUBSYSTEM\fR]
 What log level to print out: options are io, debug, info, unusual,
-broken\.
+broken\.  If \fISUBSYSTEM\fR is supplied, this sets the logging level
+for any subsystem containing that string\.  Subsystems include:
+
+.RS
+.IP \[bu]
+\fIlightningd\fR: The main lightning daemon
+.IP \[bu]
+\fIdatabase\fR: The database subsystem
+.IP \[bu]
+\fIwallet\fR: The wallet subsystem
+.IP \[bu]
+\fIgossipd\fR: The gossip daemon
+.IP \[bu]
+\fIplugin-manager\fR: The plugin subsystem
+.IP \[bu]
+\fIplugin-P\fR: Each plugin, P = plugin path without directory
+.IP \[bu]
+\fIhsmd\fR: The secret-holding daemon
+.IP \[bu]
+\fIgossipd\fR: The gossip daemon
+.IP \[bu]
+\fIconnectd\fR: The network connection daemon
+.IP \[bu]
+\fIjsonrpc#FD\fR: Each JSONRPC connection, FD = file descriptor number
+
+.RE
+
+  The following subsystems exist for each channel, where N is an incrementing
+internal integer id assigned for the lifetime of the channel:
+
+.RS
+.IP \[bu]
+\fIopeningd-chan#N\fR: Each opening / idling daemon
+.IP \[bu]
+\fIchanneld-chan#N\fR: Each channel management daemon
+.IP \[bu]
+\fIclosingd-chan#N\fR: Each closing negotiation daemon
+.IP \[bu]
+\fIonchaind-chan#N\fR: Each onchain close handling daemon
+
+.RE
+
+  So, \fBlog-level=debug:plugin\fR would set debug level logging on all
+plugins and the plugin manager\.  \fBlog-level=io:chan#55\fR would set
+IO logging on channel number 55 (or 550, for that matter)\.
 
 
  \fBlog-prefix\fR=\fIPREFIX\fR
@@ -143,11 +195,11 @@ Run in the background, suppress stdout and stderr\.
 
 
  \fBconf\fR=\fIPATH\fR
-Sets configuration file (default: \fBlightning-dir\fR/\fIconfig\fR )\. If this
-is a relative path, it is relative to the starting directory, not
+Sets configuration file, and disable reading the normal general and network
+ones\. If this is a relative path, it is relative to the starting directory, not
 \fBlightning-dir\fR (unlike other paths)\. \fIPATH\fR must exist and be
 readable (we allow missing files in the default case)\. Using this inside
-a configuration file is meaningless\.
+a configuration file is invalid\.
 
 
  \fBwallet\fR=\fIDSN\fR
@@ -163,15 +215,15 @@ Note that once you encrypt the \fBhsm_secret\fR this option will be mandatory fo
 
 .SH Lightning node customization options
 
- \fBalias\fR=\fIRRGGBB\fR
- \fBrgb\fR=\fIRRGGBB\fR
-Your favorite color as a hex code\.
-
-
-Up to 32 UTF-8 characters to tag your node\. Completely silly, since
+ \fBalias\fR=\fINAME\fR
+Up to 32 bytes of UTF-8 characters to tag your node\. Completely silly, since
 anyone can call their node anything they want\. The default is an
 NSA-style codename derived from your public key, but "Peter Todd" and
 "VAULTERO" are good options, too\.
+
+
+ \fBrgb\fR=\fIRRGGBB\fR
+Your favorite color as a hex code\.
 
 
  \fBfee-base\fR=\fIMILLISATOSHI\fR
@@ -203,7 +255,7 @@ increase, but make channels far more reliable since we never close it
 due to unreasonable fees\.
 
 
- \fBcommit-time\fR='MILLISECONDS
+ \fBcommit-time\fR=\fIMILLISECONDS\fR
 How long to wait before sending commitment messages to the peer: in
 theory increasing this would reduce load, but your node would have to be
 extremely busy node for you to even notice\.
@@ -285,7 +337,9 @@ precisely control where to bind and what to announce with the
 \fIautolisten\fR logic, so you must specifiy exactly what you want!
 
 
- \fBaddr\fR=\fI[IPADDRESS[:PORT]]|autotor:TORIPADDRESS[:TORPORT]\fR
+ \fBaddr\fR=\fI[IPADDRESS[:PORT]]|autotor:TORIPADDRESS[:SERVICEPORT][/torport=TORPORT]|statictor:TORIPADDRESS[:SERVICEPORT][/torport=TORPORT][/torblob=[blob]]\fR
+
+
 Set an IP address (v4 or v6) or automatic Tor address to listen on and
 (maybe) announce as our node address\.
 
@@ -303,6 +357,18 @@ IPv4 or IPv6 address of the Tor control port (default port 9051),
 and this will be used to configure a Tor hidden service for port
 9735.  The Tor hidden service will be configured to point to the
 first IPv4 or IPv6 address we bind to.
+
+If the argument begins with 'statictor:' then it is followed by the
+IPv4 or IPv6 address of the Tor control port (default port 9051),
+and this will be used to configure a static Tor hidden service for port
+9735.  The Tor hidden service will be configured to point to the
+first IPv4 or IPv6 address we bind to and is by default unique to
+your nodes id. You can add the text '/torblob=BLOB' followed by up to
+64 Bytes of text to generate from this text a v3 onion service
+address text unique to the first 32 Byte of this text.
+You can also use an postfix '/torport=TORPORT' to select the external
+tor binding. The result is that over tor your node is accessible by a port
+defined by you and possible different from your local node port assignment
 
 This option can be used multiple times to add more addresses, and
 its use disables autolisten.  If necessary, and 'always-use-proxy'

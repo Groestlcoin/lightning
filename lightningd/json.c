@@ -15,6 +15,7 @@
 #include <common/node_id.h>
 #include <common/param.h>
 #include <common/type_to_string.h>
+#include <common/utils.h>
 #include <common/wallet_tx.h>
 #include <common/wireaddr.h>
 #include <gossipd/routing.h>
@@ -26,35 +27,6 @@
 #include <sys/socket.h>
 #include <wallet/wallet.h>
 #include <wire/wire.h>
-
-/* Output a route hop */
-static void
-json_add_route_hop(struct json_stream *r, char const *n,
-		   const struct route_hop *h)
-{
-	/* Imitate what getroute/sendpay use */
-	json_object_start(r, n);
-	json_add_node_id(r, "id", &h->nodeid);
-	json_add_short_channel_id(r, "channel",
-				  &h->channel_id);
-	json_add_num(r, "direction", h->direction);
-	json_add_amount_msat_compat(r, h->amount, "msatoshi", "amount_msat");
-	json_add_num(r, "delay", h->delay);
-	json_object_end(r);
-}
-
-/* Output a route */
-void
-json_add_route(struct json_stream *r, char const *n,
-	       const struct route_hop *hops, size_t hops_len)
-{
-	size_t i;
-	json_array_start(r, n);
-	for (i = 0; i < hops_len; ++i) {
-		json_add_route_hop(r, NULL, &hops[i]);
-	}
-	json_array_end(r);
-}
 
 void json_add_node_id(struct json_stream *response,
 		      const char *fieldname,
@@ -277,7 +249,13 @@ void json_add_address_internal(struct json_stream *response,
 	case ADDR_INTERNAL_AUTOTOR:
 		json_object_start(response, fieldname);
 		json_add_string(response, "type", "Tor generated address");
-		json_add_address(response, "service", &addr->u.torservice);
+		json_add_address(response, "service", &addr->u.torservice.address);
+		json_object_end(response);
+		return;
+	case ADDR_INTERNAL_STATICTOR:
+		json_object_start(response, fieldname);
+		json_add_string(response, "type", "Tor from blob generated static address");
+		json_add_address(response, "service", &addr->u.torservice.address);
 		json_object_end(response);
 		return;
 	case ADDR_INTERNAL_FORPROXY:
@@ -466,6 +444,12 @@ void json_add_sha256(struct json_stream *result, const char *fieldname,
 	json_add_hex(result, fieldname, hash, sizeof(*hash));
 }
 
+void json_add_preimage(struct json_stream *result, const char *fieldname,
+		     const struct preimage *preimage)
+{
+	json_add_hex(result, fieldname, preimage, sizeof(*preimage));
+}
+
 /**
  * segwit_addr_net_decode - Try to decode a Bech32 address and detect
  * testnet/mainnet/regtest/signet
@@ -581,7 +565,7 @@ struct command_result *param_bitcoin_address(struct command *cmd,
 {
 	/* Parse address. */
 	switch (json_to_address_scriptpubkey(cmd,
-					     get_chainparams(cmd->ld),
+					     chainparams,
 					     buffer, tok,
 					     scriptpubkey)) {
 	case ADDRESS_PARSE_UNRECOGNIZED:
@@ -592,9 +576,52 @@ struct command_result *param_bitcoin_address(struct command *cmd,
 	case ADDRESS_PARSE_WRONG_NETWORK:
 		return command_fail(cmd, LIGHTNINGD,
 				    "Destination address is not on network %s",
-				    get_chainparams(cmd->ld)->network_name);
+				    chainparams->network_name);
 	case ADDRESS_PARSE_SUCCESS:
 		return NULL;
+	}
+	abort();
+}
+
+void json_add_tok(struct json_stream *result, const char *fieldname,
+                  const jsmntok_t *tok, const char *buffer)
+{
+	int i = 0;
+	const jsmntok_t *t;
+
+	switch (tok->type) {
+	case JSMN_PRIMITIVE:
+		if (json_tok_is_num(buffer, tok)) {
+			json_to_int(buffer, tok, &i);
+			json_add_num(result, fieldname, i);
+		}
+		return;
+
+	case JSMN_STRING:
+		if (json_tok_streq(buffer, tok, "true"))
+			json_add_bool(result, fieldname, true);
+		else if (json_tok_streq(buffer, tok, "false"))
+			json_add_bool(result, fieldname, false);
+		else
+			json_add_string(result, fieldname, json_strdup(tmpctx, buffer, tok));
+		return;
+
+	case JSMN_ARRAY:
+		json_array_start(result, fieldname);
+		json_for_each_arr(i, t, tok)
+			json_add_tok(result, NULL, t, buffer);
+		json_array_end(result);
+		return;
+
+	case JSMN_OBJECT:
+		json_object_start(result, fieldname);
+		json_for_each_obj(i, t, tok)
+			json_add_tok(result, json_strdup(tmpctx, buffer, t), t+1, buffer);
+		json_object_end(result);
+		return;
+
+	case JSMN_UNDEFINED:
+		break;
 	}
 	abort();
 }

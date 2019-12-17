@@ -249,11 +249,18 @@ struct wallet_payment {
 	struct list_node list;
 	u64 id;
 	u32 timestamp;
+
+	/* The combination of these two fields is unique: */
 	struct sha256 payment_hash;
+	u64 partid;
+
 	enum wallet_payment_status status;
-	struct node_id destination;
+
+	/* The destination may not be known if we used `sendonion` */
+	struct node_id *destination;
 	struct amount_msat msatoshi;
 	struct amount_msat msatoshi_sent;
+	struct amount_msat total_msat;
 	/* If and only if PAYMENT_COMPLETE */
 	struct preimage *payment_preimage;
 	/* Needed for recovering from routing failures. */
@@ -265,6 +272,9 @@ struct wallet_payment {
 
 	/* The label of the payment. Must support `tal_len` */
 	const char *label;
+
+	/* If we could not decode the fail onion, just add it here. */
+	const u8 *failonion;
 };
 
 struct outpoint {
@@ -319,8 +329,7 @@ struct wallet_transaction {
  * This is guaranteed to either return a valid wallet, or abort with
  * `fatal` if it cannot be initialized.
  */
-struct wallet *wallet_new(struct lightningd *ld,
-			  struct log *log, struct timers *timers);
+struct wallet *wallet_new(struct lightningd *ld, struct timers *timers);
 
 /**
  * wallet_add_utxo - Register an UTXO which we (partially) own
@@ -585,29 +594,35 @@ void wallet_htlc_update(struct wallet *wallet, const u64 htlc_dbid,
 			enum onion_type failcode, const u8 *failuremsg);
 
 /**
- * wallet_htlcs_load_for_channel - Load HTLCs associated with chan from DB.
+ * wallet_htlcs_load_in_for_channel - Load incoming HTLCs associated with chan from DB.
  *
  * @wallet: wallet to load from
  * @chan: load HTLCs associated with this channel
  * @htlcs_in: htlc_in_map to store loaded htlc_in in
- * @htlcs_out: htlc_out_map to store loaded htlc_out in
  *
- * This function looks for HTLCs that are associated with the given
- * channel and loads them into the provided maps. One caveat is that
- * the `struct htlc_out` instances are not wired up with the
- * corresponding `struct htlc_in` in the forwarding case nor are they
- * associated with a `struct pay_command` in the case we originated
- * the payment. In the former case the corresponding `struct htlc_in`
- * may not have been loaded yet. In the latter case the pay_command
- * does not exist anymore since we restarted.
- *
- * Use `htlcs_reconnect` to wire htlc_out instances to the
- * corresponding htlc_in after loading all channels.
+ * This function looks for incoming HTLCs that are associated with the given
+ * channel and loads them into the provided map.
  */
-bool wallet_htlcs_load_for_channel(struct wallet *wallet,
-				   struct channel *chan,
-				   struct htlc_in_map *htlcs_in,
-				   struct htlc_out_map *htlcs_out);
+bool wallet_htlcs_load_in_for_channel(struct wallet *wallet,
+				      struct channel *chan,
+				      struct htlc_in_map *htlcs_in);
+
+/**
+ * wallet_htlcs_load_out_for_channel - Load outgoing HTLCs associated with chan from DB.
+ *
+ * @wallet: wallet to load from
+ * @chan: load HTLCs associated with this channel
+ * @htlcs_out: htlc_out_map to store loaded htlc_out in.
+ * @remaining_htlcs_in: htlc_in_map with unconnected htlcs (removed as we progress)
+ *
+ * We populate htlc_out->in by looking up in remaining_htlcs_in.  It's
+ * possible that it's still NULL, since we can have outgoing HTLCs
+ * outlive their corresponding incoming.
+ */
+bool wallet_htlcs_load_out_for_channel(struct wallet *wallet,
+				       struct channel *chan,
+				       struct htlc_out_map *htlcs_out,
+				       struct htlc_in_map *remaining_htlcs_in);
 
 /**
  * wallet_announcement_save - Save remote announcement information with channel.
@@ -674,6 +689,8 @@ struct invoice_details {
 
 	/* The description of the payment. */
 	char *description;
+	/* The features, if any (tal_arr) */
+	u8 *features;
 };
 
 /* An object that handles iteration over the set of invoices */
@@ -714,6 +731,7 @@ bool wallet_invoice_create(struct wallet *wallet,
 			   u64 expiry,
 			   const char *b11enc,
 			   const char *description,
+			   const u8 *features,
 			   const struct preimage *r,
 			   const struct sha256 *rhash);
 
@@ -923,7 +941,8 @@ void wallet_payment_setup(struct wallet *wallet, struct wallet_payment *payment)
  * Stores the payment in the database.
  */
 void wallet_payment_store(struct wallet *wallet,
-			  const struct sha256 *payment_hash);
+			  const struct sha256 *payment_hash,
+			  u64 partid);
 
 /**
  * wallet_payment_delete - Remove a payment
@@ -931,7 +950,8 @@ void wallet_payment_store(struct wallet *wallet,
  * Removes the payment from the database.
  */
 void wallet_payment_delete(struct wallet *wallet,
-			   const struct sha256 *payment_hash);
+			   const struct sha256 *payment_hash,
+			   u64 partid);
 
 /**
  * wallet_local_htlc_out_delete - Remove a local outgoing failed HTLC
@@ -942,7 +962,8 @@ void wallet_payment_delete(struct wallet *wallet,
  */
 void wallet_local_htlc_out_delete(struct wallet *wallet,
 				  struct channel *chan,
-				  const struct sha256 *payment_hash);
+				  const struct sha256 *payment_hash,
+				  u64 partid);
 
 /**
  * wallet_payment_by_hash - Retrieve a specific payment
@@ -951,7 +972,8 @@ void wallet_local_htlc_out_delete(struct wallet *wallet,
  */
 struct wallet_payment *
 wallet_payment_by_hash(const tal_t *ctx, struct wallet *wallet,
-				const struct sha256 *payment_hash);
+		       const struct sha256 *payment_hash,
+		       u64 partid);
 
 /**
  * wallet_payment_set_status - Update the status of the payment
@@ -960,9 +982,10 @@ wallet_payment_by_hash(const tal_t *ctx, struct wallet *wallet,
  * its state.
  */
 void wallet_payment_set_status(struct wallet *wallet,
-				const struct sha256 *payment_hash,
-			        const enum wallet_payment_status newstatus,
-			        const struct preimage *preimage);
+			       const struct sha256 *payment_hash,
+			       u64 partid,
+			       const enum wallet_payment_status newstatus,
+			       const struct preimage *preimage);
 
 /**
  * wallet_payment_get_failinfo - Get failure information for a given
@@ -974,6 +997,7 @@ void wallet_payment_set_status(struct wallet *wallet,
 void wallet_payment_get_failinfo(const tal_t *ctx,
 				 struct wallet *wallet,
 				 const struct sha256 *payment_hash,
+				 u64 partid,
 				 /* outputs */
 				 u8 **failonionreply,
 				 bool *faildestperm,
@@ -990,6 +1014,7 @@ void wallet_payment_get_failinfo(const tal_t *ctx,
  */
 void wallet_payment_set_failinfo(struct wallet *wallet,
 				 const struct sha256 *payment_hash,
+				 u64 partid,
 				 const u8 *failonionreply,
 				 bool faildestperm,
 				 int failindex,
@@ -1022,8 +1047,7 @@ void wallet_htlc_sigs_save(struct wallet *w, u64 channel_id,
  * genesis_hash with which the DB was initialized. Returns false if
  * the check failed, i.e., if the genesis hashes do not match.
  */
-bool wallet_network_check(struct wallet *w,
-			  const struct chainparams *chainparams);
+bool wallet_network_check(struct wallet *w);
 
 /**
  * wallet_block_add - Add a block to the blockchain tracked by this wallet

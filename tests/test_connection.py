@@ -4,7 +4,7 @@ from fixtures import *  # noqa: F401,F403
 from fixtures import TEST_NETWORK
 from flaky import flaky  # noqa: F401
 from lightning import RpcError
-from utils import DEVELOPER, only_one, wait_for, sync_blockheight, VALGRIND, TIMEOUT, SLOW_MACHINE, COMPAT
+from utils import DEVELOPER, only_one, wait_for, sync_blockheight, VALGRIND, TIMEOUT, SLOW_MACHINE, COMPAT, expected_features
 from bitcoin.core import CMutableTransaction, CMutableTxOut
 
 import binascii
@@ -39,7 +39,7 @@ def test_connect(node_factory):
     assert len(l2.rpc.listpeers()) == 1
 
     # Should get reasonable error if unknown addr for peer.
-    with pytest.raises(RpcError, match=r'No address known'):
+    with pytest.raises(RpcError, match=r'Unable to connect, no address known'):
         l1.rpc.connect('032cf15d1ad9c4a08d26eab1918f732d8ef8fdc6abb9640bf3db174372c491304e')
 
     # Should get reasonable error if connection refuse.
@@ -236,7 +236,7 @@ def test_disconnect(node_factory):
 
     # Should have 3 connect fails.
     for d in disconnects:
-        l1.daemon.wait_for_log('Failed connected out for {}'
+        l1.daemon.wait_for_log('{}-.*Failed connected out'
                                .format(l2.info['id']))
 
     # Should still only have one peer!
@@ -365,7 +365,7 @@ def test_reconnect_openingd(node_factory):
 
     # We should get a message about reconnecting.
     l2.daemon.wait_for_log('Killing openingd: Reconnected')
-    l2.daemon.wait_for_log('lightning_openingd.*Handed peer, entering loop')
+    l2.daemon.wait_for_log('openingd.*Handed peer, entering loop')
 
     # Should work fine.
     l1.rpc.fundchannel(l2.info['id'], 20000)
@@ -374,7 +374,7 @@ def test_reconnect_openingd(node_factory):
     l1.bitcoin.generate_block(3)
 
     # Just to be sure, second openingd hand over to channeld. This log line is about channeld being started
-    l2.daemon.wait_for_log(r'lightning_channeld-[0-9a-f]{66} chan #[0-9]: pid [0-9]+, msgfd [0-9]+')
+    l2.daemon.wait_for_log(r'channeld-chan#[0-9]: pid [0-9]+, msgfd [0-9]+')
 
 
 @unittest.skipIf(not DEVELOPER, "needs DEVELOPER=1")
@@ -430,8 +430,8 @@ def test_connect_stresstest(node_factory, executor):
 
     # Hack l3 into a clone of l2, to stress reconnect code.
     l3.stop()
-    shutil.copyfile(os.path.join(l2.daemon.lightning_dir, 'hsm_secret'),
-                    os.path.join(l3.daemon.lightning_dir, 'hsm_secret'))
+    shutil.copyfile(os.path.join(l2.daemon.lightning_dir, TEST_NETWORK, 'hsm_secret'),
+                    os.path.join(l3.daemon.lightning_dir, TEST_NETWORK, 'hsm_secret'))
     l3.start()
     l3.info = l3.rpc.getinfo()
 
@@ -891,7 +891,7 @@ def test_funding_fail(node_factory, bitcoind):
 
     # Should still be connected.
     assert only_one(l1.rpc.listpeers()['peers'])['connected']
-    l2.daemon.wait_for_log('lightning_openingd-.*: Handed peer, entering loop')
+    l2.daemon.wait_for_log('openingd-.*: Handed peer, entering loop')
     assert only_one(l2.rpc.listpeers()['peers'])['connected']
 
     # This works.
@@ -953,6 +953,7 @@ def test_funding_by_utxos(node_factory, bitcoind):
         l1.rpc.fundchannel(l3.info["id"], int(0.01 * 10**8), utxos=utxos)
 
 
+@unittest.skipIf(not DEVELOPER, "needs dev_forget_channel")
 def test_funding_external_wallet_corners(node_factory, bitcoind):
     l1 = node_factory.get_node()
     l2 = node_factory.get_node()
@@ -1009,6 +1010,9 @@ def test_funding_external_wallet_corners(node_factory, bitcoind):
     assert l1.rpc.fundchannel_complete(l2.info['id'], prep['txid'], txout)['commitments_secured']
     # Canceld channel after fundchannel_complete
     assert l1.rpc.fundchannel_cancel(l2.info['id'])['cancelled']
+
+    # l2 won't give up, since it considers error "soft".
+    l2.rpc.dev_forget_channel(l1.info['id'])
 
     l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
     l1.rpc.fundchannel_start(l2.info['id'], amount)['funding_address']
@@ -1089,13 +1093,21 @@ def test_funding_cancel_race(node_factory, bitcoind, executor):
 @unittest.skipIf(TEST_NETWORK != 'regtest', "External wallet support doesn't work with elements yet.")
 def test_funding_close_upfront(node_factory, bitcoind):
     l1 = node_factory.get_node()
-    l2 = node_factory.get_node()
 
-    def _fundchannel(l1, l2, close_to):
+    opts = {'plugin': os.path.join(os.getcwd(), 'tests/plugins/accepter_close_to.py')}
+    l2 = node_factory.get_node(options=opts)
+
+    # The 'accepter_close_to' plugin uses the channel funding amount to determine
+    # whether or not to include a 'close_to' address
+    amt_normal = 100007     # continues without returning a close_to
+    amt_addr = 100001       # returns valid regtest address
+
+    remote_valid_addr = 'bcrt1q7gtnxmlaly9vklvmfj06amfdef3rtnrdazdsvw'
+
+    def _fundchannel(l1, l2, amount, close_to):
         l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
         assert(l1.rpc.listpeers()['peers'][0]['id'] == l2.info['id'])
 
-        amount = 2**24 - 1
         resp = l1.rpc.fundchannel_start(l2.info['id'], amount, close_to=close_to)
         address = resp['funding_address']
 
@@ -1133,35 +1145,46 @@ def test_funding_close_upfront(node_factory, bitcoind):
 
         for node in [l1, l2]:
             node.daemon.wait_for_log(r'State changed from CHANNELD_AWAITING_LOCKIN to CHANNELD_NORMAL')
-            channel = node.rpc.listpeers()['peers'][0]['channels'][0]
+            channel = node.rpc.listpeers()['peers'][0]['channels'][-1]
             assert amount * 1000 == channel['msatoshi_total']
 
     # check that normal peer close works
-    _fundchannel(l1, l2, None)
+    _fundchannel(l1, l2, amt_normal, None)
     assert l1.rpc.close(l2.info['id'])['type'] == 'mutual'
 
     # check that you can provide a closing address upfront
     addr = l1.rpc.newaddr()['bech32']
-    _fundchannel(l1, l2, addr)
+    _fundchannel(l1, l2, amt_normal, addr)
+    # confirm that it appears in listpeers
+    assert addr == only_one(l1.rpc.listpeers()['peers'])['channels'][1]['close_to_addr']
     resp = l1.rpc.close(l2.info['id'])
     assert resp['type'] == 'mutual'
     assert only_one(only_one(bitcoind.rpc.decoderawtransaction(resp['tx'])['vout'])['scriptPubKey']['addresses']) == addr
 
     # check that passing in the same addr to close works
-    _fundchannel(l1, l2, addr)
+    addr = bitcoind.rpc.getnewaddress()
+    _fundchannel(l1, l2, amt_normal, addr)
+    assert addr == only_one(l1.rpc.listpeers()['peers'])['channels'][2]['close_to_addr']
     resp = l1.rpc.close(l2.info['id'], destination=addr)
     assert resp['type'] == 'mutual'
     assert only_one(only_one(bitcoind.rpc.decoderawtransaction(resp['tx'])['vout'])['scriptPubKey']['addresses']) == addr
 
-    # check that remote peer closing works as expected
-    _fundchannel(l1, l2, addr)
+    # check that remote peer closing works as expected (and that remote's close_to works)
+    _fundchannel(l1, l2, amt_addr, addr)
+    # send some money to remote so that they have a closeout
+    l1.rpc.pay(l2.rpc.invoice((amt_addr // 2) * 1000, 'test_remote_close_to', 'desc')['bolt11'])
+    assert only_one(l2.rpc.listpeers()['peers'])['channels'][-1]['close_to_addr'] == remote_valid_addr
+
     resp = l2.rpc.close(l1.info['id'])
     assert resp['type'] == 'mutual'
-    assert only_one(only_one(bitcoind.rpc.decoderawtransaction(resp['tx'])['vout'])['scriptPubKey']['addresses']) == addr
+    vouts = bitcoind.rpc.decoderawtransaction(resp['tx'])['vout']
+    assert len(vouts) == 2
+    for vout in vouts:
+        assert only_one(vout['scriptPubKey']['addresses']) in [addr, remote_valid_addr]
 
     # check that passing in a different addr to close causes an RPC error
     addr2 = l1.rpc.newaddr()['bech32']
-    _fundchannel(l1, l2, addr)
+    _fundchannel(l1, l2, amt_normal, addr)
     with pytest.raises(RpcError, match=r'does not match previous shutdown script'):
         l1.rpc.close(l2.info['id'], destination=addr2)
 
@@ -1422,7 +1445,7 @@ def test_update_fee(node_factory, bitcoind):
 
 
 @unittest.skipIf(not DEVELOPER, "needs DEVELOPER=1")
-def test_fee_limits(node_factory):
+def test_fee_limits(node_factory, bitcoind):
     l1, l2 = node_factory.line_graph(2, opts={'dev-max-fee-multiplier': 5, 'may_reconnect': True}, fundchannel=True)
 
     # L1 asks for stupid low fee (will actually hit the floor of 253)
@@ -1430,11 +1453,13 @@ def test_fee_limits(node_factory):
     l1.set_feerates((15, 15, 15), False)
     l1.start()
 
-    l1.daemon.wait_for_log('Peer permanent failure in CHANNELD_NORMAL: lightning_channeld: received ERROR channel .*: update_fee 253 outside range 1875-75000')
+    l1.daemon.wait_for_log('Peer transient failure in CHANNELD_NORMAL: channeld: .*: update_fee 253 outside range 1875-75000')
     # Make sure the resolution of this one doesn't interfere with the next!
     # Note: may succeed, may fail with insufficient fee, depending on how
     # groestlcoind feels!
-    l1.daemon.wait_for_log('sendrawtx exit')
+    l2.daemon.wait_for_log('sendrawtx exit')
+    bitcoind.generate_block(1)
+    sync_blockheight(bitcoind, [l1, l2])
 
     # Trying to open a channel with too low a fee-rate is denied
     l4 = node_factory.get_node()
@@ -1490,7 +1515,7 @@ def test_update_fee_reconnect(node_factory, bitcoind):
     l1.daemon.wait_for_log(r'dev_disconnect: \+WIRE_COMMITMENT_SIGNED')
 
     # Wait for reconnect....
-    l1.daemon.wait_for_log('Applying feerate 14000 to LOCAL')
+    l1.daemon.wait_for_log('Feerate:.*LOCAL now 14000')
 
     l1.pay(l2, 200000000)
     l2.pay(l1, 100000000)
@@ -1570,7 +1595,7 @@ def test_forget_channel(node_factory):
 
 def test_peerinfo(node_factory, bitcoind):
     l1, l2 = node_factory.line_graph(2, fundchannel=False, opts={'may_reconnect': True})
-    lfeatures = '28a2'
+    lfeatures = expected_features()
     # Gossiping but no node announcement yet
     assert l1.rpc.getpeer(l2.info['id'])['connected']
     assert len(l1.rpc.getpeer(l2.info['id'])['channels']) == 0
@@ -1829,19 +1854,16 @@ def test_funder_simple_reconnect(node_factory, bitcoind):
 @unittest.skipIf(os.getenv('TEST_DB_PROVIDER', 'sqlite3') != 'sqlite3', "sqlite3-specific DB rollback")
 @unittest.skipIf(not DEVELOPER, "needs LIGHTNINGD_DEV_LOG_IO")
 def test_dataloss_protection(node_factory, bitcoind):
-    l1 = node_factory.get_node(may_reconnect=True, log_all_io=True,
+    l1 = node_factory.get_node(may_reconnect=True, options={'log-level': 'io'},
                                feerates=(7500, 7500, 7500))
-    l2 = node_factory.get_node(may_reconnect=True, log_all_io=True,
+    l2 = node_factory.get_node(may_reconnect=True, options={'log-level': 'io'},
                                feerates=(7500, 7500, 7500), allow_broken_log=True)
 
-    # features 1, 3, 7, 11 and 13 (0x28a2).
-    lf = "28a2"
+    lf = expected_features()
+
     l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
     # l1 should send out WIRE_INIT (0010)
-    l1.daemon.wait_for_log(r"\[OUT\] 0010"
-                           # gflen
-                           + format(len(lf) // 2, '04x')
-                           + lf
+    l1.daemon.wait_for_log(r"\[OUT\] 0010.*"
                            # lflen
                            + format(len(lf) // 2, '04x')
                            + lf)
@@ -1850,7 +1872,7 @@ def test_dataloss_protection(node_factory, bitcoind):
     l2.stop()
 
     # Save copy of the db.
-    dbpath = os.path.join(l2.daemon.lightning_dir, "lightningd.sqlite3")
+    dbpath = os.path.join(l2.daemon.lightning_dir, TEST_NETWORK, "lightningd.sqlite3")
     orig_db = open(dbpath, "rb").read()
     l2.start()
 
@@ -2218,3 +2240,38 @@ def test_feerate_stress(node_factory, executor):
     l1.rpc.call('dev-feerate', [l2.info['id'], rate - 5])
     assert not l1.daemon.is_in_log('Bad.*signature')
     assert not l2.daemon.is_in_log('Bad.*signature')
+
+
+@unittest.skipIf(not DEVELOPER, "need dev_disconnect")
+def test_pay_disconnect_stress(node_factory, executor):
+    """Expose race in htlc restoration in channeld: 50% chance of failure"""
+    if SLOW_MACHINE and VALGRIND:
+        NUM_RUNS = 2
+    else:
+        NUM_RUNS = 5
+    for i in range(NUM_RUNS):
+        l1, l2 = node_factory.line_graph(2, opts=[{'may_reconnect': True},
+                                                  {'may_reconnect': True,
+                                                   'disconnect': ['=WIRE_UPDATE_ADD_HTLC',
+                                                                  '-WIRE_COMMITMENT_SIGNED']}])
+
+        scid12 = l1.get_channel_scid(l2)
+        routel2l1 = [{'msatoshi': '10000msat', 'id': l1.info['id'], 'delay': 5, 'channel': scid12}]
+
+        # Get invoice from l1 to pay.
+        payhash1 = l1.rpc.invoice(10000, "invoice", "invoice")['payment_hash']
+
+        # Start balancing payment.
+        fut = executor.submit(l1.pay, l2, 10**9 // 2)
+
+        # As soon as reverse payment is accepted, reconnect.
+        while True:
+            l2.rpc.sendpay(routel2l1, payhash1)
+            try:
+                # This will usually fail with Capacity exceeded
+                l2.rpc.waitsendpay(payhash1, timeout=TIMEOUT)
+                break
+            except RpcError:
+                pass
+
+        fut.result()

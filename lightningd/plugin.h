@@ -157,7 +157,7 @@ bool plugin_remove(struct plugins *plugins, const char *name);
 /**
  * Kill a plugin process, with an error message.
  */
-void PRINTF_FMT(2,3) plugin_kill(struct plugin *plugin, char *fmt, ...);
+void plugin_kill(struct plugin *plugin, char *fmt, ...) PRINTF_FMT(2,3);
 
 /**
  * Send the configure message to all plugins.
@@ -239,5 +239,10 @@ struct io_plan *plugin_stdout_conn_init(struct io_conn *conn,
  * Needed for I/O logging for plugin messages.
 */
 struct log *plugin_get_log(struct plugin *plugin);
+
+/* Pair of functions to detect if plugin destroys itself: must always
+ * call both! */
+struct plugin_destroyed *plugin_detect_destruction(const struct plugin *plugin);
+bool was_plugin_destroyed(struct plugin_destroyed *destroyed);
 
 #endif /* LIGHTNING_LIGHTNINGD_PLUGIN_H */

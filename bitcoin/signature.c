@@ -34,19 +34,19 @@ static void dump_tx(const char *msg,
 {
 	size_t i, j;
 	warnx("%s tx version %u locktime %#x:",
-	      msg, tx->version, tx->lock_time);
-	for (i = 0; i < tal_count(tx->input); i++) {
+	      msg, tx->wtx->version, tx->wtx->locktime);
+	for (i = 0; i < tx->wtx->num_inputs; i++) {
 		warnx("input[%zu].txid = "SHA_FMT, i,
-		      SHA_VALS(tx->input[i].txid.sha.u.u8));
-		warnx("input[%zu].index = %u", i, tx->input[i].index);
+		      SHA_VALS(tx->wtx->inputs[i].txhash));
+		warnx("input[%zu].index = %u", i, tx->wtx->inputs[i].index);
 	}
-	for (i = 0; i < tal_count(tx->output); i++) {
+	for (i = 0; i < tx->wtx->num_outputs; i++) {
 		warnx("output[%zu].amount = %llu",
-		      i, (long long)tx->output[i].amount);
+		      i, (long long)tx->wtx->outputs[i].satoshi);
 		warnx("output[%zu].script = %zu",
-		      i, tal_count(tx->output[i].script));
-		for (j = 0; j < tal_count(tx->output[i].script); j++)
-			fprintf(stderr, "%02x", tx->output[i].script[j]);
+		      i, tx->wtx->outputs[i].script_len);
+		for (j = 0; j < tx->wtx->outputs[i].script_len; j++)
+			fprintf(stderr, "%02x", tx->wtx->outputs[i].script[j]);
 		fprintf(stderr, "\n");
 	}
 	warnx("input[%zu].script = %zu", inputnum, tal_count(script));
@@ -75,23 +75,46 @@ static void dump_tx(const char *msg UNUSED,
 }
 #endif
 
+/* Taken from https://github.com/bitcoin/bitcoin/blob/master/src/key.cpp */
+/* Check that the sig has a low R value and will be less than 71 bytes */
+static bool sig_has_low_r(const secp256k1_ecdsa_signature* sig)
+{
+	unsigned char compact_sig[64];
+	secp256k1_ecdsa_signature_serialize_compact(secp256k1_ctx, compact_sig, sig);
+
+	/* In DER serialization, all values are interpreted as big-endian, signed
+	 * integers. The highest bit in the integer indicates its signed-ness; 0 is
+	 * positive, 1 is negative. When the value is interpreted as a negative
+	 * integer, it must be converted to a positive value by prepending a 0x00
+	 * byte so that the highest bit is 0. We can avoid this prepending by
+	 * ensuring that our highest bit is always 0, and thus we must check that
+	 * the first byte is less than 0x80. */
+	return compact_sig[0] < 0x80;
+}
+
 void sign_hash(const struct privkey *privkey,
 	       const struct sha256_double *h,
 	       secp256k1_ecdsa_signature *s)
 {
 	bool ok;
+	unsigned char extra_entropy[32] = {0};
 
-	ok = secp256k1_ecdsa_sign(secp256k1_ctx,
-				  s,
-				  h->sha.u.u8,
-				  privkey->secret.data, NULL, NULL);
+	/* Grind for low R */
+	do {
+		ok = secp256k1_ecdsa_sign(secp256k1_ctx,
+					  s,
+					  h->sha.u.u8,
+					  privkey->secret.data, NULL, extra_entropy);
+		((u32 *)extra_entropy)[0]++;
+	} while (!sig_has_low_r(s));
+
 	assert(ok);
 }
 
-static void bitcoin_tx_hash_for_sig(const struct bitcoin_tx *tx, unsigned int in,
-				    const u8 *script,
-				    enum sighash_type sighash_type,
-				    struct sha256_double *dest)
+void bitcoin_tx_hash_for_sig(const struct bitcoin_tx *tx, unsigned int in,
+			     const u8 *script,
+			     enum sighash_type sighash_type,
+			     struct sha256_double *dest)
 {
 	int ret;
 	u8 value[9];

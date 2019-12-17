@@ -2,7 +2,7 @@ from collections import OrderedDict
 from fixtures import *  # noqa: F401,F403
 from flaky import flaky  # noqa: F401
 from lightning import RpcError, Millisatoshi
-from utils import DEVELOPER, only_one, sync_blockheight, TIMEOUT, wait_for
+from utils import DEVELOPER, only_one, sync_blockheight, TIMEOUT, wait_for, TEST_NETWORK
 
 import json
 import os
@@ -239,8 +239,11 @@ def test_pay_plugin(node_factory):
         l1.rpc.call('pay')
 
     # Make sure usage messages are present.
-    assert only_one(l1.rpc.help('pay')['help'])['command'] == 'pay bolt11 [msatoshi] [label] [riskfactor] [maxfeepercent] [retry_for] [maxdelay] [exemptfee]'
-    assert only_one(l1.rpc.help('paystatus')['help'])['command'] == 'paystatus [bolt11]'
+    msg = 'pay bolt11 [msatoshi] [label] [riskfactor] [maxfeepercent] '\
+          '[retry_for] [maxdelay] [exemptfee]'
+    if DEVELOPER:
+        msg += ' [use_shadow]'
+    assert only_one(l1.rpc.help('pay')['help'])['command'] == msg
 
 
 def test_plugin_connected_hook(node_factory):
@@ -260,8 +263,7 @@ def test_plugin_connected_hook(node_factory):
     l1.daemon.wait_for_log(r"{} is in reject list".format(l3.info['id']))
 
     # FIXME: this error occurs *after* connection, so we connect then drop.
-    l3.daemon.wait_for_log(r"lightning_openingd-{} chan #1: peer_in WIRE_ERROR"
-                           .format(l1.info['id']))
+    l3.daemon.wait_for_log(r"openingd-chan#1: peer_in WIRE_ERROR")
     l3.daemon.wait_for_log(r"You are in reject list")
 
     def check_disconnect():
@@ -305,16 +307,16 @@ def test_db_hook(node_factory, executor):
     # It should see the db being created, and sometime later actually get
     # initted.
     # This precedes startup, so needle already past
-    assert l1.daemon.is_in_log(r'plugin-dblog.py deferring \d+ commands')
+    assert l1.daemon.is_in_log(r'plugin-dblog.py: deferring \d+ commands')
     l1.daemon.logsearch_start = 0
-    l1.daemon.wait_for_log('plugin-dblog.py replaying pre-init data:')
-    l1.daemon.wait_for_log('plugin-dblog.py CREATE TABLE version \\(version INTEGER\\)')
-    l1.daemon.wait_for_log("plugin-dblog.py initialized.* 'startup': True")
+    l1.daemon.wait_for_log('plugin-dblog.py: replaying pre-init data:')
+    l1.daemon.wait_for_log('plugin-dblog.py: CREATE TABLE version \\(version INTEGER\\)')
+    l1.daemon.wait_for_log("plugin-dblog.py: initialized.* 'startup': True")
 
     l1.stop()
 
     # Databases should be identical.
-    db1 = sqlite3.connect(os.path.join(l1.daemon.lightning_dir, 'lightningd.sqlite3'))
+    db1 = sqlite3.connect(os.path.join(l1.daemon.lightning_dir, TEST_NETWORK, 'lightningd.sqlite3'))
     db2 = sqlite3.connect(dbfile)
 
     assert [x for x in db1.iterdump()] == [x for x in db2.iterdump()]
@@ -331,6 +333,7 @@ def test_utf8_passthrough(node_factory, executor):
 
     # Now, try native.
     out = subprocess.check_output(['cli/lightning-cli',
+                                   '--network={}'.format(TEST_NETWORK),
                                    '--lightning-dir={}'
                                    .format(l1.daemon.lightning_dir),
                                    'utf8', 'ナンセンス 1杯']).decode('utf-8')
@@ -392,18 +395,18 @@ def test_openchannel_hook(node_factory, bitcoind):
     l1.rpc.fundchannel(l2.info['id'], 100000)
 
     # Make sure plugin got all the vars we expect
-    l2.daemon.wait_for_log('reject_odd_funding_amounts.py 11 VARS')
-    l2.daemon.wait_for_log('reject_odd_funding_amounts.py channel_flags=1')
-    l2.daemon.wait_for_log('reject_odd_funding_amounts.py channel_reserve_satoshis=1000000msat')
-    l2.daemon.wait_for_log('reject_odd_funding_amounts.py dust_limit_satoshis=546000msat')
-    l2.daemon.wait_for_log('reject_odd_funding_amounts.py feerate_per_kw=7500')
-    l2.daemon.wait_for_log('reject_odd_funding_amounts.py funding_satoshis=100000000msat')
-    l2.daemon.wait_for_log('reject_odd_funding_amounts.py htlc_minimum_msat=0msat')
-    l2.daemon.wait_for_log('reject_odd_funding_amounts.py id={}'.format(l1.info['id']))
-    l2.daemon.wait_for_log('reject_odd_funding_amounts.py max_accepted_htlcs=483')
-    l2.daemon.wait_for_log('reject_odd_funding_amounts.py max_htlc_value_in_flight_msat=18446744073709551615msat')
-    l2.daemon.wait_for_log('reject_odd_funding_amounts.py push_msat=0msat')
-    l2.daemon.wait_for_log('reject_odd_funding_amounts.py to_self_delay=5')
+    l2.daemon.wait_for_log('reject_odd_funding_amounts.py: 11 VARS')
+    l2.daemon.wait_for_log('reject_odd_funding_amounts.py: channel_flags=1')
+    l2.daemon.wait_for_log('reject_odd_funding_amounts.py: channel_reserve_satoshis=1000000msat')
+    l2.daemon.wait_for_log('reject_odd_funding_amounts.py: dust_limit_satoshis=546000msat')
+    l2.daemon.wait_for_log('reject_odd_funding_amounts.py: feerate_per_kw=7500')
+    l2.daemon.wait_for_log('reject_odd_funding_amounts.py: funding_satoshis=100000000msat')
+    l2.daemon.wait_for_log('reject_odd_funding_amounts.py: htlc_minimum_msat=0msat')
+    l2.daemon.wait_for_log('reject_odd_funding_amounts.py: id={}'.format(l1.info['id']))
+    l2.daemon.wait_for_log('reject_odd_funding_amounts.py: max_accepted_htlcs=483')
+    l2.daemon.wait_for_log('reject_odd_funding_amounts.py: max_htlc_value_in_flight_msat=18446744073709551615msat')
+    l2.daemon.wait_for_log('reject_odd_funding_amounts.py: push_msat=0msat')
+    l2.daemon.wait_for_log('reject_odd_funding_amounts.py: to_self_delay=5')
 
     # Close it.
     txid = l1.rpc.close(l2.info['id'])['txid']
@@ -513,7 +516,7 @@ def test_htlc_accepted_hook_forward_restart(node_factory, executor):
     ], wait_for_announce=True)
 
     i1 = l3.rpc.invoice(msatoshi=1000, label="direct", description="desc")['bolt11']
-    f1 = executor.submit(l1.rpc.pay, i1)
+    f1 = executor.submit(l1.rpc.dev_pay, i1, use_shadow=False)
 
     l2.daemon.wait_for_log(r'Holding onto an incoming htlc for 10 seconds')
 
@@ -531,11 +534,10 @@ def test_htlc_accepted_hook_forward_restart(node_factory, executor):
     logline = l2.daemon.wait_for_log(r'Onion written to')
     fname = re.search(r'Onion written to (.*\.json)', logline).group(1)
     onion = json.load(open(fname))
-    assert re.match(r'^00006700000.000100000000000003e8000000..000000000000000000000000$', onion['payload'])
-    assert len(onion['payload']) == 64
+    assert onion['type'] == 'tlv'
+    assert re.match(r'^11020203e80401..0608................$', onion['payload'])
     assert len(onion['shared_secret']) == 64
-    assert onion['per_hop_v0']['realm'] == "00"
-    assert onion['per_hop_v0']['forward_amount'] == '1000msat'
+    assert onion['forward_amount'] == '1000msat'
     assert len(onion['next_onion']) == 2 * (1300 + 32 + 33 + 1)
 
     f1.result()
@@ -551,27 +553,28 @@ def test_warning_notification(node_factory):
     l1.rpc.call('pretendbad', {'event': event, 'level': 'warn'})
 
     # ensure an unusual log_entry was produced by 'pretendunusual' method
-    l1.daemon.wait_for_log('plugin-pretend_badlog.py Test warning notification\\(for unusual event\\)')
+    l1.daemon.wait_for_log('plugin-pretend_badlog.py: Test warning notification\\(for unusual event\\)')
 
     # now wait for notification
-    l1.daemon.wait_for_log('plugin-pretend_badlog.py Received warning')
-    l1.daemon.wait_for_log('plugin-pretend_badlog.py level: warn')
-    l1.daemon.wait_for_log('plugin-pretend_badlog.py time: *')
-    l1.daemon.wait_for_log('plugin-pretend_badlog.py source: plugin-pretend_badlog.py')
-    l1.daemon.wait_for_log('plugin-pretend_badlog.py log: Test warning notification\\(for unusual event\\)')
+    l1.daemon.wait_for_log('plugin-pretend_badlog.py: Received warning')
+    l1.daemon.wait_for_log('plugin-pretend_badlog.py: level: warn')
+    l1.daemon.wait_for_log('plugin-pretend_badlog.py: time: *')
+    l1.daemon.wait_for_log('plugin-pretend_badlog.py: source: plugin-pretend_badlog.py')
+    l1.daemon.wait_for_log('plugin-pretend_badlog.py: log: Test warning notification\\(for unusual event\\)')
 
     # 2. test 'error' level, steps like above
     event = "Test warning notification(for broken event)"
     l1.rpc.call('pretendbad', {'event': event, 'level': 'error'})
-    l1.daemon.wait_for_log(r'\*\*BROKEN\*\* plugin-pretend_badlog.py Test warning notification\(for broken event\)')
+    l1.daemon.wait_for_log(r'\*\*BROKEN\*\* plugin-pretend_badlog.py: Test warning notification\(for broken event\)')
 
-    l1.daemon.wait_for_log('plugin-pretend_badlog.py Received warning')
-    l1.daemon.wait_for_log('plugin-pretend_badlog.py level: error')
-    l1.daemon.wait_for_log('plugin-pretend_badlog.py time: *')
-    l1.daemon.wait_for_log('plugin-pretend_badlog.py source: plugin-pretend_badlog.py')
-    l1.daemon.wait_for_log('plugin-pretend_badlog.py log: Test warning notification\\(for broken event\\)')
+    l1.daemon.wait_for_log('plugin-pretend_badlog.py: Received warning')
+    l1.daemon.wait_for_log('plugin-pretend_badlog.py: level: error')
+    l1.daemon.wait_for_log('plugin-pretend_badlog.py: time: *')
+    l1.daemon.wait_for_log('plugin-pretend_badlog.py: source: plugin-pretend_badlog.py')
+    l1.daemon.wait_for_log('plugin-pretend_badlog.py: log: Test warning notification\\(for broken event\\)')
 
 
+@unittest.skipIf(not DEVELOPER, "needs to deactivate shadow routing")
 def test_invoice_payment_notification(node_factory):
     """
     Test the 'invoice_payment' notification
@@ -583,7 +586,7 @@ def test_invoice_payment_notification(node_factory):
     preimage = '1' * 64
     label = "a_descriptive_label"
     inv1 = l2.rpc.invoice(msats, label, 'description', preimage=preimage)
-    l1.rpc.pay(inv1['bolt11'])
+    l1.rpc.dev_pay(inv1['bolt11'], use_shadow=False)
 
     l2.daemon.wait_for_log(r"Received invoice_payment event for label {},"
                            " preimage {}, and amount of {}msat"
@@ -751,3 +754,28 @@ def test_sendpay_notifications(node_factory, bitcoind):
 
     assert results['sendpay_success'][0] == response1
     assert results['sendpay_failure'][0] == err.value.error
+
+
+def test_rpc_command_hook(node_factory):
+    """Test the `sensitive_command` hook"""
+    plugin = os.path.join(os.getcwd(), "tests/plugins/rpc_command.py")
+    l1 = node_factory.get_node(options={"plugin": plugin})
+
+    # Usage of "sendpay" has been restricted by the plugin
+    with pytest.raises(RpcError, match=r"You cannot do this"):
+        l1.rpc.call("sendpay")
+
+    # The plugin replaces a call made for the "invoice" command
+    invoice = l1.rpc.invoice(10**6, "test_side", "test_input")
+    decoded = l1.rpc.decodepay(invoice["bolt11"])
+    assert decoded["description"] == "A plugin modified this description"
+
+    # The plugin sends a custom response to "listfunds"
+    funds = l1.rpc.listfunds()
+    assert funds[0] == "Custom result"
+
+    # Test command redirection to a plugin
+    l1.rpc.call('help', [0])
+
+    # Test command which removes plugin itself!
+    l1.rpc.plugin_stop('rpc_command.py')

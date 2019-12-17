@@ -3,8 +3,8 @@
  * For example, in the spec tests we use the following:
  *
  * lightning/devtools/mkcommit 0 41085b995c1f591cfc3ae79ccde012bf0b37c7bde23d80a61c9732bdd6210b2f 0 999878sat 253 999878sat local \
-   5 546 9900sat						\
-   6 546 9900sat							\
+   5 546 9998sat						\
+   6 546 9998sat							\
    0000000000000000000000000000000000000000000000000000000000000020 0000000000000000000000000000000000000000000000000000000000000000 0000000000000000000000000000000000000000000000000000000000000021 0000000000000000000000000000000000000000000000000000000000000022 0000000000000000000000000000000000000000000000000000000000000023 0000000000000000000000000000000000000000000000000000000000000024 \
    0000000000000000000000000000000000000000000000000000000000000010 FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF 0000000000000000000000000000000000000000000000000000000000000011 0000000000000000000000000000000000000000000000000000000000000012 0000000000000000000000000000000000000000000000000000000000000013 0000000000000000000000000000000000000000000000000000000000000014
  */
@@ -16,6 +16,7 @@
 #include <channeld/full_channel.h>
 #include <common/amount.h>
 #include <common/derive_basepoints.h>
+#include <common/fee_states.h>
 #include <common/htlc_wire.h>
 #include <common/key_derive.h>
 #include <common/keyset.h>
@@ -28,7 +29,9 @@
 
 static bool verbose = false;
 
-void status_fmt(enum log_level level, const char *fmt, ...)
+void status_fmt(enum log_level level,
+		const struct node_id *node_id,
+		const char *fmt, ...)
 {
 	if (verbose) {
 		va_list ap;
@@ -160,16 +163,6 @@ static int parse_config(char *argv[],
 	return argnum;
 }
 
-static char *sig_as_hex(const struct bitcoin_signature *sig)
-{
-	u8 compact_sig[64];
-
-	secp256k1_ecdsa_signature_serialize_compact(secp256k1_ctx,
-						    compact_sig,
-						    &sig->s);
-	return tal_hexstr(NULL, compact_sig, sizeof(compact_sig));
-}
-
 static int parse_htlc(char *argv[],
 		      struct added_htlc **htlcs,
 		      enum htlc_state **htlc_states,
@@ -222,6 +215,33 @@ static const struct preimage *preimage_of(const struct sha256 *hash,
 	abort();
 }
 
+static char *sig_as_hex(const struct bitcoin_signature *sig)
+{
+	u8 compact_sig[64];
+
+	secp256k1_ecdsa_signature_serialize_compact(secp256k1_ctx,
+						    compact_sig,
+						    &sig->s);
+	return tal_hexstr(NULL, compact_sig, sizeof(compact_sig));
+}
+
+
+static char *sig_notation(const struct sha256_double *hash,
+			  const struct privkey *privkey,
+			  const struct bitcoin_signature *sig)
+{
+	const char *pstr = tal_hexstr(NULL, privkey->secret.data, sizeof(privkey->secret.data));
+	const char *hstr = type_to_string(NULL, struct sha256_double, hash);
+
+	if (verbose)
+		return tal_fmt(NULL,
+			       "SIG(%s:%s)\n privkey: %s\n tx_hash: %s\n"
+			       " sig: %s",
+			       pstr, hstr, pstr, hstr, sig_as_hex(sig));
+
+	return tal_fmt(NULL, "SIG(%s:%s)", pstr, hstr);
+}
+
 int main(int argc, char *argv[])
 {
 	struct secrets local, remote;
@@ -232,7 +252,7 @@ int main(int argc, char *argv[])
 	struct amount_sat funding_amount;
 	struct bitcoin_txid funding_txid;
 	unsigned int funding_outnum;
-	u32 feerate_per_kw[NUM_SIDES];
+	u32 feerate_per_kw;
 	struct pubkey local_per_commit_point, remote_per_commit_point;
 	struct bitcoin_signature local_sig, remote_sig;
 	struct channel_config localconfig, remoteconfig;
@@ -250,9 +270,10 @@ int main(int argc, char *argv[])
 	struct privkey local_htlc_privkey, remote_htlc_privkey;
 	struct pubkey local_htlc_pubkey, remote_htlc_pubkey;
 	bool option_static_remotekey = false;
-	const struct chainparams *chainparams = chainparams_for_network("groestlcoin");
+	struct sha256_double hash;
 
 	setup_locale();
+	chainparams = chainparams_for_network("groestlcoin");
 
 	secp256k1_ctx = secp256k1_context_create(SECP256K1_CONTEXT_VERIFY |
 						 SECP256K1_CONTEXT_SIGN);
@@ -298,7 +319,7 @@ int main(int argc, char *argv[])
 	if (!parse_amount_sat(&funding_amount, argv[argnum], strlen(argv[argnum])))
 		errx(1, "Bad funding-amount");
 	argnum++;
-	feerate_per_kw[LOCAL] = feerate_per_kw[REMOTE] = atoi(argv[argnum++]);
+	feerate_per_kw = atoi(argv[argnum++]);
 	if (!parse_amount_msat(&local_msat,
 			       argv[argnum], strlen(argv[argnum])))
 		errx(1, "Bad local-msat");
@@ -319,6 +340,9 @@ int main(int argc, char *argv[])
 
 	if (!amount_sat_sub_msat(&remote_msat, funding_amount, local_msat))
 		errx(1, "Can't afford local_msat");
+
+	if (option_static_remotekey)
+		printf("Using option-static-remotekey\n");
 
 	printf("## HTLCs\n");
 	while (argnum < argc) {
@@ -358,12 +382,11 @@ int main(int argc, char *argv[])
 			 &remotebase, &funding_remotekey, commitnum);
 
 	channel = new_full_channel(NULL,
-				   &chainparams_for_network("regtest")
-				   ->genesis_blockhash,
 				   &funding_txid, funding_outnum, 1,
 				   funding_amount,
 				   local_msat,
-				   feerate_per_kw,
+				   take(new_fee_states(NULL, fee_payer,
+						       &feerate_per_kw)),
 				   &localconfig, &remoteconfig,
 				   &localbase, &remotebase,
 				   &funding_localkey, &funding_remotekey,
@@ -382,30 +405,37 @@ int main(int argc, char *argv[])
 	if (!per_commit_point(&localseed, &local_per_commit_point, commitnum))
 		errx(1, "Bad deriving local per-commitment-point");
 
-	local_txs = channel_txs(NULL, chainparams, &htlcmap, &wscripts, channel,
+	local_txs = channel_txs(NULL, &htlcmap, &wscripts, channel,
 				&local_per_commit_point, commitnum, LOCAL);
 
 	printf("## local_commitment\n"
-	       "# input amount %s, funding_wscript %s, key %s\n",
+	       "# input amount %s, funding_wscript %s, pubkey %s\n",
 	       type_to_string(NULL, struct amount_sat, &funding_amount),
 	       tal_hex(NULL, funding_wscript),
 	       type_to_string(NULL, struct pubkey, &funding_localkey));
 	printf("# unsigned local commitment tx: %s\n",
 	       tal_hex(NULL, linearize_tx(NULL, local_txs[0])));
 
+	/* Get the hash out, for printing */
+	bitcoin_tx_hash_for_sig(local_txs[0], 0, funding_wscript,
+				SIGHASH_ALL, &hash);
 	sign_tx_input(local_txs[0], 0, NULL, funding_wscript,
 		      &local.funding_privkey,
 		      &funding_localkey,
 		      SIGHASH_ALL,
 		      &local_sig);
-	printf("localsig_on_local: %s\n", sig_as_hex(&local_sig));
+	printf("localsig_on_local: %s\n", sig_notation(&hash,
+						       &local.funding_privkey,
+						       &local_sig));
 
 	sign_tx_input(local_txs[0], 0, NULL, funding_wscript,
 		      &remote.funding_privkey,
 		      &funding_remotekey,
 		      SIGHASH_ALL,
 		      &remote_sig);
-	printf("remotesig_on_local: %s\n", sig_as_hex(&remote_sig));
+	printf("remotesig_on_local: %s\n", sig_notation(&hash,
+							&remote.funding_privkey,
+							&remote_sig));
 
 	witness =
 		bitcoin_witness_2of2(NULL, &local_sig, &remote_sig,
@@ -452,6 +482,9 @@ int main(int argc, char *argv[])
 			= tal_dup(local_txs[1+i], struct amount_sat, &amt);
 
 		printf("# wscript: %s\n", tal_hex(NULL, wscripts[1+i]));
+
+		bitcoin_tx_hash_for_sig(local_txs[1+i], 0, wscripts[1+i],
+					SIGHASH_ALL, &hash);
 		sign_tx_input(local_txs[1+i], 0, NULL, wscripts[1+i],
 			      &local_htlc_privkey, &local_htlc_pubkey,
 			      SIGHASH_ALL, &local_htlc_sig);
@@ -459,9 +492,9 @@ int main(int argc, char *argv[])
 			      &remote_htlc_privkey, &remote_htlc_pubkey,
 			      SIGHASH_ALL, &remote_htlc_sig);
 		printf("localsig_on_local output %zu: %s\n",
-		       i, sig_as_hex(&local_htlc_sig));
+		       i, sig_notation(&hash, &local_htlc_privkey, &local_htlc_sig));
 		printf("remotesig_on_local output %zu: %s\n",
-		       i, sig_as_hex(&remote_htlc_sig));
+		       i, sig_notation(&hash, &remote_htlc_privkey, &remote_htlc_sig));
 
 		if (htlc_owner(htlcmap[i]) == LOCAL)
 			witness = bitcoin_witness_htlc_timeout_tx(NULL,
@@ -483,7 +516,7 @@ int main(int argc, char *argv[])
 	/* Create the remote commitment tx */
 	if (!per_commit_point(&remoteseed, &remote_per_commit_point, commitnum))
 		errx(1, "Bad deriving remote per-commitment-point");
-	remote_txs = channel_txs(NULL, chainparams, &htlcmap, &wscripts, channel,
+	remote_txs = channel_txs(NULL, &htlcmap, &wscripts, channel,
 				 &remote_per_commit_point, commitnum, REMOTE);
 	remote_txs[0]->input_amounts[0]
 		= tal_dup(remote_txs[0], struct amount_sat, &funding_amount);
@@ -496,19 +529,25 @@ int main(int argc, char *argv[])
 	printf("# unsigned remote commitment tx: %s\n",
 	       tal_hex(NULL, linearize_tx(NULL, remote_txs[0])));
 
+	bitcoin_tx_hash_for_sig(remote_txs[0], 0, funding_wscript,
+				SIGHASH_ALL, &hash);
 	sign_tx_input(remote_txs[0], 0, NULL, funding_wscript,
 		      &local.funding_privkey,
 		      &funding_localkey,
 		      SIGHASH_ALL,
 		      &local_sig);
-	printf("localsig_on_remote: %s\n", sig_as_hex(&local_sig));
+	printf("localsig_on_remote: %s\n", sig_notation(&hash,
+							&local.funding_privkey,
+							&local_sig));
 
 	sign_tx_input(remote_txs[0], 0, NULL, funding_wscript,
 		      &remote.funding_privkey,
 		      &funding_remotekey,
 		      SIGHASH_ALL,
 		      &remote_sig);
-	printf("remotesig_on_remote: %s\n", sig_as_hex(&remote_sig));
+	printf("remotesig_on_remote: %s\n", sig_notation(&hash,
+							 &remote.funding_privkey,
+							 &remote_sig));
 
 	witness =
 		bitcoin_witness_2of2(NULL, &local_sig, &remote_sig,
@@ -555,6 +594,8 @@ int main(int argc, char *argv[])
 			= tal_dup(remote_txs[1+i], struct amount_sat, &amt);
 
 		printf("# wscript: %s\n", tal_hex(NULL, wscripts[1+i]));
+		bitcoin_tx_hash_for_sig(remote_txs[1+i], 0, wscripts[1+i],
+					SIGHASH_ALL, &hash);
 		sign_tx_input(remote_txs[1+i], 0, NULL, wscripts[1+i],
 			      &local_htlc_privkey, &local_htlc_pubkey,
 			      SIGHASH_ALL, &local_htlc_sig);
@@ -562,9 +603,9 @@ int main(int argc, char *argv[])
 			      &remote_htlc_privkey, &remote_htlc_pubkey,
 			      SIGHASH_ALL, &remote_htlc_sig);
 		printf("localsig_on_remote output %zu: %s\n",
-		       i, sig_as_hex(&local_htlc_sig));
+		       i, sig_notation(&hash, &local_htlc_privkey, &local_htlc_sig));
 		printf("remotesig_on_remote output %zu: %s\n",
-		       i, sig_as_hex(&remote_htlc_sig));
+		       i, sig_notation(&hash, &remote_htlc_privkey, &remote_htlc_sig));
 
 		if (htlc_owner(htlcmap[i]) == REMOTE)
 			witness = bitcoin_witness_htlc_timeout_tx(NULL,

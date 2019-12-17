@@ -10,14 +10,12 @@
 /**
  * new_full_channel: Given initial fees and funding, what is initial state?
  * @ctx: tal context to allocate return value from.
- * @chain_hash: Which blockchain are we talking about?
  * @funding_txid: The commitment transaction id.
  * @funding_txout: The commitment transaction output number.
  * @minimum_depth: The minimum confirmations needed for funding transaction.
  * @funding: The commitment transaction amount.
  * @local_msat: The amount for the local side (remainder goes to remote)
- * @feerate_per_kw: feerate per kiloweight (satoshis) for the commitment
- *   transaction and HTLCS for each side.
+ * @fee_states: The fee update states.
  * @local: local channel configuration
  * @remote: remote channel configuration
  * @local_basepoints: local basepoints.
@@ -30,13 +28,12 @@
  * Returns state, or NULL if malformed.
  */
 struct channel *new_full_channel(const tal_t *ctx,
-				 const struct bitcoin_blkid *chain_hash,
 				 const struct bitcoin_txid *funding_txid,
 				 unsigned int funding_txout,
 				 u32 minimum_depth,
 				 struct amount_sat funding,
 				 struct amount_msat local_msat,
-				 const u32 feerate_per_kw[NUM_SIDES],
+				 const struct fee_states *fee_states,
 				 const struct channel_config *local,
 				 const struct channel_config *remote,
 				 const struct basepoints *local_basepoints,
@@ -49,7 +46,6 @@ struct channel *new_full_channel(const tal_t *ctx,
 /**
  * channel_txs: Get the current commitment and htlc txs for the channel.
  * @ctx: tal context to allocate return value from.
- * @chainparams: Parameters for the generated transactions.
  * @channel: The channel to evaluate
  * @htlc_map: Pointer to htlcs for each tx output (allocated off @ctx).
  * @wscripts: Pointer to array of wscript for each tx returned (alloced off @ctx)
@@ -62,7 +58,6 @@ struct channel *new_full_channel(const tal_t *ctx,
  * fills in @htlc_map, or NULL on key derivation failure.
  */
 struct bitcoin_tx **channel_txs(const tal_t *ctx,
-				const struct chainparams *chainparams,
 				const struct htlc ***htlcmap,
 				const u8 ***wscripts,
 				const struct channel *channel,

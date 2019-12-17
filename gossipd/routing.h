@@ -133,6 +133,11 @@ HTABLE_DEFINE_TYPE(struct local_chan,
 		   local_chan_map_scid, hash_scid, local_chan_eq_scid,
 		   local_chan_map);
 
+enum route_hop_style {
+	ROUTE_HOP_LEGACY = 1,
+	ROUTE_HOP_TLV = 2,
+};
+
 /* For a small number of channels (by far the most common) we use a simple
  * array, with empty buckets NULL.  For larger, we use a proper hash table,
  * with the extra allocation that implies. */
@@ -146,6 +151,9 @@ struct node {
 
 	/* Token bucket */
 	u8 tokens;
+
+	/* route_hop_style */
+	enum route_hop_style hop_style;
 
 	/* Channels connecting us to other nodes */
 	union {
@@ -252,9 +260,6 @@ static inline int half_chan_to(const struct node *n, const struct chan *chan)
 }
 
 struct routing_state {
-	/* Which chain we're on */
-	const struct chainparams *chainparams;
-
 	/* TImers base from struct gossipd. */
 	struct timers *timers;
 
@@ -320,6 +325,7 @@ struct route_hop {
 	struct node_id nodeid;
 	struct amount_msat amount;
 	u32 delay;
+	enum route_hop_style style;
 };
 
 enum exclude_entry_type {
@@ -336,7 +342,6 @@ struct exclude_entry {
 };
 
 struct routing_state *new_routing_state(const tal_t *ctx,
-					const struct chainparams *chainparams,
 					const struct node_id *local_id,
 					struct list_head *peers,
 					struct timers *timers,
@@ -473,7 +478,9 @@ bool routing_add_node_announcement(struct routing_state *rstate,
  * is the case for private channels or channels that have not yet reached
  * `announce_depth`.
  */
-bool handle_local_add_channel(struct routing_state *rstate, const u8 *msg,
+bool handle_local_add_channel(struct routing_state *rstate,
+			      const struct peer *peer,
+			      const u8 *msg,
 			      u64 index);
 
 /**
@@ -529,4 +536,8 @@ void remove_channel_from_store(struct routing_state *rstate,
 const char *unfinalized_entries(const tal_t *ctx, struct routing_state *rstate);
 
 void remove_all_gossip(struct routing_state *rstate);
+
+/* This scid is dead to us. */
+void add_to_txout_failures(struct routing_state *rstate,
+			   const struct short_channel_id *scid);
 #endif /* LIGHTNING_GOSSIPD_ROUTING_H */

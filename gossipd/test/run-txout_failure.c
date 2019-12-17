@@ -16,7 +16,7 @@ bool fromwire_wireaddr(const u8 **cursor UNNEEDED, size_t *max UNNEEDED, struct 
 { fprintf(stderr, "fromwire_wireaddr called!\n"); abort(); }
 /* Generated stub for gossip_store_add */
 u64 gossip_store_add(struct gossip_store *gs UNNEEDED, const u8 *gossip_msg UNNEEDED,
-		     u32 timestamp UNNEEDED, const u8 *addendum UNNEEDED)
+		     u32 timestamp UNNEEDED, bool push UNNEEDED, const u8 *addendum UNNEEDED)
 { fprintf(stderr, "gossip_store_add called!\n"); abort(); }
 /* Generated stub for gossip_store_add_private_update */
 u64 gossip_store_add_private_update(struct gossip_store *gs UNNEEDED, const u8 *update UNNEEDED)
@@ -64,7 +64,9 @@ char *sanitize_error(const tal_t *ctx UNNEEDED, const u8 *errmsg UNNEEDED,
 		     struct channel_id *channel_id UNNEEDED)
 { fprintf(stderr, "sanitize_error called!\n"); abort(); }
 /* Generated stub for status_fmt */
-void status_fmt(enum log_level level UNNEEDED, const char *fmt UNNEEDED, ...)
+void status_fmt(enum log_level level UNNEEDED,
+		const struct node_id *peer UNNEEDED,
+		const char *fmt UNNEEDED, ...)
 
 { fprintf(stderr, "status_fmt called!\n"); abort(); }
 /* Generated stub for towire_errorfmt */
@@ -96,7 +98,7 @@ int main(void)
 
 	timers_init(&timers, time_mono());
 	/* Random uninitalized node_id, we don't reference it. */
-	rstate = new_routing_state(tmpctx, NULL, tal(tmpctx, struct node_id),
+	rstate = new_routing_state(tmpctx, tal(tmpctx, struct node_id),
 				   NULL, &timers, NULL, false, false);
 
 	scid1.u64 = 100;
