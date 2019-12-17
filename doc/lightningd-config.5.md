@@ -9,14 +9,18 @@ SYNOPSIS
 DESCRIPTION
 -----------
 
-When lightningd(8) starts up, it reads a configuration file. By default
-that is *config* in the **.lightning** subdirectory of the home
-directory (if it exists), but that can be changed by the
-*--lightning-dir* or *--conf* options on the lightningd(8) command line.
+When lightningd(8) starts up it usually reads a general configuration
+file (default: **$HOME/.lightning/config**) then a network-specific
+configuration file (default: **$HOME/.lightning/testnet/config**).  This can
+be changed: see *--conf* and *--lightning-dir*.
 
-Configuration file options are processed first, then command line
-options: later options override earlier ones except *addr* options which
+General configuration files are processed first, then network-specific
+ones, then command line options: later options override earlier ones
+except *addr* options and *log-level* with subsystems, which
 accumulate.
+
+*include * followed by a filename includes another configuration file at that
+point, relative to the current configuration file.
 
 All these options are mirrored as commandline arguments to
 lightningd(8), so *--foo* becomes simply *foo* in the configuration
@@ -57,6 +61,7 @@ Bitcoin control options:
 
  **network**=*NETWORK*
 Select the network parameters (*bitcoin*, *testnet*, or *regtest*).
+This is not valid within the per-network configuration file.
 
  **testnet**
 Alias for *network=testnet*.
@@ -98,14 +103,41 @@ wrong.
 
  **lightning-dir**=*DIR*
 Sets the working directory. All files (except *--conf* and
-*--lightning-dir* on the command line) are relative to this.
+*--lightning-dir* on the command line) are relative to this.  This
+is only valid on the command-line, or in a configuration file specified
+by *--conf*.
 
  **pid-file**=*PATH*
 Specify pid file to write to.
 
- **log-level**=*LEVEL*
+ **log-level**=*LEVEL*\[:*SUBSYSTEM*\]
 What log level to print out: options are io, debug, info, unusual,
-broken.
+broken.  If *SUBSYSTEM* is supplied, this sets the logging level
+for any subsystem containing that string.  Subsystems include:
+
+* *lightningd*: The main lightning daemon
+* *database*: The database subsystem
+* *wallet*: The wallet subsystem
+* *gossipd*: The gossip daemon
+* *plugin-manager*: The plugin subsystem
+* *plugin-P*: Each plugin, P = plugin path without directory
+* *hsmd*: The secret-holding daemon
+* *gossipd*: The gossip daemon
+* *connectd*: The network connection daemon
+* *jsonrpc#FD*: Each JSONRPC connection, FD = file descriptor number
+
+
+  The following subsystems exist for each channel, where N is an incrementing
+internal integer id assigned for the lifetime of the channel:
+* *openingd-chan#N*: Each opening / idling daemon
+* *channeld-chan#N*: Each channel management daemon
+* *closingd-chan#N*: Each closing negotiation daemon
+* *onchaind-chan#N*: Each onchain close handling daemon
+
+
+  So, **log-level=debug:plugin** would set debug level logging on all
+plugins and the plugin manager.  **log-level=io:chan#55** would set
+IO logging on channel number 55 (or 550, for that matter).
 
  **log-prefix**=*PREFIX*
 Prefix for log lines: this can be customized if you want to merge logs
@@ -122,11 +154,11 @@ Set JSON-RPC socket (or /dev/tty), such as for lightning-cli(1).
 Run in the background, suppress stdout and stderr.
 
  **conf**=*PATH*
-Sets configuration file (default: **lightning-dir**/*config* ). If this
-is a relative path, it is relative to the starting directory, not
+Sets configuration file, and disable reading the normal general and network
+ones. If this is a relative path, it is relative to the starting directory, not
 **lightning-dir** (unlike other paths). *PATH* must exist and be
 readable (we allow missing files in the default case). Using this inside
-a configuration file is meaningless.
+a configuration file is invalid.
 
  **wallet**=*DSN*
 Identify the location of the wallet. This is a fully qualified data source
@@ -140,14 +172,14 @@ Note that once you encrypt the `hsm_secret` this option will be mandatory for
 
 ### Lightning node customization options
 
- **alias**=*RRGGBB*
- **rgb**=*RRGGBB*
-Your favorite color as a hex code.
-
-Up to 32 UTF-8 characters to tag your node. Completely silly, since
+ **alias**=*NAME*
+Up to 32 bytes of UTF-8 characters to tag your node. Completely silly, since
 anyone can call their node anything they want. The default is an
 NSA-style codename derived from your public key, but "Peter Todd" and
 "VAULTERO" are good options, too.
+
+ **rgb**=*RRGGBB*
+Your favorite color as a hex code.
 
  **fee-base**=*MILLISATOSHI*
 Default: 1000. The base fee to charge for every payment which passes
@@ -174,7 +206,7 @@ This may result in a channel which cannot be closed, should fees
 increase, but make channels far more reliable since we never close it
 due to unreasonable fees.
 
- **commit-time**='MILLISECONDS
+ **commit-time**=*MILLISECONDS*
 How long to wait before sending commitment messages to the peer: in
 theory increasing this would reduce load, but your node would have to be
 extremely busy node for you to even notice.
@@ -244,7 +276,8 @@ precisely control where to bind and what to announce with the
 *bind-addr* and *announce-addr* options. These will **disable** the
 *autolisten* logic, so you must specifiy exactly what you want!
 
- **addr**=*\[IPADDRESS\[:PORT\]\]|autotor:TORIPADDRESS\[:TORPORT\]*
+ **addr**=*\[IPADDRESS\[:PORT\]\]|autotor:TORIPADDRESS\[:SERVICEPORT\]\[/torport=TORPORT\]|statictor:TORIPADDRESS\[:SERVICEPORT\]\[/torport=TORPORT\]\[/torblob=\[blob\]\]*
+
 Set an IP address (v4 or v6) or automatic Tor address to listen on and
 (maybe) announce as our node address.
 
@@ -260,6 +293,18 @@ Set an IP address (v4 or v6) or automatic Tor address to listen on and
     and this will be used to configure a Tor hidden service for port
     9735.  The Tor hidden service will be configured to point to the
     first IPv4 or IPv6 address we bind to.
+
+    If the argument begins with 'statictor:' then it is followed by the
+    IPv4 or IPv6 address of the Tor control port (default port 9051),
+    and this will be used to configure a static Tor hidden service for port
+    9735.  The Tor hidden service will be configured to point to the
+    first IPv4 or IPv6 address we bind to and is by default unique to
+    your nodes id. You can add the text '/torblob=BLOB' followed by up to
+    64 Bytes of text to generate from this text a v3 onion service
+    address text unique to the first 32 Byte of this text.
+    You can also use an postfix '/torport=TORPORT' to select the external
+    tor binding. The result is that over tor your node is accessible by a port
+    defined by you and possible different from your local node port assignment
 
     This option can be used multiple times to add more addresses, and
     its use disables autolisten.  If necessary, and 'always-use-proxy'

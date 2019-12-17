@@ -9,6 +9,7 @@
 #include <common/amount.h>
 #include <common/json.h>
 #include <common/json_helpers.h>
+#include <common/onion.h>
 #include <common/sphinx.h>
 #include <common/utils.h>
 #include <common/version.h>
@@ -29,78 +30,64 @@ static void do_generate(int argc, char **argv,
 	struct secret session_key;
 	struct secret *shared_secrets;
 	struct sphinx_path *sp;
-	struct hop_data hops_data[num_hops];
 
-	assocdata = tal_arr(ctx, u8, ASSOC_DATA_SIZE);
+	const u8* tmp_assocdata =tal_dup_arr(ctx, u8, assocdata,
+					  ASSOC_DATA_SIZE, 0);
 	memset(&session_key, 'A', sizeof(struct secret));
 
-	sp = sphinx_path_new_with_key(ctx, assocdata, &session_key);
+	sp = sphinx_path_new_with_key(ctx, tmp_assocdata, &session_key);
 
 	for (int i = 0; i < num_hops; i++) {
-		size_t klen = strcspn(argv[1 + i], "/");
+		size_t klen = strcspn(argv[2 + i], "/");
 		if (hex_data_size(klen) == PRIVKEY_LEN) {
-			if (!hex_decode(argv[1 + i], klen, rawprivkey, PRIVKEY_LEN))
+			if (!hex_decode(argv[2 + i], klen, rawprivkey, PRIVKEY_LEN))
 				errx(1, "Invalid private key hex '%s'",
-				     argv[1 + i]);
+				     argv[2 + i]);
 
 			if (secp256k1_ec_pubkey_create(secp256k1_ctx,
 						       &path[i].pubkey,
 						       rawprivkey) != 1)
 				errx(1, "Could not decode pubkey");
 		} else if (hex_data_size(klen) == PUBKEY_CMPR_LEN) {
-			if (!pubkey_from_hexstr(argv[i + 1], klen, &path[i]))
+			if (!pubkey_from_hexstr(argv[2 + i], klen, &path[i]))
 				errx(1, "Invalid public key hex '%s'",
-				     argv[1 + i]);
+				     argv[2 + i]);
 		} else {
 			errx(1,
 			     "Provided key is neither a pubkey nor a privkey: "
 			     "%s\n",
-			     argv[1 + i]);
+			     argv[2 + i]);
 		}
 
-		memset(&hops_data[i], 0, sizeof(hops_data[i]));
-		if (argv[1 + i][klen] != '\0') {
-			/* FIXME: Generic realm support, not this hack! */
-			/* FIXME: Multi hop! */
-			const char *hopstr = argv[1 + i] + klen + 1;
-			size_t dsize = hex_data_size(strlen(hopstr));
-			be64 scid, msat;
-			be32 cltv;
-			u8 padding[12];
-			if (dsize != 33)
-				errx(1, "hopdata expected 33 bytes");
-			if (!hex_decode(hopstr, 2,
-					&hops_data[i].realm,
-					sizeof(hops_data[i].realm))
-			    || !hex_decode(hopstr + 2, 16,
-					   &scid, sizeof(scid))
-			    || !hex_decode(hopstr + 2 + 16, 16,
-					   &msat, sizeof(msat))
-			    || !hex_decode(hopstr + 2 + 16 + 16, 8,
-					   &cltv, sizeof(cltv))
-			    || !hex_decode(hopstr + 2 + 16 + 16 + 8, 24,
-					   padding, sizeof(padding)))
-				errx(1, "hopdata bad hex");
-			if (hops_data[i].realm != 0)
-				errx(1, "FIXME: Only realm 0 supported");
-			if (!memeqzero(padding, sizeof(padding)))
-				errx(1, "FIXME: Only zero padding supported");
-			/* Fix endian up */
-			hops_data[i].channel_id.u64
-				= be64_to_cpu(scid);
-			hops_data[i].amt_forward.millisatoshis /* Raw: test code */
-				= be64_to_cpu(msat);
-			hops_data[i].outgoing_cltv
-				= be32_to_cpu(cltv);
+		/* /<hex> -> raw hopdata. /tlv -> TLV encoding. */
+		if (argv[2 + i][klen] != '\0' && argv[2 + i][klen] != 't') {
+			const char *hopstr = argv[2 + i] + klen + 1;
+			u8 *data = tal_hexdata(ctx, hopstr, strlen(hopstr));
+
+			if (!data)
+				errx(1, "bad hex after / in %s", argv[1 + i]);
+			sphinx_add_hop(sp, &path[i], data);
 		} else {
-			hops_data[i].realm = i;
-			memset(&hops_data[i].channel_id, i,
-			       sizeof(hops_data[i].channel_id));
-			hops_data[i].amt_forward.millisatoshis = i; /* Raw: test code */
-			hops_data[i].outgoing_cltv = i;
+			struct short_channel_id scid;
+			struct amount_msat amt;
+			bool use_tlv = streq(argv[1 + i] + klen, "/tlv");
+
+			/* FIXME: support secret and and total_msat */
+			memset(&scid, i, sizeof(scid));
+			amt.millisatoshis = i; /* Raw: test code */
+			if (i == num_hops - 1)
+				sphinx_add_hop(sp, &path[i],
+					       take(onion_final_hop(NULL,
+								    use_tlv,
+								    amt, i, amt,
+								    NULL)));
+			else
+				sphinx_add_hop(sp, &path[i],
+					       take(onion_nonfinal_hop(NULL,
+								       use_tlv,
+								       &scid,
+								       amt, i)));
 		}
-		fprintf(stderr, "Hopdata %d: %s\n", i, tal_hexstr(NULL, &hops_data[i], sizeof(hops_data[i])));
-		sphinx_add_v0_hop(sp, &path[i], &hops_data[i].channel_id, hops_data[i].amt_forward, i);
 	}
 
 	struct onionpacket *res = create_onionpacket(ctx, sp, &shared_secrets);
@@ -116,21 +103,21 @@ static struct route_step *decode_with_privkey(const tal_t *ctx, const u8 *onion,
 {
 	struct privkey seckey;
 	struct route_step *step;
-	struct onionpacket *packet;
+	struct onionpacket packet;
 	enum onion_type why_bad;
 	u8 shared_secret[32];
 	if (!hex_decode(hexprivkey, strlen(hexprivkey), &seckey, sizeof(seckey)))
 		errx(1, "Invalid private key hex '%s'", hexprivkey);
 
-	packet = parse_onionpacket(ctx, onion, TOTAL_PACKET_SIZE, &why_bad);
+	why_bad = parse_onionpacket(onion, TOTAL_PACKET_SIZE, &packet);
 
-	if (!packet)
+	if (why_bad != 0)
 		errx(1, "Error parsing message: %s", onion_type_name(why_bad));
 
-	if (!onion_shared_secret(shared_secret, packet, &seckey))
+	if (!onion_shared_secret(shared_secret, &packet, &seckey))
 		errx(1, "Error creating shared secret.");
 
-	step = process_onionpacket(ctx, packet, shared_secret, assocdata,
+	step = process_onionpacket(ctx, &packet, shared_secret, assocdata,
 				   tal_bytelen(assocdata));
 	return step;
 
@@ -141,20 +128,24 @@ static void do_decode(int argc, char **argv, const u8 assocdata[ASSOC_DATA_SIZE]
 	const tal_t *ctx = talz(NULL, tal_t);
 	u8 serialized[TOTAL_PACKET_SIZE];
 	struct route_step *step;
-	char hextemp[2 * sizeof(serialized)];
-	memset(hextemp, 0, sizeof(hextemp));
 
-	if (argc != 3)
-		opt_usage_exit_fail("Expect a privkey with --decode");
+	if (argc != 4)
+		opt_usage_exit_fail("Expect an filename and privkey with 'decode' method");
 
-	if (!read_all(STDIN_FILENO, hextemp, sizeof(hextemp)))
-		errx(1, "Reading in onion");
+	char *hextemp = grab_file(ctx, argv[2]);
+	size_t hexlen = strlen(hextemp);
 
-	if (!hex_decode(hextemp, sizeof(hextemp), serialized, sizeof(serialized))) {
+	// trim trailing whitespace
+	while (isspace(hextemp[hexlen-1]))
+		hexlen--;
+
+	if (!hex_decode(hextemp, hexlen, serialized, sizeof(serialized))) {
 		errx(1, "Invalid onion hex '%s'", hextemp);
 	}
 
-	step = decode_with_privkey(ctx, serialized, tal_strdup(ctx, argv[2]), assocdata);
+	const u8* tmp_assocdata =tal_dup_arr(ctx, u8, assocdata,
+					  ASSOC_DATA_SIZE, 0);
+	step = decode_with_privkey(ctx, serialized, tal_strdup(ctx, argv[3]), tmp_assocdata);
 
 	if (!step || !step->next)
 		errx(1, "Error processing message.");
@@ -196,7 +187,6 @@ static void runtest(const char *filename)
 	struct pubkey pubkey;
 	struct sphinx_path *path;
 	size_t i;
-	enum sphinx_payload_type type;
 	struct onionpacket *res;
 	struct route_step *step;
 	char *hexprivkey;
@@ -220,17 +210,26 @@ static void runtest(const char *filename)
 	/* Unpack the hops and build up the path */
 	hopstok = json_get_member(buffer, gentok, "hops");
 	json_for_each_arr(i, hop, hopstok) {
+		u8 *full;
+		size_t prepended;
+
 		payloadtok = json_get_member(buffer, hop, "payload");
 		typetok = json_get_member(buffer, hop, "type");
 		pubkeytok = json_get_member(buffer, hop, "pubkey");
 		payload = json_tok_bin_from_hex(ctx, buffer, payloadtok);
 		json_to_pubkey(buffer, pubkeytok, &pubkey);
 		if (!typetok || json_tok_streq(buffer, typetok, "legacy")) {
-			type = SPHINX_V0_PAYLOAD;
+			/* Legacy has a single 0 prepended as "realm" byte */
+			full = tal_arrz(ctx, u8, 1);
 		} else {
-			type = SPHINX_RAW_PAYLOAD;
+			/* TLV has length prepended */
+			full = tal_arr(ctx, u8, 0);
+			towire_bigsize(&full, tal_bytelen(payload));
 		}
-		sphinx_add_raw_hop(path, &pubkey, type, payload);
+		prepended = tal_bytelen(full);
+		tal_resize(&full, prepended + tal_bytelen(payload));
+		memcpy(full + prepended, payload, tal_bytelen(payload));
+		sphinx_add_hop(path, &pubkey, full);
 	}
 	res = create_onionpacket(ctx, path, &shared_secrets);
 	serialized = serialize_onionpacket(ctx, res);
@@ -255,13 +254,20 @@ static void runtest(const char *filename)
 	decodetok = json_get_member(buffer, toks, "decode");
 
 	json_for_each_arr(i, hop, decodetok) {
+		enum onion_payload_type type;
+		bool valid;
+
 		hexprivkey = json_strdup(ctx, buffer, hop);
 		printf("Processing at hop %zu\n", i);
 		step = decode_with_privkey(ctx, serialized, hexprivkey, associated_data);
 		serialized = serialize_onionpacket(ctx, step->next);
 		if (!serialized)
 			errx(1, "Error serializing message.");
-		printf("  Type: %d\n", step->type);
+		onion_payload_length(step->raw_payload,
+				     tal_bytelen(step->raw_payload),
+				     &valid, &type);
+		assert(valid);
+		printf("  Type: %d\n", type);
 		printf("  Payload: %s\n", tal_hex(ctx, step->raw_payload));
 		printf("  Next onion: %s\n", tal_hex(ctx, serialized));
 		printf("  Next HMAC: %s\n", tal_hexstr(ctx, step->next->mac, HMAC_SIZE));
@@ -304,11 +310,14 @@ int main(int argc, char **argv)
 			 assocdata,
 			 "Associated data (usu. payment_hash of payment)");
 	opt_register_noarg("--help|-h", opt_usage_and_exit,
-			   "\n\n\tdecode <onion>\n"
+			   "\n\n\tdecode <onion_file> <privkey>\n"
 			   "\tgenerate <pubkey1> <pubkey2> ...\n"
-			   "\tgenerate <pubkey1>[/hopdata] <pubkey2>[/hopdata]\n"
-			   "\tgenerate <privkey1>[/hopdata] <privkey2>[/hopdata]\n"
-			   "\truntest <test-filename>\n\n", "Show this message");
+			   "\tgenerate <pubkey1>[/hopdata|/tlv] <pubkey2>[/hopdata|/tlv]\n"
+			   "\tgenerate <privkey1>[/hopdata|/tlv] <privkey2>[/hopdata|/tlv]\n"
+			   "\truntest <test-filename>\n\n", "Show this message\n\n"
+			   "\texample:\n"
+			   "\t> onion generate 02c18e7ff9a319983e85094b8c957da5c1230ecb328c1f1c7e88029f1fec2046f8/00000000000000000000000000000f424000000138000000000000000000000000 --assoc-data 44ee26f01e54665937b892f6afbfdfb88df74bcca52d563f088668cf4490aacd > onion.dat\n"
+			   "\t> onion decode onion.dat 78302c8edb1b94e662464e99af721054b6ab9d577d3189f933abde57709c5cb8 --assoc-data 44ee26f01e54665937b892f6afbfdfb88df74bcca52d563f088668cf4490aacd\n");
 	opt_register_version();
 
 	opt_early_parse(argc, argv, opt_log_stderr_exit);

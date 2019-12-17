@@ -39,9 +39,6 @@ struct daemon {
 	/* Routing information */
 	struct routing_state *rstate;
 
-	/* chainhash for checking/making gossip msgs */
-	struct bitcoin_blkid chain_hash;
-
 	/* Timers: we batch gossip, and also refresh announcements */
 	struct timers timers;
 
@@ -124,9 +121,6 @@ void peer_supplied_good_gossip(struct peer *peer, size_t amount);
 /* Pick a random peer which passes check_peer */
 struct peer *random_peer(struct daemon *daemon,
 			 bool (*check_peer)(const struct peer *peer));
-
-/* Push this gossip out to all peers immediately. */
-void push_gossip(struct daemon *daemon, const u8 *msg TAKES);
 
 /* Queue a gossip message for the peer: the subdaemon on the other end simply
  * forwards it to the peer. */

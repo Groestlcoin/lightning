@@ -27,6 +27,15 @@ struct peer {
 	u8 *msg;
 };
 
+static bool contains_common_chain(struct bitcoin_blkid *chains)
+{
+	for (size_t i = 0; i < tal_count(chains); i++) {
+		if (bitcoin_blkid_eq(&chains[0], &chainparams->genesis_blockhash))
+			return true;
+	}
+	return false;
+}
+
 /* Here in case we need to read another message. */
 static struct io_plan *read_init(struct io_conn *conn, struct peer *peer);
 
@@ -35,11 +44,13 @@ static struct io_plan *peer_init_received(struct io_conn *conn,
 {
 	u8 *msg = cryptomsg_decrypt_body(tmpctx, &peer->cs, peer->msg);
 	u8 *globalfeatures, *features;
+	int unsup;
+	struct tlv_init_tlvs *tlvs = tlv_init_tlvs_new(msg);
 
 	if (!msg)
 		return io_close(conn);
 
-	status_peer_io(LOG_IO_IN, msg);
+	status_peer_io(LOG_IO_IN, &peer->id, msg);
 
 	/* BOLT #1:
 	 *
@@ -50,11 +61,32 @@ static struct io_plan *peer_init_received(struct io_conn *conn,
 	if (unlikely(is_unknown_msg_discardable(msg)))
 		return read_init(conn, peer);
 
-	if (!fromwire_init(tmpctx, msg, &globalfeatures, &features)) {
-		status_debug("peer %s bad fromwire_init '%s', closing",
-			     type_to_string(tmpctx, struct node_id, &peer->id),
-			     tal_hex(tmpctx, msg));
+	if (!fromwire_init(tmpctx, msg, &globalfeatures, &features, tlvs)) {
+		status_peer_debug(&peer->id,
+				  "bad fromwire_init '%s', closing",
+				  tal_hex(tmpctx, msg));
 		return io_close(conn);
+	}
+
+	/* BOLT-ef7c97c02b6fa67a1df1af30b3843eb576100ebd #1:
+	 * The receiving node:
+	 * ...
+	 *  - upon receiving `networks` containing no common chains
+	 *    - MAY fail the connection.
+	 */
+	if (tlvs->networks) {
+		if (!tlvs->networks->chains) {
+			status_peer_debug(&peer->id,
+			                  "bad networks TLV in init '%s', closing",
+			                  tal_hex(tmpctx, msg));
+			return io_close(conn);
+		}
+		if (!contains_common_chain(tlvs->networks->chains)) {
+			status_peer_debug(&peer->id,
+			                  "No common chain with this peer '%s', closing",
+			                  tal_hex(tmpctx, msg));
+			return io_close(conn);
+		}
 	}
 
 	/* The globalfeatures field is now unused, but there was a
@@ -73,12 +105,10 @@ static struct io_plan *peer_init_received(struct io_conn *conn,
 	 *  - upon receiving unknown _even_ feature bits that are non-zero:
 	 *    - MUST fail the connection.
 	 */
-	if (!features_supported(features)) {
-		const u8 *our_features = get_offered_features(msg);
-		msg = towire_errorfmt(NULL, NULL, "Unsupported features %s:"
-				      " we only offer features %s",
-				      tal_hex(msg, features),
-				      tal_hex(msg, our_features));
+	unsup = features_unsupported(features);
+	if (unsup != -1) {
+		msg = towire_errorfmt(NULL, NULL, "Unsupported feature %u",
+				      unsup);
 		msg = cryptomsg_encrypt_msg(NULL, &peer->cs, take(msg));
 		return io_write(conn, msg, tal_count(msg), io_close_cb, NULL);
 	}
@@ -137,18 +167,27 @@ struct io_plan *peer_exchange_initmsg(struct io_conn *conn,
 	/* If conn is closed, forget peer */
 	struct peer *peer = tal(conn, struct peer);
 	struct io_plan *(*next)(struct io_conn *, struct peer *);
+	struct tlv_init_tlvs *tlvs;
 
 	peer->daemon = daemon;
 	peer->id = *id;
 	peer->addr = *addr;
 	peer->cs = *cs;
 
-	/* BOLT #1:
+	/* BOLT-ef7c97c02b6fa67a1df1af30b3843eb576100ebd #1:
 	 *
 	 * The sending node:
 	 *   - MUST send `init` as the first Lightning message for any
 	 *     connection.
+	 *  ...
+	 *   - SHOULD set `networks` to all chains it will gossip or open
+	 *     channels for.
 	 */
+	tlvs = tlv_init_tlvs_new(tmpctx);
+	tlvs->networks = tal(tlvs, struct tlv_init_tlvs_networks);
+	tlvs->networks->chains = tal_arr(tlvs->networks, struct bitcoin_blkid, 1);
+	tlvs->networks->chains[0] = chainparams->genesis_blockhash;
+
 	/* Initially, there were two sets of feature bits: global and local.
 	 * Local affected peer nodes only, global affected everyone.  Both were
 	 * sent in the `init` message, but node_announcement only advertized
@@ -157,18 +196,20 @@ struct io_plan *peer_exchange_initmsg(struct io_conn *conn,
 	 * But we didn't have any globals for a long time, and it turned out
 	 * that people wanted us to broadcast local features so they could do
 	 * peer selection.  We agreed that the number spaces should be distinct,
-	 * but debate still rages on how to handle them.
+	 * but debate still raged on how to handle them.
 	 *
 	 * Meanwhile, we finally added a global bit to the spec, so now it
 	 * matters.  And LND v0.8 decided to make option_static_remotekey a
 	 * GLOBAL bit, not a local bit, so we need to send that as a global
-	 * bit here.  Thus, we send our full, combo, bitset as both global
-	 * and local bits. */
+	 * bit here.
+	 *
+	 * Finally, we agreed that bits below 13 could be put in both, but
+	 * from now on they'll all go in initfeatures. */
 	peer->msg = towire_init(NULL,
-				/* Features so nice, we send it twice! */
-				get_offered_features(tmpctx),
-				get_offered_features(tmpctx));
-	status_peer_io(LOG_IO_OUT, peer->msg);
+				get_offered_globalinitfeatures(tmpctx),
+				get_offered_initfeatures(tmpctx),
+				tlvs);
+	status_peer_io(LOG_IO_OUT, &peer->id, peer->msg);
 	peer->msg = cryptomsg_encrypt_msg(peer, &peer->cs, take(peer->msg));
 
 	next = read_init;

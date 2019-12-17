@@ -3,7 +3,7 @@ from fixtures import *  # noqa: F401,F403
 from fixtures import TEST_NETWORK
 from flaky import flaky  # noqa: F401
 from lightning import RpcError, Millisatoshi
-from utils import only_one, wait_for, sync_blockheight, EXPERIMENTAL_FEATURES, COMPAT, VALGRIND, SLOW_MACHINE
+from utils import only_one, wait_for, sync_blockheight, EXPERIMENTAL_FEATURES, COMPAT, VALGRIND
 
 import os
 import pytest
@@ -567,42 +567,116 @@ def test_transaction_annotations(node_factory, bitcoind):
 
 
 @unittest.skipIf(VALGRIND, "It does not play well with prompt and key derivation.")
-def test_hsm_secret_encryption(node_factory, executor):
-    l1 = node_factory.get_node()
+def test_hsm_secret_encryption(node_factory):
+    l1 = node_factory.get_node(may_fail=True)  # May fail when started without key
     password = "reckful\n"
     # We need to simulate a terminal to use termios in `lightningd`.
     master_fd, slave_fd = os.openpty()
 
     # Test we can encrypt an already-existing and not encrypted hsm_secret
-    l1.rpc.stop()
+    l1.stop()
     l1.daemon.opts.update({"encrypted-hsm": None})
     l1.daemon.start(stdin=slave_fd, wait_for_initialized=False)
-    time.sleep(3 if SLOW_MACHINE else 1)
+    l1.daemon.wait_for_log(r'The hsm_secret is encrypted')
+
     os.write(master_fd, password.encode("utf-8"))
     l1.daemon.wait_for_log("Server started with public key")
     id = l1.rpc.getinfo()["id"]
+    l1.stop()
 
     # Test we cannot start the same wallet without specifying --encrypted-hsm
-    l1.stop()
     l1.daemon.opts.pop("encrypted-hsm")
-    l1.daemon.start(stdin=slave_fd, stderr=subprocess.STDOUT,
-                    wait_for_initialized=False)
-    time.sleep(3 if SLOW_MACHINE else 1)
-    os.write(master_fd, password[2:].encode("utf-8"))
-    err = "hsm_secret is encrypted, you need to pass the --encrypted-hsm startup option."
-    assert l1.daemon.is_in_log(err)
+    with pytest.raises(subprocess.CalledProcessError, match=r'returned non-zero exit status 1'):
+        subprocess.check_call(l1.daemon.cmd_line)
 
     # Test we cannot restore the same wallet with another password
     l1.daemon.opts.update({"encrypted-hsm": None})
     l1.daemon.start(stdin=slave_fd, stderr=subprocess.STDOUT,
                     wait_for_initialized=False)
-    time.sleep(3 if SLOW_MACHINE else 1)
+    l1.daemon.wait_for_log(r'The hsm_secret is encrypted')
     os.write(master_fd, password[2:].encode("utf-8"))
-    l1.daemon.wait_for_log("Wrong password for encrypted hsm_secret.")
+    assert(l1.daemon.proc.wait() == 1)
+    assert(l1.daemon.is_in_log("Wrong password for encrypted hsm_secret."))
 
     # Test we can restore the same wallet with the same password
     l1.daemon.start(stdin=slave_fd, wait_for_initialized=False)
-    time.sleep(3 if SLOW_MACHINE else 1)
+    l1.daemon.wait_for_log(r'The hsm_secret is encrypted')
     os.write(master_fd, password.encode("utf-8"))
     l1.daemon.wait_for_log("Server started with public key")
     assert id == l1.rpc.getinfo()["id"]
+
+
+@unittest.skipIf(VALGRIND, "It does not play well with prompt and key derivation.")
+def test_hsmtool_secret_decryption(node_factory):
+    l1 = node_factory.get_node()
+    password = "reckless\n"
+    hsm_path = os.path.join(l1.daemon.lightning_dir, TEST_NETWORK, "hsm_secret")
+    # We need to simulate a terminal to use termios in `lightningd`.
+    master_fd, slave_fd = os.openpty()
+
+    # Encrypt the master seed
+    l1.stop()
+    l1.daemon.opts.update({"encrypted-hsm": None})
+    l1.daemon.start(stdin=slave_fd, wait_for_initialized=False)
+    l1.daemon.wait_for_log(r'The hsm_secret is encrypted')
+    os.write(master_fd, password.encode("utf-8"))
+    l1.daemon.wait_for_log("Server started with public key")
+    node_id = l1.rpc.getinfo()["id"]
+    l1.stop()
+
+    # We can't use a wrong password !
+    cmd_line = ["tools/hsmtool", "decrypt", hsm_path, "A wrong pass"]
+    with pytest.raises(subprocess.CalledProcessError):
+        subprocess.check_call(cmd_line)
+
+    # Decrypt it with hsmtool
+    cmd_line[3] = password[:-1]
+    subprocess.check_call(cmd_line)
+    # Then test we can now start it without password
+    l1.daemon.opts.pop("encrypted-hsm")
+    l1.daemon.start(stdin=slave_fd, wait_for_initialized=True)
+    assert node_id == l1.rpc.getinfo()["id"]
+    l1.stop()
+
+    # Test we can encrypt it offline
+    cmd_line[1] = "encrypt"
+    subprocess.check_call(cmd_line)
+    # Now we need to pass the encrypted-hsm startup option
+    l1.stop()
+
+    with pytest.raises(subprocess.CalledProcessError, match=r'returned non-zero exit status 1'):
+        subprocess.check_call(l1.daemon.cmd_line)
+
+    l1.daemon.opts.update({"encrypted-hsm": None})
+    master_fd, slave_fd = os.openpty()
+    l1.daemon.start(stdin=slave_fd, stderr=subprocess.STDOUT,
+                    wait_for_initialized=False)
+
+    l1.daemon.wait_for_log(r'The hsm_secret is encrypted')
+    os.write(master_fd, password.encode("utf-8"))
+    l1.daemon.wait_for_log("Server started with public key")
+    assert node_id == l1.rpc.getinfo()["id"]
+    l1.stop()
+
+    # And finally test that we can also decrypt if encrypted with hsmtool
+    cmd_line[1] = "decrypt"
+    subprocess.check_call(cmd_line)
+    l1.daemon.opts.pop("encrypted-hsm")
+    l1.daemon.start(stdin=slave_fd, wait_for_initialized=True)
+    assert node_id == l1.rpc.getinfo()["id"]
+
+
+# this test does a 'listtransactions' on a yet unconfirmed channel
+def test_fundchannel_listtransaction(node_factory, bitcoind):
+    l1, l2 = node_factory.get_nodes(2)
+    l1.fundwallet(10**6)
+
+    l1.connect(l2)
+    txid = l1.rpc.fundchannel(l2.info['id'], 10**5)['txid']
+
+    # next call warned about SQL Accessing a null column
+    # and crashed the daemon for accessing random memory or null
+    txs = l1.rpc.listtransactions()['transactions']
+
+    tx = [t for t in txs if t['hash'] == txid][0]
+    assert tx['blockheight'] == 0

@@ -1,11 +1,9 @@
-from decimal import Decimal
 import json
 import logging
-from math import floor, log10
 import socket
 import warnings
-
-__version__ = "0.0.7.4"
+from decimal import Decimal
+from math import floor, log10
 
 
 class RpcError(ValueError):
@@ -171,7 +169,7 @@ class UnixDomainSocketRpc(object):
         self.next_id = 0
 
     def _writeobj(self, sock, obj):
-        s = json.dumps(obj, cls=self.encoder_cls)
+        s = json.dumps(obj, ensure_ascii=False, cls=self.encoder_cls)
         sock.sendall(bytearray(s, 'UTF-8'))
 
     def _readobj(self, sock, buff=b''):
@@ -432,6 +430,28 @@ class LightningRpc(UnixDomainSocketRpc):
         Show unreferenced memory objects
         """
         return self.call("dev-memleak")
+
+    def dev_pay(self, bolt11, msatoshi=None, label=None, riskfactor=None,
+                description=None, maxfeepercent=None, retry_for=None,
+                maxdelay=None, exemptfee=None, use_shadow=True):
+        """
+        A developer version of `pay`, with the possibility to deactivate
+        shadow routing (used for testing).
+        """
+        payload = {
+            "bolt11": bolt11,
+            "msatoshi": msatoshi,
+            "label": label,
+            "riskfactor": riskfactor,
+            "maxfeepercent": maxfeepercent,
+            "retry_for": retry_for,
+            "maxdelay": maxdelay,
+            "exemptfee": exemptfee,
+            "use_shadow": use_shadow,
+            # Deprecated.
+            "description": description,
+        }
+        return self.call("pay", payload)
 
     def dev_reenable_commit(self, peer_id):
         """
@@ -760,7 +780,9 @@ class LightningRpc(UnixDomainSocketRpc):
         """
         return self.call("newaddr", {"addresstype": addresstype})
 
-    def pay(self, bolt11, msatoshi=None, label=None, riskfactor=None, description=None):
+    def pay(self, bolt11, msatoshi=None, label=None, riskfactor=None,
+            description=None, maxfeepercent=None, retry_for=None,
+            maxdelay=None, exemptfee=None):
         """
         Send payment specified by {bolt11} with {msatoshi}
         (ignored if {bolt11} has an amount), optional {label}
@@ -771,6 +793,10 @@ class LightningRpc(UnixDomainSocketRpc):
             "msatoshi": msatoshi,
             "label": label,
             "riskfactor": riskfactor,
+            "maxfeepercent": maxfeepercent,
+            "retry_for": retry_for,
+            "maxdelay": maxdelay,
+            "exemptfee": exemptfee,
             # Deprecated.
             "description": description,
         }
@@ -859,12 +885,15 @@ class LightningRpc(UnixDomainSocketRpc):
         if 'description' in kwargs:
             return self._deprecated_sendpay(route, payment_hash, *args, **kwargs)
 
-        def _sendpay(route, payment_hash, label=None, msatoshi=None):
+        def _sendpay(route, payment_hash, label=None, msatoshi=None, bolt11=None, payment_secret=None, partid=None):
             payload = {
                 "route": route,
                 "payment_hash": payment_hash,
                 "label": label,
                 "msatoshi": msatoshi,
+                "bolt11": bolt11,
+                "payment_secret": payment_secret,
+                "partid": partid,
             }
             return self.call("sendpay", payload)
 
@@ -908,13 +937,14 @@ class LightningRpc(UnixDomainSocketRpc):
         }
         return self.call("waitinvoice", payload)
 
-    def waitsendpay(self, payment_hash, timeout=None):
+    def waitsendpay(self, payment_hash, timeout=None, partid=None):
         """
         Wait for payment for preimage of {payment_hash} to complete
         """
         payload = {
             "payment_hash": payment_hash,
-            "timeout": timeout
+            "timeout": timeout,
+            "partid": partid,
         }
         return self.call("waitsendpay", payload)
 

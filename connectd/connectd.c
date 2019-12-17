@@ -56,6 +56,7 @@
 #include <netdb.h>
 #include <netinet/in.h>
 #include <secp256k1_ecdh.h>
+#include <sodium.h>
 #include <sodium/randombytes.h>
 #include <stdarg.h>
 #include <sys/socket.h>
@@ -149,7 +150,7 @@ struct daemon {
 	/* File descriptors to listen on once we're activated. */
 	struct listen_fd *listen_fds;
 
-	/* Allow to define the default behavior of tot services calls*/
+	/* Allow to define the default behavior of tor services calls*/
 	bool use_v3_autotor;
 };
 
@@ -200,8 +201,8 @@ static bool broken_resolver(struct daemon *daemon)
 	const char *hostname = "nxdomain-test.doesntexist";
 	int err;
 
-	/* If they told us to never do DNS queries, don't even do this one */
-	if (!daemon->use_dns) {
+	/* If they told us to never do DNS queries, don't even do this one and also not if we just say that we don't */
+	if (!daemon->use_dns || daemon->use_proxy_always) {
 		daemon->broken_resolver_response = NULL;
 		return false;
 	}
@@ -354,8 +355,7 @@ static struct io_plan *retry_peer_connected(struct io_conn *conn,
 	struct io_plan *plan;
 
 	/*~ As you can see, we've had issues with this code before :( */
-	status_debug("peer %s: processing now old peer gone",
-		     type_to_string(tmpctx, struct node_id, &pr->id));
+	status_peer_debug(&pr->id, "processing now old peer gone");
 
 	/*~ Usually the pattern is to return this directly, but we have to free
 	 * our temporary structure. */
@@ -377,8 +377,7 @@ static struct io_plan *peer_reconnected(struct io_conn *conn,
 	u8 *msg;
 	struct peer_reconnected *pr;
 
-	status_debug("peer %s: reconnect",
-		     type_to_string(tmpctx, struct node_id, id));
+	status_peer_debug(id, "reconnect");
 
 	/* Tell master to kill it: will send peer_disconnect */
 	msg = towire_connect_reconnected(NULL, id);
@@ -470,8 +469,7 @@ static struct io_plan *handshake_in_success(struct io_conn *conn,
 {
 	struct node_id id;
 	node_id_from_pubkey(&id, id_key);
-	status_debug("Connect IN from %s",
-		     type_to_string(tmpctx, struct node_id, &id));
+	status_peer_debug(&id, "Connect IN");
 	return peer_exchange_initmsg(conn, daemon, cs, &id, addr);
 }
 
@@ -531,8 +529,7 @@ static struct io_plan *handshake_out_success(struct io_conn *conn,
 
 	node_id_from_pubkey(&id, key);
 	connect->connstate = "Exchanging init messages";
-	status_debug("Connect OUT to %s",
-		     type_to_string(tmpctx, struct node_id, &id));
+	status_peer_debug(&id, "Connect OUT");
 	return peer_exchange_initmsg(conn, connect->daemon, cs, &id, addr);
 }
 
@@ -549,8 +546,7 @@ struct io_plan *connection_out(struct io_conn *conn, struct connecting *connect)
 	}
 
 	/* FIXME: Timeout */
-	status_debug("Connected out for %s",
-		     type_to_string(tmpctx, struct node_id, &connect->id));
+	status_peer_debug(&connect->id, "Connected out, starting crypto");
 
 	connect->connstate = "Cryptographic handshake";
 	return initiator_handshake(conn, &connect->daemon->mykey, &outkey,
@@ -558,13 +554,25 @@ struct io_plan *connection_out(struct io_conn *conn, struct connecting *connect)
 				   handshake_out_success, connect);
 }
 
-/*~ When we've exhausted all addresses without success, we come here. */
-static void PRINTF_FMT(5,6)
-	connect_failed(struct daemon *daemon,
-		       const struct node_id *id,
-		       u32 seconds_waited,
-		       const struct wireaddr_internal *addrhint,
-		       const char *errfmt, ...)
+/*~ When we've exhausted all addresses without success, we come here.
+ *
+ * Note that gcc gets upset if we put the PRINTF_FMT at the end like this if
+ * it's an actual function definition, but etags gets confused and ignores the
+ * rest of the file if we put PRINTF_FMT at the front.  So we put it at the
+ * end, in a gratuitous declaration.
+ */
+static void connect_failed(struct daemon *daemon,
+			   const struct node_id *id,
+			   u32 seconds_waited,
+			   const struct wireaddr_internal *addrhint,
+			   const char *errfmt, ...)
+	PRINTF_FMT(5,6);
+
+static void connect_failed(struct daemon *daemon,
+			   const struct node_id *id,
+			   u32 seconds_waited,
+			   const struct wireaddr_internal *addrhint,
+			   const char *errfmt, ...)
 {
 	u8 *msg;
 	va_list ap;
@@ -590,9 +598,7 @@ static void PRINTF_FMT(5,6)
 					       addrhint);
 	daemon_conn_send(daemon->master, take(msg));
 
-	status_debug("Failed connected out for %s: %s",
-		     type_to_string(tmpctx, struct node_id, id),
-		     err);
+	status_peer_debug(id, "Failed connected out: %s", err);
 }
 
 /*~ This is the destructor for the (unsuccessful) connection.  We accumulate
@@ -647,6 +653,10 @@ static struct io_plan *conn_init(struct io_conn *conn,
 		status_failed(STATUS_FAIL_INTERNAL_ERROR,
 			      "Can't connect to autotor address");
 		break;
+	case ADDR_INTERNAL_STATICTOR:
+		status_failed(STATUS_FAIL_INTERNAL_ERROR,
+			      "Can't connect to statictor address");
+		break;
 	case ADDR_INTERNAL_FORPROXY:
 		status_failed(STATUS_FAIL_INTERNAL_ERROR,
 			      "Can't connect to forproxy address");
@@ -683,6 +693,7 @@ static struct io_plan *conn_proxy_init(struct io_conn *conn,
 	case ADDR_INTERNAL_SOCKNAME:
 	case ADDR_INTERNAL_ALLPROTO:
 	case ADDR_INTERNAL_AUTOTOR:
+	case ADDR_INTERNAL_STATICTOR:
 		break;
 	}
 
@@ -726,6 +737,9 @@ static void try_connect_one_addr(struct connecting *connect)
 	case ADDR_INTERNAL_AUTOTOR:
 		status_failed(STATUS_FAIL_INTERNAL_ERROR,
 			      "Can't connect AUTOTOR");
+	case ADDR_INTERNAL_STATICTOR:
+		status_failed(STATUS_FAIL_INTERNAL_ERROR,
+			      "Can't connect STATICTOR");
 	case ADDR_INTERNAL_FORPROXY:
 		use_proxy = true;
 		break;
@@ -989,6 +1003,10 @@ static struct wireaddr_internal *setup_listeners(const tal_t *ctx,
 	struct sockaddr_un addrun;
 	int fd;
 	struct wireaddr_internal *binding;
+	const u8 *blob = NULL;
+	struct secret random;
+	struct pubkey pb;
+	struct wireaddr *toraddr;
 
 	/* Start with empty arrays, for tal_arr_expand() */
 	binding = tal_arr(ctx, struct wireaddr_internal, 0);
@@ -1014,7 +1032,6 @@ static struct wireaddr_internal *setup_listeners(const tal_t *ctx,
 	for (size_t i = 0; i < tal_count(proposed_wireaddr); i++) {
 		struct wireaddr_internal wa = proposed_wireaddr[i];
 		bool announce = (proposed_listen_announce[i] & ADDR_ANNOUNCE);
-
 		if (!(proposed_listen_announce[i] & ADDR_LISTEN))
 			continue;
 
@@ -1036,6 +1053,9 @@ static struct wireaddr_internal *setup_listeners(const tal_t *ctx,
 			add_binding(&binding, &wa);
 			continue;
 		case ADDR_INTERNAL_AUTOTOR:
+			/* We handle these after we have all bindings. */
+			continue;
+		case ADDR_INTERNAL_STATICTOR:
 			/* We handle these after we have all bindings. */
 			continue;
 		/* Special case meaning IPv6 and IPv4 */
@@ -1098,25 +1118,63 @@ static struct wireaddr_internal *setup_listeners(const tal_t *ctx,
 	for (size_t i = 0; i < tal_count(proposed_wireaddr); i++) {
 		if (!(proposed_listen_announce[i] & ADDR_LISTEN))
 			continue;
-
 		if (proposed_wireaddr[i].itype != ADDR_INTERNAL_AUTOTOR)
 			continue;
+		toraddr = tor_autoservice(tmpctx,
+					  &proposed_wireaddr[i],
+					  tor_password,
+					  binding,
+					  daemon->use_v3_autotor);
+
 		if (!(proposed_listen_announce[i] & ADDR_ANNOUNCE)) {
-				tor_autoservice(tmpctx,
-						&proposed_wireaddr[i].u.torservice,
-						tor_password,
-						binding,
-						daemon->use_v3_autotor);
 			continue;
 		};
-		add_announcable(announcable,
-				tor_autoservice(tmpctx,
-						&proposed_wireaddr[i].u.torservice,
-						tor_password,
-						binding,
-						daemon->use_v3_autotor));
+		add_announcable(announcable, toraddr);
 	}
 
+	/* Now we have bindings, set up any Tor static addresses: we will point
+	 * it at the first bound IPv4 or IPv6 address we have. */
+	for (size_t i = 0; i < tal_count(proposed_wireaddr); i++) {
+		if (!(proposed_listen_announce[i] & ADDR_LISTEN))
+			continue;
+		if (proposed_wireaddr[i].itype != ADDR_INTERNAL_STATICTOR)
+			continue;
+		blob = proposed_wireaddr[i].u.torservice.blob;
+
+		if (tal_strreg(tmpctx, (char *)proposed_wireaddr[i].u.torservice.blob, STATIC_TOR_MAGIC_STRING)) {
+			if (pubkey_from_node_id(&pb, &daemon->id)) {
+				if (sodium_mlock(&random, sizeof(random)) != 0)
+						status_failed(STATUS_FAIL_INTERNAL_ERROR,
+									"Could not lock the random prf key memory.");
+				randombytes_buf((void * const)&random, 32);
+				/* generate static tor node address, take first 32 bytes from secret of node_id plus 32 random bytes from sodiom */
+				struct sha256 sha;
+				/* let's sha, that will clear ctx of hsm data */
+				sha256(&sha, hsm_do_ecdh(tmpctx, &pb), 32);
+				/* even if it's a secret pub derived, tor shall see only the single sha */
+				memcpy((void *)&blob[0], &sha, 32);
+				memcpy((void *)&blob[32], &random, 32);
+				/* clear our temp buffer, don't leak by extern libs core-dumps, our blob we/tal handle later */
+				sodium_munlock(&random, sizeof(random));
+
+			} else status_failed(STATUS_FAIL_INTERNAL_ERROR,
+							"Could not get the pub of our node id from hsm");
+		}
+
+		toraddr = tor_fixed_service(tmpctx,
+					    &proposed_wireaddr[i],
+					    tor_password,
+					    blob,
+					    find_local_address(binding),
+					    0);
+		/* get rid of blob data on our side of tor and add jitter */
+		randombytes_buf((void * const)proposed_wireaddr[i].u.torservice.blob, TOR_V3_BLOBLEN);
+
+		if (!(proposed_listen_announce[i] & ADDR_ANNOUNCE)) {
+				continue;
+		};
+		add_announcable(announcable, toraddr);
+	}
 	/* Sort and uniquify. */
 	finalize_announcable(announcable);
 
@@ -1141,6 +1199,7 @@ static struct io_plan *connect_init(struct io_conn *conn,
 	/* Fields which require allocation are allocated off daemon */
 	if (!fromwire_connectctl_init(
 		daemon, msg,
+		&chainparams,
 		&daemon->id,
 		&proposed_wireaddr,
 		&proposed_listen_announce,
@@ -1268,7 +1327,7 @@ static void add_seed_addrs(struct wireaddr_internal **addrs,
 	const char **hostnames = seednames(tmpctx, id);
 
 	for (size_t i = 0; i < tal_count(hostnames); i++) {
-		status_debug("Resolving %s", hostnames[i]);
+		status_peer_debug(id, "Resolving %s", hostnames[i]);
 		new_addrs = wireaddr_from_hostname(tmpctx, hostnames[i], DEFAULT_PORT,
 		                                   NULL, broken_reply, NULL);
 		if (new_addrs) {
@@ -1276,13 +1335,13 @@ static void add_seed_addrs(struct wireaddr_internal **addrs,
 				struct wireaddr_internal a;
 				a.itype = ADDR_INTERNAL_WIREADDR;
 				a.u.wireaddr = new_addrs[j];
-				status_debug("Resolved %s to %s", hostnames[i],
-				             type_to_string(tmpctx, struct wireaddr,
-				                            &a.u.wireaddr));
+				status_peer_debug(id, "Resolved %s to %s", hostnames[i],
+						  type_to_string(tmpctx, struct wireaddr,
+								 &a.u.wireaddr));
 				tal_arr_expand(addrs, a);
 			}
 		} else
-			status_debug("Could not resolve %s", hostnames[i]);
+			status_peer_debug(id, "Could not resolve %s", hostnames[i]);
 	}
 }
 
@@ -1370,7 +1429,7 @@ static void try_connect_peer(struct daemon *daemon,
 	* to retry; an address may get gossiped or appear on the DNS seed. */
 	if (tal_count(addrs) == 0) {
 		connect_failed(daemon, id, seconds_waited, addrhint,
-			       "No address known");
+			       "Unable to connect, no address known for peer");
 		return;
 	}
 

@@ -2,7 +2,9 @@
 #include "../gossip_store.c"
 #include <stdio.h>
 
-void status_fmt(enum log_level level UNUSED, const char *fmt, ...)
+void status_fmt(enum log_level level UNUSED,
+		const struct node_id *node_id,
+		const char *fmt, ...)
 {
 	va_list ap;
 
@@ -120,7 +122,7 @@ int main(void)
 		node_id_from_privkey(&tmp, &ids[i]);
 	}
 	/* We are node 0 */
-	rstate = new_routing_state(tmpctx, NULL, &ids[0], NULL, NULL, NULL,
+	rstate = new_routing_state(tmpctx, &ids[0], NULL, NULL, NULL,
 				   false, false);
 
 	for (size_t i = 0; i < NUM_NODES; i++) {

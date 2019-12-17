@@ -7,7 +7,9 @@ import unittest
 
 
 @unittest.skipIf(TEST_NETWORK != 'regtest', "The DB migration is network specific due to the chain var.")
-def test_db_dangling_peer_fix(node_factory):
+def test_db_dangling_peer_fix(node_factory, bitcoind):
+    # Make sure bitcoind doesn't think it's going backwards
+    bitcoind.generate_block(104)
     # This was taken from test_fail_unconfirmed() node.
     l1 = node_factory.get_node(dbfile='dangling-peer.sqlite3.xz')
     l2 = node_factory.get_node()
@@ -79,6 +81,10 @@ def test_block_backfill(node_factory, bitcoind, chainparams):
     # Make sure we also have the needle we added to the haystack above
     assert(31337 in [r['satoshis'] for r in l3.db_query("SELECT satoshis FROM utxoset")])
 
+    # Make sure that l3 doesn't ask for more gossip and get a reply about
+    # the closed channel (hence Bad gossip msgs in log).
+    l3.daemon.wait_for_log('seeker: state = NORMAL')
+
     # Now close the channel and make sure `l3` cleans up correctly:
     txid = l1.rpc.close(l2.info['id'])['txid']
     bitcoind.generate_block(1, wait_for_mempool=txid)
@@ -122,7 +128,8 @@ def test_max_channel_id(node_factory, bitcoind):
 @unittest.skipIf(not COMPAT, "needs COMPAT to convert obsolete db")
 @unittest.skipIf(os.getenv('TEST_DB_PROVIDER', 'sqlite3') != 'sqlite3', "This test is based on a sqlite3 snapshot")
 @unittest.skipIf(TEST_NETWORK != 'regtest', "The network must match the DB snapshot")
-def test_scid_upgrade(node_factory):
+def test_scid_upgrade(node_factory, bitcoind):
+    bitcoind.generate_block(1)
 
     # Created through the power of sed "s/X'\([0-9]*\)78\([0-9]*\)78\([0-9]*\)'/X'\13A\23A\3'/"
     l1 = node_factory.get_node(dbfile='oldstyle-scids.sqlite3.xz')

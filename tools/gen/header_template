@@ -53,6 +53,11 @@ struct ${struct.struct_name()} {
 ## Structs for TLVs
 % for tlv in tlvs.values():
 struct ${tlv.struct_name()} {
+        /* Raw fields including unknown ones. */
+        struct tlv_field *fields;
+
+	/* TODO The following explicit fields could just point into the
+	 * tlv_field entries above to save on memory. */
     % for msg in tlv.messages.values():
         struct ${msg.struct_name()} *${msg.name};
     % endfor
@@ -61,6 +66,41 @@ struct ${tlv.struct_name()} {
 
 % for tlv in tlvs.values():
 struct ${tlv.struct_name()} *${tlv.struct_name()}_new(const tal_t *ctx);
+
+/**
+ * Deserialize a TLV stream for the ${tlv.name} namespace.
+ *
+ * This function will parse any TLV stream, as long as the type, length and
+ * value fields are formatted correctly. Fields that are not known in the
+ * current namespace are stored in the `fields` member. Validity can be
+ * checked using ${tlv.name}_is_valid.
+ */
+bool fromwire_${tlv.name}(const u8 **cursor, size_t *max,
+			  struct ${tlv.struct_name()} * record);
+
+/**
+ * Serialize a TLV stream for the ${tlv.name} namespace.
+ *
+ * This function only considers known fields from the ${tlv.name} namespace,
+ * and will ignore any fields that may be stored in the `fields` member. This
+ * ensures that the resulting stream is valid according to
+ * `${tlv.name}_is_valid`.
+ */
+void towire_${tlv.name}(u8 **pptr, const void *record);
+
+/**
+ * Check that the TLV stream is valid.
+ *
+ * Enforces the followin validity rules:
+ * - Types must be in monotonic non-repeating order
+ * - We must understand all even types
+ *
+ * Returns false if an error was detected, otherwise returns true. If err_index
+ * is non-null and we detect an error it is set to the index of the first error
+ * detected.
+ */
+bool ${tlv.name}_is_valid(const struct ${tlv.struct_name()} *record,
+			  size_t *err_index);
 
 % if tlv.name in options.expose_tlv_type:
 #define TLVS_${tlv.name.upper()}_ARRAY_SIZE ${len(tlv.messages)}

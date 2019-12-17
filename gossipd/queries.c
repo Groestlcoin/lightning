@@ -223,15 +223,15 @@ bool query_short_channel_ids(struct daemon *daemon,
 	} else
 		tlvs = NULL;
 
-	msg = towire_query_short_channel_ids(NULL, &daemon->chain_hash,
+	msg = towire_query_short_channel_ids(NULL,
+					     &chainparams->genesis_blockhash,
 					     encoded, tlvs);
 	queue_peer_msg(peer, take(msg));
 	peer->scid_query_outstanding = true;
 	peer->scid_query_cb = cb;
 
-	status_debug("%s: sending query for %zu scids",
-		     type_to_string(tmpctx, struct node_id, &peer->id),
-		     tal_count(scids));
+	status_peer_debug(&peer->id, "sending query for %zu scids",
+			  tal_count(scids));
 	return true;
 }
 
@@ -279,10 +279,10 @@ const u8 *handle_query_short_channel_ids(struct peer *peer, const u8 *msg)
 	 *   - if does not maintain up-to-date channel information for `chain_hash`:
 	 *     - MUST set `complete` to 0.
 	 */
-	if (!bitcoin_blkid_eq(&peer->daemon->chain_hash, &chain)) {
-		status_debug("%s sent query_short_channel_ids chainhash %s",
-			     type_to_string(tmpctx, struct node_id, &peer->id),
-			     type_to_string(tmpctx, struct bitcoin_blkid, &chain));
+	if (!bitcoin_blkid_eq(&chainparams->genesis_blockhash, &chain)) {
+		status_peer_debug(&peer->id,
+				  "sent query_short_channel_ids chainhash %s",
+				  type_to_string(tmpctx, struct bitcoin_blkid, &chain));
 		return towire_reply_short_channel_ids_end(peer, &chain, 0);
 	}
 
@@ -371,7 +371,7 @@ static void reply_channel_range(struct peer *peer,
 	tlvs->checksums_tlv = checksums;
 
 	u8 *msg = towire_reply_channel_range(NULL,
-					     &peer->daemon->chain_hash,
+					     &chainparams->genesis_blockhash,
 					     first_blocknum,
 					     number_of_blocks,
 					     1, encoded_scids, tlvs);
@@ -596,11 +596,11 @@ const u8 *handle_query_channel_range(struct peer *peer, const u8 *msg)
 	 *   - if does not maintain up-to-date channel information for `chain_hash`:
 	 *     - MUST set `complete` to 0.
 	 */
-	if (!bitcoin_blkid_eq(&peer->daemon->chain_hash, &chain_hash)) {
-		status_debug("%s sent query_channel_range chainhash %s",
-			     type_to_string(tmpctx, struct node_id, &peer->id),
-			     type_to_string(tmpctx, struct bitcoin_blkid,
-					    &chain_hash));
+	if (!bitcoin_blkid_eq(&chainparams->genesis_blockhash, &chain_hash)) {
+		status_peer_debug(&peer->id,
+				  "query_channel_range with chainhash %s",
+				  type_to_string(tmpctx, struct bitcoin_blkid,
+						 &chain_hash));
 		u8 *end = towire_reply_channel_range(NULL, &chain_hash, first_blocknum,
 		                                     number_of_blocks, false, NULL, NULL);
 		queue_peer_msg(peer, take(end));
@@ -661,7 +661,7 @@ const u8 *handle_reply_channel_range(struct peer *peer, const u8 *msg)
 				       tal_hex(tmpctx, msg));
 	}
 
-	if (!bitcoin_blkid_eq(&peer->daemon->chain_hash, &chain)) {
+	if (!bitcoin_blkid_eq(&chainparams->genesis_blockhash, &chain)) {
 		return towire_errorfmt(peer, NULL,
 				       "reply_channel_range for bad chain: %s",
 				       tal_hex(tmpctx, msg));
@@ -687,12 +687,12 @@ const u8 *handle_reply_channel_range(struct peer *peer, const u8 *msg)
 				       tal_hex(tmpctx, encoded));
 	}
 
-	status_debug("peer %s reply_channel_range %u+%u (of %u+%u) %zu scids",
-		     type_to_string(tmpctx, struct node_id, &peer->id),
-		     first_blocknum, number_of_blocks,
-		     peer->range_first_blocknum,
-		     peer->range_end_blocknum - peer->range_first_blocknum,
-		     tal_count(scids));
+	status_peer_debug(&peer->id,
+			  "reply_channel_range %u+%u (of %u+%u) %zu scids",
+			  first_blocknum, number_of_blocks,
+			  peer->range_first_blocknum,
+			  peer->range_end_blocknum - peer->range_first_blocknum,
+			  tal_count(scids));
 
 	/* BOLT #7:
 	 *
@@ -721,23 +721,34 @@ const u8 *handle_reply_channel_range(struct peer *peer, const u8 *msg)
 	if (end > peer->range_end_blocknum)
 		end = peer->range_end_blocknum;
 
-	/* We keep a bitmap of what blocks have been covered by replies: bit 0
-	 * represents block peer->range_first_blocknum */
-	b = bitmap_ffs(peer->query_channel_blocks,
-		       start - peer->range_first_blocknum,
-		       end - peer->range_first_blocknum);
-	if (b != end - peer->range_first_blocknum) {
-		return towire_errorfmt(peer, NULL,
-				       "reply_channel_range %u+%u already have block %lu",
-				       first_blocknum, number_of_blocks,
-				       peer->range_first_blocknum + b);
-	}
+	/* LND mis-implemented the spec.  If they have multiple replies, set
+	 * each one to the *whole* range, with complete=0 except the last.
+	 * Try to accomodate that (pretend we make no progress until the
+	 * end)! */
+	if (first_blocknum == peer->range_first_blocknum
+	    && first_blocknum + number_of_blocks == peer->range_end_blocknum
+	    && !complete
+	    && tal_bytelen(msg) == 64046) {
+		status_debug("LND reply_channel_range detected: futzing");
+	} else {
+		/* We keep a bitmap of what blocks have been covered by replies: bit 0
+		 * represents block peer->range_first_blocknum */
+		b = bitmap_ffs(peer->query_channel_blocks,
+			       start - peer->range_first_blocknum,
+			       end - peer->range_first_blocknum);
+		if (b != end - peer->range_first_blocknum) {
+			return towire_errorfmt(peer, NULL,
+					       "reply_channel_range %u+%u already have block %lu",
+					       first_blocknum, number_of_blocks,
+					       peer->range_first_blocknum + b);
+		}
 
-	/* Mark that short_channel_ids for this block have been received */
-	bitmap_fill_range(peer->query_channel_blocks,
-			  start - peer->range_first_blocknum,
-			  end - peer->range_first_blocknum);
-	peer->range_blocks_remaining -= end - start;
+		/* Mark that short_channel_ids for this block have been received */
+		bitmap_fill_range(peer->query_channel_blocks,
+				  start - peer->range_first_blocknum,
+				  end - peer->range_first_blocknum);
+		peer->range_blocks_remaining -= end - start;
+	}
 
 	/* Add scids */
 	n = tal_count(peer->query_channel_scids);
@@ -800,7 +811,7 @@ const u8 *handle_reply_short_channel_ids_end(struct peer *peer, const u8 *msg)
 				       tal_hex(tmpctx, msg));
 	}
 
-	if (!bitcoin_blkid_eq(&peer->daemon->chain_hash, &chain)) {
+	if (!bitcoin_blkid_eq(&chainparams->genesis_blockhash, &chain)) {
 		return towire_errorfmt(peer, NULL,
 				       "reply_short_channel_ids_end for bad chain: %s",
 				       tal_hex(tmpctx, msg));
@@ -985,7 +996,7 @@ void maybe_send_query_responses(struct peer *peer)
 		 */
 		/* FIXME: We consider ourselves to have complete knowledge. */
 		u8 *end = towire_reply_short_channel_ids_end(peer,
-							     &peer->daemon->chain_hash,
+							     &chainparams->genesis_blockhash,
 							     true);
 		queue_peer_msg(peer, take(end));
 
@@ -1030,10 +1041,11 @@ bool query_channel_range(struct daemon *daemon,
 		tlvs->query_option->query_option_flags = qflags;
 	} else
 		tlvs = NULL;
-	status_debug("sending query_channel_range for blocks %u+%u",
-		     first_blocknum, number_of_blocks);
+	status_peer_debug(&peer->id,
+			  "sending query_channel_range for blocks %u+%u",
+			  first_blocknum, number_of_blocks);
 
-	msg = towire_query_channel_range(NULL, &daemon->chain_hash,
+	msg = towire_query_channel_range(NULL, &chainparams->genesis_blockhash,
 					 first_blocknum, number_of_blocks,
 					 tlvs);
 	queue_peer_msg(peer, take(msg));

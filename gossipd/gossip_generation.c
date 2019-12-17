@@ -202,13 +202,12 @@ static void update_own_node_announcement(struct daemon *daemon)
 
 	/* This injects it into the routing code in routing.c; it should not
 	 * reject it! */
-	err = handle_node_announcement(daemon->rstate, nannounce,
+	err = handle_node_announcement(daemon->rstate, take(nannounce),
 				       NULL, NULL);
 	if (err)
 		status_failed(STATUS_FAIL_INTERNAL_ERROR,
 			      "rejected own node announcement: %s",
 			      tal_hex(tmpctx, err));
-	push_gossip(daemon, take(nannounce));
 }
 
 /* Should we announce our own node?  Called at strategic places. */
@@ -306,7 +305,7 @@ static void update_local_channel(struct local_cupdate *lc /* frees! */)
 	/* We create an update with a dummy signature, and hand to hsmd to get
 	 * it signed. */
 	update = towire_channel_update_option_channel_htlc_max(tmpctx, &dummy_sig,
-				       &daemon->chain_hash,
+				       &chainparams->genesis_blockhash,
 				       &chan->scid,
 				       timestamp,
 				       message_flags, channel_flags,
@@ -399,9 +398,6 @@ static void update_local_channel(struct local_cupdate *lc /* frees! */)
 			      tal_hex(tmpctx, update),
 			      tal_hex(tmpctx, msg));
 
-	if (is_chan_public(chan))
-		push_gossip(daemon, take(update));
-
 	tal_free(lc);
 }
 
@@ -456,9 +452,8 @@ bool handle_local_channel_update(struct daemon *daemon,
 						   &lc->fee_base_msat,
 						   &lc->fee_proportional_millionths,
 						   &lc->htlc_maximum)) {
-		status_broken("peer %s bad local_channel_update %s",
-			      type_to_string(tmpctx, struct node_id, src),
-			      tal_hex(tmpctx, msg));
+		status_peer_broken(src, "bad local_channel_update %s",
+				   tal_hex(tmpctx, msg));
 		return false;
 	}
 
@@ -466,10 +461,9 @@ bool handle_local_channel_update(struct daemon *daemon,
 					    &scid);
 	/* Can theoretically happen if channel just closed. */
 	if (!lc->local_chan) {
-		status_debug("peer %s local_channel_update for unknown %s",
-			      type_to_string(tmpctx, struct node_id, src),
-			      type_to_string(tmpctx, struct short_channel_id,
-					     &scid));
+		status_peer_debug(src, "local_channel_update for unknown %s",
+				  type_to_string(tmpctx, struct short_channel_id,
+						 &scid));
 		return true;
 	}
 

@@ -5,12 +5,14 @@
 #include <common/addr.h>
 #include <common/channel_config.h>
 #include <common/features.h>
+#include <common/fee_states.h>
 #include <common/funding_tx.h>
 #include <common/json_command.h>
 #include <common/jsonrpc_errors.h>
 #include <common/key_derive.h>
 #include <common/param.h>
 #include <common/per_peer_state.h>
+#include <common/utils.h>
 #include <common/wallet_tx.h>
 #include <common/wire_error.h>
 #include <connectd/gen_connect_wire.h>
@@ -193,10 +195,8 @@ wallet_commit_channel(struct lightningd *ld,
 	} else
 		our_msat = push;
 
-	/* Feerates begin identical. */
-	channel_info->feerate_per_kw[LOCAL]
-		= channel_info->feerate_per_kw[REMOTE]
-		= feerate;
+	channel_info->fee_states = new_fee_states(uc, uc->fc ? LOCAL : REMOTE,
+						  &feerate);
 
 	/* old_remote_per_commit not valid yet, copy valid one. */
 	channel_info->old_remote_per_commit = channel_info->remote_per_commit;
@@ -301,7 +301,7 @@ static void funding_started_success(struct funding_channel *fc,
 
 	response = json_stream_success(cmd);
 	out = encode_scriptpubkey_to_addr(cmd,
-				          get_chainparams(cmd->ld)->bip173_name,
+				          chainparams,
 					  scriptPubkey);
 	if (out) {
 		json_add_string(response, "funding_address", out);
@@ -395,7 +395,7 @@ static void opening_funder_finished(struct subd *openingd, const u8 *resp,
 					 tal_hex(fc->cmd, resp)));
 		goto cleanup;
 	}
-	remote_commit->chainparams = get_chainparams(openingd->ld);
+	remote_commit->chainparams = chainparams;
 	per_peer_state_set_fds_arr(pps, fds);
 
 	log_debug(ld->log,
@@ -454,7 +454,7 @@ static void opening_fundee_finished(struct subd *openingd,
 	u32 feerate;
 	u8 channel_flags;
 	struct channel *channel;
-	u8 *remote_upfront_shutdown_script;
+	u8 *remote_upfront_shutdown_script, *local_upfront_shutdown_script;
 	struct per_peer_state *pps;
 
 	log_debug(uc->log, "Got opening_fundee_finish_response");
@@ -481,6 +481,7 @@ static void opening_fundee_finished(struct subd *openingd,
 					   &feerate,
 					   &funding_signed,
 				           &uc->our_config.channel_reserve,
+					   &local_upfront_shutdown_script,
 				           &remote_upfront_shutdown_script)) {
 		log_broken(uc->log, "bad OPENING_FUNDEE_REPLY %s",
 			   tal_hex(reply, reply));
@@ -488,7 +489,7 @@ static void opening_fundee_finished(struct subd *openingd,
 		goto failed;
 	}
 
-	remote_commit->chainparams = get_chainparams(openingd->ld);
+	remote_commit->chainparams = chainparams;
 	per_peer_state_set_fds_arr(pps, fds);
 
 	/* openingd should never accept them funding channel in this case. */
@@ -509,7 +510,7 @@ static void opening_fundee_finished(struct subd *openingd,
 					channel_flags,
 					&channel_info,
 					feerate,
-					NULL,
+					local_upfront_shutdown_script,
 					remote_upfront_shutdown_script);
 	if (!channel) {
 		uncommitted_channel_disconnect(uc, "Commit channel failed");
@@ -620,7 +621,6 @@ new_uncommitted_channel(struct peer *peer)
 {
 	struct lightningd *ld = peer->ld;
 	struct uncommitted_channel *uc = tal(ld, struct uncommitted_channel);
-	const char *idname;
 
 	uc->peer = peer;
 	assert(!peer->uncommitted_channel);
@@ -628,10 +628,8 @@ new_uncommitted_channel(struct peer *peer)
 	uc->transient_billboard = NULL;
 	uc->dbid = wallet_get_channel_dbid(ld->wallet);
 
-	idname = type_to_string(uc, struct node_id, &uc->peer->id);
-	uc->log = new_log(uc, uc->peer->log_book, "%s chan #%"PRIu64":",
-			  idname, uc->dbid);
-	tal_free(idname);
+	uc->log = new_log(uc, ld->log_book, &uc->peer->id,
+			  "chan#%"PRIu64, uc->dbid);
 
 	uc->fc = NULL;
 	uc->our_config.id = 0;
@@ -660,7 +658,7 @@ static void channel_config(struct lightningd *ld,
 				ld->config.min_capacity_sat))
 		fatal("amount_msat overflow for config.min_capacity_sat");
 	/* Substract 2 * dust_limit, so fundchannel with min value is possible */
-	if (!amount_sat_to_msat(&dust_limit, get_chainparams(ld)->dust_limit))
+	if (!amount_sat_to_msat(&dust_limit, chainparams->dust_limit))
 		fatal("amount_msat overflow for dustlimit");
 	if (!amount_msat_sub(min_effective_htlc_capacity,
 				*min_effective_htlc_capacity,
@@ -678,7 +676,7 @@ static void channel_config(struct lightningd *ld,
 	 *   - set `dust_limit_satoshis` to a sufficient value to allow
 	 *     commitment transactions to propagate through the Bitcoin network.
 	 */
-	ours->dust_limit = get_chainparams(ld)->dust_limit;
+	ours->dust_limit = chainparams->dust_limit;
 	ours->max_htlc_value_in_flight = AMOUNT_MSAT(UINT64_MAX);
 
 	/* Don't care */
@@ -755,6 +753,7 @@ static void openchannel_hook_cb(struct openchannel_hook_payload *payload,
 			    const jsmntok_t *toks)
 {
 	struct subd *openingd = payload->openingd;
+	const u8 *our_upfront_shutdown_script;
 	const char *errmsg = NULL;
 
 	/* We want to free this, whatever happens. */
@@ -784,14 +783,41 @@ static void openchannel_hook_cb(struct openchannel_hook_payload *payload,
 			log_debug(openingd->ld->log,
 				  "openchannel_hook_cb says '%s'",
 				  errmsg);
+			our_upfront_shutdown_script = NULL;
 		} else if (!json_tok_streq(buffer, t, "continue"))
 			fatal("Plugin returned an invalid result for the "
 			      "openchannel hook: %.*s",
 			      t->end - t->start, buffer + t->start);
-	}
+
+		/* Check for a 'close_to' address passed back */
+		if (!errmsg) {
+			t = json_get_member(buffer, toks, "close_to");
+			if (t) {
+				switch (json_to_address_scriptpubkey(tmpctx, chainparams,
+								     buffer, t,
+								     &our_upfront_shutdown_script)) {
+					case ADDRESS_PARSE_UNRECOGNIZED:
+						fatal("Plugin returned an invalid response to the"
+						      " openchannel.close_to hook: %.*s",
+						      t->end - t->start, buffer + t->start);
+					case ADDRESS_PARSE_WRONG_NETWORK:
+						fatal("Plugin returned invalid response to the"
+						      " openchannel.close_to hook: address %s is"
+						      " not on network %s",
+						      tal_hex(NULL, our_upfront_shutdown_script),
+						      chainparams->network_name);
+					case ADDRESS_PARSE_SUCCESS:
+						errmsg = NULL;
+				}
+			} else
+				our_upfront_shutdown_script = NULL;
+		}
+	} else
+		our_upfront_shutdown_script = NULL;
 
 	subd_send_msg(openingd,
-		      take(towire_opening_got_offer_reply(NULL, errmsg)));
+		      take(towire_opening_got_offer_reply(NULL, errmsg,
+							  our_upfront_shutdown_script)));
 }
 
 REGISTER_PLUGIN_HOOK(openchannel,
@@ -810,7 +836,7 @@ static void opening_got_offer(struct subd *openingd,
 	if (peer_active_channel(uc->peer)) {
 		subd_send_msg(openingd,
 			      take(towire_opening_got_offer_reply(NULL,
-					  "Already have active channel")));
+					  "Already have active channel", NULL)));
 		return;
 	}
 
@@ -922,7 +948,7 @@ void peer_start_openingd(struct peer *peer,
 
 	uc->openingd = new_channel_subd(peer->ld,
 					"lightning_openingd",
-					uc, uc->log,
+					uc, &peer->id, uc->log,
 					true, opening_wire_type_name,
 					openingd_msg,
 					opening_channel_errmsg,
@@ -965,6 +991,7 @@ void peer_start_openingd(struct peer *peer,
 				  feature_negotiated(peer->features,
 						     OPT_STATIC_REMOTEKEY),
 				  send_msg,
+				  IFDEV(peer->ld->dev_force_tmp_channel_id, NULL),
 				  IFDEV(peer->ld->dev_fast_gossip, false));
 	subd_send_msg(uc->openingd, take(msg));
 }
@@ -1077,9 +1104,8 @@ static struct command_result *json_fund_channel_start(struct command *cmd,
 	u32 *feerate_per_kw;
 
 	u8 *msg = NULL;
-	struct amount_sat max_funding_satoshi, *amount;
+	struct amount_sat *amount;
 
-	max_funding_satoshi = get_chainparams(cmd->ld)->max_funding;
 	fc->cmd = cmd;
 	fc->cancels = tal_arr(fc, struct command *, 0);
 	fc->uc = NULL;
@@ -1121,11 +1147,11 @@ static struct command_result *json_fund_channel_start(struct command *cmd,
 		fc->our_upfront_shutdown_script = NULL;
 	}
 
-	if (amount_sat_greater(*amount, max_funding_satoshi))
+	if (amount_sat_greater(*amount, chainparams->max_funding))
 		return command_fail(cmd, FUND_MAX_EXCEEDED,
 				    "Amount exceeded %s",
 				    type_to_string(tmpctx, struct amount_sat,
-						   &max_funding_satoshi));
+						   &chainparams->max_funding));
 
 	fc->funding = *amount;
 	if (!feerate_per_kw) {
@@ -1175,7 +1201,7 @@ static struct command_result *json_fund_channel_start(struct command *cmd,
 			type_to_string(fc, struct node_id, id));
 	}
 
-	assert(!amount_sat_greater(*amount, max_funding_satoshi));
+	assert(!amount_sat_greater(*amount, chainparams->max_funding));
 	peer->uncommitted_channel->fc = tal_steal(peer->uncommitted_channel, fc);
 	fc->uc = peer->uncommitted_channel;
 

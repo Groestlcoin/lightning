@@ -7,6 +7,7 @@
 #include <ccan/time/time.h>
 #include <ccan/timer/timer.h>
 #include <lightningd/htlc_end.h>
+#include <lightningd/htlc_set.h>
 #include <lightningd/plugin.h>
 #include <stdio.h>
 #include <wallet/txfilter.h>
@@ -68,7 +69,7 @@ struct config {
 	/* Minimal amount of effective funding_satoshis for accepting channels */
 	u64 min_capacity_sat;
 
-	/* Allow to define the default behavior of tot services calls*/
+	/* Allow to define the default behavior of tor services calls*/
 	bool use_v3_autotor;
 
 	/* This is the key we use to encrypt `hsm_secret`. */
@@ -85,8 +86,8 @@ struct lightningd {
 
 	int pid_fd;
 
-	/* Our config dir, and rpc file */
-	char *config_dir;
+	/* Our config basedir, network directory, and rpc file */
+	char *config_basedir, *config_netdir;
 
 	/* Location of the RPC socket. */
 	char *rpc_filename;
@@ -162,6 +163,9 @@ struct lightningd {
 	struct htlc_in_map htlcs_in;
 	struct htlc_out_map htlcs_out;
 
+	/* Sets of HTLCs we are holding onto for MPP. */
+	struct htlc_set_map htlc_sets;
+
 	struct wallet *wallet;
 
 	/* Outstanding waitsendpay commands. */
@@ -223,6 +227,12 @@ struct lightningd {
 	/* These are the forced channel secrets for the node. */
 	struct secrets *dev_force_channel_secrets;
 	struct sha256 *dev_force_channel_secrets_shaseed;
+
+	struct channel_id *dev_force_tmp_channel_id;
+
+	/* For slow tests (eg protocol tests) don't die if HTLC not
+	 * committed in 30 secs */
+	bool dev_no_htlc_timeout;
 #endif /* DEVELOPER */
 
 	/* tor support */
@@ -244,8 +254,6 @@ struct lightningd {
 /* Turning this on allows a tal allocation to return NULL, rather than aborting.
  * Use only on carefully tested code! */
 extern bool tal_oom_ok;
-
-const struct chainparams *get_chainparams(const struct lightningd *ld);
 
 /* Check we can run subdaemons, and check their versions */
 void test_subdaemons(const struct lightningd *ld);

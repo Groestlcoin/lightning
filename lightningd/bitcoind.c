@@ -42,9 +42,9 @@ static const char **gather_args(const struct bitcoind *bitcoind,
 	const char **args = tal_arr(ctx, const char *, 1);
 	const char *arg;
 
-	args[0] = bitcoind->cli ? bitcoind->cli : bitcoind->chainparams->cli;
-	if (bitcoind->chainparams->cli_args)
-		add_arg(&args, bitcoind->chainparams->cli_args);
+	args[0] = bitcoind->cli ? bitcoind->cli : chainparams->cli;
+	if (chainparams->cli_args)
+		add_arg(&args, chainparams->cli_args);
 
 	if (bitcoind->datadir)
 		add_arg(&args, tal_fmt(args, "-datadir=%s", bitcoind->datadir));
@@ -111,11 +111,8 @@ static struct io_plan *output_init(struct io_conn *conn, struct bitcoin_cli *bcl
 
 static void next_bcli(struct bitcoind *bitcoind, enum bitcoind_prio prio);
 
-/* For printing: simple string of args. */
-/* bcli_args_direct() will be used in wat_for_bitcoind(), where
- * we send bitcoin-cli a "getblockchaininfo" command without
- * struct bitcoin_cli */
-static char *bcli_args_direct(const tal_t *ctx, const char **args)
+/* For printing: simple string of args (no secrets!) */
+static char *args_string(const tal_t *ctx, const char **args)
 {
 	size_t i;
 	char *ret = tal_strdup(ctx, args[0]);
@@ -135,7 +132,7 @@ static char *bcli_args_direct(const tal_t *ctx, const char **args)
 
 static char *bcli_args(const tal_t *ctx, struct bitcoin_cli *bcli)
 {
-    return bcli_args_direct(ctx, bcli->args);
+    return args_string(ctx, bcli->args);
 }
 
 static void retry_bcli(struct bitcoin_cli *bcli)
@@ -159,7 +156,7 @@ static void bcli_failure(struct bitcoind *bitcoind,
 		fatal("%s exited %u (after %u other errors) '%.*s'; "
 		      "we have been retrying command for "
 		      "--bitcoin-retry-timeout=%"PRIu64" seconds; "
-		      "groestlcoind setup or our --bitcoin-* configs broken?",
+		      "groestlcoind setup or our --groestlcoin-* configs broken?",
 		      bcli_args(tmpctx, bcli),
 		      exitstatus,
 		      bitcoind->error_count,
@@ -174,8 +171,9 @@ static void bcli_failure(struct bitcoind *bitcoind,
 	bitcoind->error_count++;
 
 	/* Retry in 1 second (not a leak!) */
-	new_reltimer(bitcoind->ld->timers, notleak(bcli), time_from_sec(1),
-		     retry_bcli, bcli);
+	notleak(new_reltimer(bitcoind->ld->timers, notleak(bcli),
+			     time_from_sec(1),
+			     retry_bcli, bcli));
 }
 
 static void bcli_finished(struct io_conn *conn UNUSED, struct bitcoin_cli *bcli)
@@ -382,7 +380,7 @@ static bool process_estimatefee(struct bitcoin_cli *bcli)
 		 * with the minimal fee even if the estimate didn't
 		 * work out. This is less disruptive than erring out
 		 * all the time. */
-		if (get_chainparams(bcli->bitcoind->ld)->testnet)
+		if (chainparams->testnet)
 			efee->satoshi_per_kw[efee->i] = FEERATE_FLOOR;
 		else
 			efee->satoshi_per_kw[efee->i] = 0;
@@ -470,7 +468,7 @@ static bool process_rawblock(struct bitcoin_cli *bcli)
 		   struct bitcoin_block *blk,
 		   void *arg) = bcli->cb;
 
-	blk = bitcoin_block_from_hex(bcli, bcli->bitcoind->chainparams,
+	blk = bitcoin_block_from_hex(bcli, chainparams,
 				     bcli->output, bcli->output_bytes);
 	if (!blk)
 		fatal("%s: bad block '%.*s'?",
@@ -989,7 +987,7 @@ static bool extract_numeric_version(struct bitcoin_cli *bcli,
 static bool process_getclientversion(struct bitcoin_cli *bcli)
 {
 	u64 version;
-	u64 min_version = bcli->bitcoind->chainparams->cli_min_supported_version;
+	u64 min_version = chainparams->cli_min_supported_version;
 
 	if (!extract_numeric_version(bcli, bcli->output,
 				     bcli->output_bytes,
@@ -1135,17 +1133,12 @@ static const char **cmdarr(const tal_t *ctx, const struct bitcoind *bitcoind,
 
 static void fatal_bitcoind_failure(struct bitcoind *bitcoind, const char *error_message)
 {
-	size_t i;
 	const char **cmd = cmdarr(bitcoind, bitcoind, "echo", NULL);
 
 	fprintf(stderr, "%s\n\n", error_message);
 	fprintf(stderr, "Make sure you have groestlcoind running and that groestlcoin-cli is able to connect to groestlcoind.\n\n");
 	fprintf(stderr, "You can verify that your Groestlcoin Core installation is ready for use by running:\n\n");
-	fprintf(stderr, "    $ ");
-	for (i = 0; cmd[i]; i++) {
-		fprintf(stderr, "%s ", cmd[i]);
-	}
-	fprintf(stderr, "'hello world'\n");
+	fprintf(stderr, "    $ %s 'hello world'\n", args_string(cmd, cmd));
 	tal_free(cmd);
 	exit(1);
 }
@@ -1162,7 +1155,7 @@ static char* check_blockchain_from_bitcoincli(const tal_t *ctx,
 
 	if (!output)
 		return tal_fmt(ctx, "Reading from %s failed: %s",
-			       bcli_args_direct(tmpctx, cmd), strerror(errno));
+			       args_string(tmpctx, cmd), strerror(errno));
 
 	output_bytes = tal_count(output);
 
@@ -1171,25 +1164,25 @@ static char* check_blockchain_from_bitcoincli(const tal_t *ctx,
 
 	if (!tokens)
 		return tal_fmt(ctx, "%s: %s response",
-			       bcli_args_direct(tmpctx, cmd),
+			       args_string(tmpctx, cmd),
 			       valid ? "partial" : "invalid");
 
 	if (tokens[0].type != JSMN_OBJECT)
 		return tal_fmt(ctx, "%s: gave non-object (%.*s)?",
-			       bcli_args_direct(tmpctx, cmd),
+			       args_string(tmpctx, cmd),
 			       (int)output_bytes, output);
 
 	valuetok = json_get_member(output, tokens, "chain");
 	if (!valuetok)
 		return tal_fmt(ctx, "%s: had no chain member (%.*s)?",
-			       bcli_args_direct(tmpctx, cmd),
+			       args_string(tmpctx, cmd),
 			       (int)output_bytes, output);
 
 	if(!json_tok_streq(output, valuetok,
-			   bitcoind->chainparams->bip70_name))
+			   chainparams->bip70_name))
 		return tal_fmt(ctx, "Error blockchain for groestlcoin-cli?"
 			       " Should be: %s",
-			       bitcoind->chainparams->bip70_name);
+			       chainparams->bip70_name);
 
 	is_bitcoind_synced_yet(bitcoind, output, output_bytes, tokens, true);
 	return NULL;
@@ -1257,8 +1250,6 @@ struct bitcoind *new_bitcoind(const tal_t *ctx,
 {
 	struct bitcoind *bitcoind = tal(ctx, struct bitcoind);
 
-	/* Use testnet by default, change later if we want another network */
-	bitcoind->chainparams = chainparams_for_network("testnet");
 	bitcoind->cli = NULL;
 	bitcoind->datadir = NULL;
 	bitcoind->ld = ld;
