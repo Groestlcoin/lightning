@@ -31,7 +31,7 @@ struct command_result *param_wtx(struct command *cmd,
 	if (!parse_amount_sat(&wtx->amount,
 			      buffer + tok->start, tok->end - tok->start))
 		return command_fail(cmd, JSONRPC2_INVALID_PARAMS,
-					"'%s' should be an amount in satoshis or all, not '%.*s'",
+					"'%s' should be an amount in gro or all, not '%.*s'",
 					name,
 					tok->end - tok->start,
 					buffer + tok->start);
@@ -112,7 +112,7 @@ static struct command_result *check_amount(const struct wallet_tx *wtx,
 		 * syncing yet, report a sync timing error first */
 		if (!topology_synced(wtx->cmd->ld->topology))
 			return command_fail(wtx->cmd, FUNDING_STILL_SYNCING_BITCOIN,
-					    "Still syncing with bitcoin network");
+					    "Still syncing with groestlcoin network");
 
 		return command_fail(wtx->cmd, FUND_CANNOT_AFFORD,
 				    "Cannot afford transaction");

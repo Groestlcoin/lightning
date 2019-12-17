@@ -307,8 +307,8 @@ static bool smells_like_old_testnet(const char *config_basedir)
 		return false;
 	}
 
-	/* Does it have a bitcoin/ subdir and no testnet/ subdir? */
-	if (stat(path_join(base, config_basedir, "bitcoin"), &st) == 0
+	/* Does it have a groestlcoin/ subdir and no testnet/ subdir? */
+	if (stat(path_join(base, config_basedir, "groestlcoin"), &st) == 0
 	    && stat(path_join(base, config_basedir, "testnet"), &st) != 0) {
 		tal_free(base);
 		return false;
@@ -374,8 +374,8 @@ void initial_config_opts(const tal_t *ctx,
 	 * options can change) and default config_netdir */
 	opt_register_early_arg("--network", opt_set_network, opt_show_network,
 			       NULL,
-			       "Select the network parameters (bitcoin, testnet,"
-			       " regtest, litecoin or litecoin-testnet)");
+			       "Select the network parameters (groestlcoin, testnet,"
+			       " regtest)");
 	opt_register_early_noarg("--testnet",
 				 opt_set_specific_network, "testnet",
 				 "Alias for --network=testnet");
@@ -383,8 +383,8 @@ void initial_config_opts(const tal_t *ctx,
 				 opt_set_specific_network, "signet",
 				 "Alias for --network=signet");
 	opt_register_early_noarg("--mainnet",
-				 opt_set_specific_network, "bitcoin",
-				 "Alias for --network=bitcoin");
+				 opt_set_specific_network, "groestlcoin",
+				 "Alias for --network=groestlcoin");
 	opt_register_early_arg("--allow-deprecated-apis",
 			       opt_set_bool_arg, opt_show_bool,
 			       &deprecated_apis,
@@ -399,13 +399,13 @@ void initial_config_opts(const tal_t *ctx,
 
 	/* We use a global (in common/utils.h) for the chainparams. */
 	if (!chainparams) {
-		/* Use bitcoin default on new installations. */
+		/* Use groestlcoin default on new installations. */
 		if (deprecated_apis && smells_like_old_testnet(*config_basedir)) {
 			warnx("WARNING: default network changing in 2020:"
 			      " please set network=testnet in config!");
 			chainparams = chainparams_for_network("testnet");
 		} else
-			chainparams = chainparams_for_network("bitcoin");
+			chainparams = chainparams_for_network("groestlcoin");
 	}
 
 	if (!*config_basedir)
@@ -433,8 +433,8 @@ void initial_config_opts(const tal_t *ctx,
 	opt_register_early_arg("--network",
 			       opt_restricted_toplevel, opt_show_network,
 			       NULL,
-			       "Select the network parameters (bitcoin, testnet,"
-			       " regtest, litecoin or litecoin-testnet)");
+			       "Select the network parameters (groestlcoin, testnet,"
+			       " regtest");
 	opt_register_early_noarg("--testnet",
 				 opt_restricted_toplevel_noarg, NULL,
 				 "Alias for --network=testnet");
@@ -443,7 +443,7 @@ void initial_config_opts(const tal_t *ctx,
 				 "Alias for --network=signet");
 	opt_register_early_noarg("--mainnet",
 				 opt_restricted_toplevel_noarg, NULL,
-				 "Alias for --network=bitcoin");
+				 "Alias for --network=groestlcoin");
 
 	/* They can set this later, it's just less effective. */
 	opt_register_early_arg("--allow-deprecated-apis",

@@ -282,8 +282,7 @@ int main(int argc, char *argv[])
 			 &features, "Send these features in init");
 	opt_register_arg("--network", opt_set_network, opt_show_network,
 	                 NULL,
-	                 "Select the network parameters (bitcoin, testnet, regtest"
-	                 " liquid, liquid-regtest, litecoin or litecoin-testnet)");
+	                 "Select the network parameters (groestlcoin, testnet, regtest)");
 	opt_register_noarg("--help|-h", opt_usage_and_exit,
 			   "id@addr[:port] [hex-msg-tosend...]\n"
 			   "Connect to a lightning peer and relay gossip messages from it",
@@ -347,4 +346,3 @@ int main(int argc, char *argv[])
 	initiator_handshake(conn, &us, &them, &addr, handshake_success, argv+2);
 	exit(0);
 }
-
