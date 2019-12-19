@@ -42,10 +42,7 @@ Get dependencies:
 If you don't have Groestlcoin installed locally you'll need to install that
 as well:
 
-    sudo apt-get install software-properties-common
-    sudo add-apt-repository ppa:groestlcoin/groestlcoin
-    sudo apt-get update
-    sudo apt-get install -y groestlcoind
+    https://github.com/Groestlcoin/groestlcoin/blob/master/doc/build-unix.md
 
 Clone lightning:
 
