@@ -1,6 +1,7 @@
 #include "bitcoin/block.h"
 #include "bitcoin/pullpush.h"
 #include "bitcoin/tx.h"
+#include "bitcoin/groestl.h"
 #include <ccan/str/hex/hex.h>
 #include <common/type_to_string.h>
 
@@ -63,7 +64,7 @@ bitcoin_block_from_hex(const tal_t *ctx, const struct chainparams *chainparams,
 	return b;
 }
 
-void bitcoin_block_blkid(const struct bitcoin_block *b,
+void bitcoin_block_blkid_sha(const struct bitcoin_block *b,
 			 struct bitcoin_blkid *out)
 {
 	struct sha256_ctx shactx;
@@ -89,7 +90,36 @@ void bitcoin_block_blkid(const struct bitcoin_block *b,
 		sha256_le32(&shactx, b->hdr.target);
 		sha256_le32(&shactx, b->hdr.nonce);
 	}
-	groestl512_double(&shactx, &out->shad, sizeof(out->shad));
+	sha256_double_done(&shactx, &out->shad);
+}
+
+void bitcoin_block_blkid(const struct bitcoin_block *b,
+			 struct bitcoin_blkid *out)
+{
+	sph_groestl512_context shactx;
+	u8 vt[VARINT_MAX_LEN];
+	size_t vtlen;
+
+	groestl512_init(&shactx);
+	groestl512_le32(&shactx, b->hdr.version);
+	groestl512_update(&shactx, &b->hdr.prev_hash, sizeof(b->hdr.prev_hash));
+	groestl512_update(&shactx, &b->hdr.merkle_hash, sizeof(b->hdr.merkle_hash));
+	groestl512_le32(&shactx, b->hdr.timestamp);
+
+    if (is_elements(chainparams)) {
+		size_t clen = tal_bytelen(b->elements_hdr->proof.challenge);
+		groestl512_le32(&shactx, b->elements_hdr->block_height);
+
+		vtlen = varint_put(vt, clen);
+		groestl512_update(&shactx, vt, vtlen);
+		groestl512_update(&shactx, b->elements_hdr->proof.challenge, clen);
+		/* The solution is skipped, since that'd create a circular
+		 * dependency apparently */
+	} else {
+		groestl512_le32(&shactx, b->hdr.target);
+		groestl512_le32(&shactx, b->hdr.nonce);
+	}
+	groestl512_double_done256(&shactx, &out->shad);
 }
 
 /* We do the same hex-reversing crud as txids. */

@@ -2,6 +2,7 @@
 #define LIGHTNING_BITCOIN_BLOCK_H
 #include "config.h"
 #include "bitcoin/shadouble.h"
+#include "bitcoin/groestl.h"
 #include <ccan/endian/endian.h>
 #include <ccan/short_types/short_types.h>
 #include <ccan/structeq/structeq.h>
@@ -47,7 +48,11 @@ bitcoin_block_from_hex(const tal_t *ctx, const struct chainparams *chainparams,
 		       const char *hex, size_t hexlen);
 
 /* Compute the double SHA block ID from the block header. */
-void bitcoin_block_blkid(const struct bitcoin_block *block,
+void bitcoin_block_blkid_sha(const struct bitcoin_block *block,
+			 struct bitcoin_blkid *out);
+
+/* Compute the double Groestl512(256) block ID from the block header. */
+void bitcoin_block_blkid(const struct bitcoin_block *b,
 			 struct bitcoin_blkid *out);
 
 /* Parse hex string to get blockid (reversed, a-la groestlcoind). */
