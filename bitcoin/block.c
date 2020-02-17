@@ -4,6 +4,8 @@
 #include "bitcoin/groestl.h"
 #include <ccan/str/hex/hex.h>
 #include <common/type_to_string.h>
+#include <common/status.h>
+#include <stdio.h>
 
 /* Encoding is <blockhdr> <varint-num-txs> <tx>... */
 struct bitcoin_block *
@@ -100,11 +102,17 @@ void bitcoin_block_blkid(const struct bitcoin_block *b,
 	u8 vt[VARINT_MAX_LEN];
 	size_t vtlen;
 
+	//fprintf(stderr, "bitcoin_block_blkid - start[%lx, %lx]\n", (long)b, (long)out);
 	groestl512_init(&shactx);
+	//fprintf(stderr, "bitcoin_block_blkid - init\n");
 	groestl512_le32(&shactx, b->hdr.version);
+	//fprintf(stderr, "bitcoin_block_blkid - processing version [%lu]\n", (long)b->hdr.version);
 	groestl512_update(&shactx, &b->hdr.prev_hash, sizeof(b->hdr.prev_hash));
 	groestl512_update(&shactx, &b->hdr.merkle_hash, sizeof(b->hdr.merkle_hash));
+	//fprintf(stderr, "bitcoin_block_blkid - processing hashes\n");
 	groestl512_le32(&shactx, b->hdr.timestamp);
+	//fprintf(stderr, "bitcoin_block_blkid - processing timestamp [%lu]\n", (long)b->hdr.timestamp);
+
 
     if (is_elements(chainparams)) {
 		size_t clen = tal_bytelen(b->elements_hdr->proof.challenge);

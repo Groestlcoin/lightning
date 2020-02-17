@@ -4,6 +4,8 @@
 #include "bitcoin/sph_groestl.h"
 #include "bitcoin/shadouble.h"
 #include <sys/types.h>
+#include <common/type_to_string.h>
+
 
 void groestlhash(void *, const void * , size_t);
 
@@ -27,6 +29,9 @@ struct groestl256 {
 		unsigned char u8[32];
 	} u;
 };
+
+//REGISTER_TYPE_TO_STRING(groestl512, fmt_groestl512);
+
 
 /**
  * groestl512 - return groestl512 of an object.

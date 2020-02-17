@@ -52,13 +52,13 @@ static void check_groestl512(sph_groestl512_context *ctx UNUSED)
 
 void groestl512_init(sph_groestl512_context *ctx)
 {
-	sph_groestl512_init(&ctx);
+	sph_groestl512_init(ctx);
 }
 
 void groestl512_update(sph_groestl512_context *ctx, const void *p, size_t size)
 {
 	check_groestl512(ctx);
-	sph_groestl512(&ctx, p, size);
+	sph_groestl512(ctx, p, size);
 }
 
 void groestl512_done(sph_groestl512_context *ctx, struct groestl512 * res)
