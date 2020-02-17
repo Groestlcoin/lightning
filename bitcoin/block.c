@@ -5,7 +5,7 @@
 #include <ccan/str/hex/hex.h>
 #include <common/type_to_string.h>
 
-static void groestl512_varint(struct sph_groestl512_context *ctx, u64 val)
+static void groestl512_varint(sph_groestl512_context *ctx, u64 val)
 {
 	u8 vt[VARINT_MAX_LEN];
 	size_t vtlen;
@@ -13,7 +13,7 @@ static void groestl512_varint(struct sph_groestl512_context *ctx, u64 val)
 	groestl512_update(ctx, vt, vtlen);
 }
 
-static void bitcoin_block_pull_dynafed_params(const u8 **cursor, size_t *len, struct sph_groestl512_context *shactx)
+static void bitcoin_block_pull_dynafed_params(const u8 **cursor, size_t *len, sph_groestl512_context *shactx)
 {
 	u8 type;
 	u64 l1, l2;
@@ -74,7 +74,7 @@ static void bitcoin_block_pull_dynafed_params(const u8 **cursor, size_t *len, st
 	}
 }
 
-static void bitcoin_block_pull_dynafed_details(const u8 **cursor, size_t *len, struct sph_groestl512_context *shactx)
+static void bitcoin_block_pull_dynafed_details(const u8 **cursor, size_t *len, sph_groestl512_context *shactx)
 {
 	bitcoin_block_pull_dynafed_params(cursor, len, shactx);
 	bitcoin_block_pull_dynafed_params(cursor, len, shactx);
@@ -96,7 +96,7 @@ bitcoin_block_from_hex(const tal_t *ctx, const struct chainparams *chainparams,
 	u8 *linear_tx;
 	const u8 *p;
 	size_t len, i, num, templen;
-	struct sph_groestl512_context shactx;
+	sph_groestl512_context shactx;
 	bool is_dynafed;
 	u32 height;
 

@@ -12,5 +12,4 @@ void sha256_double(struct sha256_double *shadouble, const void *p, size_t len);
 
 void sha256_double_done(struct sha256_ctx *sha256, struct sha256_double *res);
 
-void groestl512_double(struct sha256_double *shadouble, const void *p, size_t len);
 #endif /* LIGHTNING_BITCOIN_SHADOUBLE_H */

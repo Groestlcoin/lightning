@@ -104,6 +104,8 @@ struct groestl512_double256 {
 	struct groestl256 groestl;
 };
 
+void groestl512_double(struct sha256_double *shadouble, const void *p, size_t len);
+
 void groestl512_double_done256(sph_groestl512_context *sha256, struct sha256_double *res);
 
 #endif /* LIGHTNING_BITCOIN_GROESTL_H */

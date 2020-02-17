@@ -132,3 +132,17 @@ void groestl512_be64(sph_groestl512_context *ctx, uint64_t v)
 	beint64_t bev = cpu_to_be64(v);
 	groestl512_update(ctx, &bev, sizeof(bev));
 }
+
+void groestl512_double(struct sha256_double *shadouble, const void *p, size_t len)
+{
+	groestlhash((void *)&shadouble->sha, (void *)p, len);
+}
+
+void groestl512_double_done256(sph_groestl512_context *shactx, struct sha256_double *res)
+{
+	struct groestl512 result;
+	groestl512_done(shactx, &result);
+	struct groestl512 result2;
+	groestl512(&result2, &result, sizeof(result));
+	memcpy(res, &result2, 32);
+}
