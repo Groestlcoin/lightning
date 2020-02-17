@@ -176,7 +176,8 @@ void notify_channel_opened(struct lightningd *ld, struct node_id *node_id,
 
 static void forward_event_notification_serialize(struct json_stream *stream,
 						 const struct htlc_in *in,
-						 const struct htlc_out *out,
+						 const struct short_channel_id *scid_out,
+						 const struct amount_msat *amount_out,
 						 enum forward_status state,
 						 enum onion_type failcode,
 						 struct timeabs *resolved_time)
@@ -186,10 +187,16 @@ static void forward_event_notification_serialize(struct json_stream *stream,
 	struct forwarding *cur = tal(tmpctx, struct forwarding);
 	cur->channel_in = *in->key.channel->scid;
 	cur->msat_in = in->msat;
-	if (out) {
-		cur->channel_out = *out->key.channel->scid;
-		cur->msat_out = out->msat;
-		assert(amount_msat_sub(&cur->fee, in->msat, out->msat));
+	if (scid_out) {
+		cur->channel_out = *scid_out;
+		if (amount_out) {
+			cur->msat_out = *amount_out;
+			assert(amount_msat_sub(&cur->fee,
+					       in->msat, *amount_out));
+		} else {
+			cur->msat_out = AMOUNT_MSAT(0);
+			cur->fee = AMOUNT_MSAT(0);
+		}
 	} else {
 		cur->channel_out.u64 = 0;
 		cur->msat_out = AMOUNT_MSAT(0);
@@ -209,21 +216,23 @@ REGISTER_NOTIFICATION(forward_event,
 
 void notify_forward_event(struct lightningd *ld,
 			  const struct htlc_in *in,
-			  const struct htlc_out *out,
+			  const struct short_channel_id *scid_out,
+			  const struct amount_msat *amount_out,
 			  enum forward_status state,
 			  enum onion_type failcode,
 			  struct timeabs *resolved_time)
 {
 	void (*serialize)(struct json_stream *,
 			  const struct htlc_in *,
-			  const struct htlc_out *,
+			  const struct short_channel_id *,
+			  const struct amount_msat *,
 			  enum forward_status,
 			  enum onion_type,
 			  struct timeabs *) = forward_event_notification_gen.serialize;
 
 	struct jsonrpc_notification *n
 		= jsonrpc_notification_start(NULL, forward_event_notification_gen.topic);
-	serialize(n->stream, in, out, state, failcode, resolved_time);
+	serialize(n->stream, in, scid_out, amount_out, state, failcode, resolved_time);
 	jsonrpc_notification_end(n);
 	plugins_notify(ld->plugins, take(n));
 }
@@ -254,8 +263,8 @@ void notify_sendpay_success(struct lightningd *ld,
 
 static void sendpay_failure_notification_serialize(struct json_stream *stream,
 						   const struct wallet_payment *payment,
-						   int pay_errcode,
-						   const u8 *onionreply,
+						   errcode_t pay_errcode,
+						   const struct onionreply *onionreply,
 						   const struct routing_failure *fail,
 						   char *errmsg)
 {
@@ -263,7 +272,7 @@ static void sendpay_failure_notification_serialize(struct json_stream *stream,
 
 	/* In line with the format of json error returned
 	 * by sendpay_fail(). */
-	json_add_member(stream, "code", false, "%d", pay_errcode);
+	json_add_member(stream, "code", false, "%" PRIerrcode, pay_errcode);
 	json_add_string(stream, "message", errmsg);
 
 	json_object_start(stream, "data");
@@ -282,17 +291,17 @@ REGISTER_NOTIFICATION(sendpay_failure,
 
 void notify_sendpay_failure(struct lightningd *ld,
 			    const struct wallet_payment *payment,
-			    int pay_errcode,
-			    const u8 *onionreply,
+			    errcode_t pay_errcode,
+			    const struct onionreply *onionreply,
 			    const struct routing_failure *fail,
-			    char *errmsg)
+			    const char *errmsg)
 {
 	void (*serialize)(struct json_stream *,
 			  const struct wallet_payment *,
-			  int,
-			  const u8 *,
+			  errcode_t,
+			  const struct onionreply *,
 			  const struct routing_failure *,
-			  char *) = sendpay_failure_notification_gen.serialize;
+			  const char *) = sendpay_failure_notification_gen.serialize;
 
 	struct jsonrpc_notification *n =
 	    jsonrpc_notification_start(NULL, "sendpay_failure");

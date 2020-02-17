@@ -3,7 +3,12 @@
 #define LIGHTNING_PLUGINS_LIBPLUGIN_H
 #include "config.h"
 
+#include <ccan/intmap/intmap.h>
+#include <ccan/membuf/membuf.h>
+#include <ccan/strmap/strmap.h>
 #include <ccan/time/time.h>
+#include <ccan/timer/timer.h>
+#include <common/errcode.h>
 #include <common/json.h>
 #include <common/json_command.h>
 #include <common/json_helpers.h>
@@ -11,15 +16,42 @@
 #include <common/param.h>
 #include <common/status_levels.h>
 
-struct command;
 struct json_out;
-struct plugin_conn;
+struct plugin;
+struct rpc_conn;
 
 extern bool deprecated_apis;
 
 enum plugin_restartability {
 	PLUGIN_STATIC,
 	PLUGIN_RESTARTABLE
+};
+
+struct out_req {
+	/* The unique id of this request. */
+	u64 id;
+	/* The command which is why we're calling this rpc. */
+	struct command *cmd;
+	/* The request stream. */
+	struct json_stream *js;
+	/* The callback when we get a response. */
+	struct command_result *(*cb)(struct command *command,
+				     const char *buf,
+				     const jsmntok_t *result,
+				     void *arg);
+	/* The callback when we get an error. */
+	struct command_result *(*errcb)(struct command *command,
+					const char *buf,
+					const jsmntok_t *error,
+					void *arg);
+	void *arg;
+};
+
+struct command {
+	u64 *id;
+	const char *methodname;
+	bool usage_only;
+	struct plugin *plugin;
 };
 
 /* Create an array of these, one for each command you support. */
@@ -58,6 +90,58 @@ struct plugin_hook {
 	                                 const jsmntok_t *params);
 };
 
+/* Helper to create a JSONRPC2 request stream. Send it with `send_outreq`. */
+struct out_req *
+jsonrpc_request_start_(struct plugin *plugin, struct command *cmd,
+		       const char *method,
+		       struct command_result *(*cb)(struct command *command,
+						    const char *buf,
+						    const jsmntok_t *result,
+						    void *arg),
+		       struct command_result *(*errcb)(struct command *command,
+						       const char *buf,
+						       const jsmntok_t *result,
+						       void *arg),
+		       void *arg);
+
+#define jsonrpc_request_start(plugin, cmd, method, cb, errcb, arg)	\
+	jsonrpc_request_start_((plugin), (cmd), (method),		\
+		     typesafe_cb_preargs(struct command_result *, void *, \
+					 (cb), (arg),			\
+					 struct command *command,	\
+					 const char *buf,		\
+					 const jsmntok_t *result),	\
+		     typesafe_cb_preargs(struct command_result *, void *, \
+					 (errcb), (arg),		\
+					 struct command *command,	\
+					 const char *buf,		\
+					 const jsmntok_t *result),	\
+		     (arg))
+
+
+/* Helper to create a JSONRPC2 response stream with a "result" object. */
+struct json_stream *jsonrpc_stream_success(struct command *cmd);
+
+/* Helper to create a JSONRPC2 response stream with an "error" object. */
+struct json_stream *jsonrpc_stream_fail(struct command *cmd,
+					int code,
+					const char *err);
+
+/* Helper to create a JSONRPC2 response stream with an "error" object,
+ * to which will be added a "data" object. */
+struct json_stream *jsonrpc_stream_fail_data(struct command *cmd,
+					     int code,
+					     const char *err);
+
+/* This command is finished, here's the response (the content of the
+ * "result" or "error" field) */
+struct command_result *WARN_UNUSED_RESULT
+command_finished(struct command *cmd, struct json_stream *response);
+
+/* Helper for a command that'll be finished in a callback. */
+struct command_result *WARN_UNUSED_RESULT
+command_still_pending(struct command *cmd);
+
 /* Helper to create a zero or single-value JSON object; if @str is NULL,
  * object is empty. */
 struct json_out *json_out_obj(const tal_t *ctx,
@@ -68,13 +152,13 @@ struct json_out *json_out_obj(const tal_t *ctx,
 struct command_result *command_param_failed(void);
 
 /* Call this on fatal error. */
-void NORETURN plugin_err(const char *fmt, ...);
+void NORETURN plugin_err(struct plugin *p, const char *fmt, ...);
 
 /* This command is finished, here's a detailed error; @cmd cannot be
  * NULL, data can be NULL; otherwise it must be a JSON object. */
 struct command_result *WARN_UNUSED_RESULT
 command_done_err(struct command *cmd,
-		 int code,
+		 errcode_t code,
 		 const char *errmsg,
 		 const struct json_out *data);
 
@@ -95,41 +179,14 @@ command_success_str(struct command *cmd, const char *str);
 /* Synchronous helper to send command and extract single field from
  * response; can only be used in init callback. */
 const char *rpc_delve(const tal_t *ctx,
+		      struct plugin *plugin,
 		      const char *method,
 		      const struct json_out *params TAKES,
-		      struct plugin_conn *rpc, const char *guide);
+		      const char *guide);
 
-/* Async rpc request.
- * @cmd can be NULL if we're coming from a timer callback.
- * @params can be NULL, otherwise it's an array or object.
- */
+/* Send an async rpc request to lightningd. */
 struct command_result *
-send_outreq_(struct command *cmd,
-	     const char *method,
-	     struct command_result *(*cb)(struct command *command,
-					  const char *buf,
-					  const jsmntok_t *result,
-					  void *arg),
-	     struct command_result *(*errcb)(struct command *command,
-					     const char *buf,
-					     const jsmntok_t *result,
-					     void *arg),
-	     void *arg,
-	     const struct json_out *params TAKES);
-
-#define send_outreq(cmd, method, cb, errcb, arg, params)		\
-	send_outreq_((cmd), (method),					\
-		     typesafe_cb_preargs(struct command_result *, void *, \
-					 (cb), (arg),			\
-					 struct command *command,	\
-					 const char *buf,		\
-					 const jsmntok_t *result),	\
-		     typesafe_cb_preargs(struct command_result *, void *, \
-					 (errcb), (arg),		\
-					 struct command *command,	\
-					 const char *buf,		\
-					 const jsmntok_t *result),	\
-		     (arg), (params))
+send_outreq(struct plugin *plugin, const struct out_req *req);
 
 /* Callback to just forward error and close request; @cmd cannot be NULL */
 struct command_result *forward_error(struct command *cmd,
@@ -146,19 +203,20 @@ struct command_result *forward_result(struct command *cmd,
 /* Callback for timer where we expect a 'command_result'.  All timers
  * must return this eventually, though they may do so via a convoluted
  * send_req() path. */
-struct command_result *timer_complete(void);
+struct command_result *timer_complete(struct plugin *p);
 
 /* Access timer infrastructure to add a timer.
  *
  * Freeing this releases the timer, otherwise it's freed after @cb
  * if it hasn't been freed already.
  */
-struct plugin_timer *plugin_timer(struct plugin_conn *rpc,
+struct plugin_timer *plugin_timer(struct plugin *p,
 				  struct timerel t,
-				  struct command_result *(*cb)(void));
+				  void (*cb)(void *cb_arg),
+				  void *cb_arg);
 
 /* Log something */
-void plugin_log(enum log_level l, const char *fmt, ...) PRINTF_FMT(2, 3);
+void plugin_log(struct plugin *p, enum log_level l, const char *fmt, ...) PRINTF_FMT(3, 4);
 
 /* Macro to define arguments */
 #define plugin_option(name, type, description, set, arg)			\
@@ -174,7 +232,7 @@ char *charp_option(const char *arg, char **p);
 
 /* The main plugin runner: append with 0 or more plugin_option(), then NULL. */
 void NORETURN LAST_ARG_NULL plugin_main(char *argv[],
-					void (*init)(struct plugin_conn *rpc,
+					void (*init)(struct plugin *p,
 						     const char *buf, const jsmntok_t *),
 					const enum plugin_restartability restartability,
 					const struct plugin_command *commands,

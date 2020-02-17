@@ -24,7 +24,7 @@ For actually doing development and running the tests, you will also need:
 * pip3: to install python-bitcoinlib
 * valgrind: for extra debugging checks
 
-You will also need a version of groestlcoind with segregated witness and `estimatesmartfee` economical node, such as the 2.16.0 or above.
+You will also need a version of groestlcoind with segregated witness and `estimatesmartfee` with `ECONOMICAL` mode support, such as the 2.16.0 or above.
 
 To Build on Ubuntu
 ---------------------
@@ -37,7 +37,7 @@ Get dependencies:
     sudo apt-get install -y \
       autoconf automake build-essential git libtool libgmp-dev \
       libsqlite3-dev python python3 python3-mako net-tools zlib1g-dev libsodium-dev \
-      git gettext
+      gettext
 
 If you don't have Groestlcoin installed locally you'll need to install that
 as well:
@@ -129,7 +129,7 @@ To Build on macOS
 
 Assuming you have Xcode and Homebrew installed. Install dependencies:
 
-    $ brew install autoconf automake libtool python3 gmp gnu-sed gettext
+    $ brew install autoconf automake libtool python3 gmp gnu-sed gettext libsodium
     $ ln -s /usr/local/Cellar/gettext/0.20.1/bin/xgettext /usr/local/opt
     $ export PATH="/usr/local/opt:$PATH"
 

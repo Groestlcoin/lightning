@@ -102,6 +102,7 @@ int elements_tx_add_fee_output(struct bitcoin_tx *tx)
 {
 	struct amount_sat fee = bitcoin_tx_compute_fee(tx);
 	int pos = -1;
+	struct witscript *w;
 
 	/* If we aren't using elements, we don't add explicit fee outputs */
 	if (!chainparams->is_elements || amount_sat_eq(fee, AMOUNT_SAT(0)))
@@ -116,6 +117,9 @@ int elements_tx_add_fee_output(struct bitcoin_tx *tx)
 	}
 
 	if (pos == -1) {
+		w = tal(tx->output_witscripts, struct witscript);
+		w->ptr = tal_arr(w, u8, 0);
+		tx->output_witscripts[tx->wtx->num_outputs] = w;
 		return bitcoin_tx_add_output(tx, NULL, fee);
 	} else {
 		bitcoin_tx_output_set_amount(tx, pos, fee);
@@ -381,7 +385,8 @@ static void bitcoin_tx_destroy(struct bitcoin_tx *tx)
 
 struct bitcoin_tx *bitcoin_tx(const tal_t *ctx,
 			      const struct chainparams *chainparams,
-			      varint_t input_count, varint_t output_count)
+			      varint_t input_count, varint_t output_count,
+			      u32 nlocktime)
 {
 	struct bitcoin_tx *tx = tal(ctx, struct bitcoin_tx);
 	assert(chainparams);
@@ -397,8 +402,9 @@ struct bitcoin_tx *bitcoin_tx(const tal_t *ctx,
 	tal_add_destructor(tx, bitcoin_tx_destroy);
 
 	tx->input_amounts = tal_arrz(tx, struct amount_sat*, input_count);
-	tx->wtx->locktime = 0;
+	tx->wtx->locktime = nlocktime;
 	tx->wtx->version = 2;
+	tx->output_witscripts = tal_arrz(tx, struct witscript*, output_count);
 	tx->chainparams = chainparams;
 	return tx;
 }

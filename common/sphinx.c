@@ -6,6 +6,7 @@
 #include <ccan/mem/mem.h>
 #include <common/node_id.h>
 #include <common/onion.h>
+#include <common/onionreply.h>
 #include <common/sphinx.h>
 #include <common/utils.h>
 
@@ -17,7 +18,6 @@
 #include <sodium/crypto_stream_chacha20.h>
 
 #define BLINDING_FACTOR_SIZE 32
-#define SHARED_SECRET_SIZE 32
 #define KEY_LEN 32
 
 #define NUM_STREAM_BYTES (2*ROUTING_INFO_SIZE)
@@ -26,7 +26,7 @@
 #define RHO_KEYTYPE "rho"
 
 struct hop_params {
-	u8 secret[SHARED_SECRET_SIZE];
+	struct secret secret;
 	u8 blind[BLINDING_FACTOR_SIZE];
 	struct pubkey ephemeralkey;
 };
@@ -83,7 +83,7 @@ static size_t sphinx_hop_size(const struct sphinx_hop *hop)
 	return tal_bytelen(hop->raw_payload) + HMAC_SIZE;
 }
 
-static size_t sphinx_path_payloads_size(const struct sphinx_path *path)
+size_t sphinx_path_payloads_size(const struct sphinx_path *path)
 {
 	size_t size = 0;
 	for (size_t i=0; i<tal_count(path->hops); i++)
@@ -98,7 +98,6 @@ void sphinx_add_hop(struct sphinx_path *path, const struct pubkey *pubkey,
 	sp.raw_payload = tal_dup_arr(path, u8, payload, tal_count(payload), 0);
 	sp.pubkey = *pubkey;
 	tal_arr_expand(&path->hops, sp);
-	assert(sphinx_path_payloads_size(path) <= ROUTING_INFO_SIZE);
 }
 
 /* Small helper to append data to a buffer and update the position
@@ -211,9 +210,10 @@ static void compute_packet_hmac(const struct onionpacket *packet,
 	memcpy(hmac, mac, HMAC_SIZE);
 }
 
-static bool generate_key(void *k, const char *t, u8 tlen, const u8 *s)
+static bool generate_key(void *k, const char *t, u8 tlen,
+			 const struct secret *s)
 {
-	return compute_hmac(k, s, KEY_LEN, t, tlen);
+	return compute_hmac(k, s->data, KEY_LEN, t, tlen);
 }
 
 static bool generate_header_padding(void *dst, size_t dstlen,
@@ -227,7 +227,7 @@ static bool generate_header_padding(void *dst, size_t dstlen,
 	memset(dst, 0, dstlen);
 	for (int i = 0; i < tal_count(path->hops) - 1; i++) {
 		if (!generate_key(&key, RHO_KEYTYPE, strlen(RHO_KEYTYPE),
-				  params[i].secret))
+				  &params[i].secret))
 			return false;
 
 		generate_cipher_stream(stream, key, sizeof(stream));
@@ -253,7 +253,7 @@ static bool generate_header_padding(void *dst, size_t dstlen,
 }
 
 static void compute_blinding_factor(const struct pubkey *key,
-				    const u8 sharedsecret[SHARED_SECRET_SIZE],
+				    const struct secret *sharedsecret,
 				    u8 res[BLINDING_FACTOR_SIZE])
 {
 	struct sha256_ctx ctx;
@@ -263,7 +263,7 @@ static void compute_blinding_factor(const struct pubkey *key,
 	pubkey_to_der(der, key);
 	sha256_init(&ctx);
 	sha256_update(&ctx, der, sizeof(der));
-	sha256_update(&ctx, sharedsecret, SHARED_SECRET_SIZE);
+	sha256_update(&ctx, sharedsecret->data, sizeof(sharedsecret->data));
 	sha256_done(&ctx, &temp);
 	memcpy(res, &temp, 32);
 }
@@ -281,17 +281,18 @@ static bool blind_group_element(struct pubkey *blindedelement,
 	return true;
 }
 
-static bool create_shared_secret(u8 *secret, const struct pubkey *pubkey,
+static bool create_shared_secret(struct secret *secret,
+				 const struct pubkey *pubkey,
 				 const struct secret *session_key)
 {
-	if (secp256k1_ecdh(secp256k1_ctx, secret, &pubkey->pubkey,
+	if (secp256k1_ecdh(secp256k1_ctx, secret->data, &pubkey->pubkey,
 			   session_key->data, NULL, NULL) != 1)
 		return false;
 	return true;
 }
 
 bool onion_shared_secret(
-	u8 *secret,
+	struct secret *secret,
 	const struct onionpacket *packet,
 	const struct privkey *privkey)
 {
@@ -299,7 +300,7 @@ bool onion_shared_secret(
 				    &privkey->secret);
 }
 
-static void generate_key_set(const u8 secret[SHARED_SECRET_SIZE],
+static void generate_key_set(const struct secret *secret,
 			     struct keyset *keys)
 {
 	generate_key(keys->rho, "rho", 3, secret);
@@ -324,12 +325,12 @@ static struct hop_params *generate_hop_params(
 				       path->session_key->data) != 1)
 		return NULL;
 
-	if (!create_shared_secret(params[0].secret, &path->hops[0].pubkey,
+	if (!create_shared_secret(&params[0].secret, &path->hops[0].pubkey,
 				  path->session_key))
 		return NULL;
 
 	compute_blinding_factor(
-		&params[0].ephemeralkey, params[0].secret,
+		&params[0].ephemeralkey, &params[0].secret,
 		params[0].blind);
 
 	/* Recursively compute all following ephemeral public keys,
@@ -367,7 +368,7 @@ static struct hop_params *generate_hop_params(
 
 		compute_blinding_factor(
 			&params[i].ephemeralkey,
-			params[i].secret, params[i].blind);
+			&params[i].secret, params[i].blind);
 	}
 	return params;
 }
@@ -396,6 +397,12 @@ struct onionpacket *create_onionpacket(
 	struct hop_params *params;
 	struct secret *secrets = tal_arr(ctx, struct secret, num_hops);
 
+	if (sphinx_path_payloads_size(sp) > ROUTING_INFO_SIZE) {
+		tal_free(packet);
+		tal_free(secrets);
+		return NULL;
+	}
+
 	if (sp->session_key == NULL) {
 		sp->session_key = tal(sp, struct secret);
 		randombytes_buf(sp->session_key, sizeof(struct secret));
@@ -417,14 +424,14 @@ struct onionpacket *create_onionpacket(
 	 */
 	/* Note that this is just hop_payloads: the rest of the packet is
 	 * overwritten below or above anyway. */
-	generate_key(padkey, "pad", 3, sp->session_key->data);
-	generate_cipher_stream(stream, padkey, ROUTING_INFO_SIZE);
+	generate_key(padkey, "pad", 3, sp->session_key);
+	generate_cipher_stream(packet->routinginfo, padkey, ROUTING_INFO_SIZE);
 
 	generate_header_padding(filler, sizeof(filler), sp, params);
 
 	for (i = num_hops - 1; i >= 0; i--) {
 		memcpy(sp->hops[i].hmac, nexthmac, HMAC_SIZE);
-		generate_key_set(params[i].secret, &keys);
+		generate_key_set(&params[i].secret, &keys);
 		generate_cipher_stream(stream, keys.rho, ROUTING_INFO_SIZE);
 
 		/* Rightshift mix-header by FRAME_SIZE */
@@ -445,12 +452,16 @@ struct onionpacket *create_onionpacket(
 	memcpy(&packet->ephemeralkey, &params[0].ephemeralkey, sizeof(secp256k1_pubkey));
 
 	for (i=0; i<num_hops; i++) {
-		memcpy(&secrets[i], params[i].secret, SHARED_SECRET_SIZE);
+		secrets[i] = params[i].secret;
 	}
 
 	*path_secrets = secrets;
 	return packet;
 }
+
+#if DEVELOPER
+bool dev_fail_process_onionpacket;
+#endif
 
 /*
  * Given an onionpacket msg extract the information for the current
@@ -459,7 +470,7 @@ struct onionpacket *create_onionpacket(
 struct route_step *process_onionpacket(
 	const tal_t *ctx,
 	const struct onionpacket *msg,
-	const u8 *shared_secret,
+	const struct secret *shared_secret,
 	const u8 *assocdata,
 	const size_t assocdatalen
 	)
@@ -480,7 +491,8 @@ struct route_step *process_onionpacket(
 
 	compute_packet_hmac(msg, assocdata, assocdatalen, keys.mu, hmac);
 
-	if (memcmp(msg->mac, hmac, sizeof(hmac)) != 0) {
+	if (memcmp(msg->mac, hmac, sizeof(hmac)) != 0
+	    || IFDEV(dev_fail_process_onionpacket, false)) {
 		/* Computed MAC does not match expected MAC, the message was modified. */
 		return tal_free(step);
 	}
@@ -524,12 +536,14 @@ struct route_step *process_onionpacket(
 	return step;
 }
 
-u8 *create_onionreply(const tal_t *ctx, const struct secret *shared_secret,
-		      const u8 *failure_msg)
+struct onionreply *create_onionreply(const tal_t *ctx,
+				     const struct secret *shared_secret,
+				     const u8 *failure_msg)
 {
 	size_t msglen = tal_count(failure_msg);
 	size_t padlen = ONION_REPLY_SIZE - msglen;
-	u8 *reply = tal_arr(ctx, u8, 0), *payload = tal_arr(ctx, u8, 0);
+	struct onionreply *reply = tal(ctx, struct onionreply);
+	u8 *payload = tal_arr(ctx, u8, 0);
 	u8 key[KEY_LEN];
 	u8 hmac[HMAC_SIZE];
 
@@ -566,24 +580,26 @@ u8 *create_onionreply(const tal_t *ctx, const struct secret *shared_secret,
  	 * Where `hmac` is an HMAC authenticating the remainder of the packet,
 	 * with a key generated using the above process, with key type `um`
 	 */
-	generate_key(key, "um", 2, shared_secret->data);
+	generate_key(key, "um", 2, shared_secret);
 
 	compute_hmac(hmac, payload, tal_count(payload), key, KEY_LEN);
-	towire(&reply, hmac, sizeof(hmac));
+	reply->contents = tal_arr(reply, u8, 0),
+	towire(&reply->contents, hmac, sizeof(hmac));
 
-	towire(&reply, payload, tal_count(payload));
+	towire(&reply->contents, payload, tal_count(payload));
 	tal_free(payload);
 
 	return reply;
 }
 
-u8 *wrap_onionreply(const tal_t *ctx,
-		    const struct secret *shared_secret, const u8 *reply)
+struct onionreply *wrap_onionreply(const tal_t *ctx,
+				   const struct secret *shared_secret,
+				   const struct onionreply *reply)
 {
 	u8 key[KEY_LEN];
-	size_t streamlen = tal_count(reply);
+	size_t streamlen = tal_count(reply->contents);
 	u8 stream[streamlen];
-	u8 *result = tal_arr(ctx, u8, streamlen);
+	struct onionreply *result = tal(ctx, struct onionreply);
 
 	/* BOLT #4:
 	 *
@@ -593,61 +609,63 @@ u8 *wrap_onionreply(const tal_t *ctx,
 	 *
 	 * The obfuscation step is repeated by every hop along the return path.
 	 */
-	generate_key(key, "ammag", 5, shared_secret->data);
+	generate_key(key, "ammag", 5, shared_secret);
 	generate_cipher_stream(stream, key, streamlen);
-	xorbytes(result, stream, reply, streamlen);
+	result->contents = tal_arr(result, u8, streamlen);
+	xorbytes(result->contents, stream, reply->contents, streamlen);
 	return result;
 }
 
-struct onionreply *unwrap_onionreply(const tal_t *ctx,
-				     const struct secret *shared_secrets,
-				     const int numhops, const u8 *reply)
+u8 *unwrap_onionreply(const tal_t *ctx,
+		      const struct secret *shared_secrets,
+		      const int numhops,
+		      const struct onionreply *reply,
+		      int *origin_index)
 {
-	struct onionreply *oreply = tal(tmpctx, struct onionreply);
-	u8 *msg = tal_arr(oreply, u8, tal_count(reply));
+	struct onionreply *r;
 	u8 key[KEY_LEN], hmac[HMAC_SIZE];
 	const u8 *cursor;
+	u8 *final;
 	size_t max;
 	u16 msglen;
 
-	if (tal_count(reply) != ONION_REPLY_SIZE + sizeof(hmac) + 4) {
+	if (tal_count(reply->contents) != ONION_REPLY_SIZE + sizeof(hmac) + 4) {
 		return NULL;
 	}
 
-	memcpy(msg, reply, tal_count(reply));
-	oreply->origin_index = -1;
+	r = new_onionreply(tmpctx, reply->contents);
+	*origin_index = -1;
 
 	for (int i = 0; i < numhops; i++) {
 		/* Since the encryption is just XORing with the cipher
 		 * stream encryption is identical to decryption */
-		msg = wrap_onionreply(tmpctx, &shared_secrets[i], msg);
+		r = wrap_onionreply(tmpctx, &shared_secrets[i], r);
 
 		/* Check if the HMAC matches, this means that this is
 		 * the origin */
-		generate_key(key, "um", 2, shared_secrets[i].data);
-		compute_hmac(hmac, msg + sizeof(hmac),
-			     tal_count(msg) - sizeof(hmac), key, KEY_LEN);
-		if (memcmp(hmac, msg, sizeof(hmac)) == 0) {
-			oreply->origin_index = i;
+		generate_key(key, "um", 2, &shared_secrets[i]);
+		compute_hmac(hmac, r->contents + sizeof(hmac),
+			     tal_count(r->contents) - sizeof(hmac),
+			     key, KEY_LEN);
+		if (memcmp(hmac, r->contents, sizeof(hmac)) == 0) {
+			*origin_index = i;
 			break;
 		}
 	}
-	if (oreply->origin_index == -1) {
+	if (*origin_index == -1) {
 		return NULL;
 	}
 
-	cursor = msg + sizeof(hmac);
-	max = tal_count(msg) - sizeof(hmac);
+	cursor = r->contents + sizeof(hmac);
+	max = tal_count(r->contents) - sizeof(hmac);
 	msglen = fromwire_u16(&cursor, &max);
 
 	if (msglen > ONION_REPLY_SIZE) {
 		return NULL;
 	}
 
-	oreply->msg = tal_arr(oreply, u8, msglen);
-	fromwire(&cursor, &max, oreply->msg, msglen);
-
-	tal_steal(ctx, oreply);
-	return oreply;
-
+	final = tal_arr(ctx, u8, msglen);
+	if (!fromwire(&cursor, &max, final, msglen))
+		return tal_free(final);
+	return final;
 }

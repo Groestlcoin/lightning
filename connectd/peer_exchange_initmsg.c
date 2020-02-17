@@ -30,7 +30,7 @@ struct peer {
 static bool contains_common_chain(struct bitcoin_blkid *chains)
 {
 	for (size_t i = 0; i < tal_count(chains); i++) {
-		if (bitcoin_blkid_eq(&chains[0], &chainparams->genesis_blockhash))
+		if (bitcoin_blkid_eq(&chains[i], &chainparams->genesis_blockhash))
 			return true;
 	}
 	return false;
@@ -75,26 +75,19 @@ static struct io_plan *peer_init_received(struct io_conn *conn,
 	 *    - MAY fail the connection.
 	 */
 	if (tlvs->networks) {
-		if (!tlvs->networks->chains) {
-			status_peer_debug(&peer->id,
-			                  "bad networks TLV in init '%s', closing",
-			                  tal_hex(tmpctx, msg));
-			return io_close(conn);
-		}
 		if (!contains_common_chain(tlvs->networks->chains)) {
 			status_peer_debug(&peer->id,
 			                  "No common chain with this peer '%s', closing",
 			                  tal_hex(tmpctx, msg));
-			return io_close(conn);
+			msg = towire_errorfmt(NULL, NULL, "No common network");
+			msg = cryptomsg_encrypt_msg(NULL, &peer->cs, take(msg));
+			return io_write(conn, msg, tal_count(msg), io_close_cb, NULL);
 		}
 	}
 
 	/* The globalfeatures field is now unused, but there was a
 	 * window where it was: combine the two. */
-	for (size_t i = 0; i < tal_bytelen(globalfeatures) * 8; i++) {
-		if (feature_is_set(globalfeatures, i))
-			set_feature_bit(&features, i);
-	}
+	features = featurebits_or(tmpctx, take(features), globalfeatures);
 
 	/* BOLT #1:
 	 *
@@ -162,7 +155,8 @@ struct io_plan *peer_exchange_initmsg(struct io_conn *conn,
 				      struct daemon *daemon,
 				      const struct crypto_state *cs,
 				      const struct node_id *id,
-				      const struct wireaddr_internal *addr)
+				      const struct wireaddr_internal *addr,
+				      const u8 *init_featurebits)
 {
 	/* If conn is closed, forget peer */
 	struct peer *peer = tal(conn, struct peer);
@@ -207,7 +201,7 @@ struct io_plan *peer_exchange_initmsg(struct io_conn *conn,
 	 * from now on they'll all go in initfeatures. */
 	peer->msg = towire_init(NULL,
 				get_offered_globalinitfeatures(tmpctx),
-				get_offered_initfeatures(tmpctx),
+				init_featurebits,
 				tlvs);
 	status_peer_io(LOG_IO_OUT, &peer->id, peer->msg);
 	peer->msg = cryptomsg_encrypt_msg(peer, &peer->cs, take(peer->msg));

@@ -8,6 +8,7 @@
 #include <common/fee_states.h>
 #include <common/key_derive.h>
 #include <common/memleak.h>
+#include <common/onionreply.h>
 #include <common/wireaddr.h>
 #include <inttypes.h>
 #include <lightningd/lightningd.h>
@@ -1757,7 +1758,8 @@ void wallet_htlc_save_out(struct wallet *wallet,
 void wallet_htlc_update(struct wallet *wallet, const u64 htlc_dbid,
 			const enum htlc_state new_state,
 			const struct preimage *payment_key,
-			enum onion_type failcode, const u8 *failuremsg)
+			enum onion_type failcode,
+			const struct onionreply *failuremsg)
 {
 	struct db_stmt *stmt;
 
@@ -1779,7 +1781,7 @@ void wallet_htlc_update(struct wallet *wallet, const u64 htlc_dbid,
 
 	db_bind_int(stmt, 2, failcode);
 	if (failuremsg)
-		db_bind_blob(stmt, 3, failuremsg, tal_bytelen(failuremsg));
+		db_bind_onionreply(stmt, 3, failuremsg);
 	else
 		db_bind_null(stmt, 3);
 
@@ -1810,7 +1812,10 @@ static bool wallet_stmt2htlc_in(struct channel *channel,
 	memcpy(&in->onion_routing_packet, db_column_blob(stmt, 7),
 	       sizeof(in->onion_routing_packet));
 
-	in->failuremsg = db_column_arr(in, stmt, 8, u8);
+	if (db_column_is_null(stmt, 8))
+		in->failuremsg = NULL;
+	else
+		in->failuremsg = db_column_onionreply(in, stmt, 8);
 	in->failcode = db_column_int(stmt, 9);
 
 	if (db_column_is_null(stmt, 11)) {
@@ -1857,7 +1862,10 @@ static bool wallet_stmt2htlc_out(struct wallet *wallet,
 	memcpy(&out->onion_routing_packet, db_column_blob(stmt, 7),
 	       sizeof(out->onion_routing_packet));
 
-	out->failuremsg = db_column_arr(out, stmt, 8, u8);
+	if (db_column_is_null(stmt, 8))
+		out->failuremsg = NULL;
+	else
+		out->failuremsg = db_column_onionreply(out, stmt, 8);
 	out->failcode = db_column_int_or_default(stmt, 9, 0);
 	out->in = NULL;
 
@@ -2185,14 +2193,10 @@ void wallet_payment_setup(struct wallet *wallet, struct wallet_payment *payment)
 }
 
 void wallet_payment_store(struct wallet *wallet,
-			  const struct sha256 *payment_hash,
-			  u64 partid)
+			  struct wallet_payment *payment TAKES)
 {
 	struct db_stmt *stmt;
-	struct wallet_payment *payment;
-
-	payment = find_unstored_payment(wallet, payment_hash, partid);
-	if (!payment) {
+	if (!find_unstored_payment(wallet, &payment->payment_hash, payment->partid)) {
 		/* Already stored on-disk */
 #if DEVELOPER
 		/* Double-check that it is indeed stored to disk
@@ -2203,8 +2207,8 @@ void wallet_payment_store(struct wallet *wallet,
 		    db_prepare_v2(wallet->db, SQL("SELECT status FROM payments"
 						  " WHERE payment_hash=?"
 						  " AND partid = ?;"));
-		db_bind_sha256(stmt, 0, payment_hash);
-		db_bind_u64(stmt, 1, partid);
+		db_bind_sha256(stmt, 0, &payment->payment_hash);
+		db_bind_u64(stmt, 1, payment->partid);
 		db_query_prepared(stmt);
 		res = db_step(stmt);
 		assert(res);
@@ -2274,8 +2278,17 @@ void wallet_payment_store(struct wallet *wallet,
 	db_bind_amount_msat(stmt, 11, &payment->total_msat);
 	db_bind_u64(stmt, 12, payment->partid);
 
-	db_exec_prepared_v2(take(stmt));
-	tal_free(payment);
+	db_exec_prepared_v2(stmt);
+	payment->id = db_last_insert_id_v2(stmt);
+	assert(payment->id > 0);
+	tal_free(stmt);
+
+	if (taken(payment)) {
+		tal_free(payment);
+	}  else {
+		list_del(&payment->list);
+		tal_del_destructor(payment, destroy_unstored_payment);
+	}
 }
 
 void wallet_payment_delete(struct wallet *wallet,
@@ -2468,7 +2481,7 @@ void wallet_payment_get_failinfo(const tal_t *ctx,
 				 const struct sha256 *payment_hash,
 				 u64 partid,
 				 /* outputs */
-				 u8 **failonionreply,
+				 struct onionreply **failonionreply,
 				 bool *faildestperm,
 				 int *failindex,
 				 enum onion_type *failcode,
@@ -2498,9 +2511,7 @@ void wallet_payment_get_failinfo(const tal_t *ctx,
 	if (db_column_is_null(stmt, 0))
 		*failonionreply = NULL;
 	else {
-		len = db_column_bytes(stmt, 0);
-		*failonionreply = tal_arr(ctx, u8, len);
-		memcpy(*failonionreply, db_column_blob(stmt, 0), len);
+		*failonionreply = db_column_onionreply(ctx, stmt, 0);
 	}
 	*faildestperm = db_column_int(stmt, 1) != 0;
 	*failindex = db_column_int(stmt, 2);
@@ -2540,7 +2551,7 @@ void wallet_payment_get_failinfo(const tal_t *ctx,
 void wallet_payment_set_failinfo(struct wallet *wallet,
 				 const struct sha256 *payment_hash,
 				 u64 partid,
-				 const u8 *failonionreply /*tal_arr*/,
+				 const struct onionreply *failonionreply,
 				 bool faildestperm,
 				 int failindex,
 				 enum onion_type failcode,
@@ -2565,8 +2576,8 @@ void wallet_payment_set_failinfo(struct wallet *wallet,
 					     " WHERE payment_hash=?"
 					     " AND partid=?;"));
 	if (failonionreply)
-		db_bind_blob(stmt, 0, failonionreply,
-			     tal_count(failonionreply));
+		db_bind_blob(stmt, 0, failonionreply->contents,
+			     tal_count(failonionreply->contents));
 	else
 		db_bind_null(stmt, 0);
 
@@ -3127,6 +3138,29 @@ bool wallet_transaction_type(struct wallet *w, const struct bitcoin_txid *txid,
 	return true;
 }
 
+struct bitcoin_tx *wallet_transaction_get(const tal_t *ctx, struct wallet *w,
+					  const struct bitcoin_txid *txid)
+{
+	struct bitcoin_tx *tx;
+	struct db_stmt *stmt = db_prepare_v2(
+	    w->db, SQL("SELECT rawtx FROM transactions WHERE id=?"));
+	db_bind_txid(stmt, 0, txid);
+	db_query_prepared(stmt);
+
+	if (!db_step(stmt)) {
+		tal_free(stmt);
+		return NULL;
+	}
+
+	if (!db_column_is_null(stmt, 0))
+		tx = db_column_tx(ctx, stmt, 0);
+	else
+		tx = NULL;
+
+	tal_free(stmt);
+	return tx;
+}
+
 u32 wallet_transaction_height(struct wallet *w, const struct bitcoin_txid *txid)
 {
 	u32 blockheight;
@@ -3315,7 +3349,7 @@ static bool wallet_forwarded_payment_update(struct wallet *w,
 		db_bind_null(stmt, 3);
 	}
 
-	if(failcode != 0) {
+	if (failcode != 0) {
 		assert(state == FORWARD_FAILED || state == FORWARD_LOCAL_FAILED);
 		db_bind_int(stmt, 4, (int)failcode);
 	} else {
@@ -3331,6 +3365,7 @@ static bool wallet_forwarded_payment_update(struct wallet *w,
 }
 
 void wallet_forwarded_payment_add(struct wallet *w, const struct htlc_in *in,
+				  const struct short_channel_id *scid_out,
 				  const struct htlc_out *out,
 				  enum forward_status state,
 				  enum onion_type failcode)
@@ -3363,7 +3398,7 @@ void wallet_forwarded_payment_add(struct wallet *w, const struct htlc_in *in,
 				 ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);"));
 	db_bind_u64(stmt, 0, in->dbid);
 
-	if(out) {
+	if (out) {
 		db_bind_u64(stmt, 1, out->dbid);
 		db_bind_u64(stmt, 3, out->key.channel->scid->u64);
 		db_bind_amount_msat(stmt, 5, &out->msat);
@@ -3388,7 +3423,7 @@ void wallet_forwarded_payment_add(struct wallet *w, const struct htlc_in *in,
 	else
 		db_bind_null(stmt, 8);
 
-	if(failcode != 0) {
+	if (failcode != 0) {
 		assert(state == FORWARD_FAILED || state == FORWARD_LOCAL_FAILED);
 		db_bind_int(stmt, 9, (int)failcode);
 	} else {
@@ -3398,7 +3433,8 @@ void wallet_forwarded_payment_add(struct wallet *w, const struct htlc_in *in,
 	db_exec_prepared_v2(take(stmt));
 
 notify:
-	notify_forward_event(w->ld, in, out, state, failcode, resolved_time);
+	notify_forward_event(w->ld, in, scid_out, out ? &out->msat : NULL,
+			     state, failcode, resolved_time);
 }
 
 struct amount_msat wallet_total_forward_fees(struct wallet *w)
@@ -3565,8 +3601,8 @@ static void process_utxo_result(struct bitcoind *bitcoind,
 	/* If we have more, resolve them too. */
 	tal_arr_remove(&utxos, 0);
 	if (tal_count(utxos) != 0) {
-		bitcoind_gettxout(bitcoind, &utxos[0]->txid, utxos[0]->outnum,
-				  process_utxo_result, utxos);
+		bitcoind_getutxout(bitcoind, &utxos[0]->txid, utxos[0]->outnum,
+				   process_utxo_result, utxos);
 	} else
 		tal_free(utxos);
 }
@@ -3576,8 +3612,8 @@ void wallet_clean_utxos(struct wallet *w, struct bitcoind *bitcoind)
 	struct utxo **utxos = wallet_get_utxos(NULL, w, output_state_reserved);
 
 	if (tal_count(utxos) != 0) {
-		bitcoind_gettxout(bitcoind, &utxos[0]->txid, utxos[0]->outnum,
-				  process_utxo_result, notleak(utxos));
+		bitcoind_getutxout(bitcoind, &utxos[0]->txid, utxos[0]->outnum,
+				   process_utxo_result, notleak(utxos));
 	} else
 		tal_free(utxos);
 }

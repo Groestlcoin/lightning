@@ -35,7 +35,7 @@ plugin dirs, usually `/usr/local/libexec/c-lightning/plugins` and
 lightningd --plugin=/path/to/plugin1 --plugin=path/to/plugin2
 ```
 
-`lightningd` run your plugins from the `--lightning-dir`/networkname, then
+`lightningd` will run your plugins from the `--lightning-dir`/networkname, then
 will write JSON-RPC requests to the plugin's `stdin` and
 will read replies from its `stdout`. To initialize the plugin two RPC
 methods are required:
@@ -92,6 +92,11 @@ this example:
     "openchannel",
     "htlc_accepted"
   ],
+  "features": {
+    "node": "D0000000",
+    "init": "0E000000",
+    "invoice": "00AD0000"
+  },
   "dynamic": true
 }
 ```
@@ -110,8 +115,23 @@ set to `description` if it was not provided). `usage` should surround optional
 parameter names in `[]`.
 
 The `dynamic` indicates if the plugin can be managed after `lightningd`
-has been started. Critical plugins that should not be stop should set it
+has been started. Critical plugins that should not be stopped should set it
 to false.
+
+The `features` object allows the plugin to register featurebits that should be
+announced in a number of places in [the protocol][bolt9]. They can be used to signal
+support for custom protocol extensions to direct peers, remote nodes and in
+invoices. Custom protocol extensions can be implemented for example using the
+`sendcustommsg` method and the `custommsg` hook, or the `sendonion` method and
+the `htlc_accepted` hook. The keys in the `features` object are `node` for
+features that should be announced via the `node_announcement` to all nodes in
+the network, `init` for features that should be announced to direct peers
+during the connection setup, and `invoice` for features that should be
+announced to a potential sender of a payment in the invoice. The low range of
+featurebits is reserved for standardize features, so please pick random, high
+position bits for experiments. If you'd like to standardize your extension
+please reach out to the [specification repository][spec] to get a featurebit
+assigned.
 
 Plugins are free to register any `name` for their `rpcmethod` as long
 as the name was not previously registered. This includes both built-in
@@ -217,9 +237,8 @@ above for example subscribes to the two topics `connect` and
 `disconnect`. The topics that are currently defined and the
 corresponding payloads are listed below.
 
-### Notification Types
 
-#### `channel_opened`
+### `channel_opened`
 
 A notification for topic `channel_opened` is sent if a peer successfully funded a channel
 with us. It contains the peer id, the funding amount (in millisatoshis), the funding
@@ -237,7 +256,7 @@ into a block.
 }
 ```
 
-#### `connect`
+### `connect`
 
 A notification for topic `connect` is sent every time a new connection
 to a peer is established.
@@ -249,7 +268,7 @@ to a peer is established.
 }
 ```
 
-#### `disconnect`
+### `disconnect`
 
 A notification for topic `disconnect` is sent every time a connection
 to a peer was lost.
@@ -260,7 +279,7 @@ to a peer was lost.
 }
 ```
 
-#### `invoice_payment`
+### `invoice_payment`
 
 A notification for topic `invoice_payment` is sent every time an invoie is paid.
 
@@ -274,7 +293,7 @@ A notification for topic `invoice_payment` is sent every time an invoie is paid.
 }
 ```
 
-#### `warning`
+### `warning`
 
 A notification for topic `warning` is sent every time a new `BROKEN`
 /`UNUSUAL` level(in plugins, we use `error`/`warn`) log generated,
@@ -302,7 +321,7 @@ forms:
 `jcon fd <error_fd_to_jsonrpc>:`, `plugin-manager`;
 4. `log` is the context of the original log entry.
 
-#### `forward_event`
+### `forward_event`
 
 A notification for topic `forward_event` is sent every time the status
 of a forward payment is set. The json format is same as the API
@@ -385,11 +404,11 @@ or
    only `settled` and `failed` case contain `resolved_time`;
  - The `failcode` and `failreason` are defined in [BOLT 4][bolt4-failure-codes].
 
-#### `sendpay_success`
+### `sendpay_success`
 
 A notification for topic `sendpay_success` is sent every time a sendpay
-success(with `complete` status). The json is same as the return value of
-command `sendpay`/`waitsendpay` when these cammand succeeds.
+succeeds (with `complete` status). The json is the same as the return value of
+the commands `sendpay`/`waitsendpay` when these commands succeed.
 
 ```json
 {
@@ -412,11 +431,11 @@ returns the result of sendpay in specified time or timeout, but
 `sendpay_success` will always return the result anytime when sendpay
 successes if is was subscribed.
 
-#### `sendpay_failure`
+### `sendpay_failure`
 
 A notification for topic `sendpay_failure` is sent every time a sendpay
-success(with `failed` status). The json is same as the return value of
-command `sendpay`/`waitsendpay` when this cammand fails.
+completes with `failed` status. The JSON is same as the return value of
+the commands `sendpay`/`waitsendpay` when these commands fail.
 
 ```json
 {
@@ -452,30 +471,55 @@ fails if is was subscribed.
 
 Hooks allow a plugin to define custom behavior for `lightningd`
 without having to modify the c-lightning source code itself. A plugin
-declares that it'd like to consulted on what to do next for certain
+declares that it'd like to be consulted on what to do next for certain
 events in the daemon. A hook can then decide how `lightningd` should
 react to the given event.
 
-Hooks and notifications sounds very similar, however there are a few
+The call semantics of the hooks, i.e., when and how hooks are called, depend
+on the hook type. Most hooks are currently set to `single`-mode. In this mode
+only a single plugin can register the hook, and that plugin will get called
+for each event of that type. If a second plugin attempts to register the hook
+it gets killed and a corresponding log entry will be added to the logs. In
+`chain`-mode multiple plugins can register for the hook type and they are
+called sequentially if a matching event is triggered. Each plugin can then
+handle the event or defer by returning a `continue` result like the following:
+
+```json
+{
+  "result": "continue"
+}
+```
+
+The remainder of the response is ignored and if there are any more plugins
+that have registered the hook the next one gets called. If there are no more
+plugins then the internal handling is resumed as if no hook had been
+called. Any other result returned by a plugin is considered an exit from the
+chain. Upon exit no more plugin hooks are called for the current event, and
+the result is executed. Unless otherwise stated all hooks are `single`-mode.
+
+Hooks and notifications are very similar, however there are a few
 key differences:
 
  - Notifications are asynchronous, i.e., `lightningd` will send the
    notifications but not wait for the plugin to process them. Hooks on
    the other hand are synchronous, `lightningd` cannot finish
    processing the event until the plugin has returned.
- - Any number of plugins can subscribe to a notification topic,
-   however only one plugin may register for any hook topic at any
-   point in time (we cannot disambiguate between multiple plugins
-   returning contradictory results from a hook callback).
+ - Any number of plugins can subscribe to a notification topic and get
+   notified in parallel, however only one plugin may register for
+   `single`-mode hook types, and in all cases only one plugin may return a
+   non-`continue` response. This avoids having multiple contradictory
+   responses.
 
 Hooks are considered to be an advanced feature due to the fact that
 `lightningd` relies on the plugin to tell it what to do next. Use them
 carefully, and make sure your plugins always return a valid response
 to any hook invocation.
 
-### Hook Types
+As a convention, for all hooks, returning the object
+`{ "result" : "continue" }` results in `lightningd` behaving exactly as if
+no plugin is registered on the hook.
 
-#### `peer_connected`
+### `peer_connected`
 
 This hook is called whenever a peer has connected and successfully completed
 the cryptographic handshake. The parameters have the following structure if there is a channel with the peer:
@@ -503,7 +547,7 @@ there's a member `error_message`, that member is sent to the peer
 before disconnection.
 
 
-#### `db_write`
+### `db_write`
 
 This hook is called whenever a change is about to be committed to the database.
 It is currently extremely restricted:
@@ -514,18 +558,69 @@ It is currently extremely restricted:
    commands, as these may become intermingled and break rule #1.
 3. the hook will be called before your plugin is initialized!
 
+This hook, unlike all the other hooks, is also strongly synchronous:
+`lightningd` will stop almost all the other processing until this
+hook responds.
+
 ```json
 {
+  "data_version": 42,
   "writes": [
     "PRAGMA foreign_keys = ON"
   ]
 }
 ```
 
-Any response but "true" will cause lightningd to error without
-committing to the database!
+This hook is intended for creating continuous backups.
+The intent is that your backup plugin maintains three
+pieces of information (possibly in separate files):
+(1) a snapshot of the database, (2) a log of database queries
+that will bring that snapshot up-to-date, and (3) the previous
+`data_version`.
 
-#### `invoice_payment`
+`data_version` is an unsigned 32-bit number that will always
+increment by 1 each time `db_write` is called.
+Note that this will wrap around on the limit of 32-bit numbers.
+
+`writes` is an array of strings, each string being a database query
+that modifies the database.
+If the `data_version` above is validated correctly, then you can
+simply append this to the log of database queries.
+
+Your plugin **MUST** validate the `data_version`.
+It **MUST** keep track of the previous `data_version` it got,
+and:
+
+1. If the new `data_version` is ***exactly*** one higher than
+   the previous, then this is the ideal case and nothing bad
+   happened and we should save this and continue.
+2. If the new `data_version` is ***exactly*** the same value
+   as the previous, then the previous set of queries was not
+   committed.
+   Your plugin **MAY** overwrite the previous set of queries with
+   the current set, or it **MAY** overwrite its entire backup
+   with a new snapshot of the database and the current `writes`
+   array (treating this case as if `data_version` were two or
+   more higher than the previous).
+3. If the new `data_version` is ***less than*** the previous,
+   your plugin **MUST** halt and catch fire, and have the
+   operator inspect what exactly happend here.
+4. Otherwise, some queries were lost and your plugin **SHOULD**
+   recover by creating a new snapshot of the database: copy the
+   database file, back up the given `writes` array, then delete
+   (or atomically `rename` if in a POSIX filesystem) the previous
+   backups of the database and SQL statements, or you **MAY**
+   fail the hook to abort `lightningd`.
+
+The "rolling up" of the database could be done periodically as well
+if the log of SQL statements has grown large.
+
+Any response other than `{"result": "continue"}` will cause lightningd
+to error without
+committing to the database!
+This is the expected way to halt and catch fire.
+
+### `invoice_payment`
 
 This hook is called whenever a valid payment for an unpaid invoice has arrived.
 
@@ -542,11 +637,12 @@ This hook is called whenever a valid payment for an unpaid invoice has arrived.
 The hook is sparse on purpose, since the plugin can use the JSON-RPC
 `listinvoices` command to get additional details about this invoice.
 It can return a non-zero `failure_code` field as defined for final
-nodes in [BOLT 4][bolt4-failure-codes], or otherwise an empty object
-to accept the payment.
+nodes in [BOLT 4][bolt4-failure-codes], a `result` field with the string
+`reject` to fail it with `incorrect_or_unknown_payment_details`, or a
+`result` field with the string `continue` to accept the payment.
 
 
-#### `openchannel`
+### `openchannel`
 
 This hook is called whenever a remote peer tries to fund a channel to us,
 and it has passed basic sanity checks:
@@ -592,7 +688,7 @@ e.g.
 Note that `close_to` must be a valid address for the current chain; an invalid address will cause the node to exit with an error.
 
 
-#### `htlc_accepted`
+### `htlc_accepted`
 
 The `htlc_accepted` hook is called whenever an incoming HTLC is accepted, and
 its result determines how `lightningd` should treat that HTLC.
@@ -607,7 +703,6 @@ The payload of the hook call has the following format:
     "short_channel_id": "1x2x3",
     "forward_amount": "42msat",
     "outgoing_cltv_value": 500014
-    }
   },
   "next_onion": "[1365bytes of serialized onion]",
   "shared_secret": "0000000000000000000000000000000000000000000000000000000000000000",
@@ -694,8 +789,14 @@ processed before the HTLC was forwarded, failed, or resolved, then the plugin
 may see the same HTLC again during startup. It is therefore paramount that the
 plugin is idempotent if it talks to an external system.
 
+The `htlc_accepted` hook is a chained hook, i.e., multiple plugins can
+register it, and they will be called in the order they were registered in
+until the first plugin return a result that is not `{"result": "continue"}`,
+after which the event is considered to be handled. After the event has been
+handled the remaining plugins will be skipped.
 
-#### `rpc_command`
+
+### `rpc_command`
 
 The `rpc_command` hook allows a plugin to take over any RPC command. It sends
 the received JSON-RPC request to the registered plugin,
@@ -720,7 +821,7 @@ Let `lightningd` execute the command with
 
 ```json
 {
-    "continue": true
+    "result" : "continue"
 }
 ```
 Replace the request made to `lightningd`:
@@ -761,8 +862,46 @@ Return a custom error to the request sender:
 }
 ```
 
+
+### `custommsg`
+
+The `custommsg` plugin hook is the receiving counterpart to the
+[`dev-sendcustommsg`][sendcustommsg] RPC method and allows plugins to handle
+messages that are not handled internally. The goal of these two components is
+to allow the implementation of custom protocols or prototypes on top of a
+c-lightning node, without having to change the node's implementation itself.
+
+The payload for a call follows this format:
+
+```json
+{
+	"peer_id": "02df5ffe895c778e10f7742a6c5b8a0cefbe9465df58b92fadeb883752c8107c8f",
+	"message": "1337ffffffff"
+}
+```
+
+This payload would have been sent by the peer with the `node_id` matching
+`peer_id`, and the message has type `0x1337` and contents `ffffffff`. Notice
+that the messages are currently limited to odd-numbered types and must not
+match a type that is handled internally by c-lightning. These limitations are
+in place in order to avoid conflicts with the internal state tracking, and
+avoiding disconnections or channel closures, since odd-numbered message can be
+ignored by nodes (see ["it's ok to be odd" in the specification][oddok] for
+details). The plugin must implement the parsing of the message, including the
+type prefix, since c-lightning does not know how to parse the message.
+
+The result for this hook is currently being discarded. For future uses of the
+result we suggest just returning `{'result': 'continue'}`.
+This will ensure backward
+compatibility should the semantics be changed in future.
+
+
 [jsonrpc-spec]: https://www.jsonrpc.org/specification
 [jsonrpc-notification-spec]: https://www.jsonrpc.org/specification#notification
 [bolt4]: https://github.com/lightningnetwork/lightning-rfc/blob/master/04-onion-routing.md
 [bolt4-failure-codes]: https://github.com/lightningnetwork/lightning-rfc/blob/master/04-onion-routing.md#failure-messages
 [bolt2-open-channel]: https://github.com/lightningnetwork/lightning-rfc/blob/master/02-peer-protocol.md#the-open_channel-message
+[sendcustommsg]: lightning-dev-sendcustommsg.7.html
+[oddok]: https://github.com/lightningnetwork/lightning-rfc/blob/master/00-introduction.md#its-ok-to-be-odd
+[spec]: [https://github.com/lightningnetwork/lightning-rfc]
+[bolt9]: https://github.com/lightningnetwork/lightning-rfc/blob/master/09-features.md

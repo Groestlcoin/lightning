@@ -4,14 +4,19 @@ lightning-fundchannel - Command for establishing a lightning channel
 .SH SYNOPSIS
 
 \fBfundchannel\fR \fIid\fR \fIamount\fR [\fIfeerate\fR \fIannounce\fR] [\fIminconf\fR]
-[\fIutxos\fR]
+[\fIutxos\fR] [\fIpush_msat\fR]
 
 .SH DESCRIPTION
 
 The \fBfundchannel\fR RPC command opens a payment channel with a peer by
 committing a funding transaction to the blockchain as defined in BOLT
-#2\. \fBfundchannel\fR by itself does not attempt to open a connection\. A
-connection must first be established using \fBconnect\fR\. Once the
+#2\.
+If not already connected, \fBfundchannel\fR will automatically attempt
+to connect if C-lightning knows a way to contact the node (either from
+normal gossip, or from a previous \fBconnect\fR call)\.
+This auto-connection can fail if C-lightning does not know how to contact
+the target node; see \fBlightning-connect\fR(7)\.
+Once the
 transaction is confirmed, normal channel operations may begin\. Readiness
 is indicated by \fBlistpeers\fR reporting a \fIstate\fR of CHANNELD_NORMAL
 for the channel\.
@@ -53,6 +58,12 @@ outputs should have\. Default is 1\.
 
 \fIutxos\fR specifies the utxos to be used to fund the channel, as an array
 of "txid:vout"\.
+
+
+\fIpush_msat\fR is the amount of millisatoshis to push to the channel peer at
+open\. Note that this is a gift to the peer -- these satoshis are
+added to the initial balance of the peer at channel start and are largely
+unrecoverable once pushed\.
 
 .SH RETURN VALUE
 

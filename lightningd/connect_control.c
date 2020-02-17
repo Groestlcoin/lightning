@@ -2,9 +2,11 @@
 #include <ccan/fdpass/fdpass.h>
 #include <ccan/list/list.h>
 #include <ccan/tal/str/str.h>
+#include <common/errcode.h>
 #include <common/features.h>
 #include <common/json_command.h>
 #include <common/json_helpers.h>
+#include <common/json_stream.h>
 #include <common/jsonrpc_errors.h>
 #include <common/memleak.h>
 #include <common/node_id.h>
@@ -20,7 +22,6 @@
 #include <lightningd/connect_control.h>
 #include <lightningd/hsm_control.h>
 #include <lightningd/json.h>
-#include <lightningd/json_stream.h>
 #include <lightningd/jsonrpc.h>
 #include <lightningd/lightningd.h>
 #include <lightningd/log.h>
@@ -231,13 +232,14 @@ void delay_then_reconnect(struct channel *channel, u32 seconds_delay,
 static void connect_failed(struct lightningd *ld, const u8 *msg)
 {
 	struct node_id id;
-	char *err;
+	errcode_t errcode;
+	char *errmsg;
 	struct connect *c;
 	u32 seconds_to_delay;
 	struct wireaddr_internal *addrhint;
 	struct channel *channel;
 
-	if (!fromwire_connectctl_connect_failed(tmpctx, msg, &id, &err,
+	if (!fromwire_connectctl_connect_failed(tmpctx, msg, &id, &errcode, &errmsg,
 						&seconds_to_delay, &addrhint))
 		fatal("Connect gave bad CONNECTCTL_CONNECT_FAILED message %s",
 		      tal_hex(msg, msg));
@@ -245,7 +247,7 @@ static void connect_failed(struct lightningd *ld, const u8 *msg)
 	/* We can have multiple connect commands: fail them all */
 	while ((c = find_connect(ld, &id)) != NULL) {
 		/* They delete themselves from list */
-		was_pending(command_fail(c->cmd, LIGHTNINGD, "%s", err));
+		was_pending(command_fail(c->cmd, errcode, "%s", errmsg));
 	}
 
 	/* If we have an active channel, then reconnect. */
@@ -335,7 +337,7 @@ static void connect_init_done(struct subd *connectd,
 int connectd_init(struct lightningd *ld)
 {
 	int fds[2];
-	u8 *msg;
+	u8 *msg, *init_features;
 	int hsmfd;
 	struct wireaddr_internal *wireaddrs = ld->proposed_wireaddr;
 	enum addr_listen_announce *listen_announce = ld->proposed_listen_announce;
@@ -360,6 +362,12 @@ int connectd_init(struct lightningd *ld)
 		*listen_announce = ADDR_LISTEN_AND_ANNOUNCE;
 	}
 
+	init_features =
+	    featurebits_or(tmpctx,
+			   take(plugins_collect_featurebits(
+			       tmpctx, ld->plugins, PLUGIN_FEATURES_INIT)),
+			   take(get_offered_initfeatures(tmpctx)));
+
 	msg = towire_connectctl_init(
 	    tmpctx, chainparams,
 	    &ld->id,
@@ -368,7 +376,7 @@ int connectd_init(struct lightningd *ld)
 	    ld->proxyaddr, ld->use_proxy_always || ld->pure_tor_setup,
 	    IFDEV(ld->dev_allow_localhost, false), ld->config.use_dns,
 	    ld->tor_service_password ? ld->tor_service_password : "",
-	    ld->config.use_v3_autotor);
+	    ld->config.use_v3_autotor, init_features);
 
 	subd_req(ld->connectd, ld->connectd, take(msg), -1, 0,
 		 connect_init_done, NULL);

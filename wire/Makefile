@@ -10,8 +10,8 @@ WIRE_HEADERS_NOGEN := wire/onion_defs.h		\
 		wire/wire.h			\
 		wire/wire_sync.h		\
 		wire/wire_io.h
-WIRE_GEN_HEADERS := wire/gen_peer_wire.h wire/gen_onion_wire.h
-WIRE_GEN_SRC := wire/gen_peer_wire.c
+WIRE_GEN_HEADERS := wire/gen_peer_wire.h wire/gen_onion_wire.h wire/gen_common_wire.h
+WIRE_GEN_SRC := wire/gen_peer_wire.c wire/gen_common_wire.c
 WIRE_GEN_ONION_SRC := wire/gen_onion_wire.c
 WIRE_SRC := wire/wire_sync.c			\
 		wire/wire_io.c			\
@@ -53,10 +53,10 @@ EXPERIMENTAL_PEER_PATCHES := $(wildcard wire/extracted_peer_experimental_*)
 EXPERIMENTAL_ONION_PATCHES := $(wildcard wire/extracted_onion_experimental_*)
 
 wire/gen_peer_wire_csv: wire/extracted_peer_wire_csv $(EXPERIMENTAL_PEER_PATCHES)
-	@set -e; trap "rm -f $@.$$$$" 0; cp $< $@.$$$$; for exp in $(EXPERIMENTAL_PEER_PATCHES); do patch --silent $@.$$$$ $$exp; done; mv $@.$$$$ $@
+	@set -e; trap "rm -f $@.$$$$" 0; cp $< $@.$$$$; for exp in $(EXPERIMENTAL_PEER_PATCHES); do patch $@.$$$$ $$exp; done; mv $@.$$$$ $@
 
 wire/gen_onion_wire_csv: wire/extracted_onion_wire_csv $(EXPERIMENTAL_ONION_PATCHES)
-	@set -e; trap "rm -f $@.$$$$" 0; cp $< $@.$$$$; for exp in $(EXPERIMENTAL_ONION_PATCHES); do patch --silent $@.$$$$ $$exp; done; mv $@.$$$$ $@
+	@set -e; trap "rm -f $@.$$$$" 0; cp $< $@.$$$$; for exp in $(EXPERIMENTAL_ONION_PATCHES); do patch $@.$$$$ $$exp; done; mv $@.$$$$ $@
 
 else # /* EXPERIMENTAL_FEATURES */
 wire/gen_peer_wire_csv: wire/extracted_peer_wire_csv
@@ -84,6 +84,13 @@ wire/gen_onion_wire.h: wire/gen_onion_wire_csv $(WIRE_BOLT_DEPS) wire/Makefile
 
 wire/gen_onion_wire.c: wire/gen_onion_wire_csv $(WIRE_BOLT_DEPS) wire/Makefile
 	$(BOLT_GEN) -s --expose-tlv-type=tlv_payload --page impl ${@:.c=.h} onion_type < $< > $@
+
+# Some messages that are common among all daemons
+wire/gen_common_wire.h: wire/common_wire_csv $(WIRE_BOLT_DEPS) wire/Makefile
+	$(BOLT_GEN) -s --page header $@ common_wire_type < $< > $@
+
+wire/gen_common_wire.c: wire/common_wire_csv $(WIRE_BOLT_DEPS) wire/Makefile
+	$(BOLT_GEN) -s --page impl ${@:.c=.h} common_wire_type < $< > $@
 
 check-source: $(WIRE_SRC:%=check-src-include-order/%) $(WIRE_HEADERS_NOGEN:%=check-hdr-include-order/%)
 

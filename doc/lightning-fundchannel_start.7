@@ -3,7 +3,7 @@
 lightning-fundchannel_start - Command for initiating channel establishment for a lightning channel
 .SH SYNOPSIS
 
-\fBfundchannel_start\fR \fIid\fR \fIamount\fR [\fIfeerate\fR \fIannounce\fR \fIclose_to\fR]
+\fBfundchannel_start\fR \fIid\fR \fIamount\fR [\fIfeerate\fR \fIannounce\fR \fIclose_to\fR \fIpush_msat\fR]
 
 .SH DESCRIPTION
 
@@ -31,6 +31,12 @@ on close\. Only valid if both peers have negotiated \fBoption_upfront_shutdown_s
 Returns \fBclose_to\fR set to closing script iff is negotiated\.
 
 
+\fIpush_msat\fR is the amount of millisatoshis to push to the channel peer at
+open\. Note that this is a gift to the peer -- these satoshis are
+added to the initial balance of the peer at channel start and are largely
+unrecoverable once pushed\.
+
+
 Note that the funding transaction MUST NOT be broadcast until after
 channel establishment has been successfully completed by running
 \fBfundchannel_complete\fR, as the commitment transactions for this channel
@@ -44,8 +50,26 @@ If a \fBclose_to\fR address was provided, will close to this address iff the \fB
 returned in the response\. Otherwise, the peer does not support \fBoption_upfront_shutdownscript\fR\.
 
 
-On failure, returns an error\.
+On error the returned object will contain \fBcode\fR and \fBmessage\fR properties,
+with \fBcode\fR being one of the following:
 
+.RS
+.IP \[bu]
+-32602: If the given parameters are wrong\.
+.IP \[bu]
+-1: Catchall nonspecific error\.
+.IP \[bu]
+300: The amount exceeded the maximum configured funding amount\.
+.IP \[bu]
+301: The provided \fBpush_msat\fR is greater than the provided \fBamount\fR\.
+.IP \[bu]
+304: Still syncing with bitcoin network
+.IP \[bu]
+305: Peer is not connected\.
+.IP \[bu]
+306: Unknown peer id\.
+
+.RE
 .SH AUTHOR
 
 Lisa Neigut \fI<niftynei@gmail.com\fR> is mainly responsible\.

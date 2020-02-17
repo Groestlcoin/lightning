@@ -4,7 +4,7 @@ lightning-fundchannel\_start -- Command for initiating channel establishment for
 SYNOPSIS
 --------
 
-**fundchannel\_start** *id* *amount* \[*feerate* *announce* *close_to*\]
+**fundchannel\_start** *id* *amount* \[*feerate* *announce* *close_to* *push_msat*\]
 
 DESCRIPTION
 -----------
@@ -27,6 +27,11 @@ commitment transactions: see **fundchannel**.
 on close. Only valid if both peers have negotiated `option_upfront_shutdown_script`.
 Returns `close_to` set to closing script iff is negotiated.
 
+*push_msat* is the amount of millisatoshis to push to the channel peer at
+open. Note that this is a gift to the peer -- these satoshis are
+added to the initial balance of the peer at channel start and are largely
+unrecoverable once pushed.
+
 Note that the funding transaction MUST NOT be broadcast until after
 channel establishment has been successfully completed by running
 `fundchannel_complete`, as the commitment transactions for this channel
@@ -40,7 +45,16 @@ On success, returns the *funding\_address* and the *scriptpubkey* for the channe
 If a `close_to` address was provided, will close to this address iff the `close_to` address is
 returned in the response. Otherwise, the peer does not support `option_upfront_shutdownscript`.
 
-On failure, returns an error.
+On error the returned object will contain `code` and `message` properties,
+with `code` being one of the following:
+
+- -32602: If the given parameters are wrong.
+- -1: Catchall nonspecific error.
+- 300: The amount exceeded the maximum configured funding amount.
+- 301: The provided `push_msat` is greater than the provided `amount`.
+- 304: Still syncing with bitcoin network
+- 305: Peer is not connected.
+- 306: Unknown peer id.
 
 AUTHOR
 ------

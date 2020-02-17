@@ -57,6 +57,7 @@
 /*~ This is common code: routines shared by one or more executables
  *  (separate daemons, or the lightning-cli program). */
 #include <common/daemon.h>
+#include <common/memleak.h>
 #include <common/timeout.h>
 #include <common/utils.h>
 #include <common/version.h>
@@ -72,15 +73,21 @@
 #include <lightningd/io_loop_with_timers.h>
 #include <lightningd/jsonrpc.h>
 #include <lightningd/log.h>
+#include <lightningd/memdump.h>
 #include <lightningd/onchain_control.h>
 #include <lightningd/options.h>
 #include <onchaind/onchain_wire.h>
 #include <signal.h>
 #include <sodium.h>
 #include <sys/resource.h>
-#include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
+
+static void destroy_alt_subdaemons(struct lightningd *ld);
+#if DEVELOPER
+static void memleak_help_alt_subdaemons(struct htable *memtable,
+					struct lightningd *ld);
+#endif /* DEVELOPER */
 
 /*~ The core lightning object: it's passed everywhere, and is basically a
  * global variable.  This new_xxx pattern is something we'll see often:
@@ -185,6 +192,7 @@ static struct lightningd *new_lightningd(const tal_t *ctx)
 	list_head_init(&ld->sendpay_commands);
 	list_head_init(&ld->close_commands);
 	list_head_init(&ld->ping_commands);
+	list_head_init(&ld->waitblockheight_commands);
 
 	/*~ Tal also explicitly supports arrays: it stores the number of
 	 * elements, which can be accessed with tal_count() (or tal_bytelen()
@@ -244,9 +252,29 @@ static struct lightningd *new_lightningd(const tal_t *ctx)
 	ld->stop_conn = NULL;
 
 	/*~ This is used to signal that `hsm_secret` is encrypted, and will
-	 * be set to `true` if the `--encrypted` option is passed at startup.
+	 * be set to `true` if the `--encrypted-hsm` option is passed at startup.
 	 */
 	ld->encrypted_hsm = false;
+
+	/* This is used to override subdaemons */
+	strmap_init(&ld->alt_subdaemons);
+	tal_add_destructor(ld, destroy_alt_subdaemons);
+	memleak_add_helper(ld, memleak_help_alt_subdaemons);
+
+	/*~ We change umask if we daemonize, but not if we don't. Initialize the
+	 * initial_umask anyway as we might rely on it later (`plugin start`). */
+	ld->initial_umask = umask(0);
+	umask(ld->initial_umask);
+
+	/*~ This is the mode of the created JSON-RPC socket file, in
+	 * traditional Unix octal. 0600 means only the user that ran
+	 * lightningd can invoke RPC on it. Changing it to 0660 may
+	 * be sensible if you run lightningd in its own system user,
+	 * and just let specific users (add the group of the
+	 * lightningd runner as an ancillary group) access its
+	 * RPC. Can be overridden with `--rpc-file-mode`.
+	 */
+	ld->rpc_filemode = 0600;
 
 	return ld;
 }
@@ -263,6 +291,50 @@ static const char *subdaemons[] = {
 	"lightning_openingd"
 };
 
+/* Return true if called with a recognized subdaemon e.g. "hsmd" */
+bool is_subdaemon(const char *sdname)
+{
+	for (size_t i = 0; i < ARRAY_SIZE(subdaemons); i++)
+		/* Skip the "lightning_" prefix in the table */
+		if (streq(sdname, subdaemons[i] + strlen("lightning_")))
+			return true;
+	return false;
+}
+
+static void destroy_alt_subdaemons(struct lightningd *ld)
+{
+	strmap_clear(&ld->alt_subdaemons);
+}
+
+#if DEVELOPER
+static void memleak_help_alt_subdaemons(struct htable *memtable,
+					struct lightningd *ld)
+{
+	memleak_remove_strmap(memtable, &ld->alt_subdaemons);
+}
+#endif /* DEVELOPER */
+
+const char *subdaemon_path(const tal_t *ctx, const struct lightningd *ld, const char *name)
+{
+	/* Strip the leading "lightning_" before looking in alt_subdaemons.
+	 */
+	size_t pfxlen = strlen("lightning_");
+	assert(strlen(name) > pfxlen);
+	const char *short_name = tal_strdup(ctx, name + pfxlen);
+
+	/* Is there an alternate path for this subdaemon? */
+	const char *dpath;
+	const char *alt = strmap_get(&ld->alt_subdaemons, short_name);
+	if (alt) {
+		/* path_join will honor absolute paths as well. */
+		dpath = path_join(ctx, ld->daemon_dir, alt);
+	} else {
+		/* This subdaemon is found in the standard place. */
+		dpath = path_join(ctx, ld->daemon_dir, name);
+	}
+	return dpath;
+}
+
 /*~ Check we can run them, and check their versions */
 void test_subdaemons(const struct lightningd *ld)
 {
@@ -277,7 +349,6 @@ void test_subdaemons(const struct lightningd *ld)
 	 * ARRAY_SIZE will cause a compiler error if the argument is actually
 	 * a pointer, not an array. */
 	for (i = 0; i < ARRAY_SIZE(subdaemons); i++) {
-		int outfd;
 		/*~ CCAN's path module uses tal, so wants a context to
 		 * allocate from.  We have a magic convenience context
 		 * `tmpctx` for temporary allocations like this.
@@ -287,7 +358,8 @@ void test_subdaemons(const struct lightningd *ld)
 		 * can free `tmpctx` in that top-level loop after each event
 		 * is handled.
 		 */
-		const char *dpath = path_join(tmpctx, ld->daemon_dir, subdaemons[i]);
+		int outfd;
+		const char *dpath = subdaemon_path(tmpctx, ld, subdaemons[i]);
 		const char *verstring;
 		/*~ CCAN's pipecmd module is like popen for grownups: it
 		 * takes pointers to fill in stdin, stdout and stderr file
@@ -533,7 +605,7 @@ static void complete_daemonize(struct lightningd *ld)
 		fatal("Could not setsid: %s", strerror(errno));
 
 	/* Discard our parent's old-fashioned umask prejudices. */
-	umask(0);
+	ld->initial_umask = umask(0);
 
 	/* OK, parent, you can exit(0) now. */
 	write_all(ld->daemon_parent_fd, &ok_status, sizeof(ok_status));
@@ -592,6 +664,7 @@ void notify_new_block(struct lightningd *ld, u32 block_height)
 	htlcs_notify_new_block(ld, block_height);
 	channel_notify_new_block(ld, block_height);
 	gossip_notify_new_block(ld, block_height);
+	waitblockheight_notify_new_block(ld, block_height);
 }
 
 static void on_sigint(int _ UNUSED)
@@ -766,10 +839,6 @@ int main(int argc, char *argv[])
 	else if (max_blockheight != UINT32_MAX)
 		max_blockheight -= ld->config.rescan;
 
-	/*~ Tell the wallet to start figuring out what to do for any reserved
-	 * unspent outputs we may have crashed with. */
-	wallet_clean_utxos(ld->wallet, ld->topology->bitcoind);
-
 	/*~ That's all of the wallet db operations for now. */
 	db_commit_transaction(ld->wallet->db);
 
@@ -778,10 +847,14 @@ int main(int argc, char *argv[])
 	setup_topology(ld->topology, ld->timers,
 		       min_blockheight, max_blockheight);
 
+	db_begin_transaction(ld->wallet->db);
+	/*~ Tell the wallet to start figuring out what to do for any reserved
+	 * unspent outputs we may have crashed with. */
+	wallet_clean_utxos(ld->wallet, ld->topology->bitcoind);
+
 	/*~ Pull peers, channels and HTLCs from db. Needs to happen after the
 	 *  topology is initialized since some decisions rely on being able to
 	 *  know the blockheight. */
-	db_begin_transaction(ld->wallet->db);
 	unconnected_htlcs_in = load_channels_from_wallet(ld);
 	db_commit_transaction(ld->wallet->db);
 

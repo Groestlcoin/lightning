@@ -10,6 +10,7 @@
 #include <common/jsonrpc_errors.h>
 #include <common/key_derive.h>
 #include <common/param.h>
+#include <common/pseudorand.h>
 #include <common/status.h>
 #include <common/utils.h>
 #include <common/utxo.h>
@@ -42,7 +43,7 @@
  * available outputs.
  */
 static void wallet_withdrawal_broadcast(struct bitcoind *bitcoind UNUSED,
-					int exitstatus, const char *msg,
+					bool success, const char *msg,
 					struct unreleased_tx *utx)
 {
 	struct command *cmd = utx->wtx->cmd;
@@ -52,7 +53,7 @@ static void wallet_withdrawal_broadcast(struct bitcoind *bitcoind UNUSED,
 	/* FIXME: This won't be necessary once we use ccan/json_out! */
 	/* Massage output into shape so it doesn't kill the JSON serialization */
 	char *output = tal_strjoin(cmd, tal_strsplit(cmd, msg, "\n", STR_NO_EMPTY), " ", STR_NO_TRAIL);
-	if (exitstatus == 0) {
+	if (success) {
 		/* Mark used outputs as spent */
 		wallet_confirm_utxos(ld->wallet, utx->wtx->utxos);
 
@@ -65,7 +66,7 @@ static void wallet_withdrawal_broadcast(struct bitcoind *bitcoind UNUSED,
 
 		struct json_stream *response = json_stream_success(cmd);
 		json_add_tx(response, "tx", utx->tx);
-		json_add_string(response, "txid", output);
+		json_add_txid(response, "txid", &utx->txid);
 		was_pending(command_success(cmd, response));
 	} else {
 		was_pending(command_fail(cmd, LIGHTNINGD,
@@ -89,7 +90,8 @@ static struct command_result *broadcast_and_wait(struct command *cmd,
 					     utx->wtx->change_key_index,
 					     cast_const2(const struct bitcoin_tx_output **,
 							 utx->outputs),
-					     utx->wtx->utxos);
+					     utx->wtx->utxos,
+					     utx->tx->wtx->locktime);
 
 	if (!wire_sync_write(cmd->ld->hsm_fd, take(msg)))
 		fatal("Could not write sign_withdrawal to HSM: %s",
@@ -141,6 +143,7 @@ static struct command_result *json_prepare_tx(struct command *cmd,
 	const u8 *destination = NULL;
 	size_t out_len, i;
 	const struct utxo **chosen_utxos = NULL;
+	u32 locktime = 0;
 
 	*utx = tal(cmd, struct unreleased_tx);
 	(*utx)->wtx = tal(*utx, struct wallet_tx);
@@ -278,6 +281,19 @@ static struct command_result *json_prepare_tx(struct command *cmd,
 			   p_opt("utxos", param_utxos, &chosen_utxos),
 			   NULL))
 		return command_param_failed();
+		/* Setting the locktime to the next block to be mined has multiple
+		 * benefits:
+		 * - anti fee-snipping (even if not yet likely)
+		 * - less distinguishable transactions (with this we create
+		 *   general-purpose transactions which looks like bitcoind:
+		 *   native segwit, nlocktime set to tip, and sequence set to
+		 *   0xFFFFFFFE by default. Other wallets are likely to implement
+		 *   this too).
+		 */
+		locktime = cmd->ld->topology->tip->height;
+		/* Eventually fuzz it too. */
+		if (pseudorand(10) == 0)
+			locktime -= (u32)pseudorand(100);
 	}
 
 	if (!feerate_per_kw) {
@@ -397,7 +413,8 @@ create_tx:
 				 (*utx)->wtx->utxos, (*utx)->outputs,
 				 changekey, (*utx)->wtx->change,
 				 cmd->ld->wallet->bip32_base,
-				 &(*utx)->change_outnum);
+				 &(*utx)->change_outnum,
+				 locktime);
 	bitcoin_txid((*utx)->tx, &(*utx)->txid);
 
 	return NULL;
@@ -725,7 +742,7 @@ static struct command_result *json_listaddrs(struct command *cmd,
 
 	for (s64 keyidx = 0; keyidx <= *bip32_max_index; keyidx++) {
 
-		if(keyidx == BIP32_INITIAL_HARDENED_CHILD){
+		if (keyidx == BIP32_INITIAL_HARDENED_CHILD){
 			break;
 		}
 
@@ -912,7 +929,7 @@ static void process_utxo_result(struct bitcoind *bitcoind,
 		json_array_end(rescan->response);
 		was_pending(command_success(rescan->cmd, rescan->response));
 	} else {
-		bitcoind_gettxout(
+		bitcoind_getutxout(
 		    bitcoind->ld->topology->bitcoind, &rescan->utxos[0]->txid,
 		    rescan->utxos[0]->outnum, process_utxo_result, rescan);
 	}
@@ -938,7 +955,7 @@ static struct command_result *json_dev_rescan_outputs(struct command *cmd,
 		json_array_end(rescan->response);
 		return command_success(cmd, rescan->response);
 	}
-	bitcoind_gettxout(cmd->ld->topology->bitcoind, &rescan->utxos[0]->txid,
+	bitcoind_getutxout(cmd->ld->topology->bitcoind, &rescan->utxos[0]->txid,
 			  rescan->utxos[0]->outnum, process_utxo_result,
 			  rescan);
 	return command_still_pending(cmd);

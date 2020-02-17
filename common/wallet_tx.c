@@ -37,7 +37,7 @@ struct command_result *param_wtx(struct command *cmd,
 					buffer + tok->start);
 
 	if (amount_sat_greater(wtx->amount, max))
-                return command_fail(wtx->cmd, FUND_MAX_EXCEEDED,
+		return command_fail(wtx->cmd, FUND_MAX_EXCEEDED,
 				    "Amount exceeded %s",
 				    type_to_string(tmpctx, struct amount_sat,
 						   &max));
@@ -71,7 +71,7 @@ struct command_result *param_utxos(struct command *cmd,
 								"Could not get a txid out of \"%s\"",
 								json_strdup(tmpctx, buffer, &txid_tok));
 		}
-		if(!json_to_number(buffer, (const jsmntok_t*)&outnum_tok, outnum))
+		if (!json_to_number(buffer, (const jsmntok_t*)&outnum_tok, outnum))
 			return command_fail(cmd, JSONRPC2_INVALID_PARAMS,
 								"Could not get a vout out of \"%s\"",
 								json_strdup(tmpctx, buffer, &outnum_tok));

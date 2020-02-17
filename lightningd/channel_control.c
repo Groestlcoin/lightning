@@ -23,6 +23,7 @@
 #include <lightningd/log.h>
 #include <lightningd/peer_control.h>
 #include <lightningd/subd.h>
+#include <wire/gen_common_wire.h>
 #include <wire/wire_sync.h>
 
 static void update_feerates(struct lightningd *ld, struct channel *channel)
@@ -234,17 +235,10 @@ static void peer_start_closingd_after_shutdown(struct channel *channel,
 	channel_set_state(channel, CHANNELD_SHUTTING_DOWN, CLOSINGD_SIGEXCHANGE);
 }
 
-static void handle_error_channel(struct channel *channel,
-				 const u8 *msg)
+static void forget(struct channel *channel)
 {
 	struct command **forgets = tal_steal(tmpctx, channel->forgets);
 	channel->forgets = tal_arr(channel, struct command *, 0);
-
-	if (!fromwire_channel_send_error_reply(msg)) {
-		channel_internal_error(channel, "bad send_error_reply: %s",
-				       tal_hex(tmpctx, msg));
-		return;
-	}
 
 	/* Forget the channel. */
 	delete_channel(channel);
@@ -259,6 +253,35 @@ static void handle_error_channel(struct channel *channel,
 	}
 
 	tal_free(forgets);
+}
+
+static void handle_error_channel(struct channel *channel,
+				 const u8 *msg)
+{
+	if (!fromwire_channel_send_error_reply(msg)) {
+		channel_internal_error(channel, "bad send_error_reply: %s",
+				       tal_hex(tmpctx, msg));
+		return;
+	}
+
+	forget(channel);
+}
+
+void forget_channel(struct channel *channel, const char *why)
+{
+	struct channel_id cid;
+
+	derive_channel_id(&cid, &channel->funding_txid,
+			  channel->funding_outnum);
+	channel->error = towire_errorfmt(channel, &cid, "%s", why);
+
+	/* If the peer is connected, we let them know. Otherwise
+	 * we just directly remove the channel */
+	if (channel->owner)
+		subd_send_msg(channel->owner,
+			      take(towire_channel_send_error(NULL, why)));
+	else
+		forget(channel);
 }
 
 static unsigned channel_msg(struct subd *sd, const u8 *msg, const int *fds)
@@ -316,6 +339,19 @@ static unsigned channel_msg(struct subd *sd, const u8 *msg, const int *fds)
 	case WIRE_CHANNEL_DEV_REENABLE_COMMIT_REPLY:
 	case WIRE_CHANNEL_DEV_MEMLEAK_REPLY:
 	case WIRE_CHANNEL_SEND_ERROR:
+		break;
+	}
+
+	switch ((enum common_wire_type)t) {
+#if DEVELOPER
+	case WIRE_CUSTOMMSG_IN:
+		handle_custommsg_in(sd->ld, sd->node_id, msg);
+		break;
+#else
+	case WIRE_CUSTOMMSG_IN:
+#endif
+	/* We send these. */
+	case WIRE_CUSTOMMSG_OUT:
 		break;
 	}
 
@@ -414,7 +450,7 @@ void peer_start_channeld(struct channel *channel,
 	if (ld->config.ignore_fee_limits)
 		log_debug(channel->log, "Ignoring fee limits!");
 
-	if(!wallet_remote_ann_sigs_load(tmpctx, channel->peer->ld->wallet, channel->dbid,
+	if (!wallet_remote_ann_sigs_load(tmpctx, channel->peer->ld->wallet, channel->dbid,
 				       &remote_ann_node_sig, &remote_ann_bitcoin_sig)) {
 		channel_internal_error(channel,
 				       "Could not load remote announcement signatures");
@@ -478,7 +514,8 @@ void peer_start_channeld(struct channel *channel,
 				      /* Set at channel open, even if not
 				       * negotiated now! */
 				      channel->option_static_remotekey,
-				      IFDEV(ld->dev_fast_gossip, false));
+				      IFDEV(ld->dev_fast_gossip, false),
+				      IFDEV(dev_fail_process_onionpacket, false));
 
 	/* We don't expect a response: we are triggered by funding_depth_cb. */
 	subd_send_msg(channel->owner, take(initmsg));
@@ -661,14 +698,10 @@ static void process_check_funding_broadcast(struct bitcoind *bitcoind,
 		return;
 	}
 
-	const char *error_reason = "Cancel channel by our RPC "
-				   "command before funding "
-				   "transaction broadcast.";
-	/* Set error so we don't try to reconnect. */
-	cancel->error = towire_errorfmt(cancel, NULL, "%s", error_reason);
-
-	subd_send_msg(cancel->owner,
-		      take(towire_channel_send_error(NULL, error_reason)));
+	char *error_reason = "Cancel channel by our RPC "
+			     "command before funding "
+			     "transaction broadcast.";
+	forget_channel(cancel, error_reason);
 }
 
 struct command_result *cancel_channel_before_broadcast(struct command *cmd,
@@ -711,10 +744,15 @@ struct command_result *cancel_channel_before_broadcast(struct command *cmd,
 					    buffer + cidtok->start);
 	}
 
+	if (cancel_channel->funder == REMOTE)
+		return command_fail(cmd, LIGHTNINGD,
+				    "Cannot cancel channel that was "
+				    "initiated by peer");
+
 	/* Check if we broadcast the transaction. (We store the transaction type into DB
 	 * before broadcast). */
 	enum wallet_tx_type type;
-	if(wallet_transaction_type(cmd->ld->wallet,
+	if (wallet_transaction_type(cmd->ld->wallet,
 				   &cancel_channel->funding_txid,
 				   &type))
 		return command_fail(cmd, LIGHTNINGD,
@@ -736,11 +774,11 @@ struct command_result *cancel_channel_before_broadcast(struct command *cmd,
 	/* Note: The above check and this check can't completely ensure that
 	 * the funding transaction isn't broadcast. We can't know if the funding
 	 * is broadcast by external wallet and the transaction hasn't been onchain. */
-	bitcoind_gettxout(cmd->ld->topology->bitcoind,
-			  &cancel_channel->funding_txid,
-			  cancel_channel->funding_outnum,
-			  process_check_funding_broadcast,
-			  notleak(cc));
+	bitcoind_getutxout(cmd->ld->topology->bitcoind,
+			   &cancel_channel->funding_txid,
+			   cancel_channel->funding_outnum,
+			   process_check_funding_broadcast,
+			   notleak(cc));
 	return command_still_pending(cmd);
 }
 

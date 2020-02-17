@@ -591,7 +591,8 @@ void wallet_htlc_save_out(struct wallet *wallet,
 void wallet_htlc_update(struct wallet *wallet, const u64 htlc_dbid,
 			const enum htlc_state new_state,
 			const struct preimage *payment_key,
-			enum onion_type failcode, const u8 *failuremsg);
+			enum onion_type failcode,
+			const struct onionreply *failuremsg);
 
 /**
  * wallet_htlcs_load_in_for_channel - Load incoming HTLCs associated with chan from DB.
@@ -941,8 +942,7 @@ void wallet_payment_setup(struct wallet *wallet, struct wallet_payment *payment)
  * Stores the payment in the database.
  */
 void wallet_payment_store(struct wallet *wallet,
-			  const struct sha256 *payment_hash,
-			  u64 partid);
+			  struct wallet_payment *payment TAKES);
 
 /**
  * wallet_payment_delete - Remove a payment
@@ -999,7 +999,7 @@ void wallet_payment_get_failinfo(const tal_t *ctx,
 				 const struct sha256 *payment_hash,
 				 u64 partid,
 				 /* outputs */
-				 u8 **failonionreply,
+				 struct onionreply **failonionreply,
 				 bool *faildestperm,
 				 int *failindex,
 				 enum onion_type *failcode,
@@ -1015,7 +1015,7 @@ void wallet_payment_get_failinfo(const tal_t *ctx,
 void wallet_payment_set_failinfo(struct wallet *wallet,
 				 const struct sha256 *payment_hash,
 				 u64 partid,
-				 const u8 *failonionreply,
+				 const struct onionreply *failonionreply,
 				 bool faildestperm,
 				 int failindex,
 				 enum onion_type failcode,
@@ -1122,6 +1122,15 @@ bool wallet_transaction_type(struct wallet *w, const struct bitcoin_txid *txid,
 			     enum wallet_tx_type *type);
 
 /**
+ * Get the transaction from the database
+ *
+ * Looks up a transaction we have in the database and returns it, or NULL if
+ * not found.
+ */
+struct bitcoin_tx *wallet_transaction_get(const tal_t *ctx, struct wallet *w,
+					  const struct bitcoin_txid *txid);
+
+/**
  * Get the confirmation height of a transaction we are watching by its
  * txid. Returns 0 if the transaction was not part of any block.
  */
@@ -1164,6 +1173,7 @@ struct channeltx *wallet_channeltxs_get(struct wallet *w, const tal_t *ctx,
  * Add of update a forwarded_payment
  */
 void wallet_forwarded_payment_add(struct wallet *w, const struct htlc_in *in,
+				  const struct short_channel_id *scid_out,
 				  const struct htlc_out *out,
 				  enum forward_status state,
 				  enum onion_type failcode);

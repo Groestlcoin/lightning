@@ -1,11 +1,14 @@
 from bitcoin.rpc import RawProxy
 from decimal import Decimal
 from fixtures import *  # noqa: F401,F403
-from fixtures import TEST_NETWORK
+from fixtures import LightningNode, TEST_NETWORK
 from flaky import flaky  # noqa: F401
-from lightning import RpcError
+from pyln.client import RpcError
 from threading import Event
-from utils import DEVELOPER, TIMEOUT, VALGRIND, sync_blockheight, only_one, wait_for, TailableProc, env
+from pyln.testing.utils import (
+    DEVELOPER, TIMEOUT, VALGRIND, sync_blockheight, only_one, wait_for,
+    TailableProc, env
+)
 from ephemeral_port_reserve import reserve
 
 import json
@@ -102,11 +105,11 @@ def test_bitcoin_failure(node_factory, bitcoind):
     l1.daemon.rpcproxy.mock_rpc('getblockhash', crash_bitcoincli)
 
     # This should cause both estimatefee and getblockhash fail
-    l1.daemon.wait_for_logs(['estimatesmartfee .* exited with status 1',
+    l1.daemon.wait_for_logs(['Unable to estimate .* fee',
                              'getblockhash .* exited with status 1'])
 
     # And they should retry!
-    l1.daemon.wait_for_logs(['estimatesmartfee .* exited with status 1',
+    l1.daemon.wait_for_logs(['Unable to estimate .* fee',
                              'getblockhash .* exited with status 1'])
 
     # Restore, then it should recover and get blockheight.
@@ -134,7 +137,7 @@ def test_bitcoin_ibd(node_factory, bitcoind):
     # "Finish" IDB.
     l1.daemon.rpcproxy.mock_rpc('getblockchaininfo', None)
 
-    l1.daemon.wait_for_log('Groestlcoind now synced')
+    l1.daemon.wait_for_log('Groestlcoin backend now synced')
     assert 'warning_bitcoind_sync' not in l1.rpc.getinfo()
 
 
@@ -1588,6 +1591,27 @@ def test_bad_onion(node_factory, bitcoind):
     assert err.value.error['data']['erring_channel'] == route[1]['channel']
 
 
+@unittest.skipIf(not DEVELOPER, "Needs DEVELOPER=1 to force onion fail")
+def test_bad_onion_immediate_peer(node_factory, bitcoind):
+    """Test that we handle the malformed msg when we're the origin"""
+    l1, l2 = node_factory.line_graph(2, opts={'dev-fail-process-onionpacket': None})
+
+    h = l2.rpc.invoice(123000, 'test_bad_onion_immediate_peer', 'description')['payment_hash']
+    route = l1.rpc.getroute(l2.info['id'], 123000, 1)['route']
+    assert len(route) == 1
+
+    l1.rpc.sendpay(route, h)
+    with pytest.raises(RpcError) as err:
+        l1.rpc.waitsendpay(h)
+
+    # FIXME: #define PAY_UNPARSEABLE_ONION		202
+    PAY_UNPARSEABLE_ONION = 202
+    assert err.value.error['code'] == PAY_UNPARSEABLE_ONION
+    # FIXME: WIRE_INVALID_ONION_HMAC = BADONION|PERM|5
+    WIRE_INVALID_ONION_HMAC = 0x8000 | 0x4000 | 5
+    assert err.value.error['data']['failcode'] == WIRE_INVALID_ONION_HMAC
+
+
 def test_newaddr(node_factory, chainparams):
     l1 = node_factory.get_node()
     p2sh = l1.rpc.newaddr('p2sh-segwit')
@@ -1624,7 +1648,7 @@ def test_bitcoind_fail_first(node_factory, bitcoind, executor):
     def mock_fail(*args):
         raise ValueError()
 
-    l1.daemon.rpcproxy.mock_rpc('getblock', mock_fail)
+    l1.daemon.rpcproxy.mock_rpc('getblockhash', mock_fail)
     l1.daemon.rpcproxy.mock_rpc('estimatesmartfee', mock_fail)
 
     f = executor.submit(l1.start)
@@ -1633,12 +1657,12 @@ def test_bitcoind_fail_first(node_factory, bitcoind, executor):
     # Make sure it fails on the first `getblock` call (need to use `is_in_log`
     # since the `wait_for_log` in `start` sets the offset)
     wait_for(lambda: l1.daemon.is_in_log(
-        r'getblock [a-z0-9]* false exited with status 1'))
+        r'getblockhash [a-z0-9]* exited with status 1'))
     wait_for(lambda: l1.daemon.is_in_log(
-        r'estimatesmartfee 2 CONSERVATIVE exited with status 1'))
+        r'Unable to estimate CONSERVATIVE/2 fee'))
 
     # Now unset the mock, so calls go through again
-    l1.daemon.rpcproxy.mock_rpc('getblock', None)
+    l1.daemon.rpcproxy.mock_rpc('getblockhash', None)
     l1.daemon.rpcproxy.mock_rpc('estimatesmartfee', None)
 
     f.result()
@@ -1993,7 +2017,7 @@ def test_new_node_is_mainnet(node_factory):
     assert os.path.isfile(os.path.join(basedir, "lightningd-bitcoin.pid"))
 
 
-def test_unicode_rpc(node_factory):
+def test_unicode_rpc(node_factory, executor, bitcoind):
     node = node_factory.get_node()
     desc = "Some candy 🍬 and a nice glass of milk 🥛."
 
@@ -2002,3 +2026,125 @@ def test_unicode_rpc(node_factory):
     assert(len(invoices) == 1)
     assert(invoices[0]['description'] == desc)
     assert(invoices[0]['label'] == desc)
+
+
+@unittest.skipIf(VALGRIND, "Testing pyln doesn't exercise anything interesting in the c code.")
+def test_unix_socket_path_length(node_factory, bitcoind, directory, executor, db_provider, test_base_dir):
+    lightning_dir = os.path.join(directory, "anode" + "far" * 30 + "away")
+    os.makedirs(lightning_dir)
+    db = db_provider.get_db(lightning_dir, "test_unix_socket_path_length", 1)
+
+    l1 = LightningNode(1, lightning_dir, bitcoind, executor, db=db, port=node_factory.get_next_port())
+
+    # `LightningNode.start()` internally calls `LightningRpc.getinfo()` which
+    # exercises the socket logic, and raises an issue if it fails.
+    l1.start()
+
+    # Let's just call it again to make sure it really works.
+    l1.rpc.listconfigs()
+    l1.stop()
+
+
+def test_waitblockheight(node_factory, executor, bitcoind):
+    node = node_factory.get_node()
+
+    sync_blockheight(bitcoind, [node])
+
+    blockheight = node.rpc.getinfo()['blockheight']
+
+    # Should succeed without waiting.
+    node.rpc.waitblockheight(blockheight - 2)
+    node.rpc.waitblockheight(blockheight - 1)
+    node.rpc.waitblockheight(blockheight)
+
+    # Should not succeed yet.
+    fut2 = executor.submit(node.rpc.waitblockheight, blockheight + 2)
+    fut1 = executor.submit(node.rpc.waitblockheight, blockheight + 1)
+    assert not fut1.done()
+    assert not fut2.done()
+
+    # Should take about ~1second and time out.
+    with pytest.raises(RpcError):
+        node.rpc.waitblockheight(blockheight + 2, 1)
+
+    # Others should still not be done.
+    assert not fut1.done()
+    assert not fut2.done()
+
+    # Trigger just one more block.
+    bitcoind.generate_block(1)
+    sync_blockheight(bitcoind, [node])
+    fut1.result(5)
+    assert not fut2.done()
+
+    # Trigger two blocks.
+    bitcoind.generate_block(1)
+    sync_blockheight(bitcoind, [node])
+    fut2.result(5)
+
+
+@unittest.skipIf(not DEVELOPER, "Needs dev-sendcustommsg")
+def test_sendcustommsg(node_factory):
+    """Check that we can send custommsgs to peers in various states.
+
+    `l2` is the node under test. `l1` has a channel with `l2` and should
+    therefore be attached to `channeld`. `l4` is just connected, so it should
+    be attached to `openingd`. `l3` has a channel open, but is disconnected
+    and we can't send to it.
+
+    """
+    plugin = os.path.join(os.path.dirname(__file__), "plugins", "custommsg.py")
+    opts = {'log-level': 'io', 'plugin': plugin}
+    l1, l2, l3 = node_factory.line_graph(3, opts=opts)
+    l4 = node_factory.get_node(options=opts)
+    l2.connect(l4)
+    l3.stop()
+    msg = r'ff' * 32
+    serialized = r'04070020' + msg
+
+    # This address doesn't exist so we should get an error when we try sending
+    # a message to it.
+    node_id = '02df5ffe895c778e10f7742a6c5b8a0cefbe9465df58b92fadeb883752c8107c8f'
+    with pytest.raises(RpcError, match=r'No such peer'):
+        l1.rpc.dev_sendcustommsg(node_id, msg)
+
+    # `l3` is disconnected and we can't send messages to it
+    assert(not l2.rpc.listpeers(l3.info['id'])['peers'][0]['connected'])
+    with pytest.raises(RpcError, match=r'Peer is not connected'):
+        l2.rpc.dev_sendcustommsg(l3.info['id'], msg)
+
+    # We should not be able to send a bogus `ping` message, since it collides
+    # with a message defined in the spec, and could potentially mess up our
+    # internal state.
+    with pytest.raises(RpcError, match=r'Cannot send messages of type 18 .WIRE_PING.'):
+        l2.rpc.dev_sendcustommsg(l2.info['id'], r'0012')
+
+    # The sendcustommsg RPC call is currently limited to odd-typed messages,
+    # since they will not result in disconnections or even worse channel
+    # failures.
+    with pytest.raises(RpcError, match=r'Cannot send even-typed [0-9]+ custom message'):
+        l2.rpc.dev_sendcustommsg(l2.info['id'], r'00FE')
+
+    # This should work since the peer is currently owned by `channeld`
+    l2.rpc.dev_sendcustommsg(l1.info['id'], msg)
+    l2.daemon.wait_for_log(
+        r'{peer_id}-{owner}-chan#[0-9]: \[OUT\] {serialized}'.format(
+            owner='channeld', serialized=serialized, peer_id=l1.info['id']
+        )
+    )
+    l1.daemon.wait_for_log(r'\[IN\] {}'.format(serialized))
+    l1.daemon.wait_for_log(
+        r'Got a custom message {serialized} from peer {peer_id}'.format(
+            serialized=serialized, peer_id=l2.info['id']))
+
+    # This should work since the peer is currently owned by `openingd`
+    l2.rpc.dev_sendcustommsg(l4.info['id'], msg)
+    l2.daemon.wait_for_log(
+        r'{peer_id}-{owner}-chan#[0-9]: \[OUT\] {serialized}'.format(
+            owner='openingd', serialized=serialized, peer_id=l4.info['id']
+        )
+    )
+    l4.daemon.wait_for_log(r'\[IN\] {}'.format(serialized))
+    l4.daemon.wait_for_log(
+        r'Got a custom message {serialized} from peer {peer_id}'.format(
+            serialized=serialized, peer_id=l2.info['id']))

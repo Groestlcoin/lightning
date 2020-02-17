@@ -3,6 +3,7 @@
 #include <ccan/opt/opt.h>
 #include <ccan/tal/str/str.h>
 #include <ccan/utf8/utf8.h>
+#include <common/features.h>
 #include <common/utils.h>
 #include <common/version.h>
 #include <lightningd/json.h>
@@ -14,12 +15,12 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 
-/* How many seconds may the plugin take to reply to the `getmanifest
- * call`? This is the maximum delay to `lightningd --help` and until
+/* How many seconds may the plugin take to reply to the `getmanifest`
+ * call? This is the maximum delay to `lightningd --help` and until
  * we can start the main `io_loop` to communicate with peers. If this
  * hangs we can't do much, so we put an upper bound on the time we're
  * willing to wait. Plugins shouldn't do any initialization in the
- * `getmanifest` call anyway, that's what `init `is for. */
+ * `getmanifest` call anyway, that's what `init` is for. */
 #define PLUGIN_MANIFEST_TIMEOUT 60
 
 #if DEVELOPER
@@ -46,6 +47,18 @@ struct plugins *plugins_new(const tal_t *ctx, struct log_book *log_book,
 	return p;
 }
 
+u8 *plugins_collect_featurebits(const tal_t *ctx, const struct plugins *plugins,
+				enum plugin_features_type type)
+{
+	struct plugin *p;
+	u8 *res = tal_arr(ctx, u8, 0);
+	list_for_each(&plugins->plugins, p, list) {
+		if (p->featurebits[type])
+			res = featurebits_or(ctx, take(res), p->featurebits[type]);
+	}
+	return res;
+}
+
 static void destroy_plugin(struct plugin *p)
 {
 	plugin_hook_unregister_all(p);
@@ -69,27 +82,14 @@ struct plugin *plugin_register(struct plugins *plugins, const char* path TAKES)
 	p->plugins = plugins;
 	p->cmd = tal_strdup(p, path);
 
-	/* Fix up old-style relative paths */
-	if (deprecated_apis
-	    && !path_is_abs(p->cmd)
-	    && access(p->cmd, X_OK) != 0) {
-		char *oldpath = path_join(tmpctx,
-					  plugins->ld->original_directory,
-					  p->cmd);
-		if (access(oldpath, X_OK) == 0) {
-			log_unusual(plugins->log, "DEPRECATED WARNING:"
-				    " plugin is now relative to"
-				    " lightning-dir, please change to"
-				    " plugin=%s",
-				    oldpath);
-			tal_free(p->cmd);
-			p->cmd = tal_steal(p, oldpath);
-		}
-	}
+	for (int i = 0; i < NUM_PLUGIN_FEATURES_TYPE; i++)
+		p->featurebits[i] = NULL;
+
 	p->plugin_state = UNCONFIGURED;
 	p->js_arr = tal_arr(p, struct json_stream *, 0);
 	p->used = 0;
 	p->subscriptions = NULL;
+	p->dynamic = false;
 
 	p->log = new_log(p, plugins->log_book, NULL, "plugin-%s",
 			 path_basename(tmpctx, p->cmd));
@@ -503,7 +503,7 @@ static bool plugin_opt_add(struct plugin *plugin, const char *buffer,
 	popt = tal(plugin, struct plugin_opt);
 	popt->value = talz(popt, struct plugin_opt_value);
 
-	popt->name = tal_fmt(plugin, "--%.*s", nametok->end - nametok->start,
+	popt->name = tal_fmt(popt, "--%.*s", nametok->end - nametok->start,
 			     buffer + nametok->start);
 	if (json_tok_streq(buffer, typetok, "string")) {
 		popt->type = "string";
@@ -611,21 +611,21 @@ static void plugin_rpcmethod_cb(const char *buffer,
 	command_raw_complete(cmd, response);
 }
 
-static struct plugin *find_plugin_for_command(struct command *cmd)
+struct plugin *find_plugin_for_command(struct lightningd *ld,
+				       const char *cmd_name)
 {
-	struct plugins *plugins = cmd->ld->plugins;
+	struct plugins *plugins = ld->plugins;
 	struct plugin *plugin;
 
 	/* Find the plugin that registered this RPC call */
 	list_for_each(&plugins->plugins, plugin, list) {
 		for (size_t i=0; i<tal_count(plugin->methods); i++) {
-			if (streq(cmd->json_cmd->name, plugin->methods[i]))
+			if (streq(cmd_name, plugin->methods[i]))
 				return plugin;
 		}
 	}
-	/* This should never happen, it'd mean that a plugin didn't
-	 * cleanup after dying */
-	abort();
+
+	return NULL;
 }
 
 static struct command_result *plugin_rpcmethod_dispatch(struct command *cmd,
@@ -641,7 +641,9 @@ static struct command_result *plugin_rpcmethod_dispatch(struct command *cmd,
 	if (cmd->mode == CMD_CHECK)
 		return command_param_failed();
 
-	plugin = find_plugin_for_command(cmd);
+	plugin = find_plugin_for_command(cmd->ld, cmd->json_cmd->name);
+	if (!plugin)
+		fatal("No plugin for %s ?", cmd->json_cmd->name);
 
 	/* Find ID again (We've parsed them before, this should not fail!) */
 	idtok = json_get_member(buffer, toks, "id");
@@ -827,22 +829,65 @@ static void plugin_manifest_timeout(struct plugin *plugin)
 	fatal("Can't recover from plugin failure, terminating.");
 }
 
+/* List of JSON keys matching `plugin_features_type`. */
+static const char *plugin_features_type_names[] = {"node", "init", "invoice"};
 
 bool plugin_parse_getmanifest_response(const char *buffer,
                                        const jsmntok_t *toks,
                                        const jsmntok_t *idtok,
                                        struct plugin *plugin)
 {
-	const jsmntok_t *resulttok, *dynamictok;
-	bool dynamic_plugin;
+	const jsmntok_t *resulttok, *dynamictok, *featurestok, *tok;
+	bool have_featurebits = false;
+	u8 *featurebits;
 
 	resulttok = json_get_member(buffer, toks, "result");
 	if (!resulttok || resulttok->type != JSMN_OBJECT)
 		return false;
 
 	dynamictok = json_get_member(buffer, resulttok, "dynamic");
-	if (dynamictok && json_to_bool(buffer, dynamictok, &dynamic_plugin))
-		plugin->dynamic = dynamic_plugin;
+	if (dynamictok && !json_to_bool(buffer, dynamictok, &plugin->dynamic))
+		plugin_kill(plugin, "Bad 'dynamic' field ('%.*s')",
+			    json_tok_full_len(dynamictok),
+			    json_tok_full(buffer, dynamictok));
+
+	featurestok = json_get_member(buffer, resulttok, "featurebits");
+
+	if (featurestok) {
+		for (int i = 0; i < NUM_PLUGIN_FEATURES_TYPE; i++) {
+			tok = json_get_member(buffer, featurestok,
+					      plugin_features_type_names[i]);
+
+			if (!tok)
+				continue;
+
+			featurebits =
+			    json_tok_bin_from_hex(plugin, buffer, tok);
+
+			have_featurebits |= tal_bytelen(featurebits) > 0;
+
+			if (featurebits) {
+				plugin->featurebits[i] = featurebits;
+			} else {
+				plugin_kill(
+				    plugin,
+				    "Featurebits returned by plugin is not a "
+				    "valid hexadecimal string: %.*s",
+				    tok->end - tok->start, buffer + tok->start);
+				return true;
+			}
+		}
+	}
+
+	if (plugin->dynamic && have_featurebits) {
+		plugin_kill(plugin,
+			    "Custom featurebits only allows for non-dynamic "
+			    "plugins: dynamic=%d, featurebits=%.*s",
+			    plugin->dynamic,
+			    featurestok->end - featurestok->start,
+			    buffer + featurestok->start);
+		return true;
+	}
 
 	if (!plugin_opts_add(plugin, buffer, resulttok) ||
 	    !plugin_rpcmethods_add(plugin, buffer, resulttok) ||
@@ -1017,8 +1062,8 @@ void plugins_init(struct plugins *plugins, const char *dev_plugin_debug)
 		p->buffer = tal_arr(p, char, 64);
 		p->stop = false;
 
-		/* Create two connections, one read-only on top of p->stdin, and one
-		 * write-only on p->stdout */
+		/* Create two connections, one read-only on top of p->stdout, and one
+		 * write-only on p->stdin */
 		io_new_conn(p, stdout, plugin_stdout_conn_init, p);
 		io_new_conn(p, stdin, plugin_stdin_conn_init, p);
 		req = jsonrpc_request_start(p, "getmanifest", p->log,
@@ -1127,19 +1172,18 @@ void json_add_opt_plugins(struct json_stream *response,
 
 		/* FIXME: use executables basename until plugins can define their names */
 		plugin_name = path_basename(NULL, p->cmd);
-		json_add_string(response, "name", plugin_name); // basename(p->cmd));
+		json_add_string(response, "name", plugin_name);
 		tal_free(plugin_name);
 
 		if (!list_empty(&p->plugin_opts)) {
 			json_object_start(response, "options");
-			list_for_each(&p->plugin_opts, opt, list)
-			{
+			list_for_each(&p->plugin_opts, opt, list) {
 				/* Trim the `--` that we added before */
 				opt_name = opt->name + 2;
 				if (opt->value->as_bool) {
 					json_add_bool(response, opt_name, opt->value->as_bool);
 				} else if (opt->value->as_int) {
-					json_add_bool(response, opt_name, opt->value->as_int);
+					json_add_s32(response, opt_name, *opt->value->as_int);
 				} else if (opt->value->as_str) {
 					json_add_string(response, opt_name, opt->value->as_str);
 				} else {

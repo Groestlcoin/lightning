@@ -443,17 +443,6 @@ class ElementsD(BitcoinD):
         self.rpc = SimpleBitcoinProxy(btc_conf_file=self.conf_file)
         self.prefix = 'elementsd'
 
-    def generate_block(self, numblocks=1, wait_for_mempool=0):
-        if wait_for_mempool:
-            if isinstance(wait_for_mempool, str):
-                wait_for_mempool = [wait_for_mempool]
-            if isinstance(wait_for_mempool, list):
-                wait_for(lambda: all(txid in self.rpc.getrawmempool() for txid in wait_for_mempool))
-            else:
-                wait_for(lambda: len(self.rpc.getrawmempool()) >= wait_for_mempool)
-        # As of 0.16, generate() is removed; use generatetoaddress.
-        return self.rpc.generate(numblocks)
-
     def getnewaddress(self):
         """Need to get an address and then make it unconfidential
         """
@@ -800,6 +789,15 @@ class LightningNode(object):
                 time.sleep(1)
         if time.time() > start_time + timeout:
             raise ValueError("Error waiting for a route to destination {}".format(destination))
+
+    # This helper waits for all HTLCs to settle
+    def wait_for_htlcs(self):
+        peers = self.rpc.listpeers()['peers']
+        for p, peer in enumerate(peers):
+            if 'channels' in peer:
+                for c, channel in enumerate(peer['channels']):
+                    if 'htlcs' in channel:
+                        wait_for(lambda: len(self.rpc.listpeers()['peers'][p]['channels'][c]['htlcs']) == 0)
 
     def pay(self, dst, amt, label=None):
         if not label:

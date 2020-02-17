@@ -1,7 +1,10 @@
 from fixtures import *  # noqa: F401,F403
 from flaky import flaky
-from lightning import RpcError
-from utils import only_one, sync_blockheight, wait_for, DEVELOPER, TIMEOUT, VALGRIND, SLOW_MACHINE, COMPAT
+from pyln.client import RpcError
+from utils import (
+    only_one, sync_blockheight, wait_for, DEVELOPER, TIMEOUT, VALGRIND,
+    SLOW_MACHINE, COMPAT
+)
 
 import os
 import queue
@@ -145,16 +148,17 @@ def test_closing_id(node_factory):
     wait_for(lambda: not only_one(l2.rpc.listpeers(l1.info['id'])['peers'])['connected'])
 
 
+@unittest.skipIf(VALGRIND, "Flaky under valgrind")
 def test_closing_torture(node_factory, executor, bitcoind):
-    # We set up N-to-N fully-connected mesh, then try
+    # We set up a fully-connected mesh of N nodes, then try
     # closing them all at once.
     amount = 10**6
 
-    num_nodes = 10  # => 55 channels (36 seconds on my laptop)
+    num_nodes = 10  # => 45 channels (36 seconds on my laptop)
     if VALGRIND:
-        num_nodes -= 4  # => 21 (135 seconds)
+        num_nodes -= 4  # => 15 (135 seconds)
     if SLOW_MACHINE:
-        num_nodes -= 1  # => 45/15 (37/95 seconds)
+        num_nodes -= 1  # => 36/10 (37/95 seconds)
 
     nodes = node_factory.get_nodes(num_nodes)
 
@@ -324,7 +328,7 @@ def test_closing_specified_destination(node_factory, bitcoind, chainparams):
     # Both nodes should have disabled the channel in their view
     wait_for(lambda: len(l1.getactivechannels()) == 0)
 
-    assert bitcoind.rpc.getmempoolinfo()['size'] == 3
+    wait_for(lambda: bitcoind.rpc.getmempoolinfo()['size'] == 3)
 
     # Now grab the close transaction
     closetxs = {}

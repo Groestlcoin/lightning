@@ -9,6 +9,7 @@
 #include <common/json_command.h>
 #include <common/jsonrpc_errors.h>
 #include <common/onion.h>
+#include <common/onionreply.h>
 #include <common/overflows.h>
 #include <common/param.h>
 #include <common/sphinx.h>
@@ -96,7 +97,7 @@ static bool htlc_out_update_state(struct channel *channel,
 
 static void fail_in_htlc(struct htlc_in *hin,
 			 enum onion_type failcode,
-			 const u8 *failuremsg,
+			 const struct onionreply *failuremsg,
 			 const struct short_channel_id *out_channelid)
 {
 	struct failed_htlc failed_htlc;
@@ -105,7 +106,7 @@ static void fail_in_htlc(struct htlc_in *hin,
 	assert(failcode || failuremsg);
 	hin->failcode = failcode;
 	if (failuremsg)
-		hin->failuremsg = tal_dup_arr(hin, u8, failuremsg, tal_count(failuremsg), 0);
+		hin->failuremsg = dup_onionreply(hin, failuremsg);
 
 	/* We need this set, since we send it to channeld. */
 	if (hin->failcode & UPDATE)
@@ -125,7 +126,7 @@ static void fail_in_htlc(struct htlc_in *hin,
 
 	failed_htlc.id = hin->key.id;
 	failed_htlc.failcode = hin->failcode;
-	failed_htlc.failreason = cast_const(u8 *, hin->failuremsg);
+	failed_htlc.failreason = hin->failuremsg;
 	if (failed_htlc.failcode & UPDATE)
 		failed_htlc.scid = &hin->failoutchannel;
 	else
@@ -172,7 +173,7 @@ static void fail_out_htlc(struct htlc_out *hout, const char *localfail)
  * * `amt_to_forward`: The amount, in millisatoshis, to forward to the next
  *   receiving peer specified within the routing information.
  *
- *   This value amount MUST include the origin node's computed _fee_ for the
+ *   For non-final nodes, this value amount MUST include the origin node's computed _fee_ for the
  *   receiving peer. When processing an incoming Sphinx packet and the HTLC
  *   message that it is encapsulated within, if the following inequality
  *   doesn't hold, then the HTLC should be rejected as it would indicate that
@@ -180,15 +181,14 @@ static void fail_out_htlc(struct htlc_out *hout, const char *localfail)
  *
  *     incoming_htlc_amt - fee >= amt_to_forward
  *
- *   Where `fee` is either calculated according to the receiving peer's
+ *   Where `fee` is calculated according to the receiving peer's
  *   advertised fee schema (as described in [BOLT
- *   #7](07-routing-gossip.md#htlc-fees)) or is 0, if the processing node is
- *   the final node.
+ *   #7](07-routing-gossip.md#htlc-fees).
  */
-static bool check_amount(struct htlc_in *hin,
-			 struct amount_msat amt_to_forward,
-			 struct amount_msat amt_in_htlc,
-			 struct amount_msat fee)
+static bool check_fwd_amount(struct htlc_in *hin,
+			     struct amount_msat amt_to_forward,
+			     struct amount_msat amt_in_htlc,
+			     struct amount_msat fee)
 {
 	struct amount_msat fwd;
 
@@ -289,13 +289,25 @@ static void handle_localpay(struct htlc_in *hin,
 
 	/* BOLT #4:
 	 *
-	 * 1. type: 19 (`final_incorrect_htlc_amount`)
-	 * 2. data:
-	 *    * [`u64`:`incoming_htlc_amt`]
-	 *
-	 * The amount in the HTLC doesn't match the value in the onion.
+	 * For the final node, this value MUST be exactly equal to the
+	 * incoming htlc amount, otherwise the HTLC should be rejected.
 	 */
-	if (!check_amount(hin, amt_to_forward, hin->msat, AMOUNT_MSAT(0))) {
+	if (!amount_msat_eq(amt_to_forward, hin->msat)) {
+		log_debug(hin->key.channel->log,
+			  "HTLC %"PRIu64" final incorrect amount:"
+			  " %s in, %s expected",
+			  hin->key.id,
+			  type_to_string(tmpctx, struct amount_msat, &hin->msat),
+			  type_to_string(tmpctx, struct amount_msat,
+					 &amt_to_forward));
+		/* BOLT #4:
+		 *
+		 * 1. type: 19 (`final_incorrect_htlc_amount`)
+		 * 2. data:
+		 *    * [`u64`:`incoming_htlc_amt`]
+		 *
+		 * The amount in the HTLC doesn't match the value in the onion.
+		 */
 		failcode = WIRE_FINAL_INCORRECT_HTLC_AMOUNT;
 		goto fail;
 	}
@@ -364,7 +376,7 @@ static void rcvd_htlc_reply(struct subd *subd, const u8 *msg, const int *fds UNU
 			    struct htlc_out *hout)
 {
 	u16 failure_code;
-	u8 *failurestr;
+	char *failurestr;
 	struct lightningd *ld = subd->ld;
 
 	if (!fromwire_channel_offer_htlc_reply(msg, msg,
@@ -380,10 +392,9 @@ static void rcvd_htlc_reply(struct subd *subd, const u8 *msg, const int *fds UNU
 	if (failure_code) {
 		hout->failcode = (enum onion_type) failure_code;
 		if (hout->am_origin) {
-			char *localfail = tal_fmt(msg, "%s: %.*s",
+			char *localfail = tal_fmt(msg, "%s: %s",
 						  onion_type_name(failure_code),
-						  (int)tal_count(failurestr),
-						  (const char *)failurestr);
+						  failurestr);
 			payment_failed(ld, hout, localfail);
 
 		} else if (hout->in) {
@@ -393,7 +404,7 @@ static void rcvd_htlc_reply(struct subd *subd, const u8 *msg, const int *fds UNU
 			/* here we haven't called connect_htlc_out(),
 			 * so set htlc field with NULL */
 			wallet_forwarded_payment_add(ld->wallet,
-					 hout->in, NULL,
+					 hout->in, NULL, NULL,
 					 FORWARD_LOCAL_FAILED,
 					 failure_code);
 		}
@@ -503,7 +514,7 @@ static void forward_htlc(struct htlc_in *hin,
 	if (!next || !next->scid) {
 		local_fail_htlc(hin, WIRE_UNKNOWN_NEXT_PEER, NULL);
 		wallet_forwarded_payment_add(hin->key.channel->peer->ld->wallet,
-					 hin, NULL,
+					 hin, next ? next->scid : NULL, NULL,
 					 FORWARD_LOCAL_FAILED,
 					 hin->failcode);
 		return;
@@ -524,7 +535,7 @@ static void forward_htlc(struct htlc_in *hin,
 		failcode = WIRE_FEE_INSUFFICIENT;
 		goto fail;
 	}
-	if (!check_amount(hin, amt_to_forward, hin->msat, fee)) {
+	if (!check_fwd_amount(hin, amt_to_forward, hin->msat, fee)) {
 		failcode = WIRE_FEE_INSUFFICIENT;
 		goto fail;
 	}
@@ -576,7 +587,6 @@ static void forward_htlc(struct htlc_in *hin,
 		goto fail;
 	}
 
-	hout = tal(tmpctx, struct htlc_out);
 	failcode = send_htlc_out(next, amt_to_forward,
 				 outgoing_cltv_value, &hin->payment_hash,
 				 0, next_onion, hin, &hout);
@@ -593,7 +603,7 @@ static void forward_htlc(struct htlc_in *hin,
 fail:
 	local_fail_htlc(hin, failcode, next->scid);
 	wallet_forwarded_payment_add(ld->wallet,
-				 hin, hout,
+				 hin, next->scid, hout,
 				 FORWARD_LOCAL_FAILED,
 				 hin->failcode);
 }
@@ -627,7 +637,7 @@ static void channel_resolve_reply(struct subd *gossip, const u8 *msg,
 	if (!peer_id) {
 		local_fail_htlc(gr->hin, WIRE_UNKNOWN_NEXT_PEER, NULL);
 		wallet_forwarded_payment_add(gr->hin->key.channel->peer->ld->wallet,
-					 gr->hin, NULL,
+					 gr->hin, &gr->next_channel, NULL,
 					 FORWARD_LOCAL_FAILED,
 					 gr->hin->failcode);
 		tal_free(gr);
@@ -863,7 +873,8 @@ htlc_accepted_hook_callback(struct htlc_accepted_hook_payload *request,
 	tal_free(request);
 }
 
-REGISTER_PLUGIN_HOOK(htlc_accepted, htlc_accepted_hook_callback,
+REGISTER_PLUGIN_HOOK(htlc_accepted, PLUGIN_HOOK_CHAIN,
+		     htlc_accepted_hook_callback,
 		     struct htlc_accepted_hook_payload *,
 		     htlc_accepted_hook_serialize,
 		     struct htlc_accepted_hook_payload *);
@@ -947,7 +958,7 @@ static bool peer_accepted_htlc(struct channel *channel, u64 id,
 		return false;
 	}
 
-	rs = process_onionpacket(tmpctx, &op, hin->shared_secret->data,
+	rs = process_onionpacket(tmpctx, &op, hin->shared_secret,
 				 hin->payment_hash.u.u8,
 				 sizeof(hin->payment_hash));
 	if (!rs) {
@@ -998,7 +1009,8 @@ static void fulfill_our_htlc_out(struct channel *channel, struct htlc_out *hout,
 		payment_succeeded(ld, hout, preimage);
 	else if (hout->in) {
 		fulfill_htlc(hout->in, preimage);
-		wallet_forwarded_payment_add(ld->wallet, hout->in, hout,
+		wallet_forwarded_payment_add(ld->wallet, hout->in,
+					     hout->key.channel->scid, hout,
 					     FORWARD_SETTLED, 0);
 	}
 }
@@ -1081,9 +1093,7 @@ static bool peer_failed_our_htlc(struct channel *channel,
 
 	hout->failcode = failed->failcode;
 	if (!failed->failcode)
-		hout->failuremsg = tal_dup_arr(hout, u8, failed->failreason,
-					       tal_count(failed->failreason), 0);
-
+		hout->failuremsg = dup_onionreply(hout, failed->failreason);
 	else
 		hout->failuremsg = NULL;
 
@@ -1093,6 +1103,7 @@ static bool peer_failed_our_htlc(struct channel *channel,
 
 	if (hout->in)
 		wallet_forwarded_payment_add(ld->wallet, hout->in,
+					     channel->scid,
 					 hout, FORWARD_FAILED, hout->failcode);
 
 	return true;
@@ -1132,7 +1143,7 @@ void onchain_failed_our_htlc(const struct channel *channel,
 		local_fail_htlc(hout->in, WIRE_PERMANENT_CHANNEL_FAILURE,
 				hout->key.channel->scid);
 		wallet_forwarded_payment_add(hout->key.channel->peer->ld->wallet,
-					 hout->in, hout,
+					 hout->in, channel->scid, hout,
 					 FORWARD_LOCAL_FAILED,
 					 hout->failcode);
 	}
@@ -1241,6 +1252,7 @@ static bool update_out_htlc(struct channel *channel,
 {
 	struct lightningd *ld = channel->peer->ld;
 	struct htlc_out *hout;
+	struct wallet_payment *payment;
 
 	hout = find_htlc_out(&ld->htlcs_out, channel, id);
 	if (!hout) {
@@ -1256,14 +1268,19 @@ static bool update_out_htlc(struct channel *channel,
 						      hout->msat);
 
 		if (hout->in) {
-			wallet_forwarded_payment_add(ld->wallet, hout->in, hout,
+			wallet_forwarded_payment_add(ld->wallet, hout->in,
+						     channel->scid, hout,
 						     FORWARD_OFFERED, 0);
 		}
 
 		/* For our own HTLCs, we commit payment to db lazily */
-		if (hout->am_origin)
-			payment_store(ld,
-				      &hout->payment_hash, hout->partid);
+		if (hout->am_origin) {
+			payment = wallet_payment_by_hash(tmpctx, ld->wallet,
+							 &hout->payment_hash,
+							 hout->partid);
+			assert(payment);
+			payment_store(ld, take(payment));
+		}
 	}
 
 	if (!htlc_out_update_state(channel, hout, newstate))
@@ -1680,9 +1697,8 @@ void peer_got_revoke(struct channel *channel, const u8 *msg)
 	for (i = 0; i < tal_count(changed); i++) {
 		/* If we're doing final accept, we need to forward */
 		if (changed[i].newstate == RCVD_ADD_ACK_REVOCATION) {
-			if (!peer_accepted_htlc(channel, changed[i].id, false,
-						&failcodes[i]))
-				return;
+			peer_accepted_htlc(channel, changed[i].id, false,
+					   &failcodes[i]);
 		} else {
 			if (!changed_htlc(channel, &changed[i])) {
 				channel_internal_error(channel,
@@ -1747,7 +1763,7 @@ void peer_got_revoke(struct channel *channel, const u8 *msg)
 		local_fail_htlc(hin, failcodes[i], NULL);
 		// in fact, now we don't know if this htlc is a forward or localpay!
 		wallet_forwarded_payment_add(ld->wallet,
-					 hin, NULL,
+					 hin, NULL, NULL,
 					 FORWARD_LOCAL_FAILED,
 					 hin->failcode);
 	}
@@ -1793,7 +1809,7 @@ static void add_fulfill(u64 id, enum side side,
 static void add_fail(u64 id, enum side side,
 		     enum onion_type failcode,
 		     const struct short_channel_id *failing_channel,
-		     const u8 *failuremsg,
+		     const struct onionreply *failuremsg,
 		     const struct failed_htlc ***failed_htlcs,
 		     enum side **failed_sides)
 {
@@ -1810,8 +1826,7 @@ static void add_fail(u64 id, enum side side,
 		newf->scid = NULL;
 
 	if (failuremsg)
-		newf->failreason
-			= tal_dup_arr(newf, u8, failuremsg, tal_count(failuremsg), 0);
+		newf->failreason = dup_onionreply(newf, failuremsg);
 	else
 		newf->failreason = NULL;
 
@@ -2179,7 +2194,7 @@ void json_format_forwarding_object(struct json_stream *response,
 	json_add_short_channel_id(response, "in_channel", &cur->channel_in);
 
 	/* This can be unknown if we failed before channel lookup */
-	if (cur->channel_out.u64 != 0 || deprecated_apis)
+	if (cur->channel_out.u64 != 0)
 		json_add_short_channel_id(response, "out_channel",
 					  &cur->channel_out);
 	json_add_amount_msat_compat(response,
@@ -2187,7 +2202,7 @@ void json_format_forwarding_object(struct json_stream *response,
 				    "in_msatoshi", "in_msat");
 
 	/* These can be unset (aka zero) if we failed before channel lookup */
-	if (cur->channel_out.u64 != 0 || deprecated_apis) {
+	if (cur->channel_out.u64 != 0) {
 		json_add_amount_msat_compat(response,
 					    cur->msat_out,
 					    "out_msatoshi",  "out_msat");
@@ -2197,7 +2212,7 @@ void json_format_forwarding_object(struct json_stream *response,
 	}
 	json_add_string(response, "status", forward_status_name(cur->status));
 
-	if(cur->failcode != 0) {
+	if (cur->failcode != 0) {
 		json_add_num(response, "failcode", cur->failcode);
 		json_add_string(response, "failreason",
 				onion_type_name(cur->failcode));

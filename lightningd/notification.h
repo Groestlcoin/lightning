@@ -7,6 +7,7 @@
 #include <ccan/json_escape/json_escape.h>
 #include <ccan/time/time.h>
 #include <common/amount.h>
+#include <common/errcode.h>
 #include <common/node_id.h>
 #include <lightningd/htlc_end.h>
 #include <lightningd/jsonrpc.h>
@@ -16,6 +17,8 @@
 #include <lightningd/plugin.h>
 #include <wallet/wallet.h>
 #include <wire/gen_onion_wire.h>
+
+struct onionreply;
 
 bool notifications_have_topic(const char *topic);
 
@@ -50,7 +53,10 @@ void notify_channel_opened(struct lightningd *ld, struct node_id *node_id,
 
 void notify_forward_event(struct lightningd *ld,
 			  const struct htlc_in *in,
-			  const struct htlc_out *out,
+			  /* May be NULL if we don't know. */
+			  const struct short_channel_id *scid_out,
+			  /* May be NULL. */
+			  const struct amount_msat *amount_out,
 			  enum forward_status state,
 			  enum onion_type failcode,
 			  struct timeabs *resolved_time);
@@ -60,9 +66,9 @@ void notify_sendpay_success(struct lightningd *ld,
 
 void notify_sendpay_failure(struct lightningd *ld,
 			    const struct wallet_payment *payment,
-			    int pay_errcode,
-			    const u8 *onionreply,
+			    errcode_t pay_errcode,
+			    const struct onionreply *onionreply,
 			    const struct routing_failure *fail,
-			    char *errmsg);
+			    const char *errmsg);
 
 #endif /* LIGHTNING_LIGHTNINGD_NOTIFICATION_H */

@@ -1,3 +1,4 @@
+from binascii import hexlify
 from collections import OrderedDict
 from enum import Enum
 from .lightning import LightningRpc, Millisatoshi
@@ -5,6 +6,7 @@ from threading import RLock
 
 import inspect
 import json
+import math
 import os
 import re
 import sys
@@ -99,9 +101,36 @@ class Plugin(object):
 
     """
 
-    def __init__(self, stdout=None, stdin=None, autopatch=True, dynamic=True):
+    def __init__(self, stdout=None, stdin=None, autopatch=True, dynamic=True,
+                 init_features=None, node_features=None, invoice_features=None):
         self.methods = {'init': Method('init', self._init, MethodType.RPCMETHOD)}
         self.options = {}
+
+        def convert_featurebits(bits):
+            """Convert the featurebits into the bytes required to hexencode.
+            """
+            if bits is None:
+                return None
+
+            elif isinstance(bits, int):
+                bitlen = math.ceil(math.log(bits, 256))
+                return hexlify(bits.to_bytes(bitlen, 'big')).decode('ASCII')
+
+            elif isinstance(bits, str):
+                # Assume this is already hex encoded
+                return bits
+
+            elif isinstance(bits, bytes):
+                return hexlify(bits).decode('ASCII')
+
+            else:
+                raise ValueError("Could not convert featurebits to hex-encoded string")
+
+        self.featurebits = {
+            'init': convert_featurebits(init_features),
+            'node': convert_featurebits(node_features),
+            'invoice': convert_featurebits(invoice_features),
+        }
 
         # A dict from topics to handler functions
         self.subscriptions = {}
@@ -317,9 +346,10 @@ class Plugin(object):
     @staticmethod
     def _coerce_arguments(func, ba):
         args = OrderedDict()
+        annotations = func.__annotations__ if hasattr(func, "__annotations__") else {}
         for key, val in ba.arguments.items():
-            annotation = func.__annotations__.get(key)
-            if annotation == Millisatoshi:
+            annotation = annotations.get(key, None)
+            if annotation is not None and annotation == Millisatoshi:
                 args[key] = Millisatoshi(val)
             else:
                 args[key] = val
@@ -522,13 +552,20 @@ class Plugin(object):
             if method.long_desc:
                 methods[len(methods) - 1]["long_description"] = method.long_desc
 
-        return {
+        manifest = {
             'options': list(self.options.values()),
             'rpcmethods': methods,
             'subscriptions': list(self.subscriptions.keys()),
             'hooks': hooks,
-            'dynamic': self.dynamic
+            'dynamic': self.dynamic,
         }
+
+        # Compact the features a bit, not important.
+        features = {k: v for k, v in self.featurebits.items() if v is not None}
+        if features is not None:
+            manifest['featurebits'] = features
+
+        return manifest
 
     def _init(self, options, configuration, request):
         self.rpc_filename = configuration['rpc-file']

@@ -107,12 +107,12 @@ struct onionpacket *create_onionpacket(
 /**
  * onion_shared_secret - calculate ECDH shared secret between nodes.
  *
- * @secret: the shared secret (32 bytes long)
+ * @secret: the shared secret
  * @pubkey: the public key of the other node
  * @privkey: the private key of this node (32 bytes long)
  */
 bool onion_shared_secret(
-	u8 *secret,
+	struct secret *secret,
 	const struct onionpacket *packet,
 	const struct privkey *privkey);
 
@@ -130,7 +130,7 @@ bool onion_shared_secret(
 struct route_step *process_onionpacket(
 	const tal_t * ctx,
 	const struct onionpacket *packet,
-	const u8 *shared_secret,
+	const struct secret *shared_secret,
 	const u8 *assocdata,
 	const size_t assocdatalen
 	);
@@ -156,12 +156,6 @@ enum onion_type parse_onionpacket(const u8 *src,
 				  const size_t srclen,
 				  struct onionpacket *dest);
 
-struct onionreply {
-	/* Node index in the path that is replying */
-	int origin_index;
-	u8 *msg;
-};
-
 /**
  * create_onionreply - Format a failure message so we can return it
  *
@@ -170,8 +164,9 @@ struct onionreply {
  *     HMAC
  * @failure_msg: message (must support tal_len)
  */
-u8 *create_onionreply(const tal_t *ctx, const struct secret *shared_secret,
-		      const u8 *failure_msg);
+struct onionreply *create_onionreply(const tal_t *ctx,
+				     const struct secret *shared_secret,
+				     const u8 *failure_msg);
 
 /**
  * wrap_onionreply - Add another encryption layer to the reply.
@@ -181,8 +176,9 @@ u8 *create_onionreply(const tal_t *ctx, const struct secret *shared_secret,
  *     encryption.
  * @reply: the reply to wrap
  */
-u8 *wrap_onionreply(const tal_t *ctx, const struct secret *shared_secret,
-		    const u8 *reply);
+struct onionreply *wrap_onionreply(const tal_t *ctx,
+				   const struct secret *shared_secret,
+				   const struct onionreply *reply);
 
 /**
  * unwrap_onionreply - Remove layers, check integrity and parse reply
@@ -191,10 +187,15 @@ u8 *wrap_onionreply(const tal_t *ctx, const struct secret *shared_secret,
  * @shared_secrets: shared secrets from the forward path
  * @numhops: path length and number of shared_secrets provided
  * @reply: the incoming reply
+ * @origin_index: the index in the path where the reply came from (-1 if unknown)
+ *
+ * Reverses create_onionreply and wrap_onionreply.
  */
-struct onionreply *unwrap_onionreply(const tal_t *ctx,
-				     const struct secret *shared_secrets,
-				     const int numhops, const u8 *reply);
+u8 *unwrap_onionreply(const tal_t *ctx,
+		      const struct secret *shared_secrets,
+		      const int numhops,
+		      const struct onionreply *reply,
+		      int *origin_index);
 
 /**
  * Create a new empty sphinx_path.
@@ -220,5 +221,15 @@ struct sphinx_path *sphinx_path_new_with_key(const tal_t *ctx,
  */
 void sphinx_add_hop(struct sphinx_path *path, const struct pubkey *pubkey,
 		    const u8 *payload TAKES);
+
+/**
+ * Compute the size of the serialized payloads.
+ */
+size_t sphinx_path_payloads_size(const struct sphinx_path *path);
+
+#if DEVELOPER
+/* Override to force us to reject valid onion packets */
+extern bool dev_fail_process_onionpacket;
+#endif
 
 #endif /* LIGHTNING_COMMON_SPHINX_H */

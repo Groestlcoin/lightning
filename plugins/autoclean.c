@@ -8,31 +8,29 @@
 
 static u64 cycle_seconds = 0, expired_by = 86400;
 static struct plugin_timer *cleantimer;
-static struct plugin_conn *rpc;
 
-static struct command_result *do_clean(void);
+static void do_clean(void *cb_arg);
 
 static struct command_result *ignore(struct command *timer,
 				     const char *buf,
 				     const jsmntok_t *result,
 				     void *arg)
 {
-	cleantimer = plugin_timer(rpc, time_from_sec(cycle_seconds), do_clean);
-	return timer_complete();
+	struct plugin *p = arg;
+	cleantimer = plugin_timer(p, time_from_sec(cycle_seconds), do_clean, p);
+	return timer_complete(p);
 }
 
-static struct command_result *do_clean(void)
+static void do_clean(void *cb_arg)
 {
-	struct json_out *params = json_out_new(NULL);
-	json_out_start(params, NULL, '{');
-	json_out_add(params, "maxexpirytime", false, "%"PRIu64,
-		     time_now().ts.tv_sec - expired_by);
-	json_out_end(params, '}');
-	json_out_finished(params);
-
+	struct plugin *p = cb_arg;
 	/* FIXME: delexpiredinvoice should be in our plugin too! */
-	return send_outreq(NULL, "delexpiredinvoice", ignore, ignore, NULL,
-			   take(params));
+	struct out_req *req = jsonrpc_request_start(p, NULL, "delexpiredinvoice",
+						    ignore, ignore, p);
+	json_add_u64(req->js, "maxexpirytime",
+		     time_now().ts.tv_sec - expired_by);
+
+	send_outreq(p, req);
 }
 
 static struct command_result *json_autocleaninvoice(struct command *cmd,
@@ -56,7 +54,8 @@ static struct command_result *json_autocleaninvoice(struct command *cmd,
 		return command_success_str(cmd, "Autoclean timer disabled");
 	}
 	tal_free(cleantimer);
-	cleantimer = plugin_timer(rpc, time_from_sec(cycle_seconds), do_clean);
+	cleantimer = plugin_timer(cmd->plugin, time_from_sec(cycle_seconds),
+				  do_clean, cmd->plugin);
 
 	return command_success_str(cmd,
 				   tal_fmt(cmd, "Autocleaning %"PRIu64
@@ -65,17 +64,15 @@ static struct command_result *json_autocleaninvoice(struct command *cmd,
 					   expired_by, cycle_seconds));
 }
 
-static void init(struct plugin_conn *prpc,
+static void init(struct plugin *p,
 		  const char *buf UNUSED, const jsmntok_t *config UNUSED)
 {
-	rpc = prpc;
-
 	if (cycle_seconds) {
-		plugin_log(LOG_INFORM, "autocleaning every %"PRIu64" seconds", cycle_seconds);
-		cleantimer = plugin_timer(rpc, time_from_sec(cycle_seconds),
-					  do_clean);
+		plugin_log(p, LOG_INFORM, "autocleaning every %"PRIu64" seconds", cycle_seconds);
+		cleantimer = plugin_timer(p, time_from_sec(cycle_seconds),
+					  do_clean, p);
 	} else
-		plugin_log(LOG_DBG, "autocleaning not active");
+		plugin_log(p, LOG_DBG, "autocleaning not active");
 }
 
 static const struct plugin_command commands[] = { {

@@ -21,6 +21,7 @@
 #include <common/initial_commit_tx.h>
 #include <common/json_command.h>
 #include <common/json_helpers.h>
+#include <common/json_tok.h>
 #include <common/jsonrpc_errors.h>
 #include <common/key_derive.h>
 #include <common/param.h>
@@ -53,6 +54,7 @@
 #include <lightningd/plugin_hook.h>
 #include <unistd.h>
 #include <wally_bip32.h>
+#include <wire/gen_common_wire.h>
 #include <wire/gen_onion_wire.h>
 #include <wire/wire_sync.h>
 
@@ -551,7 +553,10 @@ static struct amount_sat commit_txfee(const struct channel *channel,
 			num_untrimmed_htlcs++;
 	}
 
-	return commit_tx_base_fee(local_feerate, num_untrimmed_htlcs);
+	/* Funder is conservative: makes sure it allows an extra HTLC
+	 * even if feerate increases 50% */
+	return commit_tx_base_fee(local_feerate + local_feerate / 2,
+				  num_untrimmed_htlcs + 1);
 }
 
 static void subtract_offered_htlcs(const struct channel *channel,
@@ -906,7 +911,8 @@ send_error:
 	tal_free(payload);
 }
 
-REGISTER_PLUGIN_HOOK(peer_connected, peer_connected_hook_cb,
+REGISTER_PLUGIN_HOOK(peer_connected, PLUGIN_HOOK_SINGLE,
+		     peer_connected_hook_cb,
 		     struct peer_connected_hook_payload *,
 		     peer_connected_serialize,
 		     struct peer_connected_hook_payload *);
@@ -990,7 +996,7 @@ static enum watch_result funding_depth_cb(struct lightningd *ld,
 	struct short_channel_id scid;
 
 	/* Sanity check */
-	if (tx && !check_funding_tx(tx, channel)) {
+	if (!check_funding_tx(tx, channel)) {
 		channel_internal_error(channel, "Bad tx %s: %s",
 				       type_to_string(tmpctx,
 						      struct bitcoin_txid, txid),
@@ -1750,6 +1756,112 @@ static const struct json_command getinfo_command = {
 };
 AUTODATA(json_command, &getinfo_command);
 
+/* Wait for at least a specific blockheight, then return, or time out.  */
+struct waitblockheight_waiter {
+	/* struct lightningd::waitblockheight_commands.  */
+	struct list_node list;
+	/* Command structure. This is the parent of the close command. */
+	struct command *cmd;
+	/* The block height being waited for.  */
+	u32 block_height;
+	/* Whether we have been removed from the list.  */
+	bool removed;
+};
+/* Completes a pending waitblockheight.  */
+static struct command_result *
+waitblockheight_complete(struct command *cmd,
+			 u32 block_height)
+{
+	struct json_stream *response;
+
+	response = json_stream_success(cmd);
+	json_add_num(response, "blockheight", block_height);
+	return command_success(cmd, response);
+}
+/* Called when command is destroyed without being resolved.  */
+static void
+destroy_waitblockheight_waiter(struct waitblockheight_waiter *w)
+{
+	if (!w->removed)
+		list_del(&w->list);
+}
+/* Called on timeout.  */
+static void
+timeout_waitblockheight_waiter(struct waitblockheight_waiter *w)
+{
+	list_del(&w->list);
+	w->removed = true;
+	tal_steal(tmpctx, w);
+	was_pending(command_fail(w->cmd, LIGHTNINGD,
+				 "Timed out."));
+}
+/* Called by lightningd at each new block.  */
+void waitblockheight_notify_new_block(struct lightningd *ld,
+				      u32 block_height)
+{
+	struct waitblockheight_waiter *w, *n;
+	char *to_delete = tal(NULL, char);
+
+	/* Use safe since we could resolve commands and thus
+	 * trigger removal of list elements.
+	 */
+	list_for_each_safe(&ld->waitblockheight_commands, w, n, list) {
+		/* Skip commands that have not been reached yet.  */
+		if (w->block_height > block_height)
+			continue;
+
+		list_del(&w->list);
+		w->removed = true;
+		tal_steal(to_delete, w);
+		was_pending(waitblockheight_complete(w->cmd,
+						     block_height));
+	}
+	tal_free(to_delete);
+}
+static struct command_result *json_waitblockheight(struct command *cmd,
+						   const char *buffer,
+						   const jsmntok_t *obj,
+						   const jsmntok_t *params)
+{
+	unsigned int *target_block_height;
+	u32 block_height;
+	unsigned int *timeout;
+	struct waitblockheight_waiter *w;
+
+	if (!param(cmd, buffer, params,
+		   p_req("blockheight", param_number, &target_block_height),
+		   p_opt_def("timeout", param_number, &timeout, 60),
+		   NULL))
+		return command_param_failed();
+
+	/* Check if already reached anyway.  */
+	block_height = get_block_height(cmd->ld->topology);
+	if (*target_block_height <= block_height)
+		return waitblockheight_complete(cmd, block_height);
+
+	/* Create a new waitblockheight command. */
+	w = tal(cmd, struct waitblockheight_waiter);
+	tal_add_destructor(w, &destroy_waitblockheight_waiter);
+	list_add(&cmd->ld->waitblockheight_commands, &w->list);
+	w->cmd = cmd;
+	w->block_height = *target_block_height;
+	w->removed = false;
+	/* Install the timeout.  */
+	(void) new_reltimer(cmd->ld->timers, w, time_from_sec(*timeout),
+			    &timeout_waitblockheight_waiter, w);
+
+	return command_still_pending(cmd);
+}
+
+static const struct json_command waitblockheight_command = {
+	"waitblockheight",
+	"utility",
+	&json_waitblockheight,
+	"Wait for the blockchain to reach {blockheight}, up to "
+	"{timeout} seconds."
+};
+AUTODATA(json_command, &waitblockheight_command);
+
 static struct command_result *param_channel_or_all(struct command *cmd,
 					     const char *name,
 					     const char *buffer,
@@ -2154,10 +2266,10 @@ static struct command_result *json_dev_forget_channel(struct command *cmd,
 				    "or `dev-fail` instead.");
 	}
 
-	bitcoind_gettxout(cmd->ld->topology->bitcoind,
-			  &forget->channel->funding_txid,
-			  forget->channel->funding_outnum,
-			  process_dev_forget_channel, forget);
+	bitcoind_getutxout(cmd->ld->topology->bitcoind,
+			   &forget->channel->funding_txid,
+			   forget->channel->funding_outnum,
+			   process_dev_forget_channel, forget);
 	return command_still_pending(cmd);
 }
 
@@ -2266,4 +2378,132 @@ void peer_dev_memleak(struct command *cmd)
 {
 	peer_memleak_req_next(cmd, NULL);
 }
+
+struct custommsg_payload {
+	struct node_id peer_id;
+	const u8 *msg;
+};
+
+static void custommsg_callback(struct custommsg_payload *payload,
+			       const char *buffer, const jsmntok_t *toks)
+{
+	tal_free(payload);
+}
+
+static void custommsg_payload_serialize(struct custommsg_payload *payload,
+					struct json_stream *stream)
+{
+	json_add_hex_talarr(stream, "message", payload->msg);
+	json_add_node_id(stream, "peer_id", &payload->peer_id);
+}
+
+REGISTER_PLUGIN_HOOK(custommsg, PLUGIN_HOOK_SINGLE, custommsg_callback,
+		     struct custommsg_payload *, custommsg_payload_serialize,
+		     struct custommsg_payload *);
+
+void handle_custommsg_in(struct lightningd *ld, const struct node_id *peer_id,
+			 const u8 *msg)
+{
+	struct custommsg_payload *p = tal(NULL, struct custommsg_payload);
+	u8 *custommsg;
+
+	if (!fromwire_custommsg_in(NULL, msg, &custommsg)) {
+		log_broken(ld->log, "Malformed custommsg from peer %s: %s",
+			   type_to_string(tmpctx, struct node_id, peer_id),
+			   tal_hex(tmpctx, msg));
+		return;
+	}
+
+	p->peer_id = *peer_id;
+	p->msg = tal_steal(p, custommsg);
+	plugin_hook_call_custommsg(ld, p, p);
+}
+
+static struct command_result *json_sendcustommsg(struct command *cmd,
+						 const char *buffer,
+						 const jsmntok_t *obj UNNEEDED,
+						 const jsmntok_t *params)
+{
+	struct json_stream *response;
+	struct node_id *dest;
+	struct peer *peer;
+	struct subd *owner;
+	u8 *msg;
+	int type;
+
+	if (!param(cmd, buffer, params,
+		   p_req("node_id", param_node_id, &dest),
+		   p_req("msg", param_bin_from_hex, &msg),
+		   NULL))
+		return command_param_failed();
+
+	type = fromwire_peektype(msg);
+	if (wire_type_is_defined(type)) {
+		return command_fail(
+		    cmd, JSONRPC2_INVALID_REQUEST,
+		    "Cannot send messages of type %d (%s). It is not possible "
+		    "to send messages that have a type managed internally "
+		    "since that might cause issues with the internal state "
+		    "tracking.",
+		    type, wire_type_name(type));
+	}
+
+	if (type % 2 == 0) {
+		return command_fail(
+		    cmd, JSONRPC2_INVALID_REQUEST,
+		    "Cannot send even-typed %d custom message. Currently "
+		    "custom messages are limited to odd-numbered message "
+		    "types, as even-numbered types might result in "
+		    "disconnections.",
+		    type);
+	}
+
+	peer = peer_by_id(cmd->ld, dest);
+	if (!peer) {
+		return command_fail(cmd, JSONRPC2_INVALID_REQUEST,
+				    "No such peer: %s",
+				    type_to_string(cmd, struct node_id, dest));
+	}
+
+	owner = peer_get_owning_subd(peer);
+	if (owner == NULL) {
+		return command_fail(cmd, JSONRPC2_INVALID_REQUEST,
+				    "Peer is not connected: %s",
+				    type_to_string(cmd, struct node_id, dest));
+	}
+
+	/* Only a couple of subdaemons have the ability to send custom
+	 * messages. We whitelist those, and error if the current owner is not
+	 * in the whitelist. The reason is that some subdaemons do not handle
+	 * spontaneous messages from the master well (I'm looking at you
+	 * `closingd`...). */
+	if (!streq(owner->name, "channeld") &&
+	    !streq(owner->name, "openingd")) {
+		return command_fail(cmd, JSONRPC2_INVALID_REQUEST,
+				    "Peer is currently owned by %s which does "
+				    "not support injecting custom messages.",
+				    owner->name);
+	}
+
+	subd_send_msg(owner, take(towire_custommsg_out(cmd, msg)));
+
+	response = json_stream_success(cmd);
+	json_add_string(response, "status",
+			tal_fmt(cmd,
+				"Message sent to subdaemon %s for delivery",
+				owner->name));
+
+	return command_success(cmd, response);
+}
+
+static const struct json_command sendcustommsg_command = {
+    "dev-sendcustommsg",
+    "utility",
+    json_sendcustommsg,
+    "Send a custom message to the peer with the given {node_id}",
+    .verbose = "dev-sendcustommsg node_id hexcustommsg",
+};
+
+AUTODATA(json_command, &sendcustommsg_command);
+
 #endif /* DEVELOPER */

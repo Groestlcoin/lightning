@@ -2,8 +2,11 @@ from binascii import hexlify
 from fixtures import *  # noqa: F401,F403
 from fixtures import TEST_NETWORK
 from flaky import flaky  # noqa: F401
-from lightning import RpcError, Millisatoshi
-from utils import DEVELOPER, wait_for, only_one, sync_blockheight, SLOW_MACHINE, TIMEOUT, VALGRIND
+from pyln.client import RpcError, Millisatoshi
+from utils import (
+    DEVELOPER, wait_for, only_one, sync_blockheight, SLOW_MACHINE, TIMEOUT,
+    VALGRIND
+)
 
 import concurrent.futures
 import copy
@@ -575,7 +578,9 @@ def test_sendpay(node_factory):
 
 @unittest.skipIf(TEST_NETWORK != 'regtest', "The reserve computation is bitcoin specific")
 def test_sendpay_cant_afford(node_factory):
-    l1, l2 = node_factory.line_graph(2, fundamount=10**6)
+    # Set feerates the same so we don't have to wait for update.
+    l1, l2 = node_factory.line_graph(2, fundamount=10**6,
+                                     opts={'feerates': (15000, 15000, 15000)})
 
     # Can't pay more than channel capacity.
     def pay(lsrc, ldst, amt, label=None):
@@ -590,7 +595,7 @@ def test_sendpay_cant_afford(node_factory):
         pay(l1, l2, 10**9 + 1)
 
     # This is the fee, which needs to be taken into account for l1.
-    available = 10**9 - 13440000
+    available = 10**9 - 24030000
     # Reserve is 1%.
     reserve = 10**7
 
@@ -2068,62 +2073,31 @@ def test_channel_spendable_capped(node_factory, bitcoind):
     assert l1.rpc.listpeers()['peers'][0]['channels'][0]['spendable_msat'] == Millisatoshi(0xFFFFFFFF)
 
 
-@unittest.skipIf(TEST_NETWORK != 'regtest', 'The numbers below are bitcoin specific')
-def test_channel_drainage(node_factory, bitcoind):
-    """Test channel drainage.
+def test_lockup_drain(node_factory, bitcoind):
+    """Try to get channel into a state where funder can't afford fees on additional HTLC, so fundee can't add HTLC"""
+    l1, l2 = node_factory.line_graph(2, opts={'may_reconnect': True})
 
-    Test to drains a channels as much as possible,
-    especially in regards to commitment fee:
+    # l1 sends all the money to l2 until even 1 msat can't get through.
+    total = 0
+    msat = 16**9
+    while msat != 0:
+        try:
+            l1.pay(l2, msat)
+            print("l1->l2: {}".format(msat))
+            total += msat
+        except RpcError:
+            msat //= 2
 
-    [l1] <=> [l2]
-    """
-    sats = 10**6
-    l1, l2 = node_factory.line_graph(2, fundamount=sats, wait_for_announce=True)
+    # Even if feerate now increases 1.5x (22500), l2 should be able to send
+    # non-dust HTLC to l1.
+    l1.set_feerates([22500] * 3, False)
+    # Restart forces fast fee adjustment (otherwise it's smoothed and takes
+    # a very long time!).
+    l1.restart()
+    wait_for(lambda: only_one(l1.rpc.listpeers()['peers'])['connected'])
+    assert(l1.rpc.feerates('perkw')['perkw']['normal'] == 22500)
 
-    # wait for everyone to see every channel as active
-    for n in [l1, l2]:
-        wait_for(lambda: [c['active'] for c in n.rpc.listchannels()['channels']] == [True] * 2 * 1)
-
-    # This first HTLC drains the channel.
-    amount = Millisatoshi("976559200msat")
-    payment_hash = l2.rpc.invoice('any', 'inv', 'for testing')['payment_hash']
-    route = l1.rpc.getroute(l2.info['id'], amount, riskfactor=1, fuzzpercent=0)['route']
-    l1.rpc.sendpay(route, payment_hash)
-    l1.rpc.waitsendpay(payment_hash, 10)
-
-    # wait until totally settled
-    wait_for(lambda: len(l1.rpc.listpeers()['peers'][0]['channels'][0]['htlcs']) == 0)
-    wait_for(lambda: len(l2.rpc.listpeers()['peers'][0]['channels'][0]['htlcs']) == 0)
-
-    # But we can get more!  By using a trimmed htlc output; this doesn't cause
-    # an increase in tx fee, so it's allowed.
-    amount = Millisatoshi("2580800msat")
-    payment_hash = l2.rpc.invoice('any', 'inv2', 'for testing')['payment_hash']
-    route = l1.rpc.getroute(l2.info['id'], amount, riskfactor=1, fuzzpercent=0)['route']
-    l1.rpc.sendpay(route, payment_hash)
-    l1.rpc.waitsendpay(payment_hash, TIMEOUT)
-
-    # wait until totally settled
-    wait_for(lambda: len(l1.rpc.listpeers()['peers'][0]['channels'][0]['htlcs']) == 0)
-    wait_for(lambda: len(l2.rpc.listpeers()['peers'][0]['channels'][0]['htlcs']) == 0)
-
-    # Now, l1 is paying fees, but it can't afford a larger tx, so any
-    # attempt to add an HTLC which is not trimmed will fail.
-    payment_hash = l1.rpc.invoice('any', 'inv', 'for testing')['payment_hash']
-
-    # feerate_per_kw = 15000, so htlc_timeout_fee = 663 * 15000 / 1000 = 9945.
-    # dust_limit is 546.  So it's trimmed if < 9945 + 546.
-    amount = Millisatoshi("10491sat")
-    route = l2.rpc.getroute(l1.info['id'], amount, riskfactor=1, fuzzpercent=0)['route']
-    l2.rpc.sendpay(route, payment_hash)
-    with pytest.raises(RpcError, match=r"Capacity exceeded.*'erring_index': 0"):
-        l2.rpc.waitsendpay(payment_hash, TIMEOUT)
-
-    # But if it's trimmed, we're ok.
-    amount -= 1
-    route = l2.rpc.getroute(l1.info['id'], amount, riskfactor=1, fuzzpercent=0)['route']
-    l2.rpc.sendpay(route, payment_hash)
-    l2.rpc.waitsendpay(payment_hash, TIMEOUT)
+    l2.pay(l1, total // 2)
 
 
 def test_error_returns_blockheight(node_factory, bitcoind):
@@ -2272,7 +2246,7 @@ def test_createonion_rpc(node_factory):
     # The trailer is generated using the filler and can be ued as a
     # checksum. This trailer is from the test-vector in the specs.
     print(res)
-    assert(res['onion'].endswith('be89e4701eb870f8ed64fafa446c78df3ea'))
+    assert(res['onion'].endswith('9400f45a48e6dc8ddbaeb3'))
 
 
 @unittest.skipIf(not DEVELOPER, "gossip propagation is slow without DEVELOPER=1")
@@ -2394,7 +2368,7 @@ def test_partial_payment(node_factory, bitcoind, executor):
     with pytest.raises(RpcError, match=r'Already have parallel payment in progress'):
         l1.rpc.sendpay(route=r124,
                        payment_hash=inv['payment_hash'],
-                       msatoshi=1000,
+                       msatoshi=499,
                        payment_secret=paysecret)
 
     # It will not allow a parallel with different msatoshi!
@@ -2512,3 +2486,116 @@ def test_partial_payment_htlc_loss(node_factory, bitcoind):
     with pytest.raises(RpcError,
                        match=r'WIRE_PERMANENT_CHANNEL_FAILURE \(reply from remote\)'):
         l1.rpc.waitsendpay(payment_hash=inv['payment_hash'], timeout=TIMEOUT, partid=1)
+
+
+def test_createonion_limits(node_factory):
+    l1, = node_factory.get_nodes(1)
+    hops = [{
+        "pubkey": "02eec7245d6b7d2ccb30380bfbe2a3648cd7a942653f5aa340edcea1f283686619",
+        "payload": "00" * 228
+    }, {
+        "pubkey": "0324653eac434488002cc06bbfb7f10fe18991e35f9fe4302dbea6d2353dc0ab1c",
+        "payload": "00" * 228
+    }, {
+        "pubkey": "027f31ebc5462c1fdce1b737ecff52d37d75dea43ce11c74d25aa297165faa2007",
+        "payload": "00" * 228
+    }, {
+        "pubkey": "032c0b7cf95324a07d05398b240174dc0c2be444d96b159aa6c7f7b1e668680991",
+        "payload": "00" * 228
+    }, {
+        "pubkey": "02edabbd16b41c8371b92ef2f04c1185b4f03b6dcd52ba9b78d9d7c89c8f221145",
+        "payload": "00" * 228
+    }]
+
+    # This should success since it's right at the edge
+    l1.rpc.createonion(hops=hops, assocdata="BB" * 32)
+
+    # This one should fail however
+    with pytest.raises(RpcError, match=r'Payloads exceed maximum onion packet size.'):
+        hops[0]['payload'] += '01'
+        l1.rpc.createonion(hops=hops, assocdata="BB" * 32)
+
+
+@unittest.skipIf(not DEVELOPER, "needs use_shadow")
+def test_blockheight_disagreement(node_factory, bitcoind, executor):
+    """
+    While a payment is in-transit from payer to payee, a block
+    might be mined, so that the blockheight the payer used to
+    initiate the payment is no longer the blockheight when the
+    payee receives it.
+    This leads to a failure which *used* to be
+    `final_expiry_too_soon`, a non-permanent failure, but
+    which is *now* `incorrect_or_unknown_payment_details`,
+    a permanent failure.
+    `pay` treats permanent failures as, well, permanent, and
+    gives up on receiving such failure from the payee, but
+    this particular subcase of blockheight disagreement is
+    actually a non-permanent failure (the payer only needs
+    to synchronize to the same blockheight as the payee).
+    """
+    l1, l2 = node_factory.line_graph(2)
+
+    sync_blockheight(bitcoind, [l1, l2])
+
+    # Arrange l1 to stop getting new blocks.
+    def no_more_blocks(req):
+        return {"result": None,
+                "error": {"code": -8, "message": "Block height out of range"}, "id": req['id']}
+    l1.daemon.rpcproxy.mock_rpc('getblockhash', no_more_blocks)
+
+    # Increase blockheight and make sure l2 knows it.
+    # Why 2? Because `pay` uses min_final_cltv_expiry + 1.
+    # But 2 blocks coming in close succession, plus slow
+    # forwarding nodes and block propagation, are still
+    # possible on the mainnet, thus this test.
+    bitcoind.generate_block(2)
+    sync_blockheight(bitcoind, [l2])
+
+    # Have l2 make an invoice.
+    inv = l2.rpc.invoice(1000, 'l', 'd')['bolt11']
+
+    # Have l1 pay l2
+    def pay(l1, inv):
+        l1.rpc.dev_pay(inv, use_shadow=False)
+    fut = executor.submit(pay, l1, inv)
+
+    # Make sure l1 sends out the HTLC.
+    l1.daemon.wait_for_logs([r'NEW:: HTLC LOCAL'])
+
+    # Unblock l1 from new blocks.
+    l1.daemon.rpcproxy.mock_rpc('getblockhash', None)
+
+    # pay command should complete without error
+    fut.result()
+
+
+def test_sendpay_msatoshi_arg(node_factory):
+    """sendpay msatoshi arg was used for non-MPP to indicate the amount
+they asked for.  But using it with anything other than the final amount
+caused a crash in 0.8.0, so we then disallowed it.
+    """
+    l1, l2 = node_factory.line_graph(2)
+
+    inv = l2.rpc.invoice(1000, 'inv', 'inv')
+
+    # Can't send non-MPP payment which specifies msatoshi != final.
+    with pytest.raises(RpcError, match=r'Do not specify msatoshi \(1001msat\) without'
+                       ' partid: if you do, it must be exactly'
+                       r' the final amount \(1000msat\)'):
+        l1.rpc.sendpay(route=l1.rpc.getroute(l2.info['id'], 1000, 1)['route'], payment_hash=inv['payment_hash'], msatoshi=1001, bolt11=inv['bolt11'])
+    with pytest.raises(RpcError, match=r'Do not specify msatoshi \(999msat\) without'
+                       ' partid: if you do, it must be exactly'
+                       r' the final amount \(1000msat\)'):
+        l1.rpc.sendpay(route=l1.rpc.getroute(l2.info['id'], 1000, 1)['route'], payment_hash=inv['payment_hash'], msatoshi=999, bolt11=inv['bolt11'])
+
+    # Can't send MPP payment which pays any more than amount.
+    with pytest.raises(RpcError, match=r'Final amount 1001msat is greater than 1000msat, despite MPP'):
+        l1.rpc.sendpay(route=l1.rpc.getroute(l2.info['id'], 1001, 1)['route'], payment_hash=inv['payment_hash'], msatoshi=1000, bolt11=inv['bolt11'], partid=1)
+
+    # But this works
+    l1.rpc.sendpay(route=l1.rpc.getroute(l2.info['id'], 1001, 1)['route'], payment_hash=inv['payment_hash'], msatoshi=1001, bolt11=inv['bolt11'])
+    l1.rpc.waitsendpay(inv['payment_hash'])
+
+    inv = only_one(l2.rpc.listinvoices('inv')['invoices'])
+    assert inv['status'] == 'paid'
+    assert inv['amount_received_msat'] == Millisatoshi(1001)

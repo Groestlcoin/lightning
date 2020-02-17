@@ -1,5 +1,9 @@
+#include <ccan/opt/opt.h>
+#include <lightningd/options.h>
 #include <lightningd/plugin_control.h>
 #include <lightningd/plugin_hook.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 
 /* A dummy structure used to give multiple arguments to callbacks. */
 struct dynamic_plugin {
@@ -107,14 +111,18 @@ static void plugin_dynamic_manifest_callback(const char *buffer,
 static struct command_result *plugin_start(struct dynamic_plugin *dp)
 {
 	int stdin, stdout;
+	mode_t prev_mask;
 	char **p_cmd;
 	struct jsonrpc_request *req;
 	struct plugin *p = dp->plugin;
 
-	p->dynamic = true;
+	p->dynamic = false;
 	p_cmd = tal_arrz(NULL, char *, 2);
 	p_cmd[0] = p->cmd;
+	/* In case the plugin create files, this is a better default. */
+	prev_mask = umask(dp->cmd->ld->initial_umask);
 	p->pid = pipecmdarr(&stdin, &stdout, &pipecmd_preserve, p_cmd);
+	umask(prev_mask);
 	if (p->pid == -1)
 		return plugin_dynamic_error(dp, "Error running command");
 	else
@@ -189,6 +197,18 @@ plugin_dynamic_startdir(struct command *cmd, const char *dir_path)
 	return command_still_pending(cmd);
 }
 
+static void clear_plugin(struct plugin *p, const char *name)
+{
+	struct plugin_opt *opt;
+
+	list_for_each(&p->plugin_opts, opt, list)
+		if (!opt_unregister(opt->name))
+			fatal("Could not unregister %s from plugin %s",
+			      opt->name, name);
+	plugin_kill(p, "%s stopped by lightningd via RPC", name);
+	tal_free(p);
+}
+
 static struct command_result *
 plugin_dynamic_stop(struct command *cmd, const char *plugin_name)
 {
@@ -202,11 +222,13 @@ plugin_dynamic_stop(struct command *cmd, const char *plugin_name)
 				                    "%s cannot be managed when "
 				                    "lightningd is up",
 				                    plugin_name);
-			plugin_hook_unregister_all(p);
-			plugin_kill(p, "%s stopped by lightningd via RPC", plugin_name);
-			tal_free(p);
+			clear_plugin(p, plugin_name);
 			response = json_stream_success(cmd);
-			json_add_string(response, "",
+			if (deprecated_apis)
+				json_add_string(response, "",
+			                    take(tal_fmt(NULL, "Successfully stopped %s.",
+			                                 plugin_name)));
+			json_add_string(response, "result",
 			                take(tal_fmt(NULL, "Successfully stopped %s.",
 			                             plugin_name)));
 			return command_success(cmd, response);

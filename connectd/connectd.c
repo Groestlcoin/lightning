@@ -29,7 +29,9 @@
 #include <common/cryptomsg.h>
 #include <common/daemon_conn.h>
 #include <common/decode_array.h>
+#include <common/errcode.h>
 #include <common/features.h>
+#include <common/jsonrpc_errors.h>
 #include <common/memleak.h>
 #include <common/ping.h>
 #include <common/pseudorand.h>
@@ -152,6 +154,9 @@ struct daemon {
 
 	/* Allow to define the default behavior of tor services calls*/
 	bool use_v3_autotor;
+
+	/* featurebits that we support internally, and via plugins */
+	u8 *init_featurebits;
 };
 
 /* Peers we're trying to reach: we iterate through addrs until we succeed
@@ -470,7 +475,8 @@ static struct io_plan *handshake_in_success(struct io_conn *conn,
 	struct node_id id;
 	node_id_from_pubkey(&id, id_key);
 	status_peer_debug(&id, "Connect IN");
-	return peer_exchange_initmsg(conn, daemon, cs, &id, addr);
+	return peer_exchange_initmsg(conn, daemon, cs, &id, addr,
+				     daemon->init_featurebits);
 }
 
 /*~ When we get a connection in we set up its network address then call
@@ -530,7 +536,8 @@ static struct io_plan *handshake_out_success(struct io_conn *conn,
 	node_id_from_pubkey(&id, key);
 	connect->connstate = "Exchanging init messages";
 	status_peer_debug(&id, "Connect OUT");
-	return peer_exchange_initmsg(conn, connect->daemon, cs, &id, addr);
+	return peer_exchange_initmsg(conn, connect->daemon, cs, &id, addr,
+				     connect->daemon->init_featurebits);
 }
 
 struct io_plan *connection_out(struct io_conn *conn, struct connecting *connect)
@@ -565,22 +572,24 @@ static void connect_failed(struct daemon *daemon,
 			   const struct node_id *id,
 			   u32 seconds_waited,
 			   const struct wireaddr_internal *addrhint,
+			   errcode_t errcode,
 			   const char *errfmt, ...)
-	PRINTF_FMT(5,6);
+	PRINTF_FMT(6,7);
 
 static void connect_failed(struct daemon *daemon,
 			   const struct node_id *id,
 			   u32 seconds_waited,
 			   const struct wireaddr_internal *addrhint,
+			   errcode_t errcode,
 			   const char *errfmt, ...)
 {
 	u8 *msg;
 	va_list ap;
-	char *err;
+	char *errmsg;
 	u32 wait_seconds;
 
 	va_start(ap, errfmt);
-	err = tal_vfmt(tmpctx, errfmt, ap);
+	errmsg = tal_vfmt(tmpctx, errfmt, ap);
 	va_end(ap);
 
 	/* Wait twice as long to reconnect, between min and max. */
@@ -594,11 +603,11 @@ static void connect_failed(struct daemon *daemon,
 	 * happened.  We leave it to lightningd to decide if it wants to try
 	 * again, with the wait_seconds as a hint of how long before
 	 * asking. */
-	msg = towire_connectctl_connect_failed(NULL, id, err, wait_seconds,
-					       addrhint);
+	msg = towire_connectctl_connect_failed(NULL, id, errcode, errmsg,
+					       wait_seconds, addrhint);
 	daemon_conn_send(daemon->master, take(msg));
 
-	status_peer_debug(id, "Failed connected out: %s", err);
+	status_peer_debug(id, "Failed connected out: %s", errmsg);
 }
 
 /*~ This is the destructor for the (unsuccessful) connection.  We accumulate
@@ -717,7 +726,8 @@ static void try_connect_one_addr(struct connecting *connect)
 	if (connect->addrnum == tal_count(connect->addrs)) {
 		connect_failed(connect->daemon, &connect->id,
 			       connect->seconds_waited,
-			       connect->addrhint, "%s", connect->errors);
+			       connect->addrhint, CONNECT_ALL_ADDRESSES_FAILED,
+			       "%s", connect->errors);
 		tal_free(connect);
 		return;
 	}
@@ -1206,7 +1216,7 @@ static struct io_plan *connect_init(struct io_conn *conn,
 		&proxyaddr, &daemon->use_proxy_always,
 		&daemon->dev_allow_localhost, &daemon->use_dns,
 		&tor_password,
-		&daemon->use_v3_autotor)) {
+		&daemon->use_v3_autotor, &daemon->init_featurebits)) {
 		/* This is a helper which prints the type expected and the actual
 		 * message, then exits (it should never be called!). */
 		master_badmsg(WIRE_CONNECTCTL_INIT, msg);
@@ -1429,6 +1439,7 @@ static void try_connect_peer(struct daemon *daemon,
 	* to retry; an address may get gossiped or appear on the DNS seed. */
 	if (tal_count(addrs) == 0) {
 		connect_failed(daemon, id, seconds_waited, addrhint,
+			       CONNECT_NO_KNOWN_ADDRESS,
 			       "Unable to connect, no address known for peer");
 		return;
 	}

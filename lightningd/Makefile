@@ -42,11 +42,13 @@ LIGHTNINGD_COMMON_OBJS :=			\
 	common/io_lock.o			\
 	common/json.o				\
 	common/json_helpers.o			\
+	common/json_stream.o			\
 	common/json_tok.o			\
 	common/memleak.o			\
 	common/msg_queue.o			\
 	common/node_id.o			\
 	common/onion.o				\
+	common/onionreply.o			\
 	common/param.o				\
 	common/per_peer_state.o			\
 	common/permute_tx.o			\
@@ -80,7 +82,6 @@ LIGHTNINGD_SRC :=				\
 	lightningd/invoice.c			\
 	lightningd/io_loop_with_timers.c	\
 	lightningd/json.c			\
-	lightningd/json_stream.c		\
 	lightningd/jsonrpc.c			\
 	lightningd/lightningd.c			\
 	lightningd/log.c			\

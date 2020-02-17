@@ -23,6 +23,10 @@ If not specified, the *port* defaults to 9735.
 If *host* is not specified, the connection will be attempted to an IP
 belonging to *id* obtained through gossip with other already connected
 peers.
+This can fail if your C-lightning node is a fresh install that has not
+connected to any peers yet (your node has no gossip yet),
+or if the target *id* is a fresh install that has no channels yet
+(nobody will gossip about a node until it has one published channel).
 
 If *host* begins with a */* it is interpreted as a local path, and the
 connection will be made to that local socket (see **bind-addr** in
@@ -37,10 +41,21 @@ RETURN VALUE
 
 On success the peer *id* is returned.
 
-The following error codes may occur:
--   -1: Catchall nonspecific error. This may occur if the host is not
-    valid or there are problems communicating with the peer. **connect**
-    will make up to 10 attempts to connect to the peer before giving up.
+ERRORS
+------
+
+On failure, one of the following errors will be returned:
+
+    { "code" : 400, "message" : "Unable to connect, no address known for peer" }
+
+If some addresses are known but connecting to all of them failed, the message
+will contain details about the failures:
+
+    { "code" : 401, "message" : "..." }
+
+If the given parameters are wrong:
+
+    { "code" : -32602, "message" : "..." }
 
 AUTHOR
 ------

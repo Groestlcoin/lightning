@@ -10,6 +10,7 @@
 #include <ccan/mem/mem.h>
 #include <ccan/tal/tal.h>
 #include <common/amount.h>
+#include <common/errcode.h>
 #include <common/node_id.h>
 #include <common/utils.h>
 
@@ -85,6 +86,11 @@ void towire_bool(u8 **pptr, bool v)
 {
 	u8 val = v;
 	towire(pptr, &val, sizeof(val));
+}
+
+void towire_errcode_t(u8 **pptr, errcode_t v)
+{
+	towire_u32(pptr, (u32)v);
 }
 
 void towire_bigsize(u8 **pptr, const bigsize_t val)
@@ -255,6 +261,17 @@ void towire_bitcoin_tx_output(u8 **pptr, const struct bitcoin_tx_output *output)
 	towire_amount_sat(pptr, output->amount);
 	towire_u16(pptr, tal_count(output->script));
 	towire_u8_array(pptr, output->script, tal_count(output->script));
+}
+
+void towire_witscript(u8 **pptr, const struct witscript *script)
+{
+	if (script == NULL) {
+		towire_u16(pptr, 0);
+	} else {
+		assert(script->ptr != NULL);
+		towire_u16(pptr, tal_count(script->ptr));
+		towire_u8_array(pptr, script->ptr, tal_count(script->ptr));
+	}
 }
 
 void towire_chainparams(u8 **cursor, const struct chainparams *chainparams)
