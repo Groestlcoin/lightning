@@ -20,4 +20,14 @@ void groestl512_double(struct sha256_double *shadouble, const void *p, size_t le
 {
 	groestlhash((void *)&shadouble->sha, (void *)p, len);
 }
+
+void groestl512_double_done256(sph_groestl512_context *shactx, struct sha256_double *res)
+{
+	struct groestl512 result;
+	groestl512_done(shactx, &result);
+	struct groestl512 result2;
+	groestl512(&result2, &result, sizeof(result));
+	memcpy(res, &result2, 32);
+}
+
 REGISTER_TYPE_TO_HEXSTR(sha256_double);
