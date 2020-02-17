@@ -180,7 +180,7 @@ static void bcli_failure(struct bitcoin_cli *bcli,
 		           "%s exited %u (after %u other errors) '%.*s'; "
 		           "we have been retrying command for "
 		           "--bitcoin-retry-timeout=%"PRIu64" seconds; "
-		           "bitcoind setup or our --bitcoin-* configs broken?",
+		           "groestlcoind setup or our --groestlcoin-* configs broken?",
 		           bcli_args(bcli),
 		           exitstatus,
 		           bitcoind->error_count,
@@ -206,7 +206,7 @@ static void bcli_finished(struct io_conn *conn UNUSED, struct bitcoin_cli *bcli)
 	/* If it took over 10 seconds, that's rather strange. */
 	if (msec > 10000)
 		plugin_log(bcli->cmd->plugin, LOG_UNUSUAL,
-		           "bitcoin-cli: finished %s (%"PRIu64" ms)",
+		           "groestlcoin-cli: finished %s (%"PRIu64" ms)",
 		           bcli_args(bcli), msec);
 
 	assert(bitcoind->num_requests[prio] > 0);
@@ -691,9 +691,9 @@ static void bitcoind_failure(struct plugin *p, const char *error_message)
 	const char **cmd = gather_args(bitcoind, "echo", NULL);
 	const char *err =
 	tal_fmt(bitcoind, "\n%s\n\n"
-			  "Make sure you have bitcoind running and that bitcoin-cli"
-			  " is able to connect to bitcoind.\n\n"
-			  "You can verify that your Bitcoin Core installation is"
+			  "Make sure you have groestlcoind running and that groestlcoin-cli"
+			  " is able to connect to groestlcoind.\n\n"
+			  "You can verify that your Groestlcoin Core installation is"
 			  " ready for use by running:\n\n"
 			  "    $ %s 'hello world'\n", error_message,
 			  args_string(cmd, cmd));
@@ -711,8 +711,8 @@ static void wait_for_bitcoind(struct plugin *p)
 		child = pipecmdarr(NULL, &from, &from, cast_const2(char **,cmd));
 		if (child < 0) {
 			if (errno == ENOENT)
-				bitcoind_failure(p, "bitcoin-cli not found. Is bitcoin-cli "
-						    "(part of Bitcoin Core) available in your PATH?");
+				bitcoind_failure(p, "groestlcoin-cli not found. Is groestlcoin-cli "
+						    "(part of Groestlcoin Core) available in your PATH?");
 			plugin_err(p, "%s exec failed: %s", cmd[0], strerror(errno));
 		}
 
@@ -734,15 +734,15 @@ static void wait_for_bitcoind(struct plugin *p)
 		 */
 		if (WEXITSTATUS(status) != 28) {
 			if (WEXITSTATUS(status) == 1)
-				bitcoind_failure(p, "Could not connect to bitcoind using"
-						    " bitcoin-cli. Is bitcoind running?");
+				bitcoind_failure(p, "Could not connect to groestlcoind using"
+						    " groestlcoin-cli. Is groestlcoind running?");
 			bitcoind_failure(p, tal_fmt(bitcoind, "%s exited with code %i: %s",
 						    cmd[0], WEXITSTATUS(status), output));
 		}
 
 		if (!printed) {
 			plugin_log(p, LOG_UNUSUAL,
-				   "Waiting for bitcoind to warm up...");
+				   "Waiting for groestlcoind to warm up...");
 			printed = true;
 		}
 		sleep(1);
@@ -755,20 +755,20 @@ static void init(struct plugin *p, const char *buffer UNUSED,
 {
 	wait_for_bitcoind(p);
 	plugin_log(p, LOG_INFORM,
-		   "bitcoin-cli initialized and connected to bitcoind.");
+		   "groestlcoin-cli initialized and connected to groestlcoind.");
 }
 
 static const struct plugin_command commands[] = {
 	{
 		"getrawblockbyheight",
-		"bitcoin",
-		"Get the bitcoin block at a given height",
+		"groestlcoin",
+		"Get the groestlcoin block at a given height",
 		"",
 		getrawblockbyheight
 	},
 	{
 		"getchaininfo",
-		"bitcoin",
+		"groestlcoin",
 		"Get the chain id, the header count, the block count,"
 		" and whether this is IBD.",
 		"",
@@ -776,21 +776,21 @@ static const struct plugin_command commands[] = {
 	},
 	{
 		"getfeerate",
-		"bitcoin",
-		"Get the Bitcoin feerate in btc/kilo-vbyte.",
+		"groestlcoin",
+		"Get the Groestlcoin feerate in grs/kilo-vbyte.",
 		"",
 		getfeerate
 	},
 	{
 		"sendrawtransaction",
-		"bitcoin",
-		"Send a raw transaction to the Bitcoin network.",
+		"groestlcoin",
+		"Send a raw transaction to the Groestlcoin network.",
 		"",
 		sendrawtransaction
 	},
 	{
 		"getutxout",
-		"bitcoin",
+		"groestlcoin",
 		"Get informations about an output, identified by a {txid} an a {vout}",
 		"",
 		getutxout
@@ -821,19 +821,19 @@ int main(int argc, char *argv[])
 		    NULL, 0, NULL, 0,
 		    plugin_option("bitcoin-datadir",
 				  "string",
-				  "-datadir arg for bitcoin-cli",
+				  "-datadir arg for groestlcoin-cli",
 				  charp_option, &bitcoind->datadir),
 		    plugin_option("bitcoin-cli",
 				  "string",
-				  "bitcoin-cli pathname",
+				  "groestlcoin-cli pathname",
 				  charp_option, &bitcoind->cli),
 		    plugin_option("bitcoin-rpcuser",
 				  "string",
-				  "bitcoind RPC username",
+				  "groestlcoind RPC username",
 				  charp_option, &bitcoind->rpcuser),
 		    plugin_option("bitcoin-rpcpassword",
 				  "string",
-				  "bitcoind RPC password",
+				  "groestlcoind RPC password",
 				  charp_option, &bitcoind->rpcpass),
 		    plugin_option("bitcoin-rpcconnect",
 				  "string",
@@ -841,11 +841,11 @@ int main(int argc, char *argv[])
 				  charp_option, &bitcoind->rpcconnect),
 		    plugin_option("bitcoin-rpcport",
 				  "string",
-				  "bitcoind RPC host's port",
+				  "groestlcoind RPC host's port",
 				  charp_option, &bitcoind->rpcport),
 		    plugin_option("bitcoin-retry-timeout",
 				  "string",
-				  "how long to keep retrying to contact bitcoind"
+				  "how long to keep retrying to contact groestlcoind"
 				  " before fatally exiting",
 				  u64_option, &bitcoind->retry_timeout),
 		    NULL);
