@@ -543,9 +543,9 @@ static struct command_result *json_feerates(struct command *cmd,
 
 static const struct json_command feerates_command = {
 	"feerates",
-	"bitcoin",
+	"groestlcoin",
 	json_feerates,
-	"Return feerate estimates, either satoshi-per-kw ({style} perkw) or satoshi-per-kb ({style} perkb)."
+	"Return feerate estimates, either gro-per-kw ({style} perkw) or gro-per-kb ({style} perkb)."
 };
 AUTODATA(json_command, &feerates_command);
 
@@ -922,7 +922,7 @@ static void check_blockcount(struct chain_topology *topo, u32 blockcount)
 			else
 				topo->max_blockheight = blockcount - topo->bitcoind->ld->config.rescan;
 		} else
-			fatal("bitcoind has gone backwards from %u to %u blocks!",
+			fatal("groestlcoind has gone backwards from %u to %u blocks!",
 			      topo->max_blockheight, blockcount);
 	}
 
