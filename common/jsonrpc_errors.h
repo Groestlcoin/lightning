@@ -25,6 +25,9 @@ static const errcode_t PARAM_DEV_ERROR = -2;
 /* Plugin returned an error */
 static const errcode_t PLUGIN_ERROR = -3;
 
+/* Plugin terminated while handling a request. */
+static const errcode_t PLUGIN_TERMINATED = -4;
+
 /* Errors from `pay`, `sendpay`, or `waitsendpay` commands */
 static const errcode_t PAY_IN_PROGRESS = 200;
 static const errcode_t PAY_RHASH_ALREADY_USED = 201;
@@ -60,5 +63,8 @@ static const errcode_t INVOICE_PREIMAGE_ALREADY_EXISTS = 901;
 static const errcode_t INVOICE_HINTS_GAVE_NO_ROUTES = 902;
 static const errcode_t INVOICE_EXPIRED_DURING_WAIT = 903;
 static const errcode_t INVOICE_WAIT_TIMED_OUT = 904;
+
+/* Errors from HSM crypto operations. */
+static const errcode_t HSM_ECDH_FAILED = 800;
 
 #endif /* LIGHTNING_COMMON_JSONRPC_ERRORS_H */

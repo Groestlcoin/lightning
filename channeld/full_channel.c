@@ -149,9 +149,8 @@ static void dump_htlc(const struct htlc *htlc, const char *prefix)
 		     htlc->id,
 		     htlc_state_name(htlc->state),
 		     htlc_state_name(remote_state),
-		     htlc->r ? "FULFILLED" : htlc->fail ? "FAILED" :
-		     htlc->failcode
-		     ? tal_fmt(tmpctx, "FAILCODE:%u", htlc->failcode) : "");
+		     htlc->r ? "FULFILLED" : htlc->failed ? "FAILED"
+		     : "");
 }
 
 void dump_htlcs(const struct channel *channel, const char *prefix)
@@ -223,7 +222,6 @@ static bool sum_offered_msatoshis(struct amount_msat *total,
 }
 
 static void add_htlcs(struct bitcoin_tx ***txs,
-		      const u8 ***wscripts,
 		      const struct htlc **htlcmap,
 		      const struct channel *channel,
 		      const struct keyset *keyset,
@@ -239,7 +237,7 @@ static void add_htlcs(struct bitcoin_tx ***txs,
 	for (i = 0; i < tal_count(htlcmap); i++) {
 		const struct htlc *htlc = htlcmap[i];
 		struct bitcoin_tx *tx;
-		u8 *wscript;
+		struct witscript *witscript;
 
 		if (!htlc)
 			continue;
@@ -251,29 +249,22 @@ static void add_htlcs(struct bitcoin_tx ***txs,
 					     channel->config[!side].to_self_delay,
 					     feerate_per_kw,
 					     keyset);
-			wscript	= bitcoin_wscript_htlc_offer(*wscripts,
-						     &keyset->self_htlc_key,
-						     &keyset->other_htlc_key,
-						     &htlc->rhash,
-						     &keyset->self_revocation_key);
 		} else {
 			tx = htlc_success_tx(*txs, chainparams, &txid, i,
 					     htlc->amount,
 					     channel->config[!side].to_self_delay,
 					     feerate_per_kw,
 					     keyset);
-			wscript	= bitcoin_wscript_htlc_receive(*wscripts,
-						       &htlc->expiry,
-						       &keyset->self_htlc_key,
-						       &keyset->other_htlc_key,
-						       &htlc->rhash,
-						       &keyset->self_revocation_key);
 		}
+		/* Re-use the previously-generated witness script */
+		witscript = (*txs)[0]->output_witscripts[i];
+		tx->output_witscripts[0] =
+		        tal(tx->output_witscripts, struct witscript);
+		tx->output_witscripts[0]->ptr =
+			tal_dup_arr(tx->output_witscripts[0], u8,
+				    witscript->ptr, tal_count(witscript->ptr), 0);
 
 		/* Append to array. */
-		assert(tal_count(*txs) == tal_count(*wscripts));
-
-		tal_arr_expand(wscripts, wscript);
 		tal_arr_expand(txs, tx);
 	}
 }
@@ -281,7 +272,7 @@ static void add_htlcs(struct bitcoin_tx ***txs,
 /* FIXME: We could cache these. */
 struct bitcoin_tx **channel_txs(const tal_t *ctx,
 				const struct htlc ***htlcmap,
-				const u8 ***wscripts,
+				const u8 **funding_wscript,
 				const struct channel *channel,
 				const struct pubkey *per_commitment_point,
 				u64 commitment_number,
@@ -311,12 +302,13 @@ struct bitcoin_tx **channel_txs(const tal_t *ctx,
 	    channel->view[side].owed[!side], committed, htlcmap,
 	    commitment_number ^ channel->commitment_number_obscurer, side);
 
-	*wscripts = tal_arr(ctx, const u8 *, 1);
-	(*wscripts)[0] = bitcoin_redeem_2of2(*wscripts,
-					     &channel->funding_pubkey[side],
-					     &channel->funding_pubkey[!side]);
+	/* Generating and saving witness script required to spend
+	 * the funding output */
+	*funding_wscript = bitcoin_redeem_2of2(ctx,
+					      &channel->funding_pubkey[side],
+					      &channel->funding_pubkey[!side]);
 
-	add_htlcs(&txs, wscripts, *htlcmap, channel, &keyset, side);
+	add_htlcs(&txs, *htlcmap, channel, &keyset, side);
 
 	tal_free(committed);
 	return txs;
@@ -391,18 +383,19 @@ static struct amount_sat fee_for_htlcs(const struct channel *channel,
 	return commit_tx_base_fee(feerate, untrimmed);
 }
 
-/* There is a corner case where the funder can spend so much that the
+/*
+ * There is a corner case where the funder can spend so much that the
  * non-funder can't add any non-dust HTLCs (since the funder would
  * have to pay the additional fee, but it can't afford to).  This
  * leads to the channel starving at the feast!  This was reported by
  * ACINQ's @t-bast
  * (https://github.com/lightningnetwork/lightning-rfc/issues/728) and
- * demonstrated with c-lightning by @m-schmook
+ * demonstrated with c-lightning by @m-schmoock
  * (https://github.com/ElementsProject/lightning/pull/3498).
  *
  * To mostly avoid this situation, at least from our side, we apply an
  * additional constraint when we're funder trying to add an HTLC: make
- * sure we can afford one more HTLC, even if fees increase 50%.
+ * sure we can afford one more HTLC, even if fees increase by 100%.
  *
  * We could do this for the peer, as well, by rejecting their HTLC
  * immediately in this case.  But rejecting a remote HTLC here causes
@@ -410,7 +403,11 @@ static struct amount_sat fee_for_htlcs(const struct channel *channel,
  * architected to reject HTLCs in channeld (it's usually lightningd's
  * job, but it doesn't have all the channel balance change calculation
  * logic.  So we look after ourselves for now, and hope other nodes start
- * self-regulating too. */
+ * self-regulating too.
+ *
+ * This mitigation will become BOLT #2 standard by:
+ * https://github.com/lightningnetwork/lightning-rfc/issues/740
+ */
 static bool local_funder_has_fee_headroom(const struct channel *channel,
 					  struct amount_msat remainder,
 					  const struct htlc **committed,
@@ -429,17 +426,17 @@ static bool local_funder_has_fee_headroom(const struct channel *channel,
 					feerate,
 					committed, adding, removing);
 
-	/* Now, how much would it cost us if feerate increases 50% and we added
+	/* Now, how much would it cost us if feerate increases 100% and we added
 	 * another HTLC? */
-	fee = commit_tx_base_fee(feerate + feerate/2, untrimmed + 1);
+	fee = commit_tx_base_fee(2 * feerate, untrimmed + 1);
 	if (amount_msat_greater_eq_sat(remainder, fee))
 		return true;
 
-	status_debug("Adding HTLC would leave us only %s:"
-		     " we need %s for another HTLC if fees increase 50%% to %uperkw",
+	status_debug("Adding HTLC would leave us only %s: we need %s for"
+		     " another HTLC if fees increase by 100%% to %uperkw",
 		     type_to_string(tmpctx, struct amount_msat, &remainder),
 		     type_to_string(tmpctx, struct amount_sat, &fee),
-		     feerate + feerate/2);
+		     feerate + feerate);
 	return false;
 }
 
@@ -450,6 +447,7 @@ static enum channel_add_err add_htlc(struct channel *channel,
 				     u32 cltv_expiry,
 				     const struct sha256 *payment_hash,
 				     const u8 routing[TOTAL_PACKET_SIZE],
+				     const struct pubkey *blinding TAKES,
 				     struct htlc **htlcp,
 				     bool enforce_aggregate_limits,
 				     struct amount_sat *htlc_fee)
@@ -466,7 +464,6 @@ static enum channel_add_err add_htlc(struct channel *channel,
 	htlc->id = id;
 	htlc->amount = amount;
 	htlc->state = state;
-	htlc->shared_secret = NULL;
 
 	/* FIXME: Change expiry to simple u32 */
 
@@ -483,9 +480,11 @@ static enum channel_add_err add_htlc(struct channel *channel,
 	}
 
 	htlc->rhash = *payment_hash;
-	htlc->fail = NULL;
-	htlc->failcode = 0;
-	htlc->failed_scid = NULL;
+	if (blinding)
+		htlc->blinding = tal_dup(htlc, struct pubkey, blinding);
+	else
+		htlc->blinding = NULL;
+	htlc->failed = NULL;
 	htlc->r = NULL;
 	htlc->routing = tal_dup_arr(htlc, u8, routing, TOTAL_PACKET_SIZE, 0);
 
@@ -700,6 +699,7 @@ enum channel_add_err channel_add_htlc(struct channel *channel,
 				      u32 cltv_expiry,
 				      const struct sha256 *payment_hash,
 				      const u8 routing[TOTAL_PACKET_SIZE],
+				      const struct pubkey *blinding TAKES,
 				      struct htlc **htlcp,
 				      struct amount_sat *htlc_fee)
 {
@@ -711,7 +711,8 @@ enum channel_add_err channel_add_htlc(struct channel *channel,
 		state = RCVD_ADD_HTLC;
 
 	return add_htlc(channel, state, id, amount, cltv_expiry,
-			payment_hash, routing, htlcp, true, htlc_fee);
+			payment_hash, routing, blinding,
+			htlcp, true, htlc_fee);
 }
 
 struct htlc *channel_get_htlc(struct channel *channel, enum side sender, u64 id)
@@ -1168,7 +1169,7 @@ static bool adjust_balance(struct balance view_owed[NUM_SIDES][NUM_SIDES],
 		if (htlc_has(htlc, HTLC_FLAG(side, HTLC_F_COMMITTED)))
 			continue;
 
-		if (!htlc->fail && !htlc->failcode && !htlc->r) {
+		if (!htlc->failed && !htlc->r) {
 			status_broken("%s HTLC %"PRIu64
 				      " %s neither fail nor fulfill?",
 				      htlc_state_owner(htlc->state) == LOCAL
@@ -1184,155 +1185,9 @@ static bool adjust_balance(struct balance view_owed[NUM_SIDES][NUM_SIDES],
 }
 
 bool channel_force_htlcs(struct channel *channel,
-			 const struct added_htlc *htlcs,
-			 const enum htlc_state *hstates,
-			 const struct fulfilled_htlc *fulfilled,
-			 const enum side *fulfilled_sides,
-			 const struct failed_htlc **failed,
-			 const enum side *failed_sides,
-			 u32 failheight)
+			 const struct existing_htlc **htlcs)
 {
-	size_t i;
-	struct htlc *htlc;
-	struct htlc_map_iter it;
 	struct balance view_owed[NUM_SIDES][NUM_SIDES];
-
-	if (tal_count(hstates) != tal_count(htlcs)) {
-		status_broken("#hstates %zu != #htlcs %zu",
-			     tal_count(hstates), tal_count(htlcs));
-		return false;
-	}
-
-	if (tal_count(fulfilled) != tal_count(fulfilled_sides)) {
-		status_broken("#fulfilled sides %zu != #fulfilled %zu",
-			     tal_count(fulfilled_sides), tal_count(fulfilled));
-		return false;
-	}
-
-	if (tal_count(failed) != tal_count(failed_sides)) {
-		status_broken("#failed sides %zu != #failed %zu",
-			     tal_count(failed_sides), tal_count(failed));
-		return false;
-	}
-
-	for (i = 0; i < tal_count(htlcs); i++) {
-		enum channel_add_err e;
-		struct htlc *htlc;
-
-		status_debug("Restoring HTLC %zu/%zu:"
-			     " id=%"PRIu64" amount=%s cltv=%u"
-			     " payment_hash=%s",
-			     i, tal_count(htlcs),
-			     htlcs[i].id,
-			     type_to_string(tmpctx, struct amount_msat,
-					    &htlcs[i].amount),
-			     htlcs[i].cltv_expiry,
-			     type_to_string(tmpctx, struct sha256,
-					    &htlcs[i].payment_hash));
-
-		e = add_htlc(channel, hstates[i],
-			     htlcs[i].id, htlcs[i].amount,
-			     htlcs[i].cltv_expiry,
-			     &htlcs[i].payment_hash,
-			     htlcs[i].onion_routing_packet, &htlc, false, NULL);
-		if (e != CHANNEL_ERR_ADD_OK) {
-			status_broken("%s HTLC %"PRIu64" failed error %u",
-				     htlc_state_owner(hstates[i]) == LOCAL
-				     ? "out" : "in", htlcs[i].id, e);
-			return false;
-		}
-	}
-
-	for (i = 0; i < tal_count(fulfilled); i++) {
-		struct htlc *htlc = channel_get_htlc(channel,
-						     fulfilled_sides[i],
-						     fulfilled[i].id);
-		if (!htlc) {
-			status_broken("Fulfill %s HTLC %"PRIu64" not found",
-				     fulfilled_sides[i] == LOCAL ? "out" : "in",
-				     fulfilled[i].id);
-			return false;
-		}
-		if (htlc->r) {
-			status_broken("Fulfill %s HTLC %"PRIu64" already fulfilled",
-				     fulfilled_sides[i] == LOCAL ? "out" : "in",
-				     fulfilled[i].id);
-			return false;
-		}
-		if (htlc->fail) {
-			status_broken("Fulfill %s HTLC %"PRIu64" already failed",
-				     fulfilled_sides[i] == LOCAL ? "out" : "in",
-				     fulfilled[i].id);
-			return false;
-		}
-		if (htlc->failcode) {
-			status_broken("Fulfill %s HTLC %"PRIu64" already fail %u",
-				     fulfilled_sides[i] == LOCAL ? "out" : "in",
-				     fulfilled[i].id, htlc->failcode);
-			return false;
-		}
-		if (!htlc_has(htlc, HTLC_REMOVING)) {
-			status_broken("Fulfill %s HTLC %"PRIu64" state %s",
-				     fulfilled_sides[i] == LOCAL ? "out" : "in",
-				     fulfilled[i].id,
-				     htlc_state_name(htlc->state));
-			return false;
-		}
-		htlc->r = tal_dup(htlc, struct preimage,
-				  &fulfilled[i].payment_preimage);
-	}
-
-	for (i = 0; i < tal_count(failed); i++) {
-		struct htlc *htlc;
-		htlc = channel_get_htlc(channel, failed_sides[i],
-					failed[i]->id);
-		if (!htlc) {
-			status_broken("Fail %s HTLC %"PRIu64" not found",
-				     failed_sides[i] == LOCAL ? "out" : "in",
-				     failed[i]->id);
-			return false;
-		}
-		if (htlc->r) {
-			status_broken("Fail %s HTLC %"PRIu64" already fulfilled",
-				     failed_sides[i] == LOCAL ? "out" : "in",
-				     failed[i]->id);
-			return false;
-		}
-		if (htlc->fail) {
-			status_broken("Fail %s HTLC %"PRIu64" already failed",
-				     failed_sides[i] == LOCAL ? "out" : "in",
-				     failed[i]->id);
-			return false;
-		}
-		if (htlc->failcode) {
-			status_broken("Fail %s HTLC %"PRIu64" already fail %u",
-				     failed_sides[i] == LOCAL ? "out" : "in",
-				     failed[i]->id, htlc->failcode);
-			return false;
-		}
-		if (!htlc_has(htlc, HTLC_REMOVING)) {
-			status_broken("Fail %s HTLC %"PRIu64" state %s",
-				     failed_sides[i] == LOCAL ? "out" : "in",
-				     failed[i]->id,
-				     htlc_state_name(htlc->state));
-			return false;
-		}
-		htlc->failcode = failed[i]->failcode;
-		/* We assume they all failed at the same height, which is
-		 * not necessarily true in case of restart.  But it's only
-		 * a hint. */
-		htlc->failblock = failheight;
-		if (failed[i]->failreason)
-			htlc->fail = dup_onionreply(htlc, failed[i]->failreason);
-		else
-			htlc->fail = NULL;
-		if (failed[i]->scid)
-			htlc->failed_scid = tal_dup(htlc,
-						    struct short_channel_id,
-						    failed[i]->scid);
-		else
-			htlc->failed_scid = NULL;
-	}
 
 	/* You'd think, since we traverse HTLCs in ID order, this would never
 	 * go negative.  But this ignores the fact that HTLCs ids from each
@@ -1345,9 +1200,40 @@ bool channel_force_htlcs(struct channel *channel,
 		}
 	}
 
-	for (htlc = htlc_map_first(channel->htlcs, &it);
-	     htlc;
-	     htlc = htlc_map_next(channel->htlcs, &it)) {
+	for (size_t i = 0; i < tal_count(htlcs); i++) {
+		enum channel_add_err e;
+		struct htlc *htlc;
+
+		status_debug("Restoring HTLC %zu/%zu:"
+			     " id=%"PRIu64" amount=%s cltv=%u"
+			     " payment_hash=%s",
+			     i, tal_count(htlcs),
+			     htlcs[i]->id,
+			     type_to_string(tmpctx, struct amount_msat,
+					    &htlcs[i]->amount),
+			     htlcs[i]->cltv_expiry,
+			     type_to_string(tmpctx, struct sha256,
+					    &htlcs[i]->payment_hash));
+
+		e = add_htlc(channel, htlcs[i]->state,
+			     htlcs[i]->id, htlcs[i]->amount,
+			     htlcs[i]->cltv_expiry,
+			     &htlcs[i]->payment_hash,
+			     htlcs[i]->onion_routing_packet,
+			     htlcs[i]->blinding,
+			     &htlc, false, NULL);
+		if (e != CHANNEL_ERR_ADD_OK) {
+			status_broken("%s HTLC %"PRIu64" failed error %u",
+				     htlc_state_owner(htlcs[i]->state) == LOCAL
+				     ? "out" : "in", htlcs[i]->id, e);
+			return false;
+		}
+		if (htlcs[i]->payment_preimage)
+			htlc->r = tal_dup(htlc, struct preimage,
+					  htlcs[i]->payment_preimage);
+		if (htlcs[i]->failed)
+			htlc->failed = tal_steal(htlc, htlcs[i]->failed);
+
 		if (!adjust_balance(view_owed, htlc))
 			return false;
 	}

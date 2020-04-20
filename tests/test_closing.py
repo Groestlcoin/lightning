@@ -3,7 +3,7 @@ from flaky import flaky
 from pyln.client import RpcError
 from utils import (
     only_one, sync_blockheight, wait_for, DEVELOPER, TIMEOUT, VALGRIND,
-    SLOW_MACHINE, COMPAT
+    SLOW_MACHINE
 )
 
 import os
@@ -216,9 +216,9 @@ def test_closing_torture(node_factory, executor, bitcoind):
 def test_closing_different_fees(node_factory, bitcoind, executor):
     l1 = node_factory.get_node()
 
-    # Default feerate = 15000/7500/1000
+    # Default feerate = 15000/11000/7500/1000
     # It will start at the second number, accepting anything above the first.
-    feerates = [[20000, 15000, 7400], [8000, 1001, 100]]
+    feerates = [[20000, 11000, 15000, 7400], [8000, 6000, 1001, 100]]
     amounts = [0, 545999, 546000]
     num_peers = len(feerates) * len(amounts)
 
@@ -360,37 +360,143 @@ def test_closing_specified_destination(node_factory, bitcoind, chainparams):
         assert 1 == bitcoind.rpc.gettxout(closetx, output_num1)['confirmations']
 
 
-@unittest.skipIf(not COMPAT, "needs COMPAT=1")
-def test_deprecated_closing_compat(node_factory, bitcoind, chainparams):
-    """ The old-style close command is:
-        close {id} {force} {timeout}
-    """
-    l1, l2 = node_factory.get_nodes(2, opts=[{'allow-deprecated-apis': True}, {}])
-    addr = chainparams['example_addr']
-    nodeid = l2.info['id']
+def closing_negotiation_step(node_factory, bitcoind, chainparams, opts):
+    rate = 29006  # closing fee negotiation starts at 21000
+    funder = node_factory.get_node(feerates=(rate, rate, rate, rate))
 
-    l1.rpc.check(command_to_check='close', id=nodeid)
-    # New-style
-    l1.rpc.check(command_to_check='close', id=nodeid, unilateraltimeout=10, destination=addr)
-    l1.rpc.check(command_to_check='close', id=nodeid, unilateraltimeout=0)
-    l1.rpc.check(command_to_check='close', id=nodeid, destination=addr)
-    # Old-style
-    l1.rpc.check(command_to_check='close', id=nodeid, force=False)
-    l1.rpc.check(command_to_check='close', id=nodeid, force=False, timeout=10)
-    l1.rpc.check(command_to_check='close', id=nodeid, timeout=10)
+    rate = 27625  # closing fee negotiation starts at 20000
+    fundee = node_factory.get_node(feerates=(rate, rate, rate, rate))
 
-    l1.rpc.call('check', ['close', nodeid])
-    # Array(new-style)
-    l1.rpc.call('check', ['close', nodeid, 10])
-    l1.rpc.call('check', ['close', nodeid, 0, addr])
-    l1.rpc.call('check', ['close', nodeid, None, addr])
-    # Array(old-style)
-    l1.rpc.call('check', ['close', nodeid, True, 10])
-    l1.rpc.call('check', ['close', nodeid, False])
-    l1.rpc.call('check', ['close', nodeid, None, 10])
-    # Not new-style nor old-style
-    with pytest.raises(RpcError, match=r'Expected unilerataltimeout to be a number'):
-        l1.rpc.call('check', ['close', nodeid, "Given enough eyeballs, all bugs are shallow."])
+    funder_id = funder.info['id']
+    fundee_id = fundee.info['id']
+
+    fund_amount = 10**6
+
+    funder.rpc.connect(fundee_id, 'localhost', fundee.port)
+    funder.fund_channel(fundee, fund_amount)
+
+    assert bitcoind.rpc.getmempoolinfo()['size'] == 0
+
+    if opts['close_initiated_by'] == 'funder':
+        funder.rpc.close(peer_id=fundee_id, fee_negotiation_step=opts['fee_negotiation_step'])
+    else:
+        assert opts['close_initiated_by'] == 'fundee'
+        fundee.rpc.close(peer_id=funder_id, fee_negotiation_step=opts['fee_negotiation_step'])
+
+    # Get the proclaimed closing fee from the two nodes' statuses
+
+    status_agreed_regex = re.compile("agreed on a closing fee of ([0-9]+) satoshi")
+
+    # [fee_from_funder_status, fee_from_fundee_status]
+    fees_from_status = [None, None]
+
+    def get_fee_from_status(node, peer_id, i):
+        nonlocal fees_from_status
+        status = only_one(only_one(node.rpc.listpeers(peer_id)['peers'][0]['channels'])['status'])
+        m = status_agreed_regex.search(status)
+        if not m:
+            return False
+        fees_from_status[i] = int(m.group(1))
+        return True
+
+    wait_for(lambda: get_fee_from_status(funder, fundee_id, 0))
+    wait_for(lambda: get_fee_from_status(fundee, funder_id, 1))
+
+    assert opts['expected_close_fee'] == fees_from_status[0]
+    assert opts['expected_close_fee'] == fees_from_status[1]
+
+    # Get the closing transaction from the bitcoind mempool and get its fee
+
+    mempool = None
+    mempool_tx_ids = None
+
+    def get_mempool_when_size_1():
+        nonlocal mempool, mempool_tx_ids
+        mempool = bitcoind.rpc.getrawmempool(True)
+        mempool_tx_ids = list(mempool.keys())
+        return len(mempool_tx_ids) == 1
+
+    wait_for(get_mempool_when_size_1)
+
+    close_tx_id = mempool_tx_ids[0]
+    fee_mempool = round(mempool[close_tx_id]['fee'] * 10**8)
+
+    assert opts['expected_close_fee'] == fee_mempool
+
+
+def test_closing_negotiation_step_30pct(node_factory, bitcoind, chainparams):
+    """Test that the closing fee negotiation step works, 30%"""
+    opts = {}
+    opts['fee_negotiation_step'] = '30%'
+
+    opts['close_initiated_by'] = 'funder'
+    opts['expected_close_fee'] = 20537 if not chainparams['elements'] else 33870
+    closing_negotiation_step(node_factory, bitcoind, chainparams, opts)
+
+    opts['close_initiated_by'] = 'fundee'
+    opts['expected_close_fee'] = 20233 if not chainparams['elements'] else 33366
+    closing_negotiation_step(node_factory, bitcoind, chainparams, opts)
+
+
+def test_closing_negotiation_step_50pct(node_factory, bitcoind, chainparams):
+    """Test that the closing fee negotiation step works, 50%, the default"""
+    opts = {}
+    opts['fee_negotiation_step'] = '50%'
+
+    opts['close_initiated_by'] = 'funder'
+    opts['expected_close_fee'] = 20334 if not chainparams['elements'] else 33533
+    closing_negotiation_step(node_factory, bitcoind, chainparams, opts)
+
+    opts['close_initiated_by'] = 'fundee'
+    opts['expected_close_fee'] = 20334 if not chainparams['elements'] else 33533
+    closing_negotiation_step(node_factory, bitcoind, chainparams, opts)
+
+
+def test_closing_negotiation_step_100pct(node_factory, bitcoind, chainparams):
+    """Test that the closing fee negotiation step works, 100%"""
+    opts = {}
+    opts['fee_negotiation_step'] = '100%'
+
+    opts['close_initiated_by'] = 'funder'
+    opts['expected_close_fee'] = 20001 if not chainparams['elements'] else 32985
+    closing_negotiation_step(node_factory, bitcoind, chainparams, opts)
+
+    # The close fee of 20499 looks strange in this case - one would expect
+    # to have a number close to 21000. This is because
+    # * the range is initially set to [20000 (fundee), 21000 (funder)]
+    # * the funder is always first to propose, he uses 50% step, so he proposes 20500
+    # * the range is narrowed to [20001, 20499] and the fundee proposes 20499
+    opts['close_initiated_by'] = 'fundee'
+    opts['expected_close_fee'] = 20499 if not chainparams['elements'] else 33808
+    closing_negotiation_step(node_factory, bitcoind, chainparams, opts)
+
+
+def test_closing_negotiation_step_1sat(node_factory, bitcoind, chainparams):
+    """Test that the closing fee negotiation step works, 1sat"""
+    opts = {}
+    opts['fee_negotiation_step'] = '1'
+
+    opts['close_initiated_by'] = 'funder'
+    opts['expected_close_fee'] = 20989 if not chainparams['elements'] else 34621
+    closing_negotiation_step(node_factory, bitcoind, chainparams, opts)
+
+    opts['close_initiated_by'] = 'fundee'
+    opts['expected_close_fee'] = 20010 if not chainparams['elements'] else 32995
+    closing_negotiation_step(node_factory, bitcoind, chainparams, opts)
+
+
+def test_closing_negotiation_step_700sat(node_factory, bitcoind, chainparams):
+    """Test that the closing fee negotiation step works, 700sat"""
+    opts = {}
+    opts['fee_negotiation_step'] = '700'
+
+    opts['close_initiated_by'] = 'funder'
+    opts['expected_close_fee'] = 20151 if not chainparams['elements'] else 33459
+    closing_negotiation_step(node_factory, bitcoind, chainparams, opts)
+
+    opts['close_initiated_by'] = 'fundee'
+    opts['expected_close_fee'] = 20499 if not chainparams['elements'] else 33746
+    closing_negotiation_step(node_factory, bitcoind, chainparams, opts)
 
 
 @unittest.skipIf(not DEVELOPER, "needs DEVELOPER=1")
@@ -398,7 +504,9 @@ def test_penalty_inhtlc(node_factory, bitcoind, executor, chainparams):
     """Test penalty transaction with an incoming HTLC"""
     # We suppress each one after first commit; HTLC gets added not fulfilled.
     # Feerates identical so we don't get gratuitous commit to update them
-    l1 = node_factory.get_node(disconnect=['=WIRE_COMMITMENT_SIGNED-nocommit'], may_fail=True, feerates=(7500, 7500, 7500), allow_broken_log=True)
+    l1 = node_factory.get_node(disconnect=['=WIRE_COMMITMENT_SIGNED-nocommit'],
+                               may_fail=True, feerates=(7500, 7500, 7500, 7500),
+                               allow_broken_log=True)
     l2 = node_factory.get_node(disconnect=['=WIRE_COMMITMENT_SIGNED-nocommit'])
 
     l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
@@ -439,6 +547,7 @@ def test_penalty_inhtlc(node_factory, bitcoind, executor, chainparams):
     bitcoind.generate_block(1)
 
     l2.daemon.wait_for_log(' to ONCHAIN')
+
     # FIXME: l1 should try to stumble along!
     wait_for(lambda: len(l2.getactivechannels()) == 0)
 
@@ -461,7 +570,7 @@ def test_penalty_inhtlc(node_factory, bitcoind, executor, chainparams):
     outputs = l2.rpc.listfunds()['outputs']
     assert [o['status'] for o in outputs] == ['confirmed'] * 2
     # Allow some lossage for fees.
-    slack = 27000 if chainparams['elements'] else 15000
+    slack = 30000 if chainparams['elements'] else 20000
     assert sum(o['value'] for o in outputs) < 10**6
     assert sum(o['value'] for o in outputs) > 10**6 - slack
 
@@ -471,7 +580,9 @@ def test_penalty_outhtlc(node_factory, bitcoind, executor, chainparams):
     """Test penalty transaction with an outgoing HTLC"""
     # First we need to get funds to l2, so suppress after second.
     # Feerates identical so we don't get gratuitous commit to update them
-    l1 = node_factory.get_node(disconnect=['=WIRE_COMMITMENT_SIGNED*3-nocommit'], may_fail=True, feerates=(7500, 7500, 7500), allow_broken_log=True)
+    l1 = node_factory.get_node(disconnect=['=WIRE_COMMITMENT_SIGNED*3-nocommit'],
+                               may_fail=True, feerates=(7500, 7500, 7500, 7500),
+                               allow_broken_log=True)
     l2 = node_factory.get_node(disconnect=['=WIRE_COMMITMENT_SIGNED*3-nocommit'])
 
     l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
@@ -541,7 +652,7 @@ def test_penalty_outhtlc(node_factory, bitcoind, executor, chainparams):
     outputs = l2.rpc.listfunds()['outputs']
     assert [o['status'] for o in outputs] == ['confirmed'] * 3
     # Allow some lossage for fees.
-    slack = 27000 if chainparams['elements'] else 15000
+    slack = 30000 if chainparams['elements'] else 20000
     assert sum(o['value'] for o in outputs) < 10**6
     assert sum(o['value'] for o in outputs) > 10**6 - slack
 
@@ -639,7 +750,8 @@ def test_onchaind_replay(node_factory, bitcoind):
     disconnects = ['+WIRE_REVOKE_AND_ACK', 'permfail']
     options = {'watchtime-blocks': 201, 'cltv-delta': 101}
     # Feerates identical so we don't get gratuitous commit to update them
-    l1 = node_factory.get_node(options=options, disconnect=disconnects, feerates=(7500, 7500, 7500))
+    l1 = node_factory.get_node(options=options, disconnect=disconnects,
+                               feerates=(7500, 7500, 7500, 7500))
     l2 = node_factory.get_node(options=options)
 
     l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
@@ -692,7 +804,8 @@ def test_onchain_dust_out(node_factory, bitcoind, executor):
     # HTLC 1->2, 1 fails after it's irrevocably committed
     disconnects = ['@WIRE_REVOKE_AND_ACK', 'permfail']
     # Feerates identical so we don't get gratuitous commit to update them
-    l1 = node_factory.get_node(disconnect=disconnects, feerates=(7500, 7500, 7500))
+    l1 = node_factory.get_node(disconnect=disconnects,
+                               feerates=(7500, 7500, 7500, 7500))
     l2 = node_factory.get_node()
 
     l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
@@ -755,7 +868,8 @@ def test_onchain_timeout(node_factory, bitcoind, executor):
     # HTLC 1->2, 1 fails just after it's irrevocably committed
     disconnects = ['+WIRE_REVOKE_AND_ACK*3', 'permfail']
     # Feerates identical so we don't get gratuitous commit to update them
-    l1 = node_factory.get_node(disconnect=disconnects, feerates=(7500, 7500, 7500))
+    l1 = node_factory.get_node(disconnect=disconnects,
+                               feerates=(7500, 7500, 7500, 7500))
     l2 = node_factory.get_node()
 
     l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
@@ -990,7 +1104,8 @@ def test_onchain_all_dust(node_factory, bitcoind, executor):
     # is generated on-the-fly, and is thus feerate sensitive.
     disconnects = ['-WIRE_UPDATE_FAIL_HTLC', 'permfail']
     # Feerates identical so we don't get gratuitous commit to update them
-    l1 = node_factory.get_node(options={'dev-no-reconnect': None}, feerates=(7500, 7500, 7500))
+    l1 = node_factory.get_node(options={'dev-no-reconnect': None},
+                               feerates=(7500, 7500, 7500, 7500))
     l2 = node_factory.get_node(disconnect=disconnects)
 
     l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
@@ -1012,8 +1127,8 @@ def test_onchain_all_dust(node_factory, bitcoind, executor):
     l2.wait_for_channel_onchain(l1.info['id'])
 
     # Make l1's fees really high (and wait for it to exceed 50000)
-    l1.set_feerates((100000, 100000, 100000))
-    l1.daemon.wait_for_log('Feerate estimate for normal set to [56789][0-9]{4}')
+    l1.set_feerates((100000, 100000, 100000, 100000))
+    l1.daemon.wait_for_log('Feerate estimate for unilateral_close set to [56789][0-9]{4}')
 
     bitcoind.generate_block(1)
     l1.daemon.wait_for_log(' to ONCHAIN')
@@ -1049,12 +1164,12 @@ def test_onchain_different_fees(node_factory, bitcoind, executor):
     p1 = executor.submit(l1.pay, l2, 1000000000)
     l1.daemon.wait_for_log('htlc 0: RCVD_ADD_ACK_COMMIT->SENT_ADD_ACK_REVOCATION')
 
-    l1.set_feerates((16000, 7500, 3750))
+    l1.set_feerates((16000, 11000, 7500, 3750))
     p2 = executor.submit(l1.pay, l2, 900000000)
     l1.daemon.wait_for_log('htlc 1: RCVD_ADD_ACK_COMMIT->SENT_ADD_ACK_REVOCATION')
 
     # Restart with different feerate for second HTLC.
-    l1.set_feerates((5000, 5000, 3750))
+    l1.set_feerates((5000, 5000, 5000, 3750))
     l1.restart()
     l1.daemon.wait_for_log('peer_out WIRE_UPDATE_FEE')
 
@@ -1108,7 +1223,8 @@ def test_permfail_new_commit(node_factory, bitcoind, executor):
     # Test case where we have two possible commits: it will use new one.
     disconnects = ['-WIRE_REVOKE_AND_ACK', 'permfail']
     # Feerates identical so we don't get gratuitous commit to update them
-    l1 = node_factory.get_node(options={'dev-no-reconnect': None}, feerates=(7500, 7500, 7500))
+    l1 = node_factory.get_node(options={'dev-no-reconnect': None},
+                               feerates=(7500, 7500, 7500, 7500))
     l2 = node_factory.get_node(disconnect=disconnects)
 
     l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
@@ -1409,7 +1525,8 @@ def test_permfail_htlc_in(node_factory, bitcoind, executor):
     # Test case where we fail with unsettled incoming HTLC.
     disconnects = ['-WIRE_UPDATE_FULFILL_HTLC', 'permfail']
     # Feerates identical so we don't get gratuitous commit to update them
-    l1 = node_factory.get_node(options={'dev-no-reconnect': None}, feerates=(7500, 7500, 7500))
+    l1 = node_factory.get_node(options={'dev-no-reconnect': None},
+                               feerates=(7500, 7500, 7500, 7500))
     l2 = node_factory.get_node(disconnect=disconnects)
 
     l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
@@ -1455,7 +1572,8 @@ def test_permfail_htlc_out(node_factory, bitcoind, executor):
     disconnects = ['+WIRE_REVOKE_AND_ACK', 'permfail']
     l1 = node_factory.get_node(options={'dev-no-reconnect': None})
     # Feerates identical so we don't get gratuitous commit to update them
-    l2 = node_factory.get_node(disconnect=disconnects, feerates=(7500, 7500, 7500))
+    l2 = node_factory.get_node(disconnect=disconnects,
+                               feerates=(7500, 7500, 7500, 7500))
 
     l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
     l2.daemon.wait_for_log('openingd-chan#1: Handed peer, entering loop'.format(l1.info['id']))

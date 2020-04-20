@@ -5,6 +5,10 @@
 #include <ccan/fdpass/fdpass.h>
 #include <ccan/io/io.h>
 #include <ccan/take/take.h>
+#include <common/ecdh.h>
+#include <common/json.h>
+#include <common/jsonrpc_errors.h>
+#include <common/param.h>
 #include <common/status.h>
 #include <common/utils.h>
 #include <errno.h>
@@ -12,6 +16,8 @@
 #include <inttypes.h>
 #include <lightningd/bitcoind.h>
 #include <lightningd/hsm_control.h>
+#include <lightningd/json.h>
+#include <lightningd/jsonrpc.h>
 #include <lightningd/log.h>
 #include <lightningd/log_status.h>
 #include <string.h>
@@ -123,3 +129,32 @@ void hsm_init(struct lightningd *ld)
 		errx(1, "HSM did not give init reply");
 	}
 }
+
+static struct command_result *json_getsharedsecret(struct command *cmd,
+					   const char *buffer,
+					   const jsmntok_t *obj UNNEEDED,
+					   const jsmntok_t *params)
+{
+	struct pubkey *point;
+	struct secret ss;
+	struct json_stream *response;
+
+	if (!param(cmd, buffer, params,
+		   p_req("point", &param_pubkey, &point),
+		   NULL))
+		return command_param_failed();
+
+	ecdh(point, &ss);
+	response = json_stream_success(cmd);
+	json_add_secret(response, "shared_secret", &ss);
+	return command_success(cmd, response);
+}
+
+static const struct json_command getsharedsecret_command = {
+	"getsharedsecret",
+	"utility", /* FIXME: Or "crypto"?  */
+	&json_getsharedsecret,
+	"Compute the hash of the Elliptic Curve Diffie Hellman shared secret point from "
+	"this node private key and an input {point}."
+};
+AUTODATA(json_command, &getsharedsecret_command);

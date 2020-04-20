@@ -13,6 +13,7 @@
 #include <bitcoin/chainparams.h>
 #include <bitcoin/privkey.h>
 #include <bitcoin/script.h>
+#include <ccan/array_size/array_size.h>
 #include <ccan/cast/cast.h>
 #include <ccan/container_of/container_of.h>
 #include <ccan/crypto/hkdf_sha256/hkdf_sha256.h>
@@ -26,8 +27,10 @@
 #include <channeld/commit_tx.h>
 #include <channeld/full_channel.h>
 #include <channeld/gen_channel_wire.h>
+#include <common/blinding.h>
 #include <common/crypto_sync.h>
 #include <common/dev_disconnect.h>
+#include <common/ecdh_hsmd.h>
 #include <common/features.h>
 #include <common/gossip_constants.h>
 #include <common/gossip_store.h>
@@ -54,6 +57,7 @@
 #include <hsmd/gen_hsm_wire.h>
 #include <inttypes.h>
 #include <secp256k1.h>
+#include <sodium/crypto_aead_chacha20poly1305.h>
 #include <stdio.h>
 #include <wire/gen_common_wire.h>
 #include <wire/gen_onion_wire.h>
@@ -72,7 +76,10 @@ struct peer {
 	u64 next_index[NUM_SIDES];
 
 	/* Features peer supports. */
-	u8 *features;
+	u8 *their_features;
+
+	/* Features we support. */
+	struct feature_set *our_features;
 
 	/* Tolerable amounts for feerate (only relevant for fundee). */
 	u32 feerate_min, feerate_max;
@@ -307,6 +314,28 @@ static void send_channel_update(struct peer *peer, int disable_flag)
 	wire_sync_write(peer->pps->gossip_fd, take(msg));
 }
 
+/* Get the latest channel update for this channel from gossipd */
+static const u8 *get_local_channel_update(const tal_t *ctx, struct peer *peer)
+{
+	const u8 *msg;
+
+	msg = towire_gossipd_get_update(NULL, &peer->short_channel_ids[LOCAL]);
+ 	wire_sync_write(peer->pps->gossip_fd, take(msg));
+
+	/* Wait for reply to come back; handle other gossipd msgs meanwhile */
+	while ((msg = wire_sync_read(tmpctx, peer->pps->gossip_fd)) != NULL) {
+		u8 *update;
+		if (fromwire_gossipd_get_update_reply(ctx, msg, &update))
+			return update;
+
+		handle_gossip_msg(peer->pps, take(msg));
+	}
+
+	/* Gossipd hangs up on us to kill us when a new
+	 * connection comes in. */
+	peer_failed_connection_lost();
+}
+
 /**
  * Add a channel locally and send a channel update to the peer
  *
@@ -391,7 +420,9 @@ static void send_announcement_signatures(struct peer *peer)
 static u8 *create_channel_announcement(const tal_t *ctx, struct peer *peer)
 {
 	int first, second;
-	u8 *cannounce, *features = tal_arr(ctx, u8, 0);
+	u8 *cannounce, *features
+		= get_agreed_channelfeatures(tmpctx, peer->our_features,
+					     peer->their_features);
 
 	if (peer->channel_direction == 0) {
 		first = LOCAL;
@@ -413,7 +444,6 @@ static u8 *create_channel_announcement(const tal_t *ctx, struct peer *peer)
 	    &peer->node_ids[second],
 	    &peer->channel->funding_pubkey[first],
 	    &peer->channel->funding_pubkey[second]);
-	tal_free(features);
 	return cannounce;
 }
 
@@ -581,43 +611,6 @@ static void handle_peer_announcement_signatures(struct peer *peer, const u8 *msg
 	channel_announcement_negotiate(peer);
 }
 
-static struct secret *get_shared_secret(const tal_t *ctx,
-					const struct htlc *htlc,
-					enum onion_type *why_bad,
-					struct sha256 *next_onion_sha)
-{
-	struct onionpacket op;
-	struct secret *secret = tal(ctx, struct secret);
-	const u8 *msg;
-	struct route_step *rs;
-
-	/* We unwrap the onion now. */
-	*why_bad = parse_onionpacket(htlc->routing, TOTAL_PACKET_SIZE, &op);
-	if (*why_bad != 0)
-		return tal_free(secret);
-
-	/* Because wire takes struct pubkey. */
-	msg = hsm_req(tmpctx, towire_hsm_ecdh_req(tmpctx, &op.ephemeralkey));
-	if (!fromwire_hsm_ecdh_resp(msg, secret))
-		status_failed(STATUS_FAIL_HSM_IO, "Reading ecdh response");
-
-	/* We make sure we can parse onion packet, so we know if shared secret
-	 * is actually valid (this checks hmac). */
-	rs = process_onionpacket(tmpctx, &op, secret,
-				 htlc->rhash.u.u8,
-				 sizeof(htlc->rhash));
-	if (!rs) {
-		*why_bad = WIRE_INVALID_ONION_HMAC;
-		return tal_free(secret);
-	}
-
-	/* Calculate sha256 we'll hand to next peer, in case they complain. */
-	msg = serialize_onionpacket(tmpctx, rs->next);
-	sha256(next_onion_sha, msg, tal_bytelen(msg));
-
-	return secret;
-}
-
 static void handle_peer_add_htlc(struct peer *peer, const u8 *msg)
 {
 	struct channel_id channel_id;
@@ -628,28 +621,34 @@ static void handle_peer_add_htlc(struct peer *peer, const u8 *msg)
 	u8 onion_routing_packet[TOTAL_PACKET_SIZE];
 	enum channel_add_err add_err;
 	struct htlc *htlc;
+#if EXPERIMENTAL_FEATURES
+	struct tlv_update_add_tlvs *tlvs = tlv_update_add_tlvs_new(msg);
+#endif
+	struct pubkey *blinding = NULL;
 
 	if (!fromwire_update_add_htlc(msg, &channel_id, &id, &amount,
 				      &payment_hash, &cltv_expiry,
-				      onion_routing_packet))
+				      onion_routing_packet
+#if EXPERIMENTAL_FEATURES
+				      , tlvs
+#endif
+		    ))
 		peer_failed(peer->pps,
 			    &peer->channel_id,
 			    "Bad peer_add_htlc %s", tal_hex(msg, msg));
 
+#if EXPERIMENTAL_FEATURES
+	if (tlvs->blinding)
+		blinding = &tlvs->blinding->blinding;
+#endif
 	add_err = channel_add_htlc(peer->channel, REMOTE, id, amount,
 				   cltv_expiry, &payment_hash,
-				   onion_routing_packet, &htlc, NULL);
+				   onion_routing_packet, blinding, &htlc, NULL);
 	if (add_err != CHANNEL_ERR_ADD_OK)
 		peer_failed(peer->pps,
 			    &peer->channel_id,
 			    "Bad peer_add_htlc: %s",
 			    channel_add_err_name(add_err));
-
-	/* If this is wrong, we don't complain yet; when it's confirmed we'll
-	 * send it to the master which handles all HTLC failures. */
-	htlc->shared_secret = get_shared_secret(htlc, htlc,
-						&htlc->why_bad_onion,
-						&htlc->next_onion_sha);
 }
 
 static void handle_peer_feechange(struct peer *peer, const u8 *msg)
@@ -815,166 +814,6 @@ static u8 *master_wait_sync_reply(const tal_t *ctx,
 	return reply;
 }
 
-static u8 *gossipd_wait_sync_reply(const tal_t *ctx,
-				   struct peer *peer, const u8 *msg,
-				   enum gossip_peerd_wire_type replytype)
-{
-	/* We can forward gossip packets while waiting for our reply. */
-	u8 *reply;
-
-	status_debug("Sending gossipd %u", fromwire_peektype(msg));
-
-	wire_sync_write(peer->pps->gossip_fd, msg);
-	status_debug("... , awaiting %u", replytype);
-
-	for (;;) {
-		int type;
-
-		reply = wire_sync_read(tmpctx, peer->pps->gossip_fd);
-		/* Gossipd hangs up on us to kill us when a new
-		 * connection comes in. */
-		if (!reply)
-			peer_failed_connection_lost();
-
-		type = fromwire_peektype(reply);
-		if (type == replytype) {
-			status_debug("Got it!");
-			break;
-		}
-
-		handle_gossip_msg(peer->pps, take(reply));
-	}
-
-	return reply;
-}
-
-static u8 *foreign_channel_update(const tal_t *ctx,
-				  struct peer *peer,
-				  const struct short_channel_id *scid)
-{
-	u8 *msg, *update, *channel_update;
-
-	msg = towire_gossipd_get_update(NULL, scid);
-	msg = gossipd_wait_sync_reply(tmpctx, peer, take(msg),
-				      WIRE_GOSSIPD_GET_UPDATE_REPLY);
-	if (!fromwire_gossipd_get_update_reply(ctx, msg, &update))
-		status_failed(STATUS_FAIL_GOSSIP_IO,
-			      "Invalid update reply");
-
-	/* Strip the type from the channel_update. Due to the specification
-	 * being underspecified, some implementations skipped the type
-	 * prefix. Since we are in the minority we adapt (See #1730 and
-	 * lightningnetwork/lnd#1599 for details). */
-	if (update && fromwire_peektype(update) == WIRE_CHANNEL_UPDATE) {
-		assert(tal_bytelen(update) > 2);
-		channel_update = tal_arr(ctx, u8, 0);
-		towire(&channel_update, update + 2, tal_bytelen(update) - 2);
-		tal_free(update);
-		return channel_update;
-	} else {
-		return update;
-	}
-}
-
-static u8 *make_failmsg(const tal_t *ctx,
-			struct peer *peer,
-			const struct htlc *htlc,
-			enum onion_type failcode,
-			const struct short_channel_id *scid,
-			const struct sha256 *sha256,
-			u32 failheight)
-{
-	u8 *msg, *channel_update = NULL;
-	u32 cltv_expiry = abs_locktime_to_blocks(&htlc->expiry);
-
-	switch (failcode) {
-	case WIRE_INVALID_REALM:
-		msg = towire_invalid_realm(ctx);
-		goto done;
-	case WIRE_TEMPORARY_NODE_FAILURE:
-		msg = towire_temporary_node_failure(ctx);
-		goto done;
-	case WIRE_PERMANENT_NODE_FAILURE:
-		msg = towire_permanent_node_failure(ctx);
-		goto done;
-	case WIRE_REQUIRED_NODE_FEATURE_MISSING:
-		msg = towire_required_node_feature_missing(ctx);
-		goto done;
-	case WIRE_TEMPORARY_CHANNEL_FAILURE:
-		channel_update = foreign_channel_update(ctx, peer, scid);
-		msg = towire_temporary_channel_failure(ctx, channel_update);
-		goto done;
-	case WIRE_CHANNEL_DISABLED:
-		msg = towire_channel_disabled(ctx);
-		goto done;
-	case WIRE_PERMANENT_CHANNEL_FAILURE:
-		msg = towire_permanent_channel_failure(ctx);
-		goto done;
-	case WIRE_REQUIRED_CHANNEL_FEATURE_MISSING:
-		msg = towire_required_channel_feature_missing(ctx);
-		goto done;
-	case WIRE_UNKNOWN_NEXT_PEER:
-		msg = towire_unknown_next_peer(ctx);
-		goto done;
-	case WIRE_AMOUNT_BELOW_MINIMUM:
-		channel_update = foreign_channel_update(ctx, peer, scid);
-		msg = towire_amount_below_minimum(ctx, htlc->amount,
-						  channel_update);
-		goto done;
-	case WIRE_FEE_INSUFFICIENT:
-		channel_update = foreign_channel_update(ctx, peer, scid);
-		msg = towire_fee_insufficient(ctx, htlc->amount,
-					      channel_update);
-		goto done;
-	case WIRE_INCORRECT_CLTV_EXPIRY:
-		channel_update = foreign_channel_update(ctx, peer, scid);
-		msg = towire_incorrect_cltv_expiry(ctx, cltv_expiry,
-						   channel_update);
-		goto done;
-	case WIRE_EXPIRY_TOO_SOON:
-		channel_update = foreign_channel_update(ctx, peer, scid);
-		msg = towire_expiry_too_soon(ctx, channel_update);
-		goto done;
-	case WIRE_EXPIRY_TOO_FAR:
-		msg = towire_expiry_too_far(ctx);
-		goto done;
-	case WIRE_INCORRECT_OR_UNKNOWN_PAYMENT_DETAILS:
-		assert(failheight);
-		msg = towire_incorrect_or_unknown_payment_details(
-			ctx, htlc->amount, failheight);
-		goto done;
-	case WIRE_FINAL_INCORRECT_CLTV_EXPIRY:
-		msg = towire_final_incorrect_cltv_expiry(ctx, cltv_expiry);
-		goto done;
-	case WIRE_FINAL_INCORRECT_HTLC_AMOUNT:
-		msg = towire_final_incorrect_htlc_amount(ctx, htlc->amount);
-		goto done;
-	case WIRE_INVALID_ONION_VERSION:
-		msg = towire_invalid_onion_version(ctx, sha256);
-		goto done;
-	case WIRE_INVALID_ONION_HMAC:
-		msg = towire_invalid_onion_hmac(ctx, sha256);
-		goto done;
-	case WIRE_INVALID_ONION_KEY:
-		msg = towire_invalid_onion_key(ctx, sha256);
-		goto done;
-	case WIRE_INVALID_ONION_PAYLOAD:
-		/* FIXME: wire this into tlv parser somehow. */
-		msg = towire_invalid_onion_payload(ctx, 0, 0);
-		goto done;
-	case WIRE_MPP_TIMEOUT:
-		msg = towire_mpp_timeout(ctx);
-		goto done;
-	}
-	status_failed(STATUS_FAIL_INTERNAL_ERROR,
-		      "Asked to create failmsg %u (%s)",
-		      failcode, onion_type_name(failcode));
-
-done:
-	tal_free(channel_update);
-	return msg;
-}
-
 /* Returns HTLC sigs, sets commit_sig */
 static secp256k1_ecdsa_signature *calc_commitsigs(const tal_t *ctx,
 						  const struct peer *peer,
@@ -983,14 +822,14 @@ static secp256k1_ecdsa_signature *calc_commitsigs(const tal_t *ctx,
 {
 	size_t i;
 	struct bitcoin_tx **txs;
-	const u8 **wscripts;
+	const u8 *funding_wscript;
 	const struct htlc **htlc_map;
 	struct pubkey local_htlckey;
 	const u8 *msg;
 	secp256k1_ecdsa_signature *htlc_sigs;
 
 	txs = channel_txs(tmpctx, &htlc_map,
-			  &wscripts, peer->channel, &peer->remote_per_commit,
+			  &funding_wscript, peer->channel, &peer->remote_per_commit,
 			  commit_index, REMOTE);
 
 	msg = towire_hsm_sign_remote_commitment_tx(NULL, txs[0],
@@ -1011,7 +850,7 @@ static secp256k1_ecdsa_signature *calc_commitsigs(const tal_t *ctx,
 		     type_to_string(tmpctx, struct bitcoin_signature,
 				    commit_sig),
 		     type_to_string(tmpctx, struct bitcoin_tx, txs[0]),
-		     tal_hex(tmpctx, wscripts[0]),
+		     tal_hex(tmpctx, funding_wscript),
 		     type_to_string(tmpctx, struct pubkey,
 				    &peer->channel->funding_pubkey[LOCAL]));
 	dump_htlcs(peer->channel, "Sending commit_sig");
@@ -1034,7 +873,7 @@ static secp256k1_ecdsa_signature *calc_commitsigs(const tal_t *ctx,
 	for (i = 0; i < tal_count(htlc_sigs); i++) {
 		struct bitcoin_signature sig;
 		msg = towire_hsm_sign_remote_htlc_tx(NULL, txs[i + 1],
-						     wscripts[i + 1],
+						     txs[i+1]->output_witscripts[0]->ptr,
 						     *txs[i+1]->input_amounts[0],
 						     &peer->remote_per_commit);
 
@@ -1049,10 +888,11 @@ static secp256k1_ecdsa_signature *calc_commitsigs(const tal_t *ctx,
 			     type_to_string(tmpctx, struct bitcoin_signature,
 					    &sig),
 			     type_to_string(tmpctx, struct bitcoin_tx, txs[1+i]),
-			     tal_hex(tmpctx, wscripts[1+i]),
+			     tal_hex(tmpctx, txs[i+1]->output_witscripts[0]->ptr),
 			     type_to_string(tmpctx, struct pubkey,
 					    &local_htlckey));
-		assert(check_tx_sig(txs[1+i], 0, NULL, wscripts[1+i],
+		assert(check_tx_sig(txs[1+i], 0, NULL,
+				    txs[i+1]->output_witscripts[0]->ptr,
 				    &local_htlckey,
 				    &sig));
 	}
@@ -1268,12 +1108,10 @@ static void marshall_htlc_info(const tal_t *ctx,
 			       struct changed_htlc **changed,
 			       struct fulfilled_htlc **fulfilled,
 			       const struct failed_htlc ***failed,
-			       struct added_htlc **added,
-			       struct secret **shared_secret)
+			       struct added_htlc **added)
 {
 	*changed = tal_arr(ctx, struct changed_htlc, 0);
 	*added = tal_arr(ctx, struct added_htlc, 0);
-	*shared_secret = tal_arr(ctx, struct secret, 0);
 	*failed = tal_arr(ctx, const struct failed_htlc *, 0);
 	*fulfilled = tal_arr(ctx, struct fulfilled_htlc, 0);
 
@@ -1281,7 +1119,6 @@ static void marshall_htlc_info(const tal_t *ctx,
 		const struct htlc *htlc = changed_htlcs[i];
 		if (htlc->state == RCVD_ADD_COMMIT) {
 			struct added_htlc a;
-			struct secret s;
 
 			a.id = htlc->id;
 			a.amount = htlc->amount;
@@ -1290,31 +1127,22 @@ static void marshall_htlc_info(const tal_t *ctx,
 			memcpy(a.onion_routing_packet,
 			       htlc->routing,
 			       sizeof(a.onion_routing_packet));
-			/* Invalid shared secret gets set to all-zero: our
-			 * code generator can't make arrays of optional values */
-			if (!htlc->shared_secret)
-				memset(&s, 0, sizeof(s));
-			else
-				s = *htlc->shared_secret;
+			if (htlc->blinding) {
+				a.blinding = htlc->blinding;
+				ecdh(a.blinding, &a.blinding_ss);
+			} else
+				a.blinding = NULL;
 			tal_arr_expand(added, a);
-			tal_arr_expand(shared_secret, s);
 		} else if (htlc->state == RCVD_REMOVE_COMMIT) {
 			if (htlc->r) {
 				struct fulfilled_htlc f;
-				assert(!htlc->fail && !htlc->failcode);
+				assert(!htlc->failed);
 				f.id = htlc->id;
 				f.payment_preimage = *htlc->r;
 				tal_arr_expand(fulfilled, f);
 			} else {
-				struct failed_htlc *f;
-				assert(htlc->fail || htlc->failcode);
-				f = tal(*failed, struct failed_htlc);
-				f->id = htlc->id;
-				f->failcode = htlc->failcode;
-				f->failreason = htlc->fail;
-				f->scid = cast_const(struct short_channel_id *,
-							htlc->failed_scid);
-				tal_arr_expand(failed, f);
+				assert(!htlc->r);
+				tal_arr_expand(failed, htlc->failed);
 			}
 		} else {
 			struct changed_htlc c;
@@ -1338,7 +1166,6 @@ static void send_revocation(struct peer *peer,
 	struct fulfilled_htlc *fulfilled;
 	const struct failed_htlc **failed;
 	struct added_htlc *added;
-	struct secret *shared_secret;
 	const u8 *msg_for_master;
 
 	/* Marshall it now before channel_sending_revoke_and_ack changes htlcs */
@@ -1348,8 +1175,7 @@ static void send_revocation(struct peer *peer,
 			   &changed,
 			   &fulfilled,
 			   &failed,
-			   &added,
-			   &shared_secret);
+			   &added);
 
 	/* Revoke previous commit, get new point. */
 	u8 *msg = make_revocation_msg(peer, peer->next_index[LOCAL]-1,
@@ -1374,7 +1200,6 @@ static void send_revocation(struct peer *peer,
 					       peer->channel->fee_states,
 					       commit_sig, htlc_sigs,
 					       added,
-					       shared_secret,
 					       fulfilled,
 					       failed,
 					       changed,
@@ -1394,7 +1219,7 @@ static void handle_peer_commit_sig(struct peer *peer, const u8 *msg)
 	struct pubkey remote_htlckey;
 	struct bitcoin_tx **txs;
 	const struct htlc **htlc_map, **changed_htlcs;
-	const u8 **wscripts;
+	const u8 *funding_wscript;
 	size_t i;
 
 	changed_htlcs = tal_arr(msg, const struct htlc *, 0);
@@ -1434,7 +1259,7 @@ static void handle_peer_commit_sig(struct peer *peer, const u8 *msg)
 
 	txs =
 	    channel_txs(tmpctx, &htlc_map,
-			&wscripts, peer->channel, &peer->next_local_per_commit,
+			&funding_wscript, peer->channel, &peer->next_local_per_commit,
 			peer->next_index[LOCAL], LOCAL);
 
 	if (!derive_simple_key(&peer->channel->basepoints[REMOTE].htlc,
@@ -1454,7 +1279,7 @@ static void handle_peer_commit_sig(struct peer *peer, const u8 *msg)
 	 *    - if `signature` is not valid for its local commitment transaction:
 	 *      - MUST fail the channel.
 	 */
-	if (!check_tx_sig(txs[0], 0, NULL, wscripts[0],
+	if (!check_tx_sig(txs[0], 0, NULL, funding_wscript,
 			  &peer->channel->funding_pubkey[REMOTE], &commit_sig)) {
 		dump_htlcs(peer->channel, "receiving commit_sig");
 		peer_failed(peer->pps,
@@ -1464,7 +1289,7 @@ static void handle_peer_commit_sig(struct peer *peer, const u8 *msg)
 			    type_to_string(msg, struct bitcoin_signature,
 					   &commit_sig),
 			    type_to_string(msg, struct bitcoin_tx, txs[0]),
-			    tal_hex(msg, wscripts[0]),
+			    tal_hex(msg, funding_wscript),
 			    type_to_string(msg, struct pubkey,
 					   &peer->channel->funding_pubkey
 					   [REMOTE]),
@@ -1498,14 +1323,14 @@ static void handle_peer_commit_sig(struct peer *peer, const u8 *msg)
 		sig.s = htlc_sigs[i];
 		sig.sighash_type = SIGHASH_ALL;
 
-		if (!check_tx_sig(txs[1+i], 0, NULL, wscripts[1+i],
+		if (!check_tx_sig(txs[1+i], 0, NULL, txs[1+i]->output_witscripts[0]->ptr,
 				  &remote_htlckey, &sig))
 			peer_failed(peer->pps,
 				    &peer->channel_id,
 				    "Bad commit_sig signature %s for htlc %s wscript %s key %s",
 				    type_to_string(msg, struct bitcoin_signature, &sig),
 				    type_to_string(msg, struct bitcoin_tx, txs[1+i]),
-				    tal_hex(msg, wscripts[1+i]),
+				    tal_hex(msg, txs[1+i]->output_witscripts[0]->ptr),
 				    type_to_string(msg, struct pubkey,
 						   &remote_htlckey));
 	}
@@ -1660,6 +1485,7 @@ static void handle_peer_fail_htlc(struct peer *peer, const u8 *msg)
 	enum channel_remove_err e;
 	u8 *reason;
 	struct htlc *htlc;
+	struct failed_htlc *f;
 
 	/* reason is not an onionreply because spec doesn't know about that */
 	if (!fromwire_update_fail_htlc(msg, msg,
@@ -1672,10 +1498,10 @@ static void handle_peer_fail_htlc(struct peer *peer, const u8 *msg)
 	e = channel_fail_htlc(peer->channel, LOCAL, id, &htlc);
 	switch (e) {
 	case CHANNEL_ERR_REMOVE_OK: {
-		/* Save reason for when we tell master. */
-		struct onionreply *r = tal(htlc, struct onionreply);
-		r->contents = tal_steal(r, reason);
-		htlc->fail = r;
+		htlc->failed = f = tal(htlc, struct failed_htlc);
+		f->id = id;
+		f->sha256_of_onion = NULL;
+		f->onion = new_onionreply(f, take(reason));
 		start_commit_timer(peer);
 		return;
 	}
@@ -1698,9 +1524,10 @@ static void handle_peer_fail_malformed_htlc(struct peer *peer, const u8 *msg)
 	struct channel_id channel_id;
 	u64 id;
 	enum channel_remove_err e;
-	struct sha256 sha256_of_onion, our_sha256_of_onion;
+	struct sha256 sha256_of_onion;
 	u16 failure_code;
 	struct htlc *htlc;
+	struct failed_htlc *f;
 
 	if (!fromwire_update_fail_malformed_htlc(msg, &channel_id, &id,
 						 &sha256_of_onion,
@@ -1724,35 +1551,14 @@ static void handle_peer_fail_malformed_htlc(struct peer *peer, const u8 *msg)
 			    failure_code);
 	}
 
-	/* BOLT #2:
-	 *
-	 *   - if the `sha256_of_onion` in `update_fail_malformed_htlc`
-	 *     doesn't match the onion it sent:
-	 *    - MAY retry or choose an alternate error response.
-	 */
-	htlc = channel_get_htlc(peer->channel, LOCAL, id);
-	sha256(&our_sha256_of_onion, htlc->routing, tal_count(htlc->routing));
-	if (!sha256_eq(&sha256_of_onion, &our_sha256_of_onion))
-		status_unusual("update_fail_malformed_htlc for bad onion"
-		               " for htlc with id %"PRIu64".", id);
-
-	/* We only handle these cases in make_failmsg, so convert any
-	 * (future?) unknown one. */
-	if (failure_code != WIRE_INVALID_ONION_VERSION
-	    && failure_code != WIRE_INVALID_ONION_HMAC
-	    && failure_code != WIRE_INVALID_ONION_KEY) {
-		status_unusual("Unknown update_fail_malformed_htlc code %u:"
-			       " sending temporary_channel_failure",
-			       failure_code);
-		failure_code = WIRE_TEMPORARY_CHANNEL_FAILURE;
-	}
-
 	e = channel_fail_htlc(peer->channel, LOCAL, id, &htlc);
 	switch (e) {
 	case CHANNEL_ERR_REMOVE_OK:
-		/* This is the only case where we set failcode for a non-local
-		 * failure; in a way, it is, since we have to report it. */
-		htlc->failcode = failure_code;
+		htlc->failed = f = tal(htlc, struct failed_htlc);
+		f->id = id;
+		f->onion = NULL;
+		f->sha256_of_onion = tal_dup(f, struct sha256, &sha256_of_onion);
+		f->badonion = failure_code;
 		start_commit_timer(peer);
 		return;
 	case CHANNEL_ERR_NO_SUCH_ID:
@@ -1842,6 +1648,241 @@ static bool channeld_handle_custommsg(const u8 *msg)
 #endif
 }
 
+#if EXPERIMENTAL_FEATURES
+/* Peer sends onion msg. */
+static void handle_onion_message(struct peer *peer, const u8 *msg)
+{
+	enum onion_type badreason;
+	struct onionpacket op;
+	struct secret ss, *blinding_ss;
+	struct pubkey *blinding_in;
+	struct route_step *rs;
+	u8 onion[TOTAL_PACKET_SIZE];
+	const u8 *cursor;
+	size_t max, maxlen;
+	struct tlv_onionmsg_payload *om;
+	const struct short_channel_id *next_scid;
+	struct node_id *next_node;
+	struct tlv_onion_message_tlvs *tlvs = tlv_onion_message_tlvs_new(msg);
+
+	if (!fromwire_onion_message(msg, onion, tlvs))
+		peer_failed(peer->pps,
+			    &peer->channel_id,
+			    "Bad onion_message %s", tal_hex(peer, msg));
+
+	/* We unwrap the onion now. */
+	badreason = parse_onionpacket(onion, TOTAL_PACKET_SIZE, &op);
+	if (badreason != 0) {
+		status_debug("onion msg: can't parse onionpacket: %s",
+			     onion_type_name(badreason));
+		return;
+	}
+
+	if (tlvs->blinding) {
+		struct secret hmac;
+
+		/* E(i) */
+		blinding_in = tal(msg, struct pubkey);
+		*blinding_in = tlvs->blinding->blinding;
+		status_debug("blinding in = %s",
+			     type_to_string(tmpctx, struct pubkey, blinding_in));
+		blinding_ss = tal(msg, struct secret);
+		ecdh(blinding_in, blinding_ss);
+
+		/* b(i) = HMAC256("blinded_node_id", ss(i)) * k(i) */
+		subkey_from_hmac("blinded_node_id", blinding_ss, &hmac);
+
+		/* We instead tweak the *ephemeral* key from the onion and use
+		 * our normal privkey: since hsmd knows only how to ECDH with
+		 * our real key */
+		if (secp256k1_ec_pubkey_tweak_mul(secp256k1_ctx,
+						  &op.ephemeralkey.pubkey,
+						  hmac.data) != 1) {
+			status_debug("onion msg: can't tweak pubkey");
+			return;
+		}
+	} else {
+		blinding_ss = NULL;
+		blinding_in = NULL;
+	}
+
+	ecdh(&op.ephemeralkey, &ss);
+
+	/* We make sure we can parse onion packet, so we know if shared secret
+	 * is actually valid (this checks hmac). */
+	rs = process_onionpacket(tmpctx, &op, &ss, NULL, 0, false);
+	if (!rs) {
+		status_debug("onion msg: can't process onionpacket ss=%s",
+			     type_to_string(tmpctx, struct secret, &ss));
+		return;
+	}
+
+	/* The raw payload is prepended with length in the TLV world. */
+	cursor = rs->raw_payload;
+	max = tal_bytelen(rs->raw_payload);
+	maxlen = fromwire_bigsize(&cursor, &max);
+	if (!cursor) {
+		status_debug("onion msg: Invalid hop payload %s",
+			     tal_hex(tmpctx, rs->raw_payload));
+		return;
+	}
+	if (maxlen > max) {
+		status_debug("onion msg: overlong hop payload %s",
+			     tal_hex(tmpctx, rs->raw_payload));
+		return;
+	}
+
+	om = tlv_onionmsg_payload_new(msg);
+	if (!fromwire_onionmsg_payload(&cursor, &maxlen, om)) {
+		status_debug("onion msg: invalid onionmsg_payload %s",
+			     tal_hex(tmpctx, rs->raw_payload));
+		return;
+	}
+
+	/* If we weren't given a blinding factor, tlv can provide one. */
+	if (om->blinding && !blinding_ss) {
+		/* E(i) */
+		blinding_in = tal(msg, struct pubkey);
+		*blinding_in = om->blinding->blinding;
+		blinding_ss = tal(msg, struct secret);
+
+		ecdh(blinding_in, blinding_ss);
+	}
+
+	if (om->enctlv) {
+		const unsigned char npub[crypto_aead_chacha20poly1305_ietf_NPUBBYTES] = { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
+		u8 *dec;
+		struct secret rho;
+		int ret;
+
+		if (!blinding_ss) {
+			status_debug("enctlv but no blinding?");
+			return;
+		}
+
+		/* We need this to decrypt enctlv */
+		subkey_from_hmac("rho", blinding_ss, &rho);
+
+		/* Overrides next_scid / next_node */
+		if (tal_bytelen(om->enctlv->enctlv)
+		    < crypto_aead_chacha20poly1305_ietf_ABYTES) {
+			status_debug("enctlv too short for mac");
+			return;
+		}
+
+		dec = tal_arr(msg, u8,
+			      tal_bytelen(om->enctlv->enctlv)
+			      - crypto_aead_chacha20poly1305_ietf_ABYTES);
+		ret = crypto_aead_chacha20poly1305_ietf_decrypt(dec, NULL,
+								NULL,
+								om->enctlv->enctlv,
+								tal_bytelen(om->enctlv->enctlv),
+								NULL, 0,
+								npub,
+								rho.data);
+		if (ret != 0)
+			errx(1, "Failed to decrypt enctlv field");
+
+		status_debug("enctlv -> %s", tal_hex(tmpctx, dec));
+
+		/* Replace onionmsg with one from enctlv */
+		cursor = dec;
+		maxlen = tal_bytelen(dec);
+
+		om = tlv_onionmsg_payload_new(msg);
+		if (!fromwire_onionmsg_payload(&cursor, &maxlen, om)) {
+			status_debug("onion msg: invalid enctlv onionmsg_payload %s",
+				     tal_hex(tmpctx, dec));
+			return;
+		}
+	} else if (blinding_ss && rs->nextcase != ONION_END) {
+		status_debug("Onion had %s, but not enctlv?",
+			     tlvs->blinding ? "blinding" : "om blinding");
+		return;
+	}
+
+	if (om->next_short_channel_id)
+		next_scid = &om->next_short_channel_id->short_channel_id;
+	else
+		next_scid = NULL;
+
+	if (om->next_node_id) {
+		next_node = tal(msg, struct node_id);
+		node_id_from_pubkey(next_node, &om->next_node_id->node_id);
+	} else
+		next_node = NULL;
+
+	if (om->enctlv) {
+		status_broken("FIXME: Handle enctlv!");
+		return;
+	}
+
+	if (rs->nextcase == ONION_END) {
+		struct pubkey *blinding;
+		const struct onionmsg_path **path;
+
+		if (om->reply_path) {
+			blinding = &om->reply_path->blinding;
+			path = cast_const2(const struct onionmsg_path **,
+					   om->reply_path->path);
+		} else {
+			blinding = NULL;
+			path = NULL;
+		}
+		wire_sync_write(MASTER_FD,
+				take(towire_got_onionmsg_to_us(NULL,
+							       blinding,
+							       path)));
+	} else {
+		struct pubkey *next_blinding;
+
+		/* This *MUST* have instructions on where to go next. */
+		if (!next_scid && !next_node) {
+			status_debug("onion msg: no next field in %s",
+				     tal_hex(tmpctx, rs->raw_payload));
+			return;
+		}
+
+		if (blinding_ss) {
+			/* E(i-1) = H(E(i) || ss(i)) * E(i) */
+			struct sha256 h;
+			blinding_hash_e_and_ss(blinding_in, blinding_ss, &h);
+			next_blinding = tal(msg, struct pubkey);
+			blinding_next_pubkey(blinding_in, &h, next_blinding);
+		} else
+			next_blinding = NULL;
+
+		wire_sync_write(MASTER_FD,
+				take(towire_got_onionmsg_forward(NULL,
+								 next_scid,
+								 next_node,
+								 next_blinding,
+								 serialize_onionpacket(tmpctx, rs->next))));
+	}
+}
+
+/* We send onion msg. */
+static void send_onionmsg(struct peer *peer, const u8 *msg)
+{
+	u8 onion_routing_packet[TOTAL_PACKET_SIZE];
+	struct pubkey *blinding;
+	struct tlv_onion_message_tlvs *tlvs = tlv_onion_message_tlvs_new(msg);
+
+	if (!fromwire_send_onionmsg(msg, msg, onion_routing_packet, &blinding))
+		master_badmsg(WIRE_SEND_ONIONMSG, msg);
+
+	if (blinding) {
+		tlvs->blinding = tal(tlvs,
+				     struct tlv_onion_message_tlvs_blinding);
+		tlvs->blinding->blinding = *blinding;
+	}
+	sync_crypto_write(peer->pps,
+			  take(towire_onion_message(NULL,
+						    onion_routing_packet,
+						    tlvs)));
+}
+#endif /* EXPERIMENTAL_FEATURES */
+
 static void peer_in(struct peer *peer, const u8 *msg)
 {
 	enum wire_type type = fromwire_peektype(msg);
@@ -1913,6 +1954,11 @@ static void peer_in(struct peer *peer, const u8 *msg)
 	case WIRE_SHUTDOWN:
 		handle_peer_shutdown(peer, msg);
 		return;
+#if EXPERIMENTAL_FEATURES
+	case WIRE_ONION_MESSAGE:
+		handle_onion_message(peer, msg);
+		return;
+#endif
 
 	case WIRE_INIT:
 	case WIRE_OPEN_CHANNEL:
@@ -1956,39 +2002,18 @@ static void send_fail_or_fulfill(struct peer *peer, const struct htlc *h)
 {
 	u8 *msg;
 
-	/* Note that if h->shared_secret is NULL, it means that we knew
-	 * this HTLC was invalid, but we still needed to hand it to lightningd
-	 * for the db, etc.  So in that case, we use our own saved failcode.
-	 *
-	 * This also lets us distinguish between "we can't decode onion" and
-	 * "next hop said it can't decode onion".  That second case is the
-	 * only case where we use a failcode for a non-local error. */
-	/* Malformed: use special reply since we can't onion. */
-	if (!h->shared_secret) {
-		struct sha256 sha256_of_onion;
-		sha256(&sha256_of_onion, h->routing, tal_count(h->routing));
-
-		msg = towire_update_fail_malformed_htlc(NULL, &peer->channel_id,
-							h->id, &sha256_of_onion,
-							h->why_bad_onion);
-	} else if (h->failcode || h->fail) {
-		const struct onionreply *onion;
-		if (h->failcode) {
-			/* Local failure, make a message. */
-			u8 *failmsg = make_failmsg(tmpctx, peer, h, h->failcode,
-						   h->failed_scid,
-						   &h->next_onion_sha,
-						   h->failblock);
-			onion = create_onionreply(tmpctx, h->shared_secret,
-						  failmsg);
-		} else /* Remote failure, just forward. */
-			onion = h->fail;
-
-		/* Now we wrap, just before sending out. */
-		msg = towire_update_fail_htlc(peer, &peer->channel_id, h->id,
-					      wrap_onionreply(tmpctx,
-							      h->shared_secret,
-							      onion)->contents);
+	if (h->failed) {
+		const struct failed_htlc *f = h->failed;
+		if (f->sha256_of_onion) {
+			msg = towire_update_fail_malformed_htlc(NULL,
+								&peer->channel_id,
+								h->id,
+								f->sha256_of_onion,
+								f->badonion);
+		} else {
+			msg = towire_update_fail_htlc(peer, &peer->channel_id, h->id,
+						      f->onion->contents);
+		}
 	} else if (h->r) {
 		msg = towire_update_fulfill_htlc(NULL, &peer->channel_id, h->id,
 						 h->r);
@@ -2021,6 +2046,27 @@ static void resend_commitment(struct peer *peer, const struct changed_htlc *last
 	 */
 	/* In our case, we consider ourselves already committed to this, so
 	 * retransmission is simplest. */
+	/* We need to send fulfills/failures before adds, so we split them
+	 * up into two loops -- this is the 'fulfill/fail' loop */
+	for (i = 0; i < tal_count(last); i++) {
+		const struct htlc *h;
+
+		h = channel_get_htlc(peer->channel,
+				     htlc_state_owner(last[i].newstate),
+				     last[i].id);
+		/* I think this can happen if we actually received revoke_and_ack
+		 * then they asked for a retransmit */
+		if (!h)
+			peer_failed(peer->pps,
+				    &peer->channel_id,
+				    "Can't find HTLC %"PRIu64" to resend",
+				    last[i].id);
+
+		if (h->state == SENT_REMOVE_COMMIT)
+			send_fail_or_fulfill(peer, h);
+	}
+	/* We need to send fulfills/failures before adds, so we split them
+	 * up into two loops -- this is the 'add' loop */
 	for (i = 0; i < tal_count(last); i++) {
 		const struct htlc *h;
 
@@ -2037,15 +2083,26 @@ static void resend_commitment(struct peer *peer, const struct changed_htlc *last
 				    last[i].id);
 
 		if (h->state == SENT_ADD_COMMIT) {
+#if EXPERIMENTAL_FEATURES
+			struct tlv_update_add_tlvs *tlvs;
+			if (h->blinding) {
+				tlvs = tlv_update_add_tlvs_new(tmpctx);
+				tlvs->blinding = tal(tlvs, struct tlv_update_add_tlvs_blinding);
+				tlvs->blinding->blinding = *h->blinding;
+			} else
+				tlvs = NULL;
+#endif
 			u8 *msg = towire_update_add_htlc(NULL, &peer->channel_id,
 							 h->id, h->amount,
 							 &h->rhash,
 							 abs_locktime_to_blocks(
 								 &h->expiry),
-							 h->routing);
+							 h->routing
+#if EXPERIMENTAL_FEATURES
+							 , tlvs
+#endif
+				);
 			sync_crypto_write(peer->pps, take(msg));
-		} else if (h->state == SENT_REMOVE_COMMIT) {
-			send_fail_or_fulfill(peer, h);
 		}
 	}
 
@@ -2285,7 +2342,8 @@ static void peer_reconnect(struct peer *peer,
 	bool dataloss_protect, check_extra_fields;
 	const u8 **premature_msgs = tal_arr(peer, const u8 *, 0);
 
-	dataloss_protect = feature_negotiated(peer->features,
+	dataloss_protect = feature_negotiated(peer->our_features,
+					      peer->their_features,
 					      OPT_DATA_LOSS_PROTECT);
 
 	/* Both these options give us extra fields to check. */
@@ -2648,22 +2706,33 @@ static void handle_offer_htlc(struct peer *peer, const u8 *inmsg)
 	struct sha256 payment_hash;
 	u8 onion_routing_packet[TOTAL_PACKET_SIZE];
 	enum channel_add_err e;
-	enum onion_type failcode;
+	const u8 *failwiremsg;
 	const char *failstr;
 	struct amount_sat htlc_fee;
+	struct pubkey *blinding;
 
 	if (!peer->funding_locked[LOCAL] || !peer->funding_locked[REMOTE])
 		status_failed(STATUS_FAIL_MASTER_IO,
 			      "funding not locked for offer_htlc");
 
-	if (!fromwire_channel_offer_htlc(inmsg, &amount,
+	if (!fromwire_channel_offer_htlc(tmpctx, inmsg, &amount,
 					 &cltv_expiry, &payment_hash,
-					 onion_routing_packet))
+					 onion_routing_packet, &blinding))
 		master_badmsg(WIRE_CHANNEL_OFFER_HTLC, inmsg);
+
+#if EXPERIMENTAL_FEATURES
+	struct tlv_update_add_tlvs *tlvs;
+	if (blinding) {
+		tlvs = tlv_update_add_tlvs_new(tmpctx);
+		tlvs->blinding = tal(tlvs, struct tlv_update_add_tlvs_blinding);
+		tlvs->blinding->blinding = *blinding;
+	} else
+		tlvs = NULL;
+#endif
 
 	e = channel_add_htlc(peer->channel, LOCAL, peer->htlc_id,
 			     amount, cltv_expiry, &payment_hash,
-			     onion_routing_packet, NULL, &htlc_fee);
+			     onion_routing_packet, take(blinding), NULL, &htlc_fee);
 	status_debug("Adding HTLC %"PRIu64" amount=%s cltv=%u gave %s",
 		     peer->htlc_id,
 		     type_to_string(tmpctx, struct amount_msat, &amount),
@@ -2676,7 +2745,11 @@ static void handle_offer_htlc(struct peer *peer, const u8 *inmsg)
 		msg = towire_update_add_htlc(NULL, &peer->channel_id,
 					     peer->htlc_id, amount,
 					     &payment_hash, cltv_expiry,
-					     onion_routing_packet);
+					     onion_routing_packet
+#if EXPERIMENTAL_FEATURES
+					     , tlvs
+#endif
+			);
 		sync_crypto_write(peer->pps, take(msg));
 		start_commit_timer(peer);
 		/* Tell the master. */
@@ -2686,7 +2759,7 @@ static void handle_offer_htlc(struct peer *peer, const u8 *inmsg)
 		peer->htlc_id++;
 		return;
 	case CHANNEL_ERR_INVALID_EXPIRY:
-		failcode = WIRE_INCORRECT_CLTV_EXPIRY;
+		failwiremsg = towire_incorrect_cltv_expiry(inmsg, cltv_expiry, get_local_channel_update(tmpctx, peer));
 		failstr = tal_fmt(inmsg, "Invalid cltv_expiry %u", cltv_expiry);
 		goto failed;
 	case CHANNEL_ERR_DUPLICATE:
@@ -2695,23 +2768,23 @@ static void handle_offer_htlc(struct peer *peer, const u8 *inmsg)
 			      "Duplicate HTLC %"PRIu64, peer->htlc_id);
 
 	case CHANNEL_ERR_MAX_HTLC_VALUE_EXCEEDED:
-		failcode = WIRE_REQUIRED_CHANNEL_FEATURE_MISSING;
+		failwiremsg = towire_required_node_feature_missing(inmsg);
 		failstr = "Mini mode: maximum value exceeded";
 		goto failed;
 	/* FIXME: Fuzz the boundaries a bit to avoid probing? */
 	case CHANNEL_ERR_CHANNEL_CAPACITY_EXCEEDED:
-		failcode = WIRE_TEMPORARY_CHANNEL_FAILURE;
+		failwiremsg = towire_temporary_channel_failure(inmsg, get_local_channel_update(inmsg, peer));
 		failstr = tal_fmt(inmsg, "Capacity exceeded - HTLC fee: %s", fmt_amount_sat(inmsg, &htlc_fee));
 		goto failed;
 	case CHANNEL_ERR_HTLC_BELOW_MINIMUM:
-		failcode = WIRE_AMOUNT_BELOW_MINIMUM;
+		failwiremsg = towire_amount_below_minimum(inmsg, amount, get_local_channel_update(inmsg, peer));
 		failstr = tal_fmt(inmsg, "HTLC too small (%s minimum)",
 				  type_to_string(tmpctx,
 						 struct amount_msat,
 						 &peer->channel->config[REMOTE].htlc_minimum));
 		goto failed;
 	case CHANNEL_ERR_TOO_MANY_HTLCS:
-		failcode = WIRE_TEMPORARY_CHANNEL_FAILURE;
+		failwiremsg = towire_temporary_channel_failure(inmsg, get_local_channel_update(inmsg, peer));
 		failstr = "Too many HTLCs";
 		goto failed;
 	}
@@ -2719,7 +2792,7 @@ static void handle_offer_htlc(struct peer *peer, const u8 *inmsg)
 	abort();
 
 failed:
-	msg = towire_channel_offer_htlc_reply(NULL, 0, failcode, failstr);
+	msg = towire_channel_offer_htlc_reply(NULL, 0, failwiremsg, failstr);
 	wire_sync_write(MASTER_FD, take(msg));
 }
 
@@ -2741,7 +2814,12 @@ static void handle_feerates(struct peer *peer, const u8 *inmsg)
 	 */
 	if (peer->channel->funder == LOCAL) {
 		peer->desired_feerate = feerate;
-		start_commit_timer(peer);
+		/* Don't do this for the first feerate, wait until something else
+		 * happens.  LND seems to get upset in some cases otherwise:
+		 * see https://github.com/ElementsProject/lightning/issues/3596 */
+		if (peer->next_index[LOCAL] != 1
+		    || peer->next_index[REMOTE] != 1)
+			start_commit_timer(peer);
 	} else {
 		/* BOLT #2:
 		 *
@@ -2805,18 +2883,14 @@ static void handle_fail(struct peer *peer, const u8 *inmsg)
 	struct failed_htlc *failed_htlc;
 	enum channel_remove_err e;
 	struct htlc *h;
-	u32 failheight;
 
-	if (!fromwire_channel_fail_htlc(inmsg, inmsg, &failed_htlc, &failheight))
+	if (!fromwire_channel_fail_htlc(inmsg, inmsg, &failed_htlc))
 		master_badmsg(WIRE_CHANNEL_FAIL_HTLC, inmsg);
 
 	e = channel_fail_htlc(peer->channel, REMOTE, failed_htlc->id, &h);
 	switch (e) {
 	case CHANNEL_ERR_REMOVE_OK:
-		h->failcode = failed_htlc->failcode;
-		h->fail = tal_steal(h, failed_htlc->failreason);
-		h->failed_scid = tal_steal(h, failed_htlc->scid);
-		h->failblock = failheight;
+		h->failed = tal_steal(h, failed_htlc);
 		send_fail_or_fulfill(peer, h);
 		start_commit_timer(peer);
 		return;
@@ -2926,6 +3000,14 @@ static void req_in(struct peer *peer, const u8 *msg)
 	case WIRE_CHANNEL_SEND_ERROR:
 		handle_send_error(peer, msg);
 		return;
+#if EXPERIMENTAL_FEATURES
+	case WIRE_SEND_ONIONMSG:
+		send_onionmsg(peer, msg);
+		return;
+#else
+	case WIRE_SEND_ONIONMSG:
+		break;
+#endif /* !EXPERIMENTAL_FEATURES */
 #if DEVELOPER
 	case WIRE_CHANNEL_DEV_REENABLE_COMMIT:
 		handle_dev_reenable_commit(peer);
@@ -2953,6 +3035,8 @@ static void req_in(struct peer *peer, const u8 *msg)
 	case WIRE_CHANNEL_FAIL_FALLEN_BEHIND:
 	case WIRE_CHANNEL_DEV_MEMLEAK_REPLY:
 	case WIRE_CHANNEL_SEND_ERROR_REPLY:
+	case WIRE_GOT_ONIONMSG_TO_US:
+	case WIRE_GOT_ONIONMSG_FORWARD:
 		break;
 	}
 
@@ -2973,24 +3057,6 @@ static void req_in(struct peer *peer, const u8 *msg)
 	master_badmsg(-1, msg);
 }
 
-static void init_shared_secrets(struct channel *channel,
-				const struct added_htlc *htlcs,
-				const enum htlc_state *hstates)
-{
-	for (size_t i = 0; i < tal_count(htlcs); i++) {
-		struct htlc *htlc;
-
-		/* We only derive this for HTLCs *they* added. */
-		if (htlc_state_owner(hstates[i]) != REMOTE)
-			continue;
-
-		htlc = channel_get_htlc(channel, REMOTE, htlcs[i].id);
-		htlc->shared_secret = get_shared_secret(htlc, htlc,
-							&htlc->why_bad_onion,
-							&htlc->next_onion_sha);
-	}
-}
-
 /* We do this synchronously. */
 static void init_channel(struct peer *peer)
 {
@@ -3002,17 +3068,12 @@ static void init_channel(struct peer *peer)
 	struct channel_config conf[NUM_SIDES];
 	struct bitcoin_txid funding_txid;
 	enum side funder;
-	enum htlc_state *hstates;
-	struct fulfilled_htlc *fulfilled;
-	enum side *fulfilled_sides;
-	struct failed_htlc **failed;
-	enum side *failed_sides;
-	struct added_htlc *htlcs;
+	struct existing_htlc **htlcs;
 	bool reconnected;
 	u8 *funding_signed;
 	const u8 *msg;
 	struct fee_states *fee_states;
-	u32 minimum_depth, failheight;
+	u32 minimum_depth;
 	struct secret last_remote_per_commit_secret;
 	secp256k1_ecdsa_signature *remote_ann_node_sig;
 	secp256k1_ecdsa_signature *remote_ann_bitcoin_sig;
@@ -3028,6 +3089,7 @@ static void init_channel(struct peer *peer)
 	msg = wire_sync_read(tmpctx, MASTER_FD);
 	if (!fromwire_channel_init(peer, msg,
 				   &chainparams,
+				   &peer->our_features,
 				   &funding_txid, &funding_txout,
 				   &funding,
 				   &minimum_depth,
@@ -3057,12 +3119,6 @@ static void init_channel(struct peer *peer)
 				   &peer->revocations_received,
 				   &peer->htlc_id,
 				   &htlcs,
-				   &hstates,
-				   &fulfilled,
-				   &fulfilled_sides,
-				   &failed,
-				   &failed_sides,
-				   &failheight,
 				   &peer->funding_locked[LOCAL],
 				   &peer->funding_locked[REMOTE],
 				   &peer->short_channel_ids[LOCAL],
@@ -3074,7 +3130,7 @@ static void init_channel(struct peer *peer)
 				   &funding_signed,
 				   &peer->announce_depth_reached,
 				   &last_remote_per_commit_secret,
-				   &peer->features,
+				   &peer->their_features,
 				   &peer->remote_upfront_shutdown_script,
 				   &remote_ann_node_sig,
 				   &remote_ann_bitcoin_sig,
@@ -3083,6 +3139,7 @@ static void init_channel(struct peer *peer)
 				   &dev_fail_process_onionpacket)) {
 		master_badmsg(WIRE_CHANNEL_INIT, msg);
 	}
+
 	/* stdin == requests, 3 == peer, 4 = gossip, 5 = gossip_store, 6 = HSM */
 	per_peer_state_set_fds(peer->pps, 3, 4, 5);
 
@@ -3113,6 +3170,8 @@ static void init_channel(struct peer *peer)
 		 * it directly!
 		 */
 		peer->short_channel_ids[REMOTE] = peer->short_channel_ids[LOCAL];
+		tal_free(remote_ann_node_sig);
+		tal_free(remote_ann_bitcoin_sig);
 	}
 
 	/* First commit is used for opening: if we've sent 0, we're on
@@ -3140,27 +3199,13 @@ static void init_channel(struct peer *peer)
 					 option_static_remotekey,
 					 funder);
 
-	if (!channel_force_htlcs(peer->channel, htlcs, hstates,
-				 fulfilled, fulfilled_sides,
-				 cast_const2(const struct failed_htlc **,
-					     failed),
-				 failed_sides, failheight))
+	if (!channel_force_htlcs(peer->channel,
+			 cast_const2(const struct existing_htlc **, htlcs)))
 		status_failed(STATUS_FAIL_INTERNAL_ERROR,
 			      "Could not restore HTLCs");
 
-	/* We derive shared secrets for each remote HTLC, so we can
-	 * create error packet if necessary. */
-	init_shared_secrets(peer->channel, htlcs, hstates);
-
 	/* We don't need these any more, so free them. */
 	tal_free(htlcs);
-	tal_free(hstates);
-	tal_free(fulfilled);
-	tal_free(fulfilled_sides);
-	tal_free(failed);
-	tal_free(failed_sides);
-	tal_free(remote_ann_node_sig);
-	tal_free(remote_ann_bitcoin_sig);
 
 	peer->channel_direction = node_id_idx(&peer->node_ids[LOCAL],
 					      &peer->node_ids[REMOTE]);
@@ -3235,6 +3280,9 @@ int main(int argc, char *argv[])
 		memset(&peer->announcement_bitcoin_sigs[i], 0,
 		       sizeof(peer->announcement_bitcoin_sigs[i]));
 	}
+
+	/* Prepare the ecdh() function for use */
+	ecdh_hsmd_setup(HSM_FD, status_failed);
 
 	/* Read init_channel message sync. */
 	init_channel(peer);

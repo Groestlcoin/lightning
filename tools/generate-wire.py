@@ -199,7 +199,6 @@ class Type(FieldSet):
         'secp256k1_ecdsa_signature',
         'secp256k1_ecdsa_recoverable_signature',
         'wirestring',
-        'double',
         'errcode_t',
         'bigsize',
         'varint',
@@ -217,6 +216,7 @@ class Type(FieldSet):
         'gossip_getnodes_entry',
         'gossip_getchannels_entry',
         'failed_htlc',
+        'existing_htlc',
         'utxo',
         'bitcoin_tx',
         'wirestring',
@@ -226,6 +226,9 @@ class Type(FieldSet):
         'fee_states',
         'onionreply',
         'witscript',
+        'feature_set',
+        'onionmsg_path',
+        'route_hop',
     ]
 
     # Some BOLT types are re-typed based on their field name

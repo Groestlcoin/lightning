@@ -160,8 +160,12 @@ Testing
 Install `valgrind` and the python dependencies for best results:
 
 ```
-sudo apt install valgrind cppcheck shellcheck
-pip3 install -r tests/requirements.txt
+sudo apt install valgrind cppcheck shellcheck libsecp256k1-dev
+pip3 install --user \
+         -r requirements.txt \
+         -r contrib/pyln-client/requirements.txt \
+         -r contrib/pyln-proto/requirements.txt \
+         -r contrib/pyln-testing/requirements.txt
 ```
 
 Re-run `configure` for the python dependencies
@@ -207,7 +211,7 @@ There are three kinds of tests:
 * **blackbox tests** - These tests setup a mini-regtest environment and test
   lightningd as a whole.  They can be run individually:
 
-  `PYTHONPATH=contrib/pylightning:contrib/pyln-client:contrib/pyln-testing py.test -v tests/`
+  `PYTHONPATH=contrib/pylightning:contrib/pyln-client:contrib/pyln-testing:contrib/pyln-proto py.test -v tests/`
 
   You can also append `-k TESTNAME` to run a single test.  Environment variables
   `DEBUG_SUBD=<subdaemon>` and `TIMEOUT=<seconds>` can be useful for debugging

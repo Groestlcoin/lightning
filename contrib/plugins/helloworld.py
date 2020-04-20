@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-from lightning import Plugin
+from pyln.client import Plugin
 import time
 
 plugin = Plugin()
@@ -17,6 +17,12 @@ def hello(plugin, name="world"):
     s = '{} {}'.format(greeting, name)
     plugin.log(s)
     return s
+
+
+@plugin.method("bye")
+def bye(plugin, name, **kwargs):
+    """This methods requires {name} to be set by the caller !"""
+    return "Bye {}".format(name)
 
 
 @plugin.init()

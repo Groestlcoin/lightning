@@ -7,6 +7,7 @@ c-lightning Documentation
 
    INSTALL.md
    TOR.md
+   FAQ <FAQ.md>
 
 .. toctree::
    :maxdepth: 2
@@ -44,6 +45,7 @@ c-lightning Documentation
    lightning-fundchannel_complete <lightning-fundchannel_complete.7.md>
    lightning-fundchannel_start <lightning-fundchannel_start.7.md>
    lightning-getroute <lightning-getroute.7.md>
+   lightning-getsharedsecret <lightning-getsharedsecret.7.md>
    lightning-invoice <lightning-invoice.7.md>
    lightning-listchannels <lightning-listchannels.7.md>
    lightning-listforwards <lightning-listforwards.7.md>

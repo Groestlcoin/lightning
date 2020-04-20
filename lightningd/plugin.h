@@ -27,22 +27,6 @@ enum plugin_state {
 };
 
 /**
- * A plugin may register any number of featurebits that should be added to
- * various messages as part of their manifest. The following enum enumerates
- * the possible locations the featurebits can be added to, and are used as
- * indices into the array of featurebits in the plugin struct itself.
- *
- * If you edit this make sure that there is a matching entry in the
- * `plugin_features_type_names[]` array in plugin.c.
- */
-enum plugin_features_type {
-	PLUGIN_FEATURES_NODE,
-	PLUGIN_FEATURES_INIT,
-	PLUGIN_FEATURES_INVOICE,
-};
-#define NUM_PLUGIN_FEATURES_TYPE (PLUGIN_FEATURES_INVOICE+1)
-
-/**
  * A plugin, exposed as a stub so we can pass it as an argument.
  */
 struct plugin {
@@ -83,10 +67,9 @@ struct plugin {
 	/* An array of subscribed topics */
 	char **subscriptions;
 
-	/* Featurebits for various locations that the plugin
-	 * registered. Indices correspond to the `plugin_features_type`
-	 * enum. */
-	u8 *featurebits[NUM_PLUGIN_FEATURES_TYPE];
+	/* An array of currently pending RPC method calls, to be killed if the
+	 * plugin exits. */
+	struct list_head pending_rpccalls;
 };
 
 /**
@@ -114,7 +97,7 @@ struct plugins {
  */
 struct plugin_opt_value {
 	char *as_str;
-	int *as_int;
+	s64 *as_int;
 	bool *as_bool;
 };
 
@@ -153,6 +136,26 @@ void plugins_add_default_dir(struct plugins *plugins);
  * The dev_plugin_debug arg comes from --dev-debugger if DEVELOPER.
  */
 void plugins_init(struct plugins *plugins, const char *dev_plugin_debug);
+
+/**
+ * Free all resources that are held by plugins in the correct order.
+ *
+ * This function ensures that the resources dangling off of the plugins struct
+ * are freed in the correct order. This is necessary since the struct manages
+ * two orthogonal sets of resources:
+ *
+ *  - Plugins
+ *  - Hook calls and notifications
+ *
+ * The tal hierarchy is organized in a plugin centric way, i.e., the plugins
+ * may exit in an arbitrary order and they'll unregister pointers in the other
+ * resources. However this will fail if `tal_free` decides to free one of the
+ * non-plugin resources (technically a sibling in the allocation tree) before
+ * the plugins we will get a use-after-free. This function fixes this by
+ * freeing in the correct order without adding additional child-relationships
+ * in the allocation structure and without adding destructors.
+ */
+void plugins_free(struct plugins *plugins);
 
 /**
  * Register a plugin for initialization and execution.
@@ -255,6 +258,12 @@ void plugin_request_send(struct plugin *plugin,
 char *plugin_opt_set(const char *arg, struct plugin_opt *popt);
 
 /**
+ * Callback called when plugin flag-type options.It just stores
+ * the value in the plugin_opt
+ */
+char *plugin_opt_flag_set(struct plugin_opt *popt);
+
+/**
  * Helpers to initialize a connection to a plugin; we read from their
  * stdout, and write to their stdin.
  */
@@ -272,9 +281,4 @@ struct log *plugin_get_log(struct plugin *plugin);
  * call both! */
 struct plugin_destroyed *plugin_detect_destruction(const struct plugin *plugin);
 bool was_plugin_destroyed(struct plugin_destroyed *destroyed);
-
-/* Gather all the features of the given type that plugins registered. */
-u8 *plugins_collect_featurebits(const tal_t *ctx, const struct plugins *plugins,
-				enum plugin_features_type type);
-
 #endif /* LIGHTNING_LIGHTNINGD_PLUGIN_H */

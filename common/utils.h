@@ -12,6 +12,11 @@ extern secp256k1_context *secp256k1_ctx;
 
 extern const struct chainparams *chainparams;
 
+/* Marker which indicates an (tal) pointer argument is stolen
+ * (i.e. eventually freed) by the function.  Unlike TAKEN, which
+ * indicates it's only stolen if caller says take() */
+#define STEALS
+
 /* Simple accessor function for our own dependencies to use, in order to avoid
  * circular dependencies (should only be used in `bitcoin/y`). */
 bool is_elements(const struct chainparams *chainparams);
@@ -55,6 +60,17 @@ void clear_softref_(const tal_t *outer, size_t outersize, void **ptr);
  */
 #define tal_arr_remove(p, n) tal_arr_remove_((p), sizeof(**p), (n))
 void tal_arr_remove_(void *p, size_t elemsize, size_t n);
+
+/**
+ * The comon case of duplicating an entire tal array.
+ *
+ * A macro because we must not double-evaluate p.
+ */
+#define tal_dup_talarr(ctx, type, p)					\
+	((type *)tal_dup_talarr_((ctx), tal_typechk_(p, type *),	\
+				 TAL_LABEL(type, "[]")))
+void *tal_dup_talarr_(const tal_t *ctx, const tal_t *src TAKES,
+		      const char *label);
 
 /* Use the POSIX C locale. */
 void setup_locale(void);

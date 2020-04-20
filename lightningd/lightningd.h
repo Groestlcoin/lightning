@@ -61,10 +61,6 @@ struct config {
 	/* ipv6 bind disable */
 	bool no_ipv6_bind;
 
-	/* Accept fee changes only if they are in the range our_fee -
-	 * our_fee*multiplier */
-	u32 max_fee_multiplier;
-
 	/* Are we allowed to use DNS lookup for peers. */
 	bool use_dns;
 
@@ -79,6 +75,11 @@ struct config {
 };
 
 typedef STRMAP(const char *) alt_subdaemon_map;
+
+enum lightningd_state {
+	LD_STATE_RUNNING,
+	LD_STATE_SHUTDOWN,
+};
 
 struct lightningd {
 	/* The directory to find all the subdaemons. */
@@ -117,6 +118,9 @@ struct lightningd {
 
 	/* This is us. */
 	struct node_id id;
+
+	/* Feature set we offer. */
+	struct feature_set *our_features;
 
 	/* My name is... my favorite color is... */
 	u8 *alias; /* At least 32 bytes (zero-filled) */
@@ -262,6 +266,8 @@ struct lightningd {
 	struct list_head waitblockheight_commands;
 
 	alt_subdaemon_map alt_subdaemons;
+
+	enum lightningd_state state;
 };
 
 /* Turning this on allows a tal allocation to return NULL, rather than aborting.

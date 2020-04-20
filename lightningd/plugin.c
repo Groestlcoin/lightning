@@ -23,6 +23,15 @@
  * `getmanifest` call anyway, that's what `init` is for. */
 #define PLUGIN_MANIFEST_TIMEOUT 60
 
+/* A simple struct associating an incoming RPC method call with the plugin
+ * that is handling it and the downstream jsonrpc_request. */
+struct plugin_rpccall {
+	struct list_node list;
+	struct command *cmd;
+	struct plugin *plugin;
+	struct jsonrpc_request *request;
+};
+
 #if DEVELOPER
 static void memleak_help_pending_requests(struct htable *memtable,
 					  struct plugins *plugins)
@@ -47,22 +56,31 @@ struct plugins *plugins_new(const tal_t *ctx, struct log_book *log_book,
 	return p;
 }
 
-u8 *plugins_collect_featurebits(const tal_t *ctx, const struct plugins *plugins,
-				enum plugin_features_type type)
+void plugins_free(struct plugins *plugins)
 {
 	struct plugin *p;
-	u8 *res = tal_arr(ctx, u8, 0);
-	list_for_each(&plugins->plugins, p, list) {
-		if (p->featurebits[type])
-			res = featurebits_or(ctx, take(res), p->featurebits[type]);
+	/* Plugins are usually the unit of allocation, and they are internally
+	 * consistent, so let's free each plugin first. */
+	while (!list_empty(&plugins->plugins)) {
+		p = list_pop(&plugins->plugins, struct plugin, list);
+		tal_free(p);
 	}
-	return res;
+
+	tal_free(plugins);
 }
 
 static void destroy_plugin(struct plugin *p)
 {
+	struct plugin_rpccall *call;
 	plugin_hook_unregister_all(p);
 	list_del(&p->list);
+
+	/* Terminate all pending RPC calls with an error. */
+	list_for_each(&p->pending_rpccalls, call, list) {
+		was_pending(command_fail(
+		    call->cmd, PLUGIN_TERMINATED,
+		    "Plugin terminated before replying to RPC call."));
+	}
 }
 
 struct plugin *plugin_register(struct plugins *plugins, const char* path TAKES)
@@ -82,9 +100,6 @@ struct plugin *plugin_register(struct plugins *plugins, const char* path TAKES)
 	p->plugins = plugins;
 	p->cmd = tal_strdup(p, path);
 
-	for (int i = 0; i < NUM_PLUGIN_FEATURES_TYPE; i++)
-		p->featurebits[i] = NULL;
-
 	p->plugin_state = UNCONFIGURED;
 	p->js_arr = tal_arr(p, struct json_stream *, 0);
 	p->used = 0;
@@ -98,6 +113,7 @@ struct plugin *plugin_register(struct plugins *plugins, const char* path TAKES)
 
 	list_add_tail(&plugins->plugins, &p->list);
 	tal_add_destructor(p, destroy_plugin);
+	list_head_init(&p->pending_rpccalls);
 	return p;
 }
 
@@ -439,14 +455,8 @@ static struct io_plan *plugin_write_json(struct io_conn *conn,
  */
 static void plugin_conn_finish(struct io_conn *conn, struct plugin *plugin)
 {
-	if (conn == plugin->stdin_conn)
-		plugin->stdin_conn = NULL;
-
-	else if (conn == plugin->stdout_conn)
-		plugin->stdout_conn = NULL;
-
-	if (plugin->stdin_conn == NULL && plugin->stdout_conn == NULL)
-		tal_free(plugin);
+	plugin->stdout_conn = NULL;
+	tal_free(plugin);
 }
 
 struct io_plan *plugin_stdin_conn_init(struct io_conn *conn,
@@ -454,8 +464,8 @@ struct io_plan *plugin_stdin_conn_init(struct io_conn *conn,
 {
 	/* We write to their stdin */
 	/* We don't have anything queued yet, wait for notification */
+	plugin->stdin_conn = tal_steal(plugin, conn);
 	plugin->stdin_conn = conn;
-	io_set_finish(conn, plugin_conn_finish, plugin);
 	return io_wait(plugin->stdin_conn, plugin, plugin_write_json, plugin);
 }
 
@@ -470,15 +480,46 @@ struct io_plan *plugin_stdout_conn_init(struct io_conn *conn,
 			       plugin_read_json, plugin);
 }
 
+char *plugin_opt_flag_set(struct plugin_opt *popt)
+{
+	/* A set flag is a true */
+	*popt->value->as_bool = true;
+	return NULL;
+}
+
 char *plugin_opt_set(const char *arg, struct plugin_opt *popt)
 {
+	char *endp;
+	long long l;
+
 	tal_free(popt->value->as_str);
+
 	popt->value->as_str = tal_strdup(popt, arg);
-	if (streq(popt->type, "int"))
-		*popt->value->as_int = atoi(arg);
-	else if (streq(popt->type, "bool"))
-		*popt->value->as_bool = streq(arg, "true") || streq(arg, "True")
-			|| streq(arg, "1");
+	if (streq(popt->type, "int")) {
+		errno = 0;
+		l = strtoll(arg, &endp, 0);
+		if (errno || *endp)
+			return tal_fmt(tmpctx, "%s does not parse as type %s",
+				       popt->value->as_str, popt->type);
+		*popt->value->as_int = l;
+
+		/* Check if the number did not fit in `s64` (in case `long long`
+		 * is a bigger type). */
+		if (*popt->value->as_int != l)
+			return tal_fmt(tmpctx, "%s does not parse as type %s (overflowed)",
+				       popt->value->as_str, popt->type);
+	} else if (streq(popt->type, "bool")) {
+		/* valid values are 'true', 'True', '1', '0', 'false', 'False', or '' */
+		if (streq(arg, "true") || streq(arg, "True") || streq(arg, "1")) {
+			*popt->value->as_bool = true;
+		} else if (streq(arg, "false") || streq(arg, "False")
+				|| streq(arg, "0")) {
+			*popt->value->as_bool = false;
+		} else
+			return tal_fmt(tmpctx, "%s does not parse as type %s",
+				       popt->value->as_str, popt->type);
+	}
+
 	return NULL;
 }
 
@@ -515,12 +556,12 @@ static bool plugin_opt_add(struct plugin *plugin, const char *buffer,
 		}
 	} else if (json_tok_streq(buffer, typetok, "int")) {
 		popt->type = "int";
-		popt->value->as_int = talz(popt->value, int);
+		popt->value->as_int = talz(popt->value, s64);
 		if (defaulttok) {
-			json_to_int(buffer, defaulttok, popt->value->as_int);
-			popt->value->as_str = tal_fmt(popt->value, "%d", *popt->value->as_int);
+			json_to_s64(buffer, defaulttok, popt->value->as_int);
+			popt->value->as_str = tal_fmt(popt->value, "%"PRIu64, *popt->value->as_int);
 			popt->description = tal_fmt(
-					popt, "%.*s (default: %i)", desctok->end - desctok->start,
+					popt, "%.*s (default: %"PRIu64")", desctok->end - desctok->start,
 					buffer + desctok->start, *popt->value->as_int);
 		}
 	} else if (json_tok_streq(buffer, typetok, "bool")) {
@@ -533,15 +574,29 @@ static bool plugin_opt_add(struct plugin *plugin, const char *buffer,
 					popt, "%.*s (default: %s)", desctok->end - desctok->start,
 					buffer + desctok->start, *popt->value->as_bool ? "true" : "false");
 		}
+	} else if (json_tok_streq(buffer, typetok, "flag")) {
+		popt->type = "flag";
+		popt->value->as_bool = talz(popt->value, bool);
+		popt->description = json_strdup(popt, buffer, desctok);
+		/* We default flags to false, the default token is ignored */
+		*popt->value->as_bool = false;
+
 	} else {
-		plugin_kill(plugin, "Only \"string\", \"int\", and \"bool\" options are supported");
+		plugin_kill(plugin, "Only \"string\", \"int\", \"bool\", and \"flag\" options are supported");
 		return false;
 	}
 	if (!defaulttok)
 		popt->description = json_strdup(popt, buffer, desctok);
 	list_add_tail(&plugin->plugin_opts, &popt->list);
-	opt_register_arg(popt->name, plugin_opt_set, NULL, popt,
-				popt->description);
+
+	if (streq(popt->type, "flag"))
+		opt_register_noarg(popt->name, plugin_opt_flag_set, popt,
+				   popt->description);
+
+	else
+		opt_register_arg(popt->name, plugin_opt_set, NULL, popt,
+				 popt->description);
+
 	return true;
 }
 
@@ -602,13 +657,17 @@ static void json_stream_forward_change_id(struct json_stream *stream,
 static void plugin_rpcmethod_cb(const char *buffer,
 				const jsmntok_t *toks,
 				const jsmntok_t *idtok,
-				struct command *cmd)
+				struct plugin_rpccall *call)
 {
+	struct command *cmd = call->cmd;
 	struct json_stream *response;
 
 	response = json_stream_raw_for_cmd(cmd);
 	json_stream_forward_change_id(response, buffer, toks, idtok, cmd->id);
 	command_raw_complete(cmd, response);
+
+	list_del(&call->list);
+	tal_free(call);
 }
 
 struct plugin *find_plugin_for_command(struct lightningd *ld,
@@ -637,6 +696,7 @@ static struct command_result *plugin_rpcmethod_dispatch(struct command *cmd,
 	struct plugin *plugin;
 	struct jsonrpc_request *req;
 	char id[STR_MAX_CHARS(u64)];
+	struct plugin_rpccall *call;
 
 	if (cmd->mode == CMD_CHECK)
 		return command_param_failed();
@@ -649,8 +709,15 @@ static struct command_result *plugin_rpcmethod_dispatch(struct command *cmd,
 	idtok = json_get_member(buffer, toks, "id");
 	assert(idtok != NULL);
 
+	call = tal(plugin, struct plugin_rpccall);
+	call->cmd = cmd;
+
 	req = jsonrpc_request_start(plugin, NULL, plugin->log,
-				    plugin_rpcmethod_cb, cmd);
+				    plugin_rpcmethod_cb, call);
+	call->request = req;
+	call->plugin = plugin;
+	list_add_tail(&plugin->pending_rpccalls, &call->list);
+
 	snprintf(id, ARRAY_SIZE(id), "%"PRIu64, req->id);
 
 	json_stream_forward_change_id(req->stream, buffer, toks, idtok, id);
@@ -829,17 +896,12 @@ static void plugin_manifest_timeout(struct plugin *plugin)
 	fatal("Can't recover from plugin failure, terminating.");
 }
 
-/* List of JSON keys matching `plugin_features_type`. */
-static const char *plugin_features_type_names[] = {"node", "init", "invoice"};
-
 bool plugin_parse_getmanifest_response(const char *buffer,
                                        const jsmntok_t *toks,
                                        const jsmntok_t *idtok,
                                        struct plugin *plugin)
 {
 	const jsmntok_t *resulttok, *dynamictok, *featurestok, *tok;
-	bool have_featurebits = false;
-	u8 *featurebits;
 
 	resulttok = json_get_member(buffer, toks, "result");
 	if (!resulttok || resulttok->type != JSMN_OBJECT)
@@ -854,21 +916,27 @@ bool plugin_parse_getmanifest_response(const char *buffer,
 	featurestok = json_get_member(buffer, resulttok, "featurebits");
 
 	if (featurestok) {
-		for (int i = 0; i < NUM_PLUGIN_FEATURES_TYPE; i++) {
+		bool have_featurebits = false;
+		struct feature_set *fset = talz(tmpctx, struct feature_set);
+
+		BUILD_ASSERT(ARRAY_SIZE(feature_place_names)
+			     == ARRAY_SIZE(fset->bits));
+
+		for (int i = 0; i < ARRAY_SIZE(fset->bits); i++) {
+			/* We don't allow setting the obs global init */
+			if (!feature_place_names[i])
+				continue;
+
 			tok = json_get_member(buffer, featurestok,
-					      plugin_features_type_names[i]);
+					      feature_place_names[i]);
 
 			if (!tok)
 				continue;
 
-			featurebits =
-			    json_tok_bin_from_hex(plugin, buffer, tok);
+			fset->bits[i] = json_tok_bin_from_hex(fset, buffer, tok);
+			have_featurebits |= tal_bytelen(fset->bits[i]) > 0;
 
-			have_featurebits |= tal_bytelen(featurebits) > 0;
-
-			if (featurebits) {
-				plugin->featurebits[i] = featurebits;
-			} else {
+			if (!fset->bits[i]) {
 				plugin_kill(
 				    plugin,
 				    "Featurebits returned by plugin is not a "
@@ -877,16 +945,22 @@ bool plugin_parse_getmanifest_response(const char *buffer,
 				return true;
 			}
 		}
-	}
 
-	if (plugin->dynamic && have_featurebits) {
-		plugin_kill(plugin,
-			    "Custom featurebits only allows for non-dynamic "
-			    "plugins: dynamic=%d, featurebits=%.*s",
-			    plugin->dynamic,
-			    featurestok->end - featurestok->start,
-			    buffer + featurestok->start);
-		return true;
+		if (plugin->dynamic && have_featurebits) {
+			plugin_kill(plugin,
+				    "Custom featurebits only allows for non-dynamic "
+				    "plugins: dynamic=%d, featurebits=%.*s",
+				    plugin->dynamic,
+				    featurestok->end - featurestok->start,
+				    buffer + featurestok->start);
+			return true;
+		}
+
+		if (!feature_set_or(plugin->plugins->ld->our_features, fset)) {
+			plugin_kill(plugin,
+				    "Custom featurebits already present");
+			return true;
+		}
 	}
 
 	if (!plugin_opts_add(plugin, buffer, resulttok) ||
@@ -1108,6 +1182,21 @@ plugin_populate_init_request(struct plugin *plugin, struct jsonrpc_request *req)
 	list_for_each(&plugin->plugin_opts, opt, list) {
 		/* Trim the `--` that we added before */
 		name = opt->name + 2;
+		if (opt->value->as_bool) {
+			/* We don't include 'flag' types if they're not
+			 * flagged on */
+			if (streq(opt->type, "flag") && !*opt->value->as_bool)
+				continue;
+
+			json_add_bool(req->stream, name, *opt->value->as_bool);
+			if (!deprecated_apis)
+				continue;
+		}
+		if (opt->value->as_int) {
+			json_add_s64(req->stream, name, *opt->value->as_int);
+			if (!deprecated_apis)
+				continue;
+		}
 		if (opt->value->as_str) {
 			json_add_string(req->stream, name, opt->value->as_str);
 		}
@@ -1120,6 +1209,15 @@ plugin_populate_init_request(struct plugin *plugin, struct jsonrpc_request *req)
 	json_add_string(req->stream, "rpc-file", ld->rpc_filename);
 	json_add_bool(req->stream, "startup", plugin->plugins->startup);
 	json_add_string(req->stream, "network", chainparams->network_name);
+	json_object_start(req->stream, "feature_set");
+	for (enum feature_place fp = 0; fp < NUM_FEATURE_PLACE; fp++) {
+		if (feature_place_names[fp]) {
+			json_add_hex_talarr(req->stream,
+					    feature_place_names[fp],
+					    ld->our_features->bits[fp]);
+		}
+	}
+	json_object_end(req->stream);
 	json_object_end(req->stream);
 }
 
@@ -1183,7 +1281,7 @@ void json_add_opt_plugins(struct json_stream *response,
 				if (opt->value->as_bool) {
 					json_add_bool(response, opt_name, opt->value->as_bool);
 				} else if (opt->value->as_int) {
-					json_add_s32(response, opt_name, *opt->value->as_int);
+					json_add_s64(response, opt_name, *opt->value->as_int);
 				} else if (opt->value->as_str) {
 					json_add_string(response, opt_name, opt->value->as_str);
 				} else {

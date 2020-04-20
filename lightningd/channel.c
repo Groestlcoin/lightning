@@ -1,6 +1,7 @@
 #include <bitcoin/script.h>
 #include <ccan/crypto/hkdf_sha256/hkdf_sha256.h>
 #include <ccan/tal/str/str.h>
+#include <common/closing_fee.h>
 #include <common/fee_states.h>
 #include <common/json_command.h>
 #include <common/jsonrpc_errors.h>
@@ -111,7 +112,7 @@ static void destroy_channel(struct channel *channel)
 	list_del_from(&channel->peer->channels, &channel->list);
 }
 
-void delete_channel(struct channel *channel)
+void delete_channel(struct channel *channel STEALS)
 {
 	struct peer *peer = channel->peer;
 	wallet_channel_close(channel->peer->ld->wallet, channel->dbid);
@@ -242,6 +243,9 @@ struct channel *new_channel(struct peer *peer, u64 dbid,
 	channel->shutdown_scriptpubkey[REMOTE]
 		= tal_steal(channel, remote_shutdown_scriptpubkey);
 	channel->final_key_idx = final_key_idx;
+	channel->closing_fee_negotiation_step = 50;
+	channel->closing_fee_negotiation_step_unit
+		= CLOSING_FEE_NEGOTIATION_STEP_UNIT_PERCENTAGE;
 	if (local_shutdown_scriptpubkey)
 		channel->shutdown_scriptpubkey[LOCAL]
 			= tal_steal(channel, local_shutdown_scriptpubkey);
@@ -326,6 +330,22 @@ struct channel *active_channel_by_id(struct lightningd *ld,
 	if (uc)
 		*uc = peer->uncommitted_channel;
 	return peer_active_channel(peer);
+}
+
+struct channel *active_channel_by_scid(struct lightningd *ld,
+				       const struct short_channel_id *scid)
+{
+	struct peer *p;
+	struct channel *chan;
+	list_for_each(&ld->peers, p, list) {
+		list_for_each(&p->channels, chan, list) {
+			if (channel_active(chan)
+			    && chan->scid
+			    && short_channel_id_eq(scid, chan->scid))
+				return chan;
+		}
+	}
+	return NULL;
 }
 
 struct channel *channel_by_dbid(struct lightningd *ld, const u64 dbid)
