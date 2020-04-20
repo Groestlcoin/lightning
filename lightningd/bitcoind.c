@@ -52,7 +52,7 @@ static void plugin_config_cb(const char *buffer,
 
 static void plugin_config_timeout(void *unused UNUSED)
 {
-	fatal("Timed out while waiting for (one of) the Bitcoin backend "
+	fatal("Timed out while waiting for (one of) the Groestlcoin backend "
 	      "plugin(s) to complete the handshake.");
 }
 
@@ -136,7 +136,7 @@ static void bitcoin_plugin_send(struct bitcoind *bitcoind,
 {
 	struct plugin *plugin = strmap_get(&bitcoind->pluginsmap, req->method);
 	if (!plugin)
-		fatal("Bitcoin backend plugin for %s died.", req->method);
+		fatal("Groestlcoin backend plugin for %s died.", req->method);
 
 	plugin_request_send(plugin, req);
 }

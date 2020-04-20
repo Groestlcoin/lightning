@@ -678,7 +678,7 @@ int main(int argc, char *argv[])
 
 	peer_billboard(
 	    true,
-	    "Negotiating closing fee between %s and %s satoshi (ideal %s) "
+	    "Negotiating closing fee between %s and %s gro (ideal %s) "
 	    "using step %s",
 	    type_to_string(tmpctx, struct amount_sat, &min_fee_to_accept),
 	    type_to_string(tmpctx, struct amount_sat, &commitment_fee),
