@@ -63,6 +63,7 @@ $(LIBWALLY_HEADERS) $(LIBSECP_HEADERS): submodcheck
 $(TARGET_DIR)/libsecp256k1.% $(TARGET_DIR)/libwallycore.%: $(TARGET_DIR)/libwally-core-build/src/secp256k1/libsecp256k1.la $(TARGET_DIR)/libwally-core-build/src/libwallycore.la
 	#GRS patch
 	grep -rl 'wally_sha256d' external/libwally-core/src/transaction.c | xargs sed -i 's/wally_sha256d/wally_sha256/g';exit 0
+	grep -rl '21000000' external/libwally-core/include/wally_transaction.h | xargs sed -i 's/21000000/105000000/g';exit 0
 	#*********
 	$(MAKE) -C $(TARGET_DIR)/libwally-core-build DESTDIR=$$(pwd)/$(TARGET_DIR) install-exec
 
