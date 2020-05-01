@@ -648,7 +648,7 @@ static WARN_UNUSED_RESULT bool risk_add_fee(struct amount_msat *risk,
 
 	/* Won't overflow on add, just lose precision */
 	r = (double)riskbias + riskfactor * delay * msat.millisatoshis + risk->millisatoshis; /* Raw: to double */
-	if (r > UINT64_MAX)
+	if (r > (double)UINT64_MAX)
 		return false;
 	risk->millisatoshis = r; /* Raw: from double */
 	return true;
@@ -682,7 +682,7 @@ static bool fuzz_fee(u64 *fee,
 	 * 2*fuzz*rand              random number between 0.0 -> 2*fuzz
 	 * 2*fuzz*rand - fuzz       random number between -fuzz -> +fuzz
 	 */
-	fee_scale = 1.0 + (2.0 * fuzz * h / UINT64_MAX) - fuzz;
+	fee_scale = 1.0 + (2.0 * fuzz * h / (double)UINT64_MAX) - fuzz;
 	fuzzed_fee = *fee * fee_scale;
 	if (fee_scale > 1.0 && fuzzed_fee < *fee)
 		return false;
@@ -1650,7 +1650,7 @@ bool routing_add_channel_announcement(struct routing_state *rstate,
 	}
 
 	uc = tal(rstate, struct unupdated_channel);
-	uc->channel_announce = tal_dup_arr(uc, u8, msg, tal_count(msg), 0);
+	uc->channel_announce = tal_dup_talarr(uc, u8, msg);
 	uc->added = gossip_time_now(rstate);
 	uc->index = index;
 	uc->sat = sat;
@@ -1694,8 +1694,7 @@ u8 *handle_channel_announcement(struct routing_state *rstate,
 	pending->updates[0] = NULL;
 	pending->updates[1] = NULL;
 	pending->update_peer_softref[0] = pending->update_peer_softref[1] = NULL;
-	pending->announce = tal_dup_arr(pending, u8,
-					announce, tal_count(announce), 0);
+	pending->announce = tal_dup_talarr(pending, u8, announce);
 	pending->update_timestamps[0] = pending->update_timestamps[1] = 0;
 
 	if (!fromwire_channel_announcement(pending, pending->announce,
@@ -1973,7 +1972,8 @@ static void update_pending(struct pending_cannouncement *pending,
 					  "Replacing existing update");
 			tal_free(pending->updates[direction]);
 		}
-		pending->updates[direction] = tal_dup_arr(pending, u8, update, tal_count(update), 0);
+		pending->updates[direction]
+			= tal_dup_talarr(pending, u8, update);
 		pending->update_timestamps[direction] = timestamp;
 		clear_softref(pending, &pending->update_peer_softref[direction]);
 		set_softref(pending, &pending->update_peer_softref[direction],
@@ -2473,9 +2473,7 @@ bool routing_add_node_announcement(struct routing_state *rstate,
 		pna->index = index;
 		tal_free(pna->node_announcement);
 		clear_softref(pna, &pna->peer_softref);
-		pna->node_announcement = tal_dup_arr(pna, u8, msg,
-						     tal_count(msg),
-						     0);
+		pna->node_announcement = tal_dup_talarr(pna, u8, msg);
 		set_softref(pna, &pna->peer_softref, peer);
 		return true;
 	}
@@ -2632,20 +2630,20 @@ u8 *handle_node_announcement(struct routing_state *rstate, const u8 *node_ann,
 	return NULL;
 }
 
-struct route_hop *get_route(const tal_t *ctx, struct routing_state *rstate,
-			    const struct node_id *source,
-			    const struct node_id *destination,
-			    struct amount_msat msat, double riskfactor,
-			    u32 final_cltv,
-			    double fuzz, u64 seed,
-			    struct exclude_entry **excluded,
-			    u32 max_hops)
+struct route_hop **get_route(const tal_t *ctx, struct routing_state *rstate,
+			     const struct node_id *source,
+			     const struct node_id *destination,
+			     struct amount_msat msat, double riskfactor,
+			     u32 final_cltv,
+			     double fuzz, u64 seed,
+			     struct exclude_entry **excluded,
+			     u32 max_hops)
 {
 	struct chan **route;
 	struct amount_msat total_amount;
 	unsigned int total_delay;
 	struct amount_msat fee;
-	struct route_hop *hops;
+	struct route_hop **hops;
 	struct node *n;
 	struct amount_msat *saved_capacity;
 	struct short_channel_id_dir *excluded_chan;
@@ -2719,7 +2717,7 @@ struct route_hop *get_route(const tal_t *ctx, struct routing_state *rstate,
 	}
 
 	/* Fees, delays need to be calculated backwards along route. */
-	hops = tal_arr(ctx, struct route_hop, tal_count(route));
+	hops = tal_arr(ctx, struct route_hop *, tal_count(route));
 	total_amount = msat;
 	total_delay = final_cltv;
 
@@ -2730,12 +2728,15 @@ struct route_hop *get_route(const tal_t *ctx, struct routing_state *rstate,
 
 		int idx = half_chan_to(n, route[i]);
 		c = &route[i]->half[idx];
-		hops[i].channel_id = route[i]->scid;
-		hops[i].nodeid = n->id;
-		hops[i].amount = total_amount;
-		hops[i].delay = total_delay;
-		hops[i].direction = idx;
-		hops[i].style = n->hop_style;
+		hops[i] = tal(hops, struct route_hop);
+		hops[i]->channel_id = route[i]->scid;
+		hops[i]->nodeid = n->id;
+		hops[i]->amount = total_amount;
+		hops[i]->delay = total_delay;
+		hops[i]->direction = idx;
+		hops[i]->style = n->hop_style;
+		hops[i]->blinding = NULL;
+		hops[i]->enctlv = NULL;
 
 		/* Since we calculated this route, it should not overflow! */
 		if (!amount_msat_add_fee(&total_amount,

@@ -21,6 +21,7 @@
 #include <lightningd/jsonrpc.h>
 #include <lightningd/lightningd.h>
 #include <lightningd/log.h>
+#include <lightningd/onion_message.h>
 #include <lightningd/peer_control.h>
 #include <lightningd/subd.h>
 #include <wire/gen_common_wire.h>
@@ -319,7 +320,17 @@ static unsigned channel_msg(struct subd *sd, const u8 *msg, const int *fds)
 	case WIRE_CHANNEL_SEND_ERROR_REPLY:
 		handle_error_channel(sd->channel, msg);
 		break;
-
+#if EXPERIMENTAL_FEATURES
+	case WIRE_GOT_ONIONMSG_TO_US:
+		handle_onionmsg_to_us(sd->channel, msg);
+		break;
+	case WIRE_GOT_ONIONMSG_FORWARD:
+		handle_onionmsg_forward(sd->channel, msg);
+		break;
+#else
+	case WIRE_GOT_ONIONMSG_TO_US:
+	case WIRE_GOT_ONIONMSG_FORWARD:
+#endif
 	/* And we never get these from channeld. */
 	case WIRE_CHANNEL_INIT:
 	case WIRE_CHANNEL_FUNDING_DEPTH:
@@ -334,7 +345,8 @@ static unsigned channel_msg(struct subd *sd, const u8 *msg, const int *fds)
 	case WIRE_CHANNEL_FEERATES:
 	case WIRE_CHANNEL_SPECIFIC_FEERATES:
 	case WIRE_CHANNEL_DEV_MEMLEAK:
-	/* Replies go to requests. */
+	case WIRE_SEND_ONIONMSG:
+		/* Replies go to requests. */
 	case WIRE_CHANNEL_OFFER_HTLC_REPLY:
 	case WIRE_CHANNEL_DEV_REENABLE_COMMIT_REPLY:
 	case WIRE_CHANNEL_DEV_MEMLEAK_REPLY:
@@ -365,12 +377,7 @@ void peer_start_channeld(struct channel *channel,
 {
 	u8 *initmsg;
 	int hsmfd;
-	struct added_htlc *htlcs;
-	enum htlc_state *htlc_states;
-	struct fulfilled_htlc *fulfilled_htlcs;
-	enum side *fulfilled_sides;
-	const struct failed_htlc **failed_htlcs;
-	enum side *failed_sides;
+	const struct existing_htlc **htlcs;
 	struct short_channel_id scid;
 	u64 num_revocations;
 	struct lightningd *ld = channel->peer->ld;
@@ -401,15 +408,14 @@ void peer_start_channeld(struct channel *channel,
 					   take(&hsmfd), NULL));
 
 	if (!channel->owner) {
-		log_unusual(channel->log, "Could not subdaemon channel: %s",
-			    strerror(errno));
+		log_broken(channel->log, "Could not subdaemon channel: %s",
+			   strerror(errno));
 		channel_fail_reconnect_later(channel,
 					     "Failed to subdaemon channel");
 		return;
 	}
 
-	peer_htlcs(tmpctx, channel, &htlcs, &htlc_states, &fulfilled_htlcs,
-		   &fulfilled_sides, &failed_htlcs, &failed_sides);
+	htlcs = peer_htlcs(tmpctx, channel);
 
 	if (channel->scid) {
 		scid = *channel->scid;
@@ -459,6 +465,7 @@ void peer_start_channeld(struct channel *channel,
 
 	initmsg = towire_channel_init(tmpctx,
 				      chainparams,
+ 				      ld->our_features,
 				      &channel->funding_txid,
 				      channel->funding_outnum,
 				      channel->funding,
@@ -490,12 +497,7 @@ void peer_start_channeld(struct channel *channel,
 				      channel->next_index[REMOTE],
 				      num_revocations,
 				      channel->next_htlc_id,
-				      htlcs, htlc_states,
-				      fulfilled_htlcs, fulfilled_sides,
-				      failed_htlcs, failed_sides,
-				      /* This is an approximation, but failing
-				       * on restart is a corner case */
-				      get_block_height(ld->topology),
+				      htlcs,
 				      channel->scid != NULL,
 				      channel->remote_funding_locked,
 				      &scid,
@@ -507,7 +509,7 @@ void peer_start_channeld(struct channel *channel,
 				      funding_signed,
 				      reached_announce_depth,
 				      &last_remote_per_commit_secret,
-				      channel->peer->features,
+				      channel->peer->their_features,
 				      channel->remote_upfront_shutdown_script,
 				      remote_ann_node_sig,
 				      remote_ann_bitcoin_sig,

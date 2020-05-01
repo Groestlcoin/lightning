@@ -94,6 +94,7 @@ this example:
   ],
   "features": {
     "node": "D0000000",
+    "channel": "D0000000",
     "init": "0E000000",
     "invoice": "00AD0000"
   },
@@ -104,7 +105,7 @@ this example:
 The `options` will be added to the list of command line options that
 `lightningd` accepts. The above will add a `--greeting` option with a
 default value of `World` and the specified description. *Notice that
-currently string, (unsigned) integers, and bool options are supported.*
+currently string, integers, bool, and flag options are supported.*
 
 The `rpcmethods` are methods that will be exposed via `lightningd`'s
 JSON-RPC over Unix-Socket interface, just like the builtin
@@ -118,15 +119,15 @@ The `dynamic` indicates if the plugin can be managed after `lightningd`
 has been started. Critical plugins that should not be stopped should set it
 to false.
 
-The `features` object allows the plugin to register featurebits that should be
+The `featurebits` object allows the plugin to register featurebits that should be
 announced in a number of places in [the protocol][bolt9]. They can be used to signal
 support for custom protocol extensions to direct peers, remote nodes and in
 invoices. Custom protocol extensions can be implemented for example using the
 `sendcustommsg` method and the `custommsg` hook, or the `sendonion` method and
-the `htlc_accepted` hook. The keys in the `features` object are `node` for
+the `htlc_accepted` hook. The keys in the `featurebits` object are `node` for
 features that should be announced via the `node_announcement` to all nodes in
 the network, `init` for features that should be announced to direct peers
-during the connection setup, and `invoice` for features that should be
+during the connection setup, `channel` for features which should apply to `channel_announcement`, and `invoice` for features that should be
 announced to a potential sender of a payment in the invoice. The low range of
 featurebits is reserved for standardize features, so please pick random, high
 position bits for experiments. If you'd like to standardize your extension
@@ -138,6 +139,48 @@ as the name was not previously registered. This includes both built-in
 methods, such as `help` and `getinfo`, as well as methods registered
 by other plugins. If there is a conflict then `lightningd` will report
 an error and exit.
+
+#### Types of Options
+
+There are currently four supported option 'types':
+  - string: a string
+  - bool: a boolean
+  - int: parsed as a signed integer (64-bit)
+  - flag: no-arg flag option. Is boolean under the hood. Defaults to false.
+
+Nota bene: if a `flag` type option is not set, it will not appear
+in the options set that is passed to the plugin.
+
+Here's an example option set, as sent in response to `getmanifest`
+
+```json
+  "options": [
+    {
+      "name": "greeting",
+      "type": "string",
+      "default": "World",
+      "description": "What name should I call you?"
+    },
+    {
+      "name": "run-hot",
+      "type": "flag",
+      "default": None,  // defaults to false
+      "description": "If set, overclocks plugin"
+    },
+    {
+      "name": "is_online",
+      "type": "bool",
+      "default": false,
+      "description": "Set to true if plugin can use network"
+    },
+    {
+      "name": "service-port",
+      "type": "int",
+      "default": 6666,
+      "description": "Port to use to connect to 3rd-party service"
+    }
+  ],
+```
 
 ### The `init` method
 
@@ -636,8 +679,8 @@ This hook is called whenever a valid payment for an unpaid invoice has arrived.
 
 The hook is sparse on purpose, since the plugin can use the JSON-RPC
 `listinvoices` command to get additional details about this invoice.
-It can return a non-zero `failure_code` field as defined for final
-nodes in [BOLT 4][bolt4-failure-codes], a `result` field with the string
+It can return a `failure_message` field as defined for final
+nodes in [BOLT 4][bolt4-failure-messages], a `result` field with the string
 `reject` to fail it with `incorrect_or_unknown_payment_details`, or a
 `result` field with the string `continue` to accept the payment.
 
@@ -760,15 +803,22 @@ This means that the plugin does not want to do anything special and
 if we're the recipient, or attempt to forward it otherwise. Notice that the
 usual checks such as sufficient fees and CLTV deltas are still enforced.
 
+It can also replace the `onion.payload` by specifying a `payload` in
+the response.  Note that this is always a TLV-style payload, so unlike
+`onion.payload` there is no length prefix (and it must be at least 4
+hex digits long).  This will be re-parsed; it's useful for removing
+onion fields which a plugin doesn't want lightningd to consider.
+
+
 ```json
 {
   "result": "fail",
-  "failure_code": 4301
+  "failure_message": "2002"
 }
 ```
 
-`fail` will tell `lightningd` to fail the HTLC with a given numeric
-`failure_code` (please refer to the [spec][bolt4-failure-codes] for details).
+`fail` will tell `lightningd` to fail the HTLC with a given hex-encoded
+`failure_message` (please refer to the [spec][bolt4-failure-messages] for details: `incorrect_or_unknown_payment_details` is the most common).
 
 ```json
 {
@@ -896,10 +946,85 @@ This will ensure backward
 compatibility should the semantics be changed in future.
 
 
+
+## Bitcoin backend
+
+C-lightning communicates with the Bitcoin network through a plugin. It uses the
+`bcli` plugin by default but you can use a custom one, multiple custom ones for
+different operations, or write your own for your favourite Bitcoin data source!
+
+Communication with the plugin is done through 5 JSONRPC commands, `lightningd`
+can use from 1 to 5 plugin(s) registering these 5 commands for gathering Bitcoin
+data. Each plugin must follow the below specification for `lightningd` to operate.
+
+
+### `getchainfo`
+
+Called at startup, it's used to check the network `lightningd` is operating on and to
+get the sync status of the backend.
+
+The plugin must respond to `getchainfo` with the following fields:
+    - `chain` (string), the network name as introduced in bip70
+    - `headercount` (number), the number of fetched block headers
+    - `blockcount` (number), the number of fetched block body
+    - `ibd` (bool), whether the backend is performing initial block download
+
+
+### `estimatefees`
+
+Polled by `lightningd` to get the current feerate, all values must be passed in sat/kVB.
+
+If fee estimation fails, the plugin must set all the fields to `null`.
+
+The plugin, if fee estimation succeeds, must respond with the following fields:
+    - `opening` (number), used for funding and also misc transactions
+    - `mutual_close` (number), used for the mutual close transaction
+    - `unilateral_close` (number), used for unilateral close (/commitment) transactions
+    - `delayed_to_us` (number), used for resolving our output from our unilateral close
+    - `htlc_resolution` (number), used for resolving HTLCs after an unilateral close
+    - `penalty` (number), used for resolving revoked transactions
+    - `min_acceptable` (number), used as the minimum acceptable feerate
+    - `max_acceptable` (number), used as the maximum acceptable feerate
+
+
+### `getrawblockbyheight`
+
+This call takes one parameter, `height`, which determines the block height of
+the block to fetch.
+
+The plugin must set all fields to `null` if no block was found at the specified `height`.
+
+The plugin must respond to `getrawblockbyheight` with the following fields:
+    - `blockhash` (string), the block hash as a hexadecimal string
+    - `block` (string), the block content as a hexadecimal string
+
+
+### `getutxout`
+
+This call takes two parameter, the `txid` (string) and the `vout` (number)
+identifying the UTXO we're interested in.
+
+The plugin must set both fields to `null` if the specified TXO was spent.
+
+The plugin must respond to `gettxout` with the following fields:
+    - `amount` (number), the output value in **sats**
+    - `script` (string), the output scriptPubKey
+
+
+### `sendrawtransaction`
+
+This call takes one parameter, a string representing a hex-encoded Bitcoin
+transaction.
+
+The plugin must broadcast it and respond with the following fields:
+    - `success` (boolean), which is `true` if the broadcast succeeded
+    - `errmsg` (string), if success is `false`, the reason why it failed
+
+
 [jsonrpc-spec]: https://www.jsonrpc.org/specification
 [jsonrpc-notification-spec]: https://www.jsonrpc.org/specification#notification
 [bolt4]: https://github.com/lightningnetwork/lightning-rfc/blob/master/04-onion-routing.md
-[bolt4-failure-codes]: https://github.com/lightningnetwork/lightning-rfc/blob/master/04-onion-routing.md#failure-messages
+[bolt4-failure-messages]: https://github.com/lightningnetwork/lightning-rfc/blob/master/04-onion-routing.md#failure-messages
 [bolt2-open-channel]: https://github.com/lightningnetwork/lightning-rfc/blob/master/02-peer-protocol.md#the-open_channel-message
 [sendcustommsg]: lightning-dev-sendcustommsg.7.html
 [oddok]: https://github.com/lightningnetwork/lightning-rfc/blob/master/00-introduction.md#its-ok-to-be-odd

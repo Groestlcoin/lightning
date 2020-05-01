@@ -60,6 +60,7 @@ struct wallet *wallet_new(struct lightningd *ld, struct timers *timers)
 	wallet->db = db_setup(wallet, ld);
 	wallet->log = new_log(wallet, ld->log_book, NULL, "wallet");
 	wallet->bip32_base = NULL;
+	wallet->keyscan_gap = 50;
 	list_head_init(&wallet->unstored_payments);
 	list_head_init(&wallet->unreleased_txs);
 
@@ -403,8 +404,10 @@ static const struct utxo **wallet_select(const tal_t *ctx, struct wallet *w,
 		 * confirmation height and that it is below the required
 		 * maxheight (current_height - minconf) */
 		if (maxheight != 0 &&
-		    (!u->blockheight || *u->blockheight > maxheight))
+		    (!u->blockheight || *u->blockheight > maxheight)) {
+			tal_free(u);
 			continue;
+		}
 
 		tal_arr_expand(&utxos, u);
 
@@ -549,7 +552,7 @@ bool wallet_can_spend(struct wallet *w, const u8 *script,
 	else
 		return false;
 
-	for (i = 0; i <= bip32_max_index; i++) {
+	for (i = 0; i <= bip32_max_index + w->keyscan_gap; i++) {
 		u8 *s;
 
 		if (bip32_key_from_parent(w->bip32_base, i,
@@ -564,6 +567,10 @@ bool wallet_can_spend(struct wallet *w, const u8 *script,
 			s = p2sh;
 		}
 		if (scripteq(s, script)) {
+			/* If we found a used key in the keyscan_gap we should
+			 * remember that. */
+			if (i > bip32_max_index)
+				db_set_intvar(w->db, "bip32_max_index", i);
 			tal_free(s);
 			*index = i;
 			return true;
@@ -1612,7 +1619,7 @@ int wallet_extract_owned_outputs(struct wallet *w, const struct bitcoin_tx *tx,
 
 		utxo->blockheight = blockheight ? blockheight : NULL;
 		utxo->spendheight = NULL;
-		utxo->scriptPubkey = tal_dup_arr(utxo, u8, script, tal_bytelen(script), 0);
+		utxo->scriptPubkey = tal_dup_talarr(utxo, u8, script);
 
 		log_debug(w->log, "Owning output %zu %s (%s) txid %s%s",
 			  output,
@@ -1755,35 +1762,47 @@ void wallet_htlc_save_out(struct wallet *wallet,
 	tal_free(stmt);
 }
 
+/* input htlcs use failcode & failonion, output htlcs use failmsg & failonion */
 void wallet_htlc_update(struct wallet *wallet, const u64 htlc_dbid,
 			const enum htlc_state new_state,
 			const struct preimage *payment_key,
-			enum onion_type failcode,
-			const struct onionreply *failuremsg)
+			enum onion_type badonion,
+			const struct onionreply *failonion,
+			const u8 *failmsg)
 {
 	struct db_stmt *stmt;
+
+	/* We should only use this for badonion codes */
+	assert(!badonion || (badonion & BADONION));
 
 	/* The database ID must be set by a previous call to
 	 * `wallet_htlc_save_*` */
 	assert(htlc_dbid);
 	stmt = db_prepare_v2(
 	    wallet->db, SQL("UPDATE channel_htlcs SET hstate=?, payment_key=?, "
-			    "malformed_onion=?, failuremsg=? WHERE id=?"));
+			    "malformed_onion=?, failuremsg=?, localfailmsg=?"
+			    " WHERE id=?"));
 
 	/* FIXME: htlc_state_in_db */
 	db_bind_int(stmt, 0, new_state);
-	db_bind_u64(stmt, 4, htlc_dbid);
+	db_bind_u64(stmt, 5, htlc_dbid);
 
 	if (payment_key)
 		db_bind_preimage(stmt, 1, payment_key);
 	else
 		db_bind_null(stmt, 1);
 
-	db_bind_int(stmt, 2, failcode);
-	if (failuremsg)
-		db_bind_onionreply(stmt, 3, failuremsg);
+	db_bind_int(stmt, 2, badonion);
+
+	if (failonion)
+		db_bind_onionreply(stmt, 3, failonion);
 	else
 		db_bind_null(stmt, 3);
+
+	if (failmsg)
+		db_bind_blob(stmt, 4, failmsg, tal_bytelen(failmsg));
+	else
+		db_bind_null(stmt, 4);
 
 	db_exec_prepared_v2(take(stmt));
 }
@@ -1798,6 +1817,8 @@ static bool wallet_stmt2htlc_in(struct channel *channel,
 	db_column_amount_msat(stmt, 2, &in->msat);
 	in->cltv_expiry = db_column_int(stmt, 3);
 	in->hstate = db_column_int(stmt, 4);
+	/* FIXME: save blinding in db !*/
+	in->blinding = NULL;
 
 	db_column_sha256(stmt, 5, &in->payment_hash);
 
@@ -1813,11 +1834,10 @@ static bool wallet_stmt2htlc_in(struct channel *channel,
 	       sizeof(in->onion_routing_packet));
 
 	if (db_column_is_null(stmt, 8))
-		in->failuremsg = NULL;
+		in->failonion = NULL;
 	else
-		in->failuremsg = db_column_onionreply(in, stmt, 8);
-	in->failcode = db_column_int(stmt, 9);
-
+		in->failonion = db_column_onionreply(in, stmt, 8);
+	in->badonion = db_column_int(stmt, 9);
 	if (db_column_is_null(stmt, 11)) {
 		in->shared_secret = NULL;
 	} else {
@@ -1831,7 +1851,28 @@ static bool wallet_stmt2htlc_in(struct channel *channel,
 #endif
 	}
 
+#ifdef COMPAT_V072
+	if (db_column_is_null(stmt, 12)) {
+		in->received_time.ts.tv_sec = 0;
+		in->received_time.ts.tv_nsec = 0;
+	} else
+#endif /* COMPAT_V072 */
 	in->received_time = db_column_timeabs(stmt, 12);
+
+#ifdef COMPAT_V080
+	/* This field is now reserved for badonion codes: the rest should
+	 * use the failonion field. */
+	if (in->badonion && !(in->badonion & BADONION)) {
+		log_broken(channel->log,
+			   "Replacing incoming HTLC %"PRIu64" error "
+			   "%s with WIRE_TEMPORARY_NODE_FAILURE",
+			   in->key.id, onion_type_name(in->badonion));
+		in->badonion = 0;
+		in->failonion = create_onionreply(in,
+						  in->shared_secret,
+						  towire_temporary_node_failure(tmpctx));
+	}
+#endif
 
 	return ok;
 }
@@ -1850,6 +1891,8 @@ static bool wallet_stmt2htlc_out(struct wallet *wallet,
 	out->cltv_expiry = db_column_int(stmt, 3);
 	out->hstate = db_column_int(stmt, 4);
 	db_column_sha256(stmt, 5, &out->payment_hash);
+	/* FIXME: save blinding in db !*/
+	out->blinding = NULL;
 
 	if (!db_column_is_null(stmt, 6)) {
 		out->preimage = tal(out, struct preimage);
@@ -1863,10 +1906,16 @@ static bool wallet_stmt2htlc_out(struct wallet *wallet,
 	       sizeof(out->onion_routing_packet));
 
 	if (db_column_is_null(stmt, 8))
-		out->failuremsg = NULL;
+		out->failonion = NULL;
 	else
-		out->failuremsg = db_column_onionreply(out, stmt, 8);
-	out->failcode = db_column_int_or_default(stmt, 9, 0);
+		out->failonion = db_column_onionreply(out, stmt, 8);
+
+	if (db_column_is_null(stmt, 14))
+		out->failmsg = NULL;
+	else
+		out->failmsg = tal_dup_arr(out, u8, db_column_blob(stmt, 14),
+					   db_column_bytes(stmt, 14), 0);
+
 	out->in = NULL;
 
 	if (!db_column_is_null(stmt, 10)) {
@@ -1898,14 +1947,7 @@ static bool wallet_stmt2htlc_out(struct wallet *wallet,
 
 static void fixup_hin(struct wallet *wallet, struct htlc_in *hin)
 {
-	/* We don't save the outgoing channel which failed; probably not worth
-	 * it for this corner case.  So we can't set hin->failoutchannel to
-	 * tell channeld what update to send, thus we turn those into a
-	 * WIRE_TEMPORARY_NODE_FAILURE. */
-	if (hin->failcode & UPDATE)
-		hin->failcode = WIRE_TEMPORARY_NODE_FAILURE;
-
-	/* We didn't used to save failcore, failuremsg... */
+	/* We didn't used to save failcore, failonion... */
 #ifdef COMPAT_V061
 	/* We care about HTLCs being removed only, not those being added. */
 	if (hin->hstate < SENT_REMOVE_HTLC)
@@ -1916,10 +1958,12 @@ static void fixup_hin(struct wallet *wallet, struct htlc_in *hin)
 		return;
 
 	/* Failed ones (only happens after db fixed!) OK. */
-	if (hin->failcode || hin->failuremsg)
+	if (hin->badonion || hin->failonion)
 		return;
 
-	hin->failcode = WIRE_TEMPORARY_NODE_FAILURE;
+	hin->failonion = create_onionreply(hin,
+					   hin->shared_secret,
+					   towire_temporary_node_failure(tmpctx));
 
 	log_broken(wallet->log, "HTLC #%"PRIu64" (%s) "
 		   " for amount %s"
@@ -2003,6 +2047,7 @@ bool wallet_htlcs_load_out_for_channel(struct wallet *wallet,
 					     ", shared_secret"
 					     ", received_time"
 					     ", partid"
+					     ", localfailmsg"
 					     " FROM channel_htlcs"
 					     " WHERE direction = ?"
 					     " AND channel_id = ?"
@@ -3707,6 +3752,7 @@ struct wallet_transaction *wallet_transactions_get(struct wallet *w, const tal_t
 			else
 				fatal("Transaction annotations are only available for inputs and outputs. Value %d", loc);
 
+			/* cppcheck-suppress uninitvar - false positive on fatal() above */
 			ann->type = db_column_int(stmt, 8);
 			if (!db_column_is_null(stmt, 9))
 				db_column_short_channel_id(stmt, 9, &ann->channel);

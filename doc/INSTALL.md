@@ -10,7 +10,8 @@ Install
 7. [Android](#to-cross-compile-for-android)
 8. [Raspberry Pi](#to-cross-compile-for-raspberry-pi)
 9. [Armbian](#to-compile-for-armbian)
-10. [Additional steps](#additional-steps)
+10. [Alpine](#to-compile-for-alpine)
+11. [Additional steps](#additional-steps)
 
 Library Requirements
 --------------------
@@ -36,7 +37,7 @@ Get dependencies:
     sudo apt-get update
     sudo apt-get install -y \
       autoconf automake build-essential git libtool libgmp-dev \
-      libsqlite3-dev python python3 python3-mako net-tools zlib1g-dev libsodium-dev \
+      libsqlite3-dev python3 python3-mako net-tools zlib1g-dev libsodium-dev \
       gettext
 
 If you don't have Groestlcoin installed locally you'll need to install that
@@ -52,7 +53,7 @@ Clone lightning:
 For development or running tests, get additional dependencies:
 
     sudo apt-get install -y valgrind python3-pip libpq-dev
-    sudo pip3 install -r tests/requirements.txt -r doc/requirements.txt
+    sudo pip3 install -r requirements.txt
 
 Build lightning:
 
@@ -85,7 +86,6 @@ $ sudo dnf update -y && \
                 git \
                 gmp-devel \
                 libsq3-devel \
-                python2-devel \
                 python3-devel \
                 python3-pip \
                 python3-setuptools \
@@ -288,6 +288,33 @@ You can compile in `customize-image.sh` using the instructions for Ubuntu.
 
 A working example that compiles both groestlcoind and c-lightning for Armbian can
 be found [here](https://github.com/groestlcoin/armbian-groestlcoin-core).
+
+To compile for Alpine
+---------------------
+Get dependencies:
+```
+apk update
+apk add ca-certificates alpine-sdk autoconf automake git libtool \
+  gmp-dev sqlite-dev python python3 py3-mako net-tools zlib-dev libsodium gettext
+```
+Clone lightning:
+```
+git clone https://github.com/ElementsProject/lightning.git
+cd lightning
+git submodule update --init
+```
+Build and install:
+```
+./configure
+make
+make install
+```
+Clean up:
+```
+cd .. && rm -rf lightning
+apk del ca-certificates alpine-sdk autoconf automake git libtool \
+  gmp-dev sqlite python3 py3-mako net-tools zlib-dev libsodium gettext
+```
 
 Additional steps
 --------------------

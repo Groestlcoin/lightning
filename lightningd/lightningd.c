@@ -57,6 +57,8 @@
 /*~ This is common code: routines shared by one or more executables
  *  (separate daemons, or the lightning-cli program). */
 #include <common/daemon.h>
+#include <common/ecdh_hsmd.h>
+#include <common/features.h>
 #include <common/memleak.h>
 #include <common/timeout.h>
 #include <common/utils.h>
@@ -513,8 +515,6 @@ static void shutdown_subdaemons(struct lightningd *ld)
 	/*~ The three "global" daemons, which we shutdown explicitly: we
 	 * give them 10 seconds to exit gracefully before killing them.  */
 	ld->connectd = subd_shutdown(ld->connectd, 10);
-	ld->gossip = subd_shutdown(ld->gossip, 10);
-	ld->hsm = subd_shutdown(ld->hsm, 10);
 
 	/* Now we free all the HTLCs */
 	free_htlcs(ld, NULL);
@@ -547,6 +547,11 @@ static void shutdown_subdaemons(struct lightningd *ld)
 		tal_free(p);
 	}
 
+	/*~ Now they're all dead, we can stop gossipd: doing it before HTLCs is
+	 * problematic because local_fail_in_htlc_needs_update() asks gossipd */
+	ld->gossip = subd_shutdown(ld->gossip, 10);
+	ld->hsm = subd_shutdown(ld->hsm, 10);
+
 	/*~ Commit the transaction.  Note that the db is actually
 	 * single-threaded, so commits never fail and we don't need
 	 * spin-and-retry logic everywhere. */
@@ -567,7 +572,7 @@ static void init_txfilter(struct wallet *w, struct txfilter *filter)
 
 	bip32_max_index = db_get_intvar(w->db, "bip32_max_index", 0);
 	/*~ One of the C99 things I unequivocally approve: for-loop scope. */
-	for (u64 i = 0; i <= bip32_max_index; i++) {
+	for (u64 i = 0; i <= bip32_max_index + w->keyscan_gap; i++) {
 		if (bip32_key_from_parent(w->bip32_base, i, BIP32_FLAG_KEY_PUBLIC, &ext) != WALLY_OK) {
 			abort();
 		}
@@ -699,6 +704,50 @@ static void setup_sig_handlers(void)
 	}
 }
 
+/*~ We actually keep more than one set of features, used in different
+ * contexts.  common/features.c knows how each standard feature is
+ * presented, so we have it generate the set for each one at a time, and
+ * combine them.
+ *
+ * This is inefficient, but the primitives are useful for adding single
+ * features later, or adding them when supplied by plugins. */
+static struct feature_set *default_features(const tal_t *ctx)
+{
+	struct feature_set *ret = NULL;
+	static const u32 features[] = {
+		OPTIONAL_FEATURE(OPT_DATA_LOSS_PROTECT),
+		OPTIONAL_FEATURE(OPT_UPFRONT_SHUTDOWN_SCRIPT),
+		OPTIONAL_FEATURE(OPT_GOSSIP_QUERIES),
+		OPTIONAL_FEATURE(OPT_VAR_ONION),
+		OPTIONAL_FEATURE(OPT_PAYMENT_SECRET),
+		OPTIONAL_FEATURE(OPT_BASIC_MPP),
+		OPTIONAL_FEATURE(OPT_GOSSIP_QUERIES_EX),
+		OPTIONAL_FEATURE(OPT_STATIC_REMOTEKEY),
+#if EXPERIMENTAL_FEATURES
+		OPTIONAL_FEATURE(OPT_ONION_MESSAGES),
+#endif
+	};
+
+	for (size_t i = 0; i < ARRAY_SIZE(features); i++) {
+		struct feature_set *f
+			= feature_set_for_feature(NULL, features[i]);
+		if (!ret)
+			ret = tal_steal(ctx, f);
+		else
+			feature_set_or(ret, take(f));
+	}
+
+	return ret;
+}
+
+/*~ We need this function style to hand to ecdh_hsmd_setup, but it's just a thin
+ * wrapper around fatal() */
+static void hsm_ecdh_failed(enum status_failreason fail,
+			    const char *fmt, ...)
+{
+	fatal("hsm failure: %s", fmt);
+}
+
 int main(int argc, char *argv[])
 {
 	struct lightningd *ld;
@@ -740,11 +789,15 @@ int main(int argc, char *argv[])
 	 * valgrind will warn us if we make decisions based on uninitialized
 	 * variables. */
 	ld = new_lightningd(NULL);
+	ld->state = LD_STATE_RUNNING;
 
 	/* Figure out where our daemons are first. */
 	ld->daemon_dir = find_daemon_dir(ld, argv[0]);
 	if (!ld->daemon_dir)
 		errx(1, "Could not find daemons");
+
+	/* Set up the feature bits for what we support */
+	ld->our_features = default_features(ld);
 
 	/*~ Handle early options; this moves us into --lightning-dir.
 	 * Plugins may add new options, which is why we are splitting
@@ -923,6 +976,9 @@ int main(int argc, char *argv[])
 	 * a backtrace if we fail during startup. */
 	crashlog = ld->log;
 
+	/*~ This sets up the ecdh() function in ecdh_hsmd to talk to hsmd */
+	ecdh_hsmd_setup(ld->hsm_fd, hsm_ecdh_failed);
+
 	/*~ The root of every backtrace (almost).  This is our main event
 	 *  loop. */
 	void *io_loop_ret = io_loop_with_timers(ld);
@@ -931,6 +987,7 @@ int main(int argc, char *argv[])
 	 *  shut down.
 	 */
 	assert(io_loop_ret == ld);
+	ld->state = LD_STATE_SHUTDOWN;
 
 	/* Keep this fd around, to write final response at the end. */
 	stop_fd = io_conn_fd(ld->stop_conn);
@@ -940,7 +997,7 @@ int main(int argc, char *argv[])
 	shutdown_subdaemons(ld);
 
 	/* Remove plugins. */
-	ld->plugins = tal_free(ld->plugins);
+	plugins_free(ld->plugins);
 
 	/* Clean up the JSON-RPC. This needs to happen in a DB transaction since
 	 * it might actually be touching the DB in some destructors, e.g.,

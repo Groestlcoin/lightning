@@ -7,6 +7,8 @@
 #include <common/initial_channel.h>
 #include <common/sphinx.h>
 
+struct existing_htlc;
+
 /**
  * new_full_channel: Given initial fees and funding, what is initial state?
  * @ctx: tal context to allocate return value from.
@@ -48,7 +50,7 @@ struct channel *new_full_channel(const tal_t *ctx,
  * @ctx: tal context to allocate return value from.
  * @channel: The channel to evaluate
  * @htlc_map: Pointer to htlcs for each tx output (allocated off @ctx).
- * @wscripts: Pointer to array of wscript for each tx returned (alloced off @ctx)
+ * @funding_wscript: Pointer to wscript for the funding tx output
  * @per_commitment_point: Per-commitment point to determine keys
  * @commitment_number: The index of this commitment.
  * @side: which side to get the commitment transaction for
@@ -59,7 +61,7 @@ struct channel *new_full_channel(const tal_t *ctx,
  */
 struct bitcoin_tx **channel_txs(const tal_t *ctx,
 				const struct htlc ***htlcmap,
-				const u8 ***wscripts,
+				const u8 **funding_wscript,
 				const struct channel *channel,
 				const struct pubkey *per_commitment_point,
 				u64 commitment_number,
@@ -90,6 +92,7 @@ u32 actual_feerate(const struct channel *channel,
  * @cltv_expiry: block number when HTLC can no longer be redeemed.
  * @payment_hash: hash whose preimage can redeem HTLC.
  * @routing: routing information (copied)
+ * @blinding: optional blinding information for this HTLC.
  * @htlcp: optional pointer for resulting htlc: filled in if and only if CHANNEL_ERR_NONE.
  *
  * If this returns CHANNEL_ERR_NONE, the fee htlc was added and
@@ -103,6 +106,7 @@ enum channel_add_err channel_add_htlc(struct channel *channel,
 				      u32 cltv_expiry,
 				      const struct sha256 *payment_hash,
 				      const u8 routing[TOTAL_PACKET_SIZE],
+				      const struct pubkey *blinding TAKES,
 				      struct htlc **htlcp,
 				      struct amount_sat *htlc_fee);
 
@@ -227,24 +231,12 @@ size_t num_channel_htlcs(const struct channel *channel);
 /**
  * channel_force_htlcs: force these htlcs into the (new) channel
  * @channel: the channel
- * @htlcs: the htlcs to add (tal_arr)
- * @hstates: the states for the htlcs (tal_arr of same size)
- * @fulfilled: htlcs of those which are fulfilled
- * @fulfilled_sides: sides for ids in @fulfilled
- * @failed: htlcs of those which are failed
- * @failed_sides: sides for ids in @failed
- * @failheight: block number which htlcs failed at.
+ * @htlcs: the htlcs to add (tal_arr) elements stolen.
  *
  * This is used for restoring a channel state.
  */
 bool channel_force_htlcs(struct channel *channel,
-			 const struct added_htlc *htlcs,
-			 const enum htlc_state *hstates,
-			 const struct fulfilled_htlc *fulfilled,
-			 const enum side *fulfilled_sides,
-			 const struct failed_htlc **failed,
-			 const enum side *failed_sides,
-			 u32 failheight);
+			 const struct existing_htlc **htlcs);
 
 /**
  * dump_htlcs: debugging dump of all HTLCs

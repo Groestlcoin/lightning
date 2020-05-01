@@ -9,6 +9,7 @@
 #include <ccan/time/time.h>
 #include <ccan/timer/timer.h>
 #include <common/errcode.h>
+#include <common/features.h>
 #include <common/json.h>
 #include <common/json_command.h>
 #include <common/json_helpers.h>
@@ -89,6 +90,9 @@ struct plugin_hook {
 	                                 const char *buf,
 	                                 const jsmntok_t *params);
 };
+
+/* Return the feature set of the current lightning node */
+const struct feature_set *plugin_feature_set(const struct plugin *p);
 
 /* Helper to create a JSONRPC2 request stream. Send it with `send_outreq`. */
 struct out_req *
@@ -210,10 +214,16 @@ struct command_result *timer_complete(struct plugin *p);
  * Freeing this releases the timer, otherwise it's freed after @cb
  * if it hasn't been freed already.
  */
-struct plugin_timer *plugin_timer(struct plugin *p,
-				  struct timerel t,
-				  void (*cb)(void *cb_arg),
-				  void *cb_arg);
+struct plugin_timer *plugin_timer_(struct plugin *p,
+				   struct timerel t,
+				   void (*cb)(void *cb_arg),
+				   void *cb_arg);
+
+#define plugin_timer(plugin, time, cb, cb_arg)		\
+	plugin_timer_((plugin), (time),			\
+		      typesafe_cb(void, void *,		\
+				  (cb), (cb_arg)),	\
+		      (cb_arg))				\
 
 /* Log something */
 void plugin_log(struct plugin *p, enum log_level l, const char *fmt, ...) PRINTF_FMT(3, 4);
@@ -228,6 +238,7 @@ void plugin_log(struct plugin *p, enum log_level l, const char *fmt, ...) PRINTF
 
 /* Standard helpers */
 char *u64_option(const char *arg, u64 *i);
+char *u32_option(const char *arg, u32 *i);
 char *charp_option(const char *arg, char **p);
 
 /* The main plugin runner: append with 0 or more plugin_option(), then NULL. */
@@ -235,6 +246,7 @@ void NORETURN LAST_ARG_NULL plugin_main(char *argv[],
 					void (*init)(struct plugin *p,
 						     const char *buf, const jsmntok_t *),
 					const enum plugin_restartability restartability,
+					struct feature_set *features,
 					const struct plugin_command *commands,
 					size_t num_commands,
 					const struct plugin_notification *notif_subs,

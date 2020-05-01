@@ -411,11 +411,12 @@ class LightningRpc(UnixDomainSocketRpc):
                 if args[0] is None and isinstance(args[1], int):
                     return self._deprecated_close(peer_id, *args, **kwargs)
 
-        def _close(peer_id, unilateraltimeout=None, destination=None):
+        def _close(peer_id, unilateraltimeout=None, destination=None, fee_negotiation_step=None):
             payload = {
                 "id": peer_id,
                 "unilateraltimeout": unilateraltimeout,
-                "destination": destination
+                "destination": destination,
+                "fee_negotiation_step": fee_negotiation_step
             }
             return self.call("close", payload)
 
@@ -1125,3 +1126,15 @@ class LightningRpc(UnixDomainSocketRpc):
             "pubkey": pubkey,
         }
         return self.call("checkmessage", payload)
+
+    def getsharedsecret(self, point, **kwargs):
+        """
+        Compute the hash of the Elliptic Curve Diffie Hellman shared
+        secret point from this node private key and an
+        input {point}.
+        """
+        payload = {
+            "point": point
+        }
+        payload.update({k: v for k, v in kwargs.items()})
+        return self.call("getsharedsecret", payload)

@@ -29,6 +29,7 @@
 #include <common/memleak.h>
 #include <common/param.h>
 #include <common/timeout.h>
+#include <common/utils.h>
 #include <common/version.h>
 #include <common/wireaddr.h>
 #include <errno.h>
@@ -611,8 +612,22 @@ struct rpc_command_hook_payload {
 static void rpc_command_hook_serialize(struct rpc_command_hook_payload *p,
                                        struct json_stream *s)
 {
+	const jsmntok_t *tok;
+	size_t i;
+	char *key;
 	json_object_start(s, "rpc_command");
-	json_add_tok(s, "rpc_command", p->request, p->buffer);
+
+#ifdef COMPAT_V081
+	if (deprecated_apis)
+		json_add_tok(s, "rpc_command", p->request, p->buffer);
+#endif
+
+	json_for_each_obj(i, tok, p->request) {
+		key = tal_strndup(NULL, p->buffer + tok->start,
+				  tok->end - tok->start);
+		json_add_tok(s, key, tok + 1, p->buffer);
+		tal_free(key);
+	}
 	json_object_end(s);
 }
 
@@ -662,12 +677,15 @@ fail:
 }
 
 static void
-rpc_command_hook_callback(struct rpc_command_hook_payload *p,
+rpc_command_hook_callback(struct rpc_command_hook_payload *p STEALS,
                           const char *buffer, const jsmntok_t *resulttok)
 {
 	const jsmntok_t *tok, *params, *custom_return;
 	const jsmntok_t *innerresulttok;
 	struct json_stream *response;
+
+	/* Free payload with cmd */
+	tal_steal(p->cmd, p);
 
 	params = json_get_member(p->buffer, p->request, "params");
 
@@ -751,15 +769,14 @@ rpc_command_hook_callback(struct rpc_command_hook_payload *p,
 	                         "Bad response to 'rpc_command' hook."));
 }
 
-REGISTER_PLUGIN_HOOK(rpc_command, PLUGIN_HOOK_SINGLE,
-		     rpc_command_hook_callback,
-                     struct rpc_command_hook_payload *,
-                     rpc_command_hook_serialize,
-                     struct rpc_command_hook_payload *);
+REGISTER_SINGLE_PLUGIN_HOOK(rpc_command,
+			    rpc_command_hook_callback,
+			    rpc_command_hook_serialize,
+			    struct rpc_command_hook_payload *);
 
 static void call_rpc_command_hook(struct rpc_command_hook_payload *p)
 {
-	plugin_hook_call_rpc_command(p->cmd->ld, p, p);
+	plugin_hook_call_rpc_command(p->cmd->ld, p);
 }
 
 /* We return struct command_result so command_fail return value has a natural
@@ -831,10 +848,8 @@ parse_request(struct json_connection *jcon, const jsmntok_t tok[])
 	rpc_hook = tal(c, struct rpc_command_hook_payload);
 	rpc_hook->cmd = c;
 	/* Duplicate since we might outlive the connection */
-	rpc_hook->buffer = tal_dup_arr(rpc_hook, char, jcon->buffer,
-	                               tal_count(jcon->buffer), 0);
-	rpc_hook->request = tal_dup_arr(rpc_hook, const jsmntok_t, tok,
-	                                tal_count(tok), 0);
+	rpc_hook->buffer = tal_dup_talarr(rpc_hook, char, jcon->buffer);
+	rpc_hook->request = tal_dup_talarr(rpc_hook, jsmntok_t, tok);
 	/* Prevent a race between was_pending and still_pending */
 	new_reltimer(c->ld->timers, rpc_hook, time_from_msec(1),
 	             call_rpc_command_hook, rpc_hook);

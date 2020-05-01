@@ -22,12 +22,14 @@ LIGHTNINGD_COMMON_OBJS :=			\
 	common/bech32_util.o			\
 	common/bigsize.o			\
 	common/bip32.o				\
+	common/blinding.o			\
 	common/bolt11.o				\
 	common/channel_config.o			\
 	common/configdir.o			\
 	common/crypto_state.o			\
 	common/daemon.o				\
 	common/derive_basepoints.o		\
+	common/ecdh_hsmd.o			\
 	common/features.o			\
 	common/fee_states.o			\
 	common/funding_tx.o			\
@@ -35,6 +37,7 @@ LIGHTNINGD_COMMON_OBJS :=			\
 	common/gen_status_wire.o		\
 	common/gossip_rcvd_filter.o		\
 	common/hash_u5.o			\
+	common/hmac.o				\
 	common/htlc_state.o			\
 	common/htlc_trim.o			\
 	common/htlc_wire.o			\
@@ -74,6 +77,7 @@ LIGHTNINGD_SRC :=				\
 	lightningd/channel_control.c		\
 	lightningd/closing_control.c		\
 	lightningd/connect_control.c		\
+	lightningd/onion_message.c		\
 	lightningd/gossip_control.c		\
 	lightningd/gossip_msg.c			\
 	lightningd/hsm_control.c		\

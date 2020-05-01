@@ -13,7 +13,9 @@
 #include <common/json_stream.h>
 #include <common/pseudorand.h>
 #include <common/type_to_string.h>
+#include <inttypes.h>
 #include <plugins/libplugin.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <wire/onion_defs.h>
 #include <wire/wire.h>
@@ -83,11 +85,13 @@ struct pay_command {
 
 	/* How much we're paying, and what riskfactor for routing. */
 	struct amount_msat msat;
-	double riskfactor;
+	/* riskfactor 12.345% -> riskfactor_millionths = 12345000 */
+	u64 riskfactor_millionths;
 	unsigned int final_cltv;
 
 	/* Limits on what routes we'll accept. */
-	double maxfeepercent;
+	/* 12.345% -> maxfee_pct_millionths = 12345000 */
+	u64 maxfee_pct_millionths;
 	unsigned int maxdelay;
 	struct amount_msat exemptfee;
 
@@ -143,13 +147,6 @@ static void json_out_add_raw_len(struct json_out *jout,
 	memcpy(p, jsonstr, len);
 }
 
-static void json_out_add_raw(struct json_out *jout,
-			     const char *fieldname,
-			     const char *jsonstr)
-{
-	json_out_add_raw_len(jout, fieldname, jsonstr, strlen(jsonstr));
-}
-
 static struct json_out *failed_start(struct pay_command *pc)
 {
 	struct pay_attempt *attempt = current_attempt(pc);
@@ -175,6 +172,15 @@ static const jsmntok_t *copy_member(struct json_out *ret,
 	if (!m)
 		return NULL;
 
+	/* FIXME: The fact it is a string is probably the wrong thing
+	 * to handle: if it *is* a string we should probably copy
+	 * the quote marks, but json_tok_full/json_tok_full_len
+	 * specifically remove those.
+	 * It works *now* because it is only used in "code" and
+	 * "data": "code" is always numeric, and "data" is usually
+	 * a JSON object/key-value table, but pure stromgs will
+	 * probably result in invalid JSON.
+	 */
 	/* Literal copy: it's already JSON escaped, and may be a string. */
 	json_out_add_raw_len(ret, membername,
 			     json_tok_full(buf, m), json_tok_full_len(m));
@@ -258,7 +264,7 @@ static struct command_result *waitsendpay_expired(struct command *cmd,
 	for (size_t i = 0; i < tal_count(pc->ps->attempts); i++) {
 		json_object_start(data, NULL);
 		if (pc->ps->attempts[i].route)
-			json_add_member(data, "route", false, "%s",
+			json_add_jsonstr(data, "route",
 					 pc->ps->attempts[i].route);
 		json_out_add_splice(data->jout, "failure",
 				    pc->ps->attempts[i].failure);
@@ -694,6 +700,9 @@ static bool maybe_exclude(struct pay_command *pc,
 {
 	const jsmntok_t *scid, *dir;
 
+	if (!route)
+		return false;
+
 	scid = json_get_member(buf, route, "channel");
 
 	if (node_or_channel_in_routehint(pc->plugin,
@@ -719,8 +728,8 @@ static struct command_result *getroute_done(struct command *cmd,
 	struct pay_attempt *attempt = current_attempt(pc);
 	const jsmntok_t *t = json_get_member(buf, result, "route");
 	struct amount_msat fee;
+	struct amount_msat max_fee;
 	u32 delay;
-	double feepercent;
 	struct out_req *req;
 
 	if (!t)
@@ -752,14 +761,19 @@ static struct command_result *getroute_done(struct command *cmd,
 		plugin_err(cmd->plugin, "getroute with invalid delay? %.*s",
 			   result->end - result->start, buf);
 
-	/* Casting u64 to double will lose some precision. The loss of precision
-	 * in feepercent will be like 3.0000..(some dots)..1 % - 3.0 %.
-	 * That loss will not be representable in double. So, it's Okay to
-	 * cast u64 to double for feepercent calculation. */
-	feepercent = ((double)fee.millisatoshis) * 100.0 / ((double) pc->msat.millisatoshis); /* Raw: fee double manipulation */
+	if (pc->maxfee_pct_millionths / 100 > UINT32_MAX)
+		plugin_err(cmd->plugin, "max fee percent too large: %lf",
+			   pc->maxfee_pct_millionths / 1000000.0);
 
-	if (amount_msat_greater(fee, pc->exemptfee)
-	    && feepercent > pc->maxfeepercent) {
+	if (!amount_msat_fee(&max_fee, pc->msat, 0,
+			     (u32)(pc->maxfee_pct_millionths / 100)))
+		plugin_err(
+		    cmd->plugin, "max fee too large: %s * %lf%%",
+		    type_to_string(tmpctx, struct amount_msat, &pc->msat),
+		    pc->maxfee_pct_millionths / 1000000.0);
+
+	if (amount_msat_greater(fee, pc->exemptfee) &&
+	    amount_msat_greater(fee, max_fee)) {
 		const jsmntok_t *charger;
 		struct json_out *failed;
 		char *feemsg;
@@ -823,7 +837,7 @@ static struct command_result *getroute_done(struct command *cmd,
 	attempt->sendpay = true;
 	req = jsonrpc_request_start(cmd->plugin, cmd, "sendpay",
 				    sendpay_done, sendpay_error, pc);
-	json_out_add_raw(req->js->jout, "route", attempt->route);
+	json_add_jsonstr(req->js, "route", attempt->route);
 	json_add_string(req->js, "payment_hash", pc->payment_hash);
 	json_add_string(req->js, "bolt11", pc->ps->bolt11);
 	if (pc->label)
@@ -859,8 +873,7 @@ static struct command_result *getroute_error(struct command *cmd,
 /* Deep copy of excludes array. */
 static const char **dup_excludes(const tal_t *ctx, const char **excludes)
 {
-	const char **ret = tal_dup_arr(ctx, const char *,
-				       excludes, tal_count(excludes), 0);
+	const char **ret = tal_dup_talarr(ctx, const char *, excludes);
 	for (size_t i = 0; i < tal_count(ret); i++)
 		ret[i] = tal_strdup(ret, excludes[i]);
 	return ret;
@@ -916,7 +929,8 @@ static struct command_result *execute_getroute(struct command *cmd,
 			type_to_string(tmpctx, struct amount_msat, &msat));
 	json_add_u32(req->js, "cltv", cltv);
 	json_add_u32(req->js, "maxhops", max_hops);
-	json_add_member(req->js, "riskfactor", false, "%f", pc->riskfactor);
+	json_add_member(req->js, "riskfactor", false, "%lf",
+			pc->riskfactor_millionths / 1000000.0);
 	if (tal_count(pc->excludes) != 0) {
 		json_array_start(req->js, "exclude");
 		for (size_t i = 0; i < tal_count(pc->excludes); i++)
@@ -1095,6 +1109,7 @@ static struct command_result *shadow_route(struct command *cmd,
 
 	req = jsonrpc_request_start(cmd->plugin, cmd, "listchannels",
 				    add_shadow_route, forward_error, pc);
+	json_add_string(req->js, "source", pc->shadow_dest);
 	return send_outreq(cmd->plugin, req);
 }
 
@@ -1245,10 +1260,10 @@ static struct command_result *json_pay(struct command *cmd,
 	struct bolt11 *b11;
 	const char *b11str;
 	char *fail;
-	double *riskfactor;
+	u64 *riskfactor_millionths;
 	unsigned int *retryfor;
 	struct pay_command *pc = tal(cmd, struct pay_command);
-	double *maxfeepercent;
+	u64 *maxfee_pct_millionths;
 	unsigned int *maxdelay;
 	struct amount_msat *exemptfee;
 	struct out_req *req;
@@ -1256,23 +1271,26 @@ static struct command_result *json_pay(struct command *cmd,
 	bool *use_shadow;
 #endif
 
-	if (!param(cmd, buf, params,
-		   p_req("bolt11", param_string, &b11str),
+	if (!param(cmd, buf, params, p_req("bolt11", param_string, &b11str),
 		   p_opt("msatoshi", param_msat, &msat),
 		   p_opt("label", param_string, &pc->label),
-		   p_opt_def("riskfactor", param_double, &riskfactor, 10),
-		   p_opt_def("maxfeepercent", param_percent, &maxfeepercent, 0.5),
+		   p_opt_def("riskfactor", param_millionths,
+			     &riskfactor_millionths, 10000000),
+		   p_opt_def("maxfeepercent", param_millionths,
+			     &maxfee_pct_millionths, 500000),
 		   p_opt_def("retry_for", param_number, &retryfor, 60),
 		   p_opt_def("maxdelay", param_number, &maxdelay,
 			     maxdelay_default),
-		   p_opt_def("exemptfee", param_msat, &exemptfee, AMOUNT_MSAT(5000)),
+		   p_opt_def("exemptfee", param_msat, &exemptfee,
+			     AMOUNT_MSAT(5000)),
 #if DEVELOPER
 		   p_opt_def("use_shadow", param_bool, &use_shadow, true),
 #endif
 		   NULL))
 		return command_param_failed();
 
-	b11 = bolt11_decode(cmd, b11str, NULL, &fail);
+	b11 = bolt11_decode(cmd, b11str, plugin_feature_set(cmd->plugin),
+			    NULL, &fail);
 	if (!b11) {
 		return command_fail(cmd, JSONRPC2_INVALID_PARAMS,
 				    "Invalid bolt11: %s", fail);
@@ -1312,10 +1330,10 @@ static struct command_result *json_pay(struct command *cmd,
 				    " sets feature var_onion with no secret");
 	}
 
-	pc->maxfeepercent = *maxfeepercent;
+	pc->maxfee_pct_millionths = *maxfee_pct_millionths;
 	pc->maxdelay = *maxdelay;
 	pc->exemptfee = *exemptfee;
-	pc->riskfactor = *riskfactor;
+	pc->riskfactor_millionths = *riskfactor_millionths;
 	pc->final_cltv = b11->min_final_cltv_expiry;
 	pc->dest = type_to_string(cmd, struct node_id, &b11->receiver_id);
 	pc->shadow_dest = tal_strdup(pc, pc->dest);
@@ -1404,7 +1422,7 @@ static void add_attempt(struct json_stream *ret,
 	}
 
 	if (attempt->route)
-		json_add_member(ret, "route", true, "%s", attempt->route);
+		json_add_jsonstr(ret, "route", attempt->route);
 
 	if (attempt->failure)
 		json_out_add_splice(ret->jout, "failure", attempt->failure);
@@ -1694,6 +1712,6 @@ static const struct plugin_command commands[] = { {
 int main(int argc, char *argv[])
 {
 	setup_locale();
-	plugin_main(argv, init, PLUGIN_RESTARTABLE, commands, ARRAY_SIZE(commands),
-	            NULL, 0, NULL, 0, NULL);
+	plugin_main(argv, init, PLUGIN_RESTARTABLE, NULL, commands,
+		    ARRAY_SIZE(commands), NULL, 0, NULL, 0, NULL);
 }

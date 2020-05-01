@@ -5,7 +5,8 @@ from hashlib import sha256
 from pyln.client import RpcError, Millisatoshi
 from pyln.proto import Invoice
 from utils import (
-    DEVELOPER, only_one, sync_blockheight, TIMEOUT, wait_for, TEST_NETWORK, expected_features
+    DEVELOPER, only_one, sync_blockheight, TIMEOUT, wait_for, TEST_NETWORK,
+    DEPRECATED_APIS, expected_peer_features, expected_node_features
 )
 
 import json
@@ -43,6 +44,95 @@ def test_option_passthrough(node_factory, directory):
     # Now try to see if it gets accepted, would fail to start if the
     # option didn't exist
     n = node_factory.get_node(options={'plugin': plugin_path, 'greeting': 'Ciao'})
+    n.stop()
+
+
+@unittest.skipIf(DEPRECATED_APIS, "We test the new API.")
+def test_option_types(node_factory):
+    """Ensure that desired types of options are
+       respected in output """
+
+    plugin_path = os.path.join(os.getcwd(), 'tests/plugins/options.py')
+    n = node_factory.get_node(options={
+        'plugin': plugin_path,
+        'str_opt': 'ok',
+        'int_opt': 22,
+        'bool_opt': True,
+    })
+
+    assert n.daemon.is_in_log(r"option str_opt ok <class 'str'>")
+    assert n.daemon.is_in_log(r"option int_opt 22 <class 'int'>")
+    assert n.daemon.is_in_log(r"option bool_opt True <class 'bool'>")
+    # flag options aren't passed through if not flagged on
+    assert not n.daemon.is_in_log(r"option flag_opt")
+    n.stop()
+
+    # A blank bool_opt should default to false
+    n = node_factory.get_node(options={
+        'plugin': plugin_path, 'str_opt': 'ok',
+        'int_opt': 22,
+        'bool_opt': 'true',
+        'flag_opt': None,
+    })
+
+    assert n.daemon.is_in_log(r"option bool_opt True <class 'bool'>")
+    assert n.daemon.is_in_log(r"option flag_opt True <class 'bool'>")
+    n.stop()
+
+    # What happens if we give it a bad bool-option?
+    n = node_factory.get_node(options={
+        'plugin': plugin_path,
+        'str_opt': 'ok',
+        'int_opt': 22,
+        'bool_opt': '!',
+    }, expect_fail=True, may_fail=True)
+
+    # the node should fail to start, and we get a stderr msg
+    assert not n.daemon.running
+    assert n.daemon.is_in_stderr('bool_opt: ! does not parse as type bool')
+
+    # What happens if we give it a bad int-option?
+    n = node_factory.get_node(options={
+        'plugin': plugin_path,
+        'str_opt': 'ok',
+        'int_opt': 'notok',
+        'bool_opt': 1,
+    }, may_fail=True, expect_fail=True)
+
+    # the node should fail to start, and we get a stderr msg
+    assert not n.daemon.running
+    assert n.daemon.is_in_stderr('--int_opt: notok does not parse as type int')
+
+    # Flag opts shouldn't allow any input
+    n = node_factory.get_node(options={
+        'plugin': plugin_path,
+        'str_opt': 'ok',
+        'int_opt': 11,
+        'bool_opt': 1,
+        'flag_opt': True,
+    }, may_fail=True, expect_fail=True)
+
+    # the node should fail to start, and we get a stderr msg
+    assert not n.daemon.running
+    assert n.daemon.is_in_stderr("--flag_opt: doesn't allow an argument")
+
+    plugin_path = os.path.join(os.getcwd(), 'tests/plugins/options.py')
+    n = node_factory.get_node(options={
+        'plugin': plugin_path,
+        'str_opt': 'ok',
+        'int_opt': 22,
+        'bool_opt': 1,
+        'flag_opt': None,
+        'allow-deprecated-apis': True
+    })
+
+    # because of how the python json parser works, since we're adding the deprecated
+    # string option after the 'typed' option in the JSON, the string option overwrites
+    # the earlier typed option in JSON parsing, resulting in a option set of only strings
+    assert n.daemon.is_in_log(r"option str_opt ok <class 'str'>")
+    assert n.daemon.is_in_log(r"option int_opt 22 <class 'str'>")
+    assert n.daemon.is_in_log(r"option bool_opt 1 <class 'str'>")
+    assert n.daemon.is_in_log(r"option flag_opt True <class 'bool'>")
     n.stop()
 
 
@@ -89,6 +179,11 @@ def test_rpc_passthrough(node_factory):
     assert(greet == "Ciao World")
     with pytest.raises(RpcError):
         n.rpc.fail()
+
+    # Try to call a method without enough arguments
+    with pytest.raises(RpcError, match="processing bye: missing a required"
+                                       " argument"):
+        n.rpc.bye()
 
 
 def test_plugin_dir(node_factory):
@@ -161,7 +256,7 @@ def test_plugin_command(node_factory):
         n2.rpc.plugin_stop(plugin="static.py")
 
     # Test that we don't crash when starting a broken plugin
-    with pytest.raises(RpcError, match=r"Timed out while waiting for plugin response"):
+    with pytest.raises(RpcError, match=r"Plugin exited before completing handshake."):
         n2.rpc.plugin_start(plugin=os.path.join(os.getcwd(), "tests/plugins/broken.py"))
 
 
@@ -819,14 +914,16 @@ def test_libplugin(node_factory):
     # Test hooks and notifications
     l2 = node_factory.get_node()
     l2.connect(l1)
-    assert l1.daemon.is_in_log("{} peer_connected".format(l2.info["id"]))
+    l1.daemon.wait_for_log("{} peer_connected".format(l2.info["id"]))
     l1.daemon.wait_for_log("{} connected".format(l2.info["id"]))
 
     # Test RPC calls FIXME: test concurrent ones ?
     assert l1.rpc.call("testrpc") == l1.rpc.getinfo()
 
 
-@unittest.skipIf(not DEVELOPER, "needs LIGHTNINGD_DEV_LOG_IO")
+@unittest.skipIf(
+    not DEVELOPER or DEPRECATED_APIS, "needs LIGHTNINGD_DEV_LOG_IO and new API"
+)
 def test_plugin_feature_announce(node_factory):
     """Check that features registered by plugins show up in messages.
 
@@ -849,7 +946,7 @@ def test_plugin_feature_announce(node_factory):
     # Check the featurebits we've set in the `init` message from
     # feature-test.py. (1 << 101) results in 13 bytes featutebits (000d) and
     # has a leading 0x20.
-    assert l1.daemon.is_in_log(r'\[OUT\] 001000.*000d20{:0>24}'.format(expected_features()))
+    assert l1.daemon.is_in_log(r'\[OUT\] 001000.*000d20{:0>24}'.format(expected_peer_features()))
 
     # Check the invoice featurebit we set in feature-test.py
     inv = l1.rpc.invoice(123, 'lbl', 'desc')['bolt11']
@@ -983,8 +1080,11 @@ def test_bcli(node_factory, bitcoind, chainparams):
         l1.rpc.plugin_stop("bcli")
 
     # Failure case of feerate is tested in test_misc.py
-    assert "feerate" in l1.rpc.call("getfeerate", {"blocks": 3,
-                                                   "mode": "CONSERVATIVE"})
+    estimates = l1.rpc.call("estimatefees")
+    for est in ["opening", "mutual_close", "unilateral_close", "delayed_to_us",
+                "htlc_resolution", "penalty", "min_acceptable",
+                "max_acceptable"]:
+        assert est in estimates
 
     resp = l1.rpc.call("getchaininfo")
     assert resp["chain"] == chainparams['name']
@@ -1012,3 +1112,91 @@ def test_bcli(node_factory, bitcoind, chainparams):
 
     resp = l1.rpc.call("sendrawtransaction", {"tx": "dummy"})
     assert not resp["success"] and "decode failed" in resp["errmsg"]
+
+
+def test_hook_crash(node_factory, executor, bitcoind):
+    """Verify that we fail over if a plugin crashes while handling a hook.
+
+    We create a star topology, with l1 opening channels to the other nodes,
+    and then triggering the plugins on those nodes in order to exercise the
+    hook chain. p0 is the interesting plugin because as soon as it get called
+    for the htlc_accepted hook it'll crash on purpose. We should still make it
+    through the chain, the plugins should all be called and the payment should
+    still go through.
+
+    """
+    p0 = os.path.join(os.path.dirname(__file__), "plugins/hook-crash.py")
+    p1 = os.path.join(os.path.dirname(__file__), "plugins/hook-chain-odd.py")
+    p2 = os.path.join(os.path.dirname(__file__), "plugins/hook-chain-even.py")
+    perm = [
+        (p0, p1, p2),  # Crashing plugin is first in chain
+        (p1, p0, p2),  # Crashing plugin is in the middle of the chain
+        (p1, p2, p0),  # Crashing plugin is last in chain
+    ]
+
+    l1 = node_factory.get_node()
+    nodes = [node_factory.get_node() for _ in perm]
+
+    # Start them in any order and we should still always end up with each
+    # plugin being called and ultimately the `pay` call should succeed:
+    for plugins, n in zip(perm, nodes):
+        for p in plugins:
+            n.rpc.plugin_start(p)
+        l1.openchannel(n, 10**6, confirm=False, wait_for_announce=False)
+
+    bitcoind.generate_block(6)
+
+    wait_for(lambda: len(l1.rpc.listchannels()['channels']) == 2 * len(perm))
+
+    # Start an RPC call that should error once the plugin crashes.
+    f1 = executor.submit(nodes[0].rpc.hold_rpc_call)
+
+    futures = []
+    for n in nodes:
+        inv = n.rpc.invoice(123, "lbl", "desc")['bolt11']
+        futures.append(executor.submit(l1.rpc.pay, inv))
+
+    for n in nodes:
+        n.daemon.wait_for_logs([
+            r'Plugin is about to crash.',
+            r'plugin-hook-chain-odd.py: htlc_accepted called for payment_hash',
+            r'plugin-hook-chain-even.py: htlc_accepted called for payment_hash',
+        ])
+
+    # Collect the results:
+    [f.result(TIMEOUT) for f in futures]
+
+    # Make sure the RPC call was terminated with the correct error
+    with pytest.raises(RpcError, match=r'Plugin terminated before replying'):
+        f1.result(10)
+
+
+def test_feature_set(node_factory):
+    plugin = os.path.join(os.path.dirname(__file__), 'plugins/show_feature_set.py')
+    l1 = node_factory.get_node(options={"plugin": plugin})
+
+    fs = l1.rpc.call('getfeatureset')
+    assert fs['init'] == expected_peer_features()
+    assert fs['node'] == expected_node_features()
+    assert fs['channel'] == ''
+    assert 'invoice' in fs
+
+
+def test_replacement_payload(node_factory):
+    """Test that htlc_accepted plugin hook can replace payload"""
+    plugin = os.path.join(os.path.dirname(__file__), 'plugins/replace_payload.py')
+    l1, l2 = node_factory.line_graph(2, opts=[{}, {"plugin": plugin}])
+
+    # Replace with an invalid payload.
+    l2.rpc.call('setpayload', ['0000'])
+    inv = l2.rpc.invoice(123, 'test_replacement_payload', 'test_replacement_payload')['bolt11']
+    with pytest.raises(RpcError, match=r"WIRE_INVALID_ONION_PAYLOAD \(reply from remote\)"):
+        l1.rpc.pay(inv)
+
+    # Replace with valid payload, but corrupt payment_secret
+    l2.rpc.call('setpayload', ['corrupt_secret'])
+
+    with pytest.raises(RpcError, match=r"WIRE_INCORRECT_OR_UNKNOWN_PAYMENT_DETAILS \(reply from remote\)"):
+        l1.rpc.pay(inv)
+
+    assert l2.daemon.wait_for_log("Attept to pay.*with wrong secret")

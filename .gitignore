@@ -33,6 +33,7 @@ external/libbacktrace.la
 test/test_protocol
 test/test_sphinx
 tests/.pytest.restart
+tests/plugins/test_libplugin
 gossip_store
 .pytest_cache
 tools/headerversions
@@ -43,6 +44,4 @@ contrib/pylightning/pylightning.egg-info/
 contrib/pyln-*/build/
 contrib/pyln-*/dist/
 contrib/pyln-*/pyln_*.egg-info/
-devtools/create-gossipstore
-contrib/compose/groestlcoin_datadir/
-contrib/compose/clightning_groestlcoin_datadir/
+plugins/keysend

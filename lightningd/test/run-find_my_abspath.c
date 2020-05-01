@@ -57,9 +57,21 @@ s64 db_get_intvar(struct db *db UNNEEDED, char *varname UNNEEDED, s64 defval UNN
 /* Generated stub for db_in_transaction */
 bool db_in_transaction(struct db *db UNNEEDED)
 { fprintf(stderr, "db_in_transaction called!\n"); abort(); }
+/* Generated stub for ecdh_hsmd_setup */
+void ecdh_hsmd_setup(int hsm_fd UNNEEDED,
+		     void (*failed)(enum status_failreason UNNEEDED,
+				    const char *fmt UNNEEDED, ...))
+{ fprintf(stderr, "ecdh_hsmd_setup called!\n"); abort(); }
 /* Generated stub for fatal */
 void   fatal(const char *fmt UNNEEDED, ...)
 { fprintf(stderr, "fatal called!\n"); abort(); }
+/* Generated stub for feature_set_for_feature */
+struct feature_set *feature_set_for_feature(const tal_t *ctx UNNEEDED, int feature UNNEEDED)
+{ fprintf(stderr, "feature_set_for_feature called!\n"); abort(); }
+/* Generated stub for feature_set_or */
+bool feature_set_or(struct feature_set *a UNNEEDED,
+		    const struct feature_set *b TAKES UNNEEDED)
+{ fprintf(stderr, "feature_set_or called!\n"); abort(); }
 /* Generated stub for free_htlcs */
 void free_htlcs(struct lightningd *ld UNNEEDED, const struct channel *channel UNNEEDED)
 { fprintf(stderr, "free_htlcs called!\n"); abort(); }
@@ -178,6 +190,9 @@ void per_peer_state_set_fds_arr(struct per_peer_state *pps UNNEEDED, const int *
 /* Generated stub for plugins_config */
 void plugins_config(struct plugins *plugins UNNEEDED)
 { fprintf(stderr, "plugins_config called!\n"); abort(); }
+/* Generated stub for plugins_free */
+void plugins_free(struct plugins *plugins UNNEEDED)
+{ fprintf(stderr, "plugins_free called!\n"); abort(); }
 /* Generated stub for plugins_init */
 void plugins_init(struct plugins *plugins UNNEEDED, const char *dev_plugin_debug UNNEEDED)
 { fprintf(stderr, "plugins_init called!\n"); abort(); }
