@@ -26,7 +26,7 @@ RUN mkdir /opt/groestlcoin && cd /opt/groestlcoin \
     && wget -qO $GROESTLCOIN_TARBALL "$GROESTLCOIN_URL" \
     && wget -qO groestlcoin.asc "$GROESTLCOIN_ASC_URL" \
     && grep $GROESTLCOIN_TARBALL groestlcoin.asc | tee SHA256SUMS.asc \
-    && sha256sum -c SHA256SUMS.asc \
+    && sha256sum --ignore-missing -c SHA256SUMS.asc \
     && BD=groestlcoin-$GROESTLCOIN_VERSION/bin \
     && tar -xzvf $GROESTLCOIN_TARBALL $BD/groestlcoin-cli --strip-components=1 \
     && rm $GROESTLCOIN_TARBALL
