@@ -17,7 +17,7 @@ RUN wget -qO /opt/tini "https://github.com/krallin/tini/releases/download/v0.18.
     && echo "12d20136605531b09a2c2dac02ccee85e1b874eb322ef6baf7561cd93f93c855 /opt/tini" | sha256sum -c - \
     && chmod +x /opt/tini
 
-ENV GROESTLCOIN_VERSION 2.18.2
+ENV GROESTLCOIN_VERSION 2.19.1
 ENV GROESTLCOIN_TARBALL groestlcoin-${GROESTLCOIN_VERSION}-x86_64-linux-gnu.tar.gz
 ENV GROESTLCOIN_URL https://github.com/Groestlcoin/groestlcoin/releases/download/v$GROESTLCOIN_VERSION/$GROESTLCOIN_TARBALL
 ENV GROESTLCOIN_ASC_URL https://github.com/Groestlcoin/groestlcoin/releases/download/v$GROESTLCOIN_VERSION/SHA256SUMS.asc
