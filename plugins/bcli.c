@@ -981,7 +981,7 @@ int main(int argc, char *argv[])
 				  charp_option, &bitcoind->rpcpass),
 		    plugin_option("bitcoin-rpcconnect",
 				  "string",
-				  "bitcoind RPC host to connect to",
+				  "groestlcoind RPC host to connect to",
 				  charp_option, &bitcoind->rpcconnect),
 		    plugin_option("bitcoin-rpcport",
 				  "string",
