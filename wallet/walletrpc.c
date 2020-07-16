@@ -494,7 +494,7 @@ static struct command_result *json_txprepare(struct command *cmd,
 }
 static const struct json_command txprepare_command = {
 	"txprepare",
-	"bitcoin",
+	"groestlcoin",
 	json_txprepare,
 	"Create a transaction, with option to spend in future (either txsend and txdiscard)",
 	false
@@ -552,7 +552,7 @@ static struct command_result *json_txsend(struct command *cmd,
 
 static const struct json_command txsend_command = {
 	"txsend",
-	"bitcoin",
+	"groestlcoin",
 	json_txsend,
 	"Sign and broadcast a transaction created by txprepare",
 	false
@@ -583,7 +583,7 @@ static struct command_result *json_txdiscard(struct command *cmd,
 
 static const struct json_command txdiscard_command = {
 	"txdiscard",
-	"bitcoin",
+	"groestlcoin",
 	json_txdiscard,
 	"Abandon a transaction created by txprepare",
 	false
@@ -760,7 +760,7 @@ static struct command_result *json_newaddr(struct command *cmd,
 
 static const struct json_command newaddr_command = {
 	"newaddr",
-	"bitcoin",
+	"groestlcoin",
 	json_newaddr,
 	"Get a new {bech32, p2sh-segwit} (or all) address to fund a channel (default is bech32)", false,
 	"Generates a new address (or both) that belongs to the internal wallet. Funds sent to these addresses will be managed by lightningd. Use `withdraw` to withdraw funds to an external wallet."
@@ -1313,7 +1313,7 @@ static struct command_result *json_signpsbt(struct command *cmd,
 
 static const struct json_command signpsbt_command = {
 	"signpsbt",
-	"bitcoin",
+	"groestlcoin",
 	json_signpsbt,
 	"Sign this wallet's inputs on a provided PSBT.",
 	false
@@ -1368,7 +1368,7 @@ static struct command_result *json_sendpsbt(struct command *cmd,
 
 static const struct json_command sendpsbt_command = {
 	"sendpsbt",
-	"bitcoin",
+	"groestlcoin",
 	json_sendpsbt,
 	"Finalize, extract and send a PSBT.",
 	false
