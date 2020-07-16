@@ -13,6 +13,10 @@ void sha256_double(struct sha256_double *shadouble, const void *p, size_t len);
 
 void sha256_double_done(struct sha256_ctx *sha256, struct sha256_double *res);
 
+void sha256_single(struct sha256_double *shasingle, const void *p, size_t len);
+
+void sha256_single_done(struct sha256_ctx *sha256, struct sha256_double *res);
+
 /* marshal/unmarshal functions */
 void fromwire_sha256_double(const u8 **cursor, size_t *max,
 			    struct sha256_double *sha256d);
