@@ -41,9 +41,13 @@ Get dependencies:
       gettext
 
 If you don't have Groestlcoin installed locally you'll need to install that
-as well:
+as well. It's now available via [snapd](https://snapcraft.io/groestlcoin-core).
 
-    https://github.com/Groestlcoin/groestlcoin/blob/master/doc/build-unix.md
+    sudo apt-get install snapd
+    sudo snap install groestlcoin-core
+    # Snap does some weird things with binary names; you'll
+    # want to add a link to them so everything works as expected
+    sudo ln -s /snap/groestlcoin-core/current/bin/groestlcoin{d,-cli} /usr/local/bin/
 
 Clone lightning:
 

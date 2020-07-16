@@ -1,9 +1,11 @@
 #include <assert.h>
 #include <bitcoin/chainparams.h>
 #include <bitcoin/preimage.h>
+#include <bitcoin/psbt.h>
 #include <bitcoin/script.h>
 #include <bitcoin/tx.h>
 #include <ccan/array_size/array_size.h>
+#include <ccan/cast/cast.h>
 #include <ccan/mem/mem.h>
 #include <ccan/tal/str/str.h>
 #include <channeld/commit_tx.h>
@@ -101,7 +103,7 @@ struct channel *new_full_channel(const tal_t *ctx,
 				 const struct pubkey *local_funding_pubkey,
 				 const struct pubkey *remote_funding_pubkey,
 				 bool option_static_remotekey,
-				 enum side funder)
+				 enum side opener)
 {
 	struct channel *channel = new_initial_channel(ctx,
 						      funding_txid,
@@ -116,7 +118,7 @@ struct channel *new_full_channel(const tal_t *ctx,
 						      local_funding_pubkey,
 						      remote_funding_pubkey,
 						      option_static_remotekey,
-						      funder);
+						      opener);
 
 	if (channel) {
 		channel->htlcs = tal(channel, struct htlc_map);
@@ -237,32 +239,32 @@ static void add_htlcs(struct bitcoin_tx ***txs,
 	for (i = 0; i < tal_count(htlcmap); i++) {
 		const struct htlc *htlc = htlcmap[i];
 		struct bitcoin_tx *tx;
-		struct witscript *witscript;
+		struct ripemd160 ripemd;
+		const u8 *wscript;
 
 		if (!htlc)
 			continue;
 
 		if (htlc_owner(htlc) == side) {
+			ripemd160(&ripemd, htlc->rhash.u.u8, sizeof(htlc->rhash.u.u8));
+			wscript = htlc_offered_wscript(tmpctx, &ripemd, keyset);
 			tx = htlc_timeout_tx(*txs, chainparams, &txid, i,
+					     wscript,
 					     htlc->amount,
 					     htlc->expiry.locktime,
 					     channel->config[!side].to_self_delay,
 					     feerate_per_kw,
 					     keyset);
 		} else {
+			ripemd160(&ripemd, htlc->rhash.u.u8, sizeof(htlc->rhash.u.u8));
+			wscript = htlc_received_wscript(tmpctx, &ripemd, &htlc->expiry, keyset);
 			tx = htlc_success_tx(*txs, chainparams, &txid, i,
+					     wscript,
 					     htlc->amount,
 					     channel->config[!side].to_self_delay,
 					     feerate_per_kw,
 					     keyset);
 		}
-		/* Re-use the previously-generated witness script */
-		witscript = (*txs)[0]->output_witscripts[i];
-		tx->output_witscripts[0] =
-		        tal(tx->output_witscripts, struct witscript);
-		tx->output_witscripts[0]->ptr =
-			tal_dup_arr(tx->output_witscripts[0], u8,
-				    witscript->ptr, tal_count(witscript->ptr), 0);
 
 		/* Append to array. */
 		tal_arr_expand(txs, tx);
@@ -272,6 +274,7 @@ static void add_htlcs(struct bitcoin_tx ***txs,
 /* FIXME: We could cache these. */
 struct bitcoin_tx **channel_txs(const tal_t *ctx,
 				const struct htlc ***htlcmap,
+				struct wally_tx_output *direct_outputs[NUM_SIDES],
 				const u8 **funding_wscript,
 				const struct channel *channel,
 				const struct pubkey *per_commitment_point,
@@ -292,21 +295,28 @@ struct bitcoin_tx **channel_txs(const tal_t *ctx,
 	/* Figure out what @side will already be committed to. */
 	gather_htlcs(ctx, channel, side, &committed, NULL, NULL);
 
-	txs = tal_arr(ctx, struct bitcoin_tx *, 1);
-	txs[0] = commit_tx(
-	    ctx, &channel->funding_txid, channel->funding_txout,
-	    channel->funding, channel->funder,
-	    channel->config[!side].to_self_delay, &keyset,
-	    channel_feerate(channel, side),
-	    channel->config[side].dust_limit, channel->view[side].owed[side],
-	    channel->view[side].owed[!side], committed, htlcmap,
-	    commitment_number ^ channel->commitment_number_obscurer, side);
-
 	/* Generating and saving witness script required to spend
 	 * the funding output */
 	*funding_wscript = bitcoin_redeem_2of2(ctx,
 					      &channel->funding_pubkey[side],
 					      &channel->funding_pubkey[!side]);
+
+	txs = tal_arr(ctx, struct bitcoin_tx *, 1);
+	txs[0] = commit_tx(
+	    ctx, &channel->funding_txid, channel->funding_txout,
+	    channel->funding, cast_const(u8 *, *funding_wscript), channel->opener,
+	    channel->config[!side].to_self_delay, &keyset,
+	    channel_feerate(channel, side),
+	    channel->config[side].dust_limit, channel->view[side].owed[side],
+	    channel->view[side].owed[!side], committed, htlcmap, direct_outputs,
+	    commitment_number ^ channel->commitment_number_obscurer,
+	    side);
+
+	/* Set the remote/local pubkeys on the commitment tx psbt */
+	psbt_input_add_pubkey(txs[0]->psbt, 0,
+			      &channel->funding_pubkey[side]);
+	psbt_input_add_pubkey(txs[0]->psbt, 0,
+			      &channel->funding_pubkey[!side]);
 
 	add_htlcs(&txs, *htlcmap, channel, &keyset, side);
 
@@ -384,8 +394,8 @@ static struct amount_sat fee_for_htlcs(const struct channel *channel,
 }
 
 /*
- * There is a corner case where the funder can spend so much that the
- * non-funder can't add any non-dust HTLCs (since the funder would
+ * There is a corner case where the opener can spend so much that the
+ * non-opener can't add any non-dust HTLCs (since the opener would
  * have to pay the additional fee, but it can't afford to).  This
  * leads to the channel starving at the feast!  This was reported by
  * ACINQ's @t-bast
@@ -394,7 +404,7 @@ static struct amount_sat fee_for_htlcs(const struct channel *channel,
  * (https://github.com/ElementsProject/lightning/pull/3498).
  *
  * To mostly avoid this situation, at least from our side, we apply an
- * additional constraint when we're funder trying to add an HTLC: make
+ * additional constraint when we're opener trying to add an HTLC: make
  * sure we can afford one more HTLC, even if fees increase by 100%.
  *
  * We could do this for the peer, as well, by rejecting their HTLC
@@ -408,7 +418,7 @@ static struct amount_sat fee_for_htlcs(const struct channel *channel,
  * This mitigation will become BOLT #2 standard by:
  * https://github.com/lightningnetwork/lightning-rfc/issues/740
  */
-static bool local_funder_has_fee_headroom(const struct channel *channel,
+static bool local_opener_has_fee_headroom(const struct channel *channel,
 					  struct amount_msat remainder,
 					  const struct htlc **committed,
 					  const struct htlc **adding,
@@ -418,7 +428,7 @@ static bool local_funder_has_fee_headroom(const struct channel *channel,
 	size_t untrimmed;
 	struct amount_sat fee;
 
-	assert(channel->funder == LOCAL);
+	assert(channel->opener == LOCAL);
 
 	/* How many untrimmed at current feerate?   Increasing feerate can
 	 * only *reduce* this number, so use current feerate here! */
@@ -540,7 +550,7 @@ static enum channel_add_err add_htlc(struct channel *channel,
 	 */
 	/* Also we should not add more htlc's than sender or recipient
 	 * configured.  This mitigates attacks in which a peer can force the
-	 * funder of the channel to pay unnecessary onchain fees during a fee
+	 * opener of the channel to pay unnecessary onchain fees during a fee
 	 * spike with large commitment transactions.
 	 */
 	min_concurrent_htlcs = channel->config[recipient].max_accepted_htlcs;
@@ -614,7 +624,7 @@ static enum channel_add_err add_htlc(struct channel *channel,
 					    &remainder))
 			return CHANNEL_ERR_CHANNEL_CAPACITY_EXCEEDED;
 
-		if (channel->funder == sender) {
+		if (channel->opener== sender) {
 			if (amount_msat_less_sat(remainder, fee)) {
 				status_debug("Cannot afford fee %s with %s above reserve",
 					     type_to_string(tmpctx, struct amount_sat,
@@ -625,7 +635,7 @@ static enum channel_add_err add_htlc(struct channel *channel,
 			}
 
 			if (sender == LOCAL
-			    && !local_funder_has_fee_headroom(channel,
+			    && !local_opener_has_fee_headroom(channel,
 							      remainder,
 							      committed,
 							      adding,
@@ -634,12 +644,12 @@ static enum channel_add_err add_htlc(struct channel *channel,
 			}
 		}
 
-		/* Try not to add a payment which will take funder into fees
+		/* Try not to add a payment which will take opener into fees
 		 * on either our side or theirs. */
 		if (sender == LOCAL) {
 			if (!get_room_above_reserve(channel, view,
 						    adding, removing,
-						    channel->funder,
+						    channel->opener,
 						    &remainder))
 				return CHANNEL_ERR_CHANNEL_CAPACITY_EXCEEDED;
 			/* Should be able to afford both their own commit tx
@@ -649,7 +659,7 @@ static enum channel_add_err add_htlc(struct channel *channel,
 					    committed,
 					    adding,
 					    removing,
-					    channel->funder);
+					    channel->opener);
 			/* set fee output pointer if given */
 			if (htlc_fee && amount_sat_greater(fee, *htlc_fee))
 				*htlc_fee = fee;
@@ -667,7 +677,7 @@ static enum channel_add_err add_htlc(struct channel *channel,
 					    committed,
 					    adding,
 					    removing,
-					    !channel->funder);
+					    !channel->opener);
 			/* set fee output pointer if given */
 			if (htlc_fee && amount_sat_greater(fee, *htlc_fee))
 				*htlc_fee = fee;
@@ -970,7 +980,7 @@ u32 approx_max_feerate(const struct channel *channel)
 	struct amount_sat avail;
 	const struct htlc **committed, **adding, **removing;
 
-	gather_htlcs(tmpctx, channel, !channel->funder,
+	gather_htlcs(tmpctx, channel, !channel->opener,
 		     &committed, &removing, &adding);
 
 	/* Assume none are trimmed; this gives lower bound on feerate. */
@@ -1001,28 +1011,28 @@ u32 approx_max_feerate(const struct channel *channel)
 
 	/* We should never go below reserve. */
 	if (!amount_sat_sub(&avail,
-			    amount_msat_to_sat_round_down(channel->view[!channel->funder].owed[channel->funder]),
-			    channel->config[!channel->funder].channel_reserve))
+			    amount_msat_to_sat_round_down(channel->view[!channel->opener].owed[channel->opener]),
+			    channel->config[!channel->opener].channel_reserve))
 		avail = AMOUNT_SAT(0);
 
 	return avail.satoshis / weight * 1000; /* Raw: once-off reverse feerate*/
 }
 
-bool can_funder_afford_feerate(const struct channel *channel, u32 feerate_per_kw)
+bool can_opener_afford_feerate(const struct channel *channel, u32 feerate_per_kw)
 {
 	struct amount_sat needed, fee;
-	struct amount_sat dust_limit = channel->config[!channel->funder].dust_limit;
+	struct amount_sat dust_limit = channel->config[!channel->opener].dust_limit;
 	size_t untrimmed;
 	const struct htlc **committed, **adding, **removing;
-	gather_htlcs(tmpctx, channel, !channel->funder,
+	gather_htlcs(tmpctx, channel, !channel->opener,
 		     &committed, &removing, &adding);
 
 	untrimmed = commit_tx_num_untrimmed(committed, feerate_per_kw, dust_limit,
-					    !channel->funder)
+					    !channel->opener)
 			+ commit_tx_num_untrimmed(adding, feerate_per_kw, dust_limit,
-						  !channel->funder)
+						  !channel->opener)
 			- commit_tx_num_untrimmed(removing, feerate_per_kw, dust_limit,
-						  !channel->funder);
+						  !channel->opener);
 
 	fee = commit_tx_base_fee(feerate_per_kw, untrimmed);
 
@@ -1032,38 +1042,38 @@ bool can_funder_afford_feerate(const struct channel *channel, u32 feerate_per_kw
 	 *     node's current commitment transaction:
 	 *     - SHOULD fail the channel
 	 */
-	/* Note: sender == funder */
+	/* Note: sender == opener */
 
 	/* How much does it think it has?  Must be >= reserve + fee */
 	if (!amount_sat_add(&needed, fee,
-			    channel->config[!channel->funder].channel_reserve))
+			    channel->config[!channel->opener].channel_reserve))
 		status_failed(STATUS_FAIL_INTERNAL_ERROR,
 			      "Cannot add fee %s and reserve %s",
 			      type_to_string(tmpctx, struct amount_sat,
 					     &fee),
 			      type_to_string(tmpctx, struct amount_sat,
-					     &channel->config[!channel->funder].channel_reserve));
+					     &channel->config[!channel->opener].channel_reserve));
 
 	status_debug("We need %s at feerate %u for %zu untrimmed htlcs: we have %s/%s",
 		     type_to_string(tmpctx, struct amount_sat, &needed),
 		     feerate_per_kw, untrimmed,
 		     type_to_string(tmpctx, struct amount_msat,
-				    &channel->view[LOCAL].owed[channel->funder]),
+				    &channel->view[LOCAL].owed[channel->opener]),
 		     type_to_string(tmpctx, struct amount_msat,
-				    &channel->view[REMOTE].owed[channel->funder]));
-	return amount_msat_greater_eq_sat(channel->view[!channel->funder].owed[channel->funder],
+				    &channel->view[REMOTE].owed[channel->opener]));
+	return amount_msat_greater_eq_sat(channel->view[!channel->opener].owed[channel->opener],
 					  needed);
 }
 
 bool channel_update_feerate(struct channel *channel, u32 feerate_per_kw)
 {
-	if (!can_funder_afford_feerate(channel, feerate_per_kw))
+	if (!can_opener_afford_feerate(channel, feerate_per_kw))
 		return false;
 
 	status_debug("Setting %s feerate to %u",
-		     side_to_str(!channel->funder), feerate_per_kw);
+		     side_to_str(!channel->opener), feerate_per_kw);
 
-	start_fee_update(channel->fee_states, channel->funder, feerate_per_kw);
+	start_fee_update(channel->fee_states, channel->opener, feerate_per_kw);
 	return true;
 }
 

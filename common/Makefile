@@ -10,6 +10,8 @@ COMMON_SRC_NOGEN :=				\
 	common/blinding.c			\
 	common/bolt11.c				\
 	common/channel_config.c			\
+	common/channel_id.c			\
+	common/coin_mvt.c			\
 	common/close_tx.c			\
 	common/configdir.c			\
 	common/crypto_state.c			\
@@ -47,6 +49,7 @@ COMMON_SRC_NOGEN :=				\
 	common/onion.c				\
 	common/onionreply.c			\
 	common/param.c				\
+	common/penalty_base.c			\
 	common/per_peer_state.c			\
 	common/peer_billboard.c			\
 	common/peer_failed.c			\
@@ -54,6 +57,7 @@ COMMON_SRC_NOGEN :=				\
 	common/ping.c				\
 	common/pseudorand.c			\
 	common/read_peer_msg.c			\
+	common/setup.c				\
 	common/socket_close.c			\
 	common/sphinx.c				\
 	common/status.c				\

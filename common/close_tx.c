@@ -9,6 +9,7 @@ struct bitcoin_tx *create_close_tx(const tal_t *ctx,
 				   const struct chainparams *chainparams,
 				   const u8 *our_script,
 				   const u8 *their_script,
+				   const u8 *funding_wscript,
 				   const struct bitcoin_txid *anchor_txid,
 				   unsigned int anchor_index,
 				   struct amount_sat funding,
@@ -39,19 +40,20 @@ struct bitcoin_tx *create_close_tx(const tal_t *ctx,
 
 	/* Our input spends the anchor tx output. */
 	bitcoin_tx_add_input(tx, anchor_txid, anchor_index,
-			     BITCOIN_TX_DEFAULT_SEQUENCE, funding, NULL);
+			     BITCOIN_TX_DEFAULT_SEQUENCE, NULL,
+			     funding, NULL, funding_wscript);
 
 	if (amount_sat_greater_eq(to_us, dust_limit)) {
 		script = tal_dup_talarr(tx, u8, our_script);
 		/* One output is to us. */
-		bitcoin_tx_add_output(tx, script, to_us);
+		bitcoin_tx_add_output(tx, script, NULL, to_us);
 		num_outputs++;
 	}
 
 	if (amount_sat_greater_eq(to_them, dust_limit)) {
 		script = tal_dup_talarr(tx, u8, their_script);
 		/* Other output is to them. */
-		bitcoin_tx_add_output(tx, script, to_them);
+		bitcoin_tx_add_output(tx, script, NULL, to_them);
 		num_outputs++;
 	}
 

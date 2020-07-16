@@ -1,7 +1,9 @@
 #include <assert.h>
 #include <bitcoin/chainparams.h>
+#include <bitcoin/psbt.h>
 #include <bitcoin/script.h>
 #include <ccan/array_size/array_size.h>
+#include <ccan/cast/cast.h>
 #include <ccan/tal/str/str.h>
 #include <common/fee_states.h>
 #include <common/initial_channel.h>
@@ -24,7 +26,7 @@ struct channel *new_initial_channel(const tal_t *ctx,
 				    const struct pubkey *local_funding_pubkey,
 				    const struct pubkey *remote_funding_pubkey,
 				    bool option_static_remotekey,
-				    enum side funder)
+				    enum side opener)
 {
 	struct channel *channel = tal(ctx, struct channel);
 	struct amount_msat remote_msatoshi;
@@ -37,7 +39,7 @@ struct channel *new_initial_channel(const tal_t *ctx,
 				 channel->funding, local_msatoshi))
 		return tal_free(channel);
 
-	channel->funder = funder;
+	channel->opener = opener;
 	channel->config[LOCAL] = *local;
 	channel->config[REMOTE] = *remote;
 	channel->funding_pubkey[LOCAL] = *local_funding_pubkey;
@@ -58,8 +60,8 @@ struct channel *new_initial_channel(const tal_t *ctx,
 	channel->basepoints[REMOTE] = *remote_basepoints;
 
 	channel->commitment_number_obscurer
-		= commit_number_obscurer(&channel->basepoints[funder].payment,
-					 &channel->basepoints[!funder].payment);
+		= commit_number_obscurer(&channel->basepoints[opener].payment,
+					 &channel->basepoints[!opener].payment);
 
 	channel->option_static_remotekey = option_static_remotekey;
 	return channel;
@@ -71,9 +73,11 @@ struct bitcoin_tx *initial_channel_tx(const tal_t *ctx,
 				      const struct channel *channel,
 				      const struct pubkey *per_commitment_point,
 				      enum side side,
+				      struct wally_tx_output *direct_outputs[NUM_SIDES],
 				      char** err_reason)
 {
 	struct keyset keyset;
+	struct bitcoin_tx *init_tx;
 
 	/* This assumes no HTLCs! */
 	assert(!channel->htlcs);
@@ -91,27 +95,37 @@ struct bitcoin_tx *initial_channel_tx(const tal_t *ctx,
 				       &channel->funding_pubkey[side],
 				       &channel->funding_pubkey[!side]);
 
-	return initial_commit_tx(ctx,
-				 &channel->funding_txid,
-				 channel->funding_txout,
-				 channel->funding,
-				 channel->funder,
-				 /* They specify our to_self_delay and v.v. */
-				 channel->config[!side].to_self_delay,
-				 &keyset,
-				 channel_feerate(channel, side),
-				 channel->config[side].dust_limit,
-				 channel->view[side].owed[side],
-				 channel->view[side].owed[!side],
-				 channel->config[!side].channel_reserve,
-				 0 ^ channel->commitment_number_obscurer,
-				 side,
-				 err_reason);
+	init_tx = initial_commit_tx(ctx, &channel->funding_txid,
+				    channel->funding_txout,
+				    channel->funding,
+				    cast_const(u8 *, *wscript),
+				    channel->opener,
+				    /* They specify our to_self_delay and v.v. */
+				    channel->config[!side].to_self_delay,
+				    &keyset,
+				    channel_feerate(channel, side),
+				    channel->config[side].dust_limit,
+				    channel->view[side].owed[side],
+				    channel->view[side].owed[!side],
+				    channel->config[!side].channel_reserve,
+				    0 ^ channel->commitment_number_obscurer,
+				    direct_outputs,
+				    side,
+				    err_reason);
+
+	if (init_tx) {
+		psbt_input_add_pubkey(init_tx->psbt, 0,
+				      &channel->funding_pubkey[side]);
+		psbt_input_add_pubkey(init_tx->psbt, 0,
+				      &channel->funding_pubkey[!side]);
+	}
+
+	return init_tx;
 }
 
 u32 channel_feerate(const struct channel *channel, enum side side)
 {
-	return get_feerate(channel->fee_states, channel->funder, side);
+	return get_feerate(channel->fee_states, channel->opener, side);
 }
 
 static char *fmt_channel_view(const tal_t *ctx, const struct channel_view *view)
@@ -128,12 +142,12 @@ static char *fmt_channel_view(const tal_t *ctx, const struct channel_view *view)
 static char *fmt_channel(const tal_t *ctx, const struct channel *channel)
 {
 	return tal_fmt(ctx, "{ funding=%s,"
-		       " funder=%s,"
+		       " opener=%s,"
 		       " local=%s,"
 		       " remote=%s }",
 		       type_to_string(tmpctx, struct amount_sat,
 				      &channel->funding),
-		       side_to_str(channel->funder),
+		       side_to_str(channel->opener),
 		       fmt_channel_view(ctx, &channel->view[LOCAL]),
 		       fmt_channel_view(ctx, &channel->view[REMOTE]));
 }

@@ -63,6 +63,9 @@ struct bitcoind {
 	/* The factor to time the urgent feerate by to get the maximum
 	 * acceptable feerate. */
 	u32 max_fee_multiplier;
+
+	/* Percent of CONSERVATIVE/2 feerate we'll use for commitment txs. */
+	u64 commit_fee_percent;
 };
 
 static struct bitcoind *bitcoind;
@@ -381,8 +384,7 @@ static struct command_result *process_getutxout(struct bitcoin_cli *bcli)
 
 	response = jsonrpc_stream_success(bcli->cmd);
 	json_add_amount_sat_only(response, "amount", output.amount);
-	json_add_string(response, "script",
-			tal_hexstr(response, output.script, sizeof(output.script)));
+	json_add_string(response, "script", tal_hex(response, output.script));
 
 	return command_finished(bcli->cmd, response);
 }
@@ -532,7 +534,8 @@ static struct command_result *estimatefees_final_step(struct bitcoin_cli *bcli)
 	response = jsonrpc_stream_success(bcli->cmd);
 	json_add_u64(response, "opening", stash->normal);
 	json_add_u64(response, "mutual_close", stash->normal);
-	json_add_u64(response, "unilateral_close", stash->very_urgent);
+	json_add_u64(response, "unilateral_close",
+		     stash->very_urgent * bitcoind->commit_fee_percent / 100);
 	json_add_u64(response, "delayed_to_us", stash->normal);
 	json_add_u64(response, "htlc_resolution", stash->urgent);
 	json_add_u64(response, "penalty", stash->urgent);
@@ -581,7 +584,7 @@ static struct command_result *estimatefees_third_step(struct bitcoin_cli *bcli)
 	struct estimatefees_stash *stash = bcli->stash;
 	const char **params = tal_arr(bcli->cmd, const char *, 2);
 
-	/* If we cannot estimatefees, no need to continue bothering bitcoind. */
+	/* If we cannot estimate fees, no need to continue bothering bitcoind. */
 	if (*bcli->exitstatus != 0)
 		return estimatefees_null_response(bcli);
 
@@ -604,7 +607,7 @@ static struct command_result *estimatefees_second_step(struct bitcoin_cli *bcli)
 	struct estimatefees_stash *stash = bcli->stash;
 	const char **params = tal_arr(bcli->cmd, const char *, 2);
 
-	/* If we cannot estimatefees, no need to continue bothering bitcoind. */
+	/* If we cannot estimate fees, no need to continue bothering bitcoind. */
 	if (*bcli->exitstatus != 0)
 		return estimatefees_null_response(bcli);
 
@@ -751,13 +754,13 @@ static struct command_result *getchaininfo(struct command *cmd,
 	return command_still_pending(cmd);
 }
 
-/* Get the current feerates. We us an urgent feerate for unilateral_close and max,
+/* Get the current feerates. We use an urgent feerate for unilateral_close and max,
  * a slightly less urgent feerate for htlc_resolution and penalty transactions,
  * a slow feerate for min, and a normal one for all others.
  *
- * Calls `estimatesmartfee` with targets 2/CONSERVATIVE (urgent),
- * 4/ECONOMICAL (normal), and 100/ECONOMICAL (slow) then returns the
- * feerates as sat/kVB.
+ * Calls `estimatesmartfee` with targets 2/CONSERVATIVE (very urgent),
+ * 3/CONSERVATIVE (urgent), 4/ECONOMICAL (normal), and 100/ECONOMICAL (slow)
+ * then returns the feerates as sat/kVB.
  */
 static struct command_result *estimatefees(struct command *cmd,
 					   const char *buf UNUSED,
@@ -769,7 +772,8 @@ static struct command_result *estimatefees(struct command *cmd,
 	if (!param(cmd, buf, toks, NULL))
 	    return command_param_failed();
 
-	/* First call to estimatesmartfee, for urgent estimation. */
+	/* First call to estimatesmartfee, for very urgent estimation (unilateral
+	 * and max_acceptable feerates). */
 	params[0] = "2";
 	params[1] = "CONSERVATIVE";
 	start_bitcoin_cli(NULL, cmd, estimatefees_second_step, true,
@@ -928,12 +932,9 @@ static const struct plugin_command commands[] = {
 	},
 };
 
-int main(int argc, char *argv[])
+static struct bitcoind *new_bitcoind(const tal_t *ctx)
 {
-	setup_locale();
-
-	/* Initialize our global context object here to handle startup options. */
-	bitcoind = tal(NULL, struct bitcoind);
+	bitcoind = tal(ctx, struct bitcoind);
 
 	bitcoind->cli = NULL;
 	bitcoind->datadir = NULL;
@@ -948,6 +949,17 @@ int main(int argc, char *argv[])
 	bitcoind->rpcconnect = NULL;
 	bitcoind->rpcport = NULL;
 	bitcoind->max_fee_multiplier = 10;
+	bitcoind->commit_fee_percent = 100;
+
+	return bitcoind;
+}
+
+int main(int argc, char *argv[])
+{
+	setup_locale();
+
+	/* Initialize our global context object here to handle startup options. */
+	bitcoind = new_bitcoind(NULL);
 
 	plugin_main(argv, init, PLUGIN_STATIC, NULL, commands, ARRAY_SIZE(commands),
 		    NULL, 0, NULL, 0,
@@ -980,6 +992,10 @@ int main(int argc, char *argv[])
 				  "how long to keep retrying to contact groestlcoind"
 				  " before fatally exiting",
 				  u64_option, &bitcoind->retry_timeout),
+		    plugin_option("commit-fee",
+				  "string",
+				  "Percentage of fee to request for their commitment",
+				  u64_option, &bitcoind->commit_fee_percent),
 #if DEVELOPER
 		    plugin_option("dev-max-fee-multiplier",
 				  "string",

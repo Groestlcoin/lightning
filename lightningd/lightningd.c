@@ -70,6 +70,7 @@
 #include <lightningd/bitcoind.h>
 #include <lightningd/chaintopology.h>
 #include <lightningd/channel_control.h>
+#include <lightningd/coin_mvts.h>
 #include <lightningd/connect_control.h>
 #include <lightningd/invoice.h>
 #include <lightningd/io_loop_with_timers.h>
@@ -105,9 +106,10 @@ static struct lightningd *new_lightningd(const tal_t *ctx)
 	 * the entire subtree rooted at that node to be freed.
 	 *
 	 * It's incredibly useful for grouping object lifetimes, as we'll see.
-	 * For example, a `struct bitcoin_tx` has a pointer to an array of
-	 * `struct bitcoin_tx_input`; they are allocated off the `struct
-	 * bitcoind_tx`, so freeing the `struct bitcoind_tx` frees them all.
+	 * For example, a `struct lightningd` has a pointer to a `log_book`
+	 * which is allocated off the `struct lightningd`, and has its own
+	 * internal members allocated off `log_book`: freeing `struct
+	 * lightningd` frees them all.
 	 *
 	 * In this case, freeing `ctx` will free `ld`:
 	 */
@@ -123,8 +125,8 @@ static struct lightningd *new_lightningd(const tal_t *ctx)
 	 * is a nod to keeping it minimal and explicit: we need this code for
 	 * testing, but its existence means we're not actually testing the
 	 * same exact code users will be running. */
-	ld->dev_debug_subprocess = NULL;
 #if DEVELOPER
+	ld->dev_debug_subprocess = NULL;
 	ld->dev_disconnect_fd = -1;
 	ld->dev_subdaemon_fail = false;
 	ld->dev_allow_localhost = false;
@@ -757,6 +759,7 @@ int main(int argc, char *argv[])
 	struct timers *timers;
 	const char *stop_response;
 	struct htlc_in_map *unconnected_htlcs_in;
+	struct ext_key *bip32_base;
 	struct rlimit nofile = {1024, 1024};
 
 	/*~ Make sure that we limit ourselves to something reasonable. Modesty
@@ -808,7 +811,7 @@ int main(int argc, char *argv[])
 	/*~ Initialize all the plugins we just registered, so they can
 	 *  do their thing and tell us about themselves (including
 	 *  options registration). */
-	plugins_init(ld->plugins, ld->dev_debug_subprocess);
+	plugins_init(ld->plugins);
 
 	/*~ Handle options and config. */
 	handle_opts(ld, argc, argv);
@@ -820,17 +823,6 @@ int main(int argc, char *argv[])
 	/*~ Make sure we can reach the subdaemons, and versions match. */
 	test_subdaemons(ld);
 
-	/*~ Our "wallet" code really wraps the db, which is more than a simple
-	 * bitcoin wallet (though it's that too).  It also stores channel
-	 * states, invoices, payments, blocks and bitcoin transactions. */
-	ld->wallet = wallet_new(ld, ld->timers);
-
-	/*~ We keep a filter of scriptpubkeys we're interested in. */
-	ld->owned_txfilter = txfilter_new(ld);
-
-	/*~ This is the ccan/io central poll override from above. */
-	io_poll_override(io_poll_lightningd);
-
 	/*~ Set up the HSM daemon, which knows our node secret key, so tells
 	 *  us who we are.
 	 *
@@ -838,7 +830,23 @@ int main(int argc, char *argv[])
 	 * standard of key storage; ours is in software for now, so the name
 	 * doesn't really make sense, but we can't call it the Badly-named
 	 * Daemon Software Module. */
-	hsm_init(ld);
+	bip32_base = hsm_init(ld);
+
+	/*~ Our "wallet" code really wraps the db, which is more than a simple
+	 * bitcoin wallet (though it's that too).  It also stores channel
+	 * states, invoices, payments, blocks and bitcoin transactions. */
+	ld->wallet = wallet_new(ld, ld->timers);
+	ld->wallet->bip32_base = tal_steal(ld->wallet, bip32_base);
+
+	/*~ We keep track of how many 'coin moves' we've ever made.
+	 * Initialize the starting value from the database here. */
+	coin_mvts_init_count(ld);
+
+	/*~ We keep a filter of scriptpubkeys we're interested in. */
+	ld->owned_txfilter = txfilter_new(ld);
+
+	/*~ This is the ccan/io central poll override from above. */
+	io_poll_override(io_poll_lightningd);
 
 	/*~ If hsm_secret is encrypted, we don't need its encryption key
 	 * anymore. Note that sodium_munlock() also zeroes the memory.*/

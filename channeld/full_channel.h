@@ -25,7 +25,7 @@ struct existing_htlc;
  * @local_fundingkey: local funding key
  * @remote_fundingkey: remote funding key
  * @option_static_remotekey: use `option_static_remotekey`.
- * @funder: which side initiated it.
+ * @opener: which side initiated it.
  *
  * Returns state, or NULL if malformed.
  */
@@ -43,13 +43,14 @@ struct channel *new_full_channel(const tal_t *ctx,
 				 const struct pubkey *local_funding_pubkey,
 				 const struct pubkey *remote_funding_pubkey,
 				 bool option_static_remotekey,
-				 enum side funder);
+				 enum side opener);
 
 /**
  * channel_txs: Get the current commitment and htlc txs for the channel.
  * @ctx: tal context to allocate return value from.
  * @channel: The channel to evaluate
  * @htlc_map: Pointer to htlcs for each tx output (allocated off @ctx).
+ * @direct_outputs: If non-NULL, fill with pointers to the direct (non-HTLC) outputs (or NULL if none).
  * @funding_wscript: Pointer to wscript for the funding tx output
  * @per_commitment_point: Per-commitment point to determine keys
  * @commitment_number: The index of this commitment.
@@ -61,6 +62,7 @@ struct channel *new_full_channel(const tal_t *ctx,
  */
 struct bitcoin_tx **channel_txs(const tal_t *ctx,
 				const struct htlc ***htlcmap,
+				struct wally_tx_output *direct_outputs[NUM_SIDES],
 				const u8 **funding_wscript,
 				const struct channel *channel,
 				const struct pubkey *per_commitment_point,
@@ -151,7 +153,7 @@ enum channel_remove_err channel_fulfill_htlc(struct channel *channel,
 					     struct htlc **htlcp);
 
 /**
- * approx_max_feerate: what's the max funder could raise fee rate to?
+ * approx_max_feerate: what's the max opener could raise fee rate to?
  * @channel: The channel state
  *
  * This is not exact!  To check if their offer is valid, try
@@ -160,14 +162,14 @@ enum channel_remove_err channel_fulfill_htlc(struct channel *channel,
 u32 approx_max_feerate(const struct channel *channel);
 
 /**
- * can_funder_afford_feerate: could the funder pay the fee?
+ * can_opener_afford_feerate: could the opener pay the fee?
  * @channel: The channel state
  * @feerate: The feerate in satoshi per 1000 bytes.
  */
-bool can_funder_afford_feerate(const struct channel *channel, u32 feerate);
+bool can_opener_afford_feerate(const struct channel *channel, u32 feerate);
 
 /**
- * channel_update_feerate: Change fee rate on non-funder side.
+ * channel_update_feerate: Change fee rate on non-opener side.
  * @channel: The channel
  * @feerate_per_kw: fee in satoshi per 1000 bytes.
  *

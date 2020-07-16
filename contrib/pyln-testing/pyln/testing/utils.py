@@ -21,6 +21,7 @@ import struct
 import subprocess
 import threading
 import time
+import warnings
 
 BITCOIND_CONFIG = {
     "regtest": 1,
@@ -488,6 +489,9 @@ class LightningD(TailableProc):
             'ignore-fee-limits': 'false',
             'bitcoin-rpcuser': BITCOIND_CONFIG['rpcuser'],
             'bitcoin-rpcpassword': BITCOIND_CONFIG['rpcpassword'],
+
+            # Make sure we don't touch any existing config files in the user's $HOME
+            'bitcoin-datadir': lightning_dir,
         }
 
         for k, v in opts.items():
@@ -871,9 +875,10 @@ class LightningNode(object):
             elif params == [100, 'ECONOMICAL']:
                 feerate = feerates[3] * 4
             else:
-                raise ValueError("Don't have a feerate set for {}/{}.".format(
+                warnings.warn("Don't have a feerate set for {}/{}.".format(
                     params[0], params[1],
                 ))
+                feerate = 42
             return {
                 'id': r['id'],
                 'error': None,

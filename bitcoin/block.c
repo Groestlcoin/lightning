@@ -1,9 +1,58 @@
-#include "bitcoin/block.h"
-#include "bitcoin/pullpush.h"
-#include "bitcoin/tx.h"
+#include <assert.h>
+#include <bitcoin/block.h>
+#include <bitcoin/chainparams.h>
+#include <bitcoin/tx.h>
 #include "bitcoin/groestl.h"
+#include <ccan/mem/mem.h>
 #include <ccan/str/hex/hex.h>
 #include <common/type_to_string.h>
+#include <wire/wire.h>
+
+/* Sets *cursor to NULL and returns NULL when a pull fails. */
+static const u8 *pull(const u8 **cursor, size_t *max, void *copy, size_t n)
+{
+	const u8 *p = *cursor;
+
+	if (*max < n) {
+		*cursor = NULL;
+		*max = 0;
+		/* Just make sure we don't leak uninitialized mem! */
+		if (copy)
+			memset(copy, 0, n);
+		return NULL;
+	}
+	*cursor += n;
+	*max -= n;
+	assert(p);
+	if (copy)
+		memcpy(copy, p, n);
+	return memcheck(p, n);
+}
+
+static u32 pull_le32(const u8 **cursor, size_t *max)
+{
+	le32 ret;
+
+	if (!pull(cursor, max, &ret, sizeof(ret)))
+		return 0;
+	return le32_to_cpu(ret);
+}
+
+static u64 pull_varint(const u8 **cursor, size_t *max)
+{
+	u64 ret;
+	size_t len;
+
+	len = varint_get(*cursor, *max, &ret);
+	if (len == 0) {
+		*cursor = NULL;
+		*max = 0;
+		return 0;
+	}
+	pull(cursor, max, NULL, len);
+	return ret;
+}
+
 
 static void groestl512_varint(sph_groestl512_context *ctx, u64 val)
 {
@@ -207,3 +256,28 @@ static char *fmt_bitcoin_blkid(const tal_t *ctx,
 	return hexstr;
 }
 REGISTER_TYPE_TO_STRING(bitcoin_blkid, fmt_bitcoin_blkid);
+
+void fromwire_bitcoin_blkid(const u8 **cursor, size_t *max,
+			    struct bitcoin_blkid *blkid)
+{
+	fromwire_sha256_double(cursor, max, &blkid->shad);
+}
+
+void towire_bitcoin_blkid(u8 **pptr, const struct bitcoin_blkid *blkid)
+{
+	towire_sha256_double(pptr, &blkid->shad);
+}
+
+
+void towire_chainparams(u8 **cursor, const struct chainparams *chainparams)
+{
+	towire_bitcoin_blkid(cursor, &chainparams->genesis_blockhash);
+}
+
+void fromwire_chainparams(const u8 **cursor, size_t *max,
+			  const struct chainparams **chainparams)
+{
+	struct bitcoin_blkid genesis;
+	fromwire_bitcoin_blkid(cursor, max, &genesis);
+	*chainparams = chainparams_by_chainhash(&genesis);
+}

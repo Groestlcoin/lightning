@@ -1,6 +1,7 @@
 #include "features.h"
 #include <assert.h>
 #include <ccan/array_size/array_size.h>
+#include <ccan/tal/str/str.h>
 #include <common/memleak.h>
 #include <common/utils.h>
 #include <wire/peer_wire.h>
@@ -60,9 +61,13 @@ static const struct feature_style feature_styles[] = {
 	  .copy_style = { [INIT_FEATURE] = FEATURE_REPRESENT,
 			  [NODE_ANNOUNCE_FEATURE] = FEATURE_REPRESENT,
 			  [BOLT11_FEATURE] = FEATURE_REPRESENT } },
+	/* BOLT #9:
+	 * | 18/19 | `option_support_large_channel` |... IN ...
+	 */
 	{ OPT_LARGE_CHANNELS,
 	  .copy_style = { [INIT_FEATURE] = FEATURE_REPRESENT,
-			  [NODE_ANNOUNCE_FEATURE] = FEATURE_REPRESENT } },
+			  [NODE_ANNOUNCE_FEATURE] = FEATURE_REPRESENT,
+			  [CHANNEL_FEATURE] = FEATURE_DONT_REPRESENT } },
 #if EXPERIMENTAL_FEATURES
 	{ OPT_ONION_MESSAGES,
 	  .copy_style = { [INIT_FEATURE] = FEATURE_REPRESENT,
@@ -190,8 +195,9 @@ u8 *get_agreed_channelfeatures(const tal_t *ctx,
 		max_len = (i / 8) + 1;
 	}
 
-	/* Trim to length */
-	tal_resize(&f, max_len);
+	/* Trim to length (unless it's already NULL). */
+	if (f)
+		tal_resize(&f, max_len);
 	return f;
 }
 

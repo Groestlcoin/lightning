@@ -130,16 +130,12 @@ int main(int argc, char *argv[])
 
 	tx = bitcoin_tx(NULL, chainparams, 1, 2, 0);
 
-	/* Our input spends the anchor tx output. */
-	bitcoin_tx_add_input(tx, &funding_txid, funding_outnum,
-			     BITCOIN_TX_DEFAULT_SEQUENCE, funding_amount, NULL);
-
 	num_outputs = 0;
 	if (amount_msat_greater_eq_sat(local_msat, dust_limit)) {
 		u8 *script = scriptpubkey_p2wpkh(NULL, &outkey[LOCAL]);
 		printf("# local witness script: %s\n", tal_hex(NULL, script));
 		/* One output is to us. */
-		bitcoin_tx_add_output(tx, script,
+		bitcoin_tx_add_output(tx, script, NULL,
 				      amount_msat_to_sat_round_down(local_msat));
 		num_outputs++;
 	} else
@@ -149,7 +145,7 @@ int main(int argc, char *argv[])
 		u8 *script = scriptpubkey_p2wpkh(NULL, &outkey[REMOTE]);
 		printf("# remote witness script: %s\n", tal_hex(NULL, script));
 		/* Other output is to them. */
-		bitcoin_tx_add_output(tx, script,
+		bitcoin_tx_add_output(tx, script, NULL,
 				      amount_msat_to_sat_round_down(remote_msat));
 		num_outputs++;
 	} else
@@ -165,8 +161,11 @@ int main(int argc, char *argv[])
 	printf("# funding witness script = %s\n",
 	       tal_hex(NULL, funding_wscript));
 
-	/* Need input amount for signing */
-	tx->input_amounts[0] = tal_dup(tx, struct amount_sat, &funding_amount);
+	/* Our input spends the anchor tx output. */
+	bitcoin_tx_add_input(tx, &funding_txid, funding_outnum,
+			     BITCOIN_TX_DEFAULT_SEQUENCE, NULL,
+			     funding_amount, NULL, funding_wscript);
+
 	sign_tx_input(tx, 0, NULL, funding_wscript,
 		      &funding_privkey[LOCAL],
 		      &funding_pubkey[LOCAL],

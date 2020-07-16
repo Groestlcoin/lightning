@@ -70,6 +70,9 @@ WARN_UNUSED_RESULT bool amount_sat_sub(struct amount_sat *val,
 WARN_UNUSED_RESULT bool amount_msat_sub_sat(struct amount_msat *val,
 					    struct amount_msat a,
 					    struct amount_sat b);
+WARN_UNUSED_RESULT bool amount_msat_add_sat(struct amount_msat *val,
+					    struct amount_msat a,
+					    struct amount_sat b);
 WARN_UNUSED_RESULT bool amount_sat_sub_msat(struct amount_msat *val,
 					    struct amount_sat a,
 					    struct amount_msat b);
@@ -102,10 +105,21 @@ bool amount_msat_greater_eq_sat(struct amount_msat msat, struct amount_sat sat);
 bool amount_msat_less_sat(struct amount_msat msat, struct amount_sat sat);
 /* Is msat <= sat? */
 bool amount_msat_less_eq_sat(struct amount_msat msat, struct amount_sat sat);
+/* Is msat == sat? */
+bool amount_msat_eq_sat(struct amount_msat msat, struct amount_sat sat);
 
 /* Check whether this asset is actually the main / fee-paying asset of the
  * current chain. */
 bool amount_asset_is_main(struct amount_asset *asset);
+
+/* Convert an amount_sat to an amount_asset */
+struct amount_asset amount_sat_to_asset(struct amount_sat *sat, const u8 *asset);
+
+/* amount_asset_extract_value -Prefix the amount_asset's value
+ * to have the 'explicit' marker. Returns NULL if the
+ * asset was originally blinded.
+ * FIXME: pass through blinded amounts */
+u8 *amount_asset_extract_value(const tal_t *ctx, struct amount_asset *asset);
 
 /* Convert from a generic asset to the fee-paying asset if possible. */
 struct amount_sat amount_asset_to_sat(struct amount_asset *asset);
@@ -163,4 +177,9 @@ bool parse_amount_msat(struct amount_msat *msat, const char *s, size_t slen);
  */
 bool parse_amount_sat(struct amount_sat *sat, const char *s, size_t slen);
 
+/* Marshal/unmarshal functions */
+struct amount_msat fromwire_amount_msat(const u8 **cursor, size_t *max);
+struct amount_sat fromwire_amount_sat(const u8 **cursor, size_t *max);
+void towire_amount_msat(u8 **pptr, const struct amount_msat msat);
+void towire_amount_sat(u8 **pptr, const struct amount_sat sat);
 #endif /* LIGHTNING_COMMON_AMOUNT_H */

@@ -1,5 +1,8 @@
 #include <assert.h>
+#include <bitcoin/privkey.h>
+#include <bitcoin/psbt.h>
 #include <bitcoin/script.h>
+#include <ccan/ccan/mem/mem.h>
 #include <common/key_derive.h>
 #include <common/utils.h>
 #include <common/utxo.h>
@@ -15,6 +18,11 @@ void towire_utxo(u8 **pptr, const struct utxo *utxo)
 	towire_amount_sat(pptr, utxo->amount);
 	towire_u32(pptr, utxo->keyindex);
 	towire_bool(pptr, utxo->is_p2sh);
+
+	towire_u16(pptr, tal_count(utxo->scriptPubkey));
+	towire_u8_array(pptr, utxo->scriptPubkey, tal_count(utxo->scriptPubkey));
+	towire_u16(pptr, tal_count(utxo->scriptSig));
+	towire_u8_array(pptr, utxo->scriptSig, tal_count(utxo->scriptSig));
 
 	towire_bool(pptr, is_unilateral_close);
 	if (is_unilateral_close) {
@@ -36,9 +44,8 @@ struct utxo *fromwire_utxo(const tal_t *ctx, const u8 **ptr, size_t *max)
 	utxo->keyindex = fromwire_u32(ptr, max);
 	utxo->is_p2sh = fromwire_bool(ptr, max);
 
-	/* No need to tell hsmd about the scriptPubkey, it has all the info to
-	 * derive it from the rest. */
-	utxo->scriptPubkey = NULL;
+	utxo->scriptPubkey = fromwire_tal_arrn(utxo, ptr, max, fromwire_u16(ptr, max));
+	utxo->scriptSig = fromwire_tal_arrn(utxo, ptr, max, fromwire_u16(ptr, max));
 
 	if (fromwire_bool(ptr, max)) {
 		utxo->close_info = tal(utxo, struct unilateral_close_info);
@@ -67,9 +74,8 @@ struct bitcoin_tx *tx_spending_utxos(const tal_t *ctx,
 				     u32 nsequence)
 {
 	struct pubkey key;
-	u8 *script;
+	u8 *scriptSig, *scriptPubkey, *redeemscript;
 
-	assert(num_output);
 	size_t outcount = add_change_output ? 1 + num_output : num_output;
 	struct bitcoin_tx *tx = bitcoin_tx(ctx, chainparams, tal_count(utxos),
 					   outcount, nlocktime);
@@ -77,14 +83,37 @@ struct bitcoin_tx *tx_spending_utxos(const tal_t *ctx,
 	for (size_t i = 0; i < tal_count(utxos); i++) {
 		if (utxos[i]->is_p2sh && bip32_base) {
 			bip32_pubkey(bip32_base, &key, utxos[i]->keyindex);
-			script = bitcoin_scriptsig_p2sh_p2wpkh(tmpctx, &key);
+			scriptSig = bitcoin_scriptsig_p2sh_p2wpkh(tmpctx, &key);
+			redeemscript = bitcoin_redeem_p2sh_p2wpkh(tmpctx, &key);
+			scriptPubkey = scriptpubkey_p2sh(tmpctx, redeemscript);
+
+			/* Make sure we've got the right info! */
+			if (utxos[i]->scriptPubkey)
+				assert(memeq(utxos[i]->scriptPubkey,
+					     tal_bytelen(utxos[i]->scriptPubkey),
+					     scriptPubkey, tal_bytelen(scriptPubkey)));
 		} else {
-			script = NULL;
+			scriptSig = NULL;
+			redeemscript = NULL;
+			/* We can't definitively derive the pubkey without
+			 * hitting the HSM, so we don't */
+			scriptPubkey = utxos[i]->scriptPubkey;
 		}
 
 		bitcoin_tx_add_input(tx, &utxos[i]->txid, utxos[i]->outnum,
-				     nsequence, utxos[i]->amount, script);
+				     nsequence, scriptSig, utxos[i]->amount,
+				     scriptPubkey, NULL);
+
+		/* Add redeemscript to the PSBT input */
+		if (redeemscript)
+			psbt_input_set_redeemscript(tx->psbt, i, redeemscript);
+
 	}
 
 	return tx;
+}
+
+size_t utxo_spend_weight(const struct utxo *utxo)
+{
+	return bitcoin_tx_simple_input_weight(utxo->is_p2sh);
 }

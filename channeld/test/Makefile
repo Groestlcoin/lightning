@@ -15,16 +15,17 @@ CHANNELD_TEST_COMMON_OBJS :=			\
 	common/htlc_tx.o			\
 	common/initial_commit_tx.o		\
 	common/key_derive.o			\
-	common/pseudorand.o			\
 	common/msg_queue.o			\
-	common/utils.o				\
+	common/permute_tx.o			\
+	common/pseudorand.o			\
+	common/setup.o				\
 	common/type_to_string.o			\
-	common/permute_tx.o
+	common/utils.o
 
 update-mocks: $(CHANNELD_TEST_SRC:%=update-mocks/%)
 
 $(CHANNELD_TEST_PROGRAMS): $(CCAN_OBJS) $(BITCOIN_OBJS) $(WIRE_OBJS) $(CHANNELD_TEST_COMMON_OBJS)
 
-$(CHANNELD_TEST_OBJS): $(LIGHTNING_CHANNELD_HEADERS) $(LIGHTNING_CHANNELD_SRC)
+$(CHANNELD_TEST_OBJS): $(LIGHTNINGD_CHANNEL_HEADERS) $(LIGHTNINGD_CHANNEL_SRC)
 
 check-units: $(CHANNELD_TEST_PROGRAMS:%=unittest/%)

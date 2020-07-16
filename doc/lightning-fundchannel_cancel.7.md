@@ -9,7 +9,7 @@ SYNOPSIS
 DESCRIPTION
 -----------
 
-`fundchannel_cancel` is a lower level RPC command. It allows channel funder
+`fundchannel_cancel` is a lower level RPC command. It allows channel opener
 to cancel a channel before funding broadcast with a connected peer.
 
 *id* is the node id of the remote peer with which to cancel.
@@ -32,8 +32,11 @@ On error the returned object will contain `code` and `message` properties,
 with `code` being one of the following:
 
 - -32602: If the given parameters are wrong.
-- -1: Catchall nonspecific error.
 - 306: Unknown peer id.
+- 307: No channel currently being funded that can be cancelled.
+- 308: It is unsafe to cancel the channel: the funding transaction
+  has been broadcast, or there are HTLCs already in the channel, or
+  the peer was the initiator and not us.
 
 AUTHOR
 ------

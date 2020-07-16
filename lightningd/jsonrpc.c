@@ -25,6 +25,7 @@
 #include <ccan/tal/str/str.h>
 #include <common/configdir.h>
 #include <common/json_command.h>
+#include <common/json_helpers.h>
 #include <common/jsonrpc_errors.h>
 #include <common/memleak.h>
 #include <common/param.h>
@@ -596,8 +597,10 @@ static struct command_result *command_exec(struct json_connection *jcon,
 	if (res == &pending)
 		assert(cmd->pending);
 
-	list_for_each(&jcon->commands, cmd, list)
-		assert(cmd->pending);
+	/* The command might outlive the connection. */
+	if (jcon)
+		list_for_each(&jcon->commands, cmd, list)
+			assert(cmd->pending);
 
 	return res;
 }
@@ -774,11 +777,6 @@ REGISTER_SINGLE_PLUGIN_HOOK(rpc_command,
 			    rpc_command_hook_serialize,
 			    struct rpc_command_hook_payload *);
 
-static void call_rpc_command_hook(struct rpc_command_hook_payload *p)
-{
-	plugin_hook_call_rpc_command(p->cmd->ld, p);
-}
-
 /* We return struct command_result so command_fail return value has a natural
  * sink; we don't actually use the result. */
 static struct command_result *
@@ -787,6 +785,7 @@ parse_request(struct json_connection *jcon, const jsmntok_t tok[])
 	const jsmntok_t *method, *id, *params;
 	struct command *c;
 	struct rpc_command_hook_payload *rpc_hook;
+	bool completed;
 
 	if (tok[0].type != JSMN_OBJECT) {
 		json_command_malformed(jcon, "null",
@@ -850,11 +849,15 @@ parse_request(struct json_connection *jcon, const jsmntok_t tok[])
 	/* Duplicate since we might outlive the connection */
 	rpc_hook->buffer = tal_dup_talarr(rpc_hook, char, jcon->buffer);
 	rpc_hook->request = tal_dup_talarr(rpc_hook, jsmntok_t, tok);
-	/* Prevent a race between was_pending and still_pending */
-	new_reltimer(c->ld->timers, rpc_hook, time_from_msec(1),
-	             call_rpc_command_hook, rpc_hook);
 
-	return command_still_pending(c);
+	db_begin_transaction(jcon->ld->wallet->db);
+	completed = plugin_hook_call_rpc_command(jcon->ld, rpc_hook);
+	db_commit_transaction(jcon->ld->wallet->db);
+
+	/* If it's deferred, mark it (otherwise, it's completed) */
+	if (!completed)
+		return command_still_pending(c);
+	return NULL;
 }
 
 /* Mutual recursion */

@@ -1,6 +1,7 @@
 #ifndef LIGHTNING_COMMON_JSON_H
 #define LIGHTNING_COMMON_JSON_H
 #include "config.h"
+#include <ccan/crypto/sha256/sha256.h>
 #include <ccan/short_types/short_types.h>
 #include <ccan/tal/tal.h>
 #include <common/errcode.h>
@@ -11,26 +12,10 @@
 #define JSMN_STRICT 1
 # include <external/jsmn/jsmn.h>
 
-struct amount_sat;
-struct amount_msat;
-struct bitcoin_tx;
-struct bitcoin_txid;
-struct channel_id;
 struct json_escape;
 struct json_stream;
-struct pubkey;
-struct node_id;
-struct sha256;
-struct preimage;
-struct secret;
-struct short_channel_id;
 struct timeabs;
 struct timespec;
-struct wallet_payment;
-struct wallet_tx;
-struct wireaddr;
-struct wireaddr_internal;
-
 
 /* Include " if it's a string. */
 const char *json_tok_full(const char *buffer, const jsmntok_t *t);
@@ -46,9 +31,6 @@ char *json_strdup(const tal_t *ctx, const char *buffer, const jsmntok_t *tok);
 
 /* Decode a hex-encoded binary */
 u8 *json_tok_bin_from_hex(const tal_t *ctx, const char *buffer, const jsmntok_t *tok);
-
-/* Decode a hex-encoded payment preimage */
-bool json_to_preimage(const char *buffer, const jsmntok_t *tok, struct preimage *preimage);
 
 /* Extract number from this (may be a string, or a number literal) */
 bool json_to_number(const char *buffer, const jsmntok_t *tok,
@@ -69,6 +51,7 @@ bool json_to_u32(const char *buffer, const jsmntok_t *tok,
 bool json_to_u16(const char *buffer, const jsmntok_t *tok,
                  uint16_t *num);
 
+bool json_to_sha256(const char *buffer, const jsmntok_t *tok, struct sha256 *dest);
 /*
  * Extract a non-negative (either 0 or positive) floating-point number from this
  * (must be a number literal), multiply it by 1 million and return it as an
@@ -85,9 +68,6 @@ bool json_to_errcode(const char *buffer, const jsmntok_t *tok, errcode_t *errcod
 
 /* Extract boolean from this */
 bool json_to_bool(const char *buffer, const jsmntok_t *tok, bool *b);
-
-/* Extract a secret from this. */
-bool json_to_secret(const char *buffer, const jsmntok_t *tok, struct secret *dest);
 
 /* Is this a number? [0..9]+ */
 bool json_tok_is_num(const char *buffer, const jsmntok_t *tok);
@@ -140,41 +120,6 @@ const jsmntok_t *json_delve(const char *buffer,
 	for (i = 0, t = (obj) + 1; i < (obj)->size; t = json_next(t+1), i++)
 
 
-/* Helpers for outputting JSON results */
-
-/* '"fieldname" : "0289abcdef..."' or "0289abcdef..." if fieldname is NULL */
-void json_add_pubkey(struct json_stream *response,
-		     const char *fieldname,
-		     const struct pubkey *key);
-
-/* '"fieldname" : "89abcdef..."' or "89abcdef..." if fieldname is NULL */
-void json_add_secret(struct json_stream *response,
-		     const char *fieldname,
-		     const struct secret *secret);
-
-/* '"fieldname" : "0289abcdef..."' or "0289abcdef..." if fieldname is NULL */
-void json_add_node_id(struct json_stream *response,
-				const char *fieldname,
-				const struct node_id *id);
-
-/* '"fieldname" : <hexrev>' or "<hexrev>" if fieldname is NULL */
-void json_add_txid(struct json_stream *result, const char *fieldname,
-		   const struct bitcoin_txid *txid);
-
-/* '"fieldname" : "1234:5:6"' */
-void json_add_short_channel_id(struct json_stream *response,
-			       const char *fieldname,
-			       const struct short_channel_id *id);
-
-/* JSON serialize a network address for a node */
-void json_add_address(struct json_stream *response, const char *fieldname,
-		      const struct wireaddr *addr);
-
-/* JSON serialize a network address for a node. */
-void json_add_address_internal(struct json_stream *response,
-			       const char *fieldname,
-			       const struct wireaddr_internal *addr);
-
 /* '"fieldname" : "value"' or '"value"' if fieldname is NULL.  Turns
  * any non-printable chars into JSON escapes, but leaves existing escapes alone.
  */
@@ -218,36 +163,6 @@ void json_add_hex(struct json_stream *result, const char *fieldname,
 void json_add_hex_talarr(struct json_stream *result,
 			 const char *fieldname,
 			 const tal_t *data);
-/* '"fieldname" : "010000000001..."' or "010000000001..." if fieldname is NULL */
-void json_add_tx(struct json_stream *result,
-		 const char *fieldname,
-		 const struct bitcoin_tx *tx);
-
-/* Adds both a 'raw' number field and an 'amount_msat' field */
-void json_add_amount_msat_compat(struct json_stream *result,
-				 struct amount_msat msat,
-				 const char *rawfieldname,
-				 const char *msatfieldname)
-	NO_NULL_ARGS;
-
-/* Adds both a 'raw' number field and an 'amount_msat' field */
-void json_add_amount_sat_compat(struct json_stream *result,
-				struct amount_sat sat,
-				const char *rawfieldname,
-				const char *msatfieldname)
-	NO_NULL_ARGS;
-
-/* Adds an 'msat' field */
-void json_add_amount_msat_only(struct json_stream *result,
-			  const char *msatfieldname,
-			  struct amount_msat msat)
-	NO_NULL_ARGS;
-
-/* Adds an 'msat' field */
-void json_add_amount_sat_only(struct json_stream *result,
-			 const char *msatfieldname,
-			 struct amount_sat sat)
-	NO_NULL_ARGS;
 
 void json_add_timeabs(struct json_stream *result, const char *fieldname,
 		      struct timeabs t);
@@ -255,12 +170,6 @@ void json_add_timeabs(struct json_stream *result, const char *fieldname,
 /* used in log.c and notification.c*/
 void json_add_time(struct json_stream *result, const char *fieldname,
 			  struct timespec ts);
-
-void json_add_sha256(struct json_stream *result, const char *fieldname,
-		     const struct sha256 *hash);
-
-void json_add_preimage(struct json_stream *result, const char *fieldname,
-		     const struct preimage *preimage);
 
 /* Add any json token */
 void json_add_tok(struct json_stream *result, const char *fieldname,

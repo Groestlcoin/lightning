@@ -39,8 +39,9 @@ static struct bitcoin_tx *close_tx(const tal_t *ctx,
 				   const struct bitcoin_txid *funding_txid,
 				   unsigned int funding_txout,
 				   struct amount_sat funding,
+				   const u8 *funding_wscript,
 				   const struct amount_sat out[NUM_SIDES],
-				   enum side funder,
+				   enum side opener,
 				   struct amount_sat fee,
 				   struct amount_sat dust_limit)
 {
@@ -49,7 +50,7 @@ static struct bitcoin_tx *close_tx(const tal_t *ctx,
 
 	out_minus_fee[LOCAL] = out[LOCAL];
 	out_minus_fee[REMOTE] = out[REMOTE];
-	if (!amount_sat_sub(&out_minus_fee[funder], out[funder], fee))
+	if (!amount_sat_sub(&out_minus_fee[opener], out[opener], fee))
 		peer_failed(pps, channel_id,
 			    "Funder cannot afford fee %s (%s and %s)",
 			    type_to_string(tmpctx, struct amount_sat, &fee),
@@ -67,6 +68,7 @@ static struct bitcoin_tx *close_tx(const tal_t *ctx,
 	tx = create_close_tx(ctx,
 			     chainparams,
 			     scriptpubkey[LOCAL], scriptpubkey[REMOTE],
+			     funding_wscript,
 			     funding_txid,
 			     funding_txout,
 			     funding,
@@ -152,6 +154,7 @@ static void do_reconnect(struct per_peer_state *pps,
 	struct channel_id their_channel_id;
 	u64 next_local_commitment_number, next_remote_revocation_number;
 	struct pubkey my_current_per_commitment_point, next_commitment_point;
+	struct secret their_secret;
 
 	my_current_per_commitment_point = get_per_commitment_point(next_index[LOCAL]-1);
 
@@ -173,9 +176,7 @@ static void do_reconnect(struct per_peer_state *pps,
 	 *     of the next `revoke_and_ack` message it expects to receive.
 	 */
 
-	/* We're always allowed to send extra fields, so we send dataloss_protect
-	 * even if we didn't negotiate it */
-	msg = towire_channel_reestablish_option_data_loss_protect(NULL, channel_id,
+	msg = towire_channel_reestablish(NULL, channel_id,
 					 next_index[LOCAL],
 					 revocations_received,
 					 last_remote_per_commit_secret,
@@ -197,7 +198,9 @@ static void do_reconnect(struct per_peer_state *pps,
 
 	if (!fromwire_channel_reestablish(channel_reestablish, &their_channel_id,
 					  &next_local_commitment_number,
-					  &next_remote_revocation_number)) {
+					  &next_remote_revocation_number,
+					  &their_secret,
+					  &next_commitment_point)) {
 		peer_failed(pps, channel_id,
 			    "bad reestablish msg: %s %s",
 			    wire_type_name(fromwire_peektype(channel_reestablish)),
@@ -238,12 +241,13 @@ static void send_offer(struct per_peer_state *pps,
 		       const struct chainparams *chainparams,
 		       const struct channel_id *channel_id,
 		       const struct pubkey funding_pubkey[NUM_SIDES],
+		       const u8 *funding_wscript,
 		       u8 *scriptpubkey[NUM_SIDES],
 		       const struct bitcoin_txid *funding_txid,
 		       unsigned int funding_txout,
 		       struct amount_sat funding,
 		       const struct amount_sat out[NUM_SIDES],
-		       enum side funder,
+		       enum side opener,
 		       struct amount_sat our_dust_limit,
 		       struct amount_sat fee_to_offer)
 {
@@ -262,8 +266,9 @@ static void send_offer(struct per_peer_state *pps,
 		      funding_txid,
 		      funding_txout,
 		      funding,
+		      funding_wscript,
 		      out,
-		      funder, fee_to_offer, our_dust_limit);
+		      opener, fee_to_offer, our_dust_limit);
 
 	/* BOLT #3:
 	 *
@@ -276,8 +281,7 @@ static void send_offer(struct per_peer_state *pps,
 	wire_sync_write(HSM_FD,
 			take(towire_hsm_sign_mutual_close_tx(NULL,
 							     tx,
-							     &funding_pubkey[REMOTE],
-							     funding)));
+							     &funding_pubkey[REMOTE])));
 	msg = wire_sync_read(tmpctx, HSM_FD);
 	if (!fromwire_hsm_sign_tx_reply(msg, &our_sig))
 		status_failed(STATUS_FAIL_HSM_IO,
@@ -321,7 +325,7 @@ receive_offer(struct per_peer_state *pps,
 	      unsigned int funding_txout,
 	      struct amount_sat funding,
 	      const struct amount_sat out[NUM_SIDES],
-	      enum side funder,
+	      enum side opener,
 	      struct amount_sat our_dust_limit,
 	      struct amount_sat min_fee_to_accept,
 	      struct bitcoin_txid *closing_txid)
@@ -372,7 +376,8 @@ receive_offer(struct per_peer_state *pps,
 		      funding_txid,
 		      funding_txout,
 		      funding,
-		      out, funder, received_fee, our_dust_limit);
+		      funding_wscript,
+		      out, opener, received_fee, our_dust_limit);
 
 	if (!check_tx_sig(tx, 0, NULL, funding_wscript,
 			  &funding_pubkey[REMOTE], &their_sig)) {
@@ -380,7 +385,7 @@ receive_offer(struct per_peer_state *pps,
 		struct bitcoin_tx *trimmed;
 		struct amount_sat trimming_out[NUM_SIDES];
 
-		if (funder == REMOTE)
+		if (opener == REMOTE)
 			trimming_out[REMOTE] = received_fee;
 		else
 			trimming_out[REMOTE] = AMOUNT_SAT(0);
@@ -401,8 +406,9 @@ receive_offer(struct per_peer_state *pps,
 				   funding_txid,
 				   funding_txout,
 				   funding,
+				   funding_wscript,
 				   trimming_out,
-				   funder, received_fee, our_dust_limit);
+				   opener, received_fee, our_dust_limit);
 		if (!trimmed
 		    || !check_tx_sig(trimmed, 0, NULL, funding_wscript,
 				     &funding_pubkey[REMOTE], &their_sig)) {
@@ -603,7 +609,7 @@ int main(int argc, char *argv[])
 	struct amount_sat our_dust_limit;
 	struct amount_sat min_fee_to_accept, commitment_fee, offer[NUM_SIDES];
 	struct feerange feerange;
-	enum side funder;
+	enum side opener;
 	u8 *scriptpubkey[NUM_SIDES], *funding_wscript;
 	u64 fee_negotiation_step;
 	u8 fee_negotiation_step_unit;
@@ -627,7 +633,7 @@ int main(int argc, char *argv[])
 				   &funding,
 				   &funding_pubkey[LOCAL],
 				   &funding_pubkey[REMOTE],
-				   &funder,
+				   &opener,
 				   &out[LOCAL],
 				   &out[REMOTE],
 				   &our_dust_limit,
@@ -692,13 +698,13 @@ int main(int argc, char *argv[])
 	 *    commitment transaction:
 	 *    - SHOULD send a `closing_signed` message.
 	 */
-	whose_turn = funder;
+	whose_turn = opener;
 	for (size_t i = 0; i < 2; i++, whose_turn = !whose_turn) {
 		if (whose_turn == LOCAL) {
 			send_offer(pps, chainparams,
-				   &channel_id, funding_pubkey,
+				   &channel_id, funding_pubkey, funding_wscript,
 				   scriptpubkey, &funding_txid, funding_txout,
-				   funding, out, funder,
+				   funding, out, opener,
 				   our_dust_limit,
 				   offer[LOCAL]);
 		} else {
@@ -718,7 +724,7 @@ int main(int argc, char *argv[])
 						funding_wscript,
 						scriptpubkey, &funding_txid,
 						funding_txout, funding,
-						out, funder,
+						out, opener,
 						our_dust_limit,
 						min_fee_to_accept,
 						&closing_txid);
@@ -728,8 +734,8 @@ int main(int argc, char *argv[])
 	/* Now we have first two points, we can init fee range. */
 	init_feerange(&feerange, commitment_fee, offer);
 
-	/* Apply (and check) funder offer now. */
-	adjust_feerange(&feerange, offer[funder], funder);
+	/* Apply (and check) opener offer now. */
+	adjust_feerange(&feerange, offer[opener], opener);
 
 	/* Now any extra rounds required. */
 	while (!amount_sat_eq(offer[LOCAL], offer[REMOTE])) {
@@ -745,9 +751,9 @@ int main(int argc, char *argv[])
 						    fee_negotiation_step,
 						    fee_negotiation_step_unit);
 			send_offer(pps, chainparams, &channel_id,
-				   funding_pubkey,
+				   funding_pubkey, funding_wscript,
 				   scriptpubkey, &funding_txid, funding_txout,
-				   funding, out, funder,
+				   funding, out, opener,
 				   our_dust_limit,
 				   offer[LOCAL]);
 		} else {
@@ -762,7 +768,7 @@ int main(int argc, char *argv[])
 						funding_wscript,
 						scriptpubkey, &funding_txid,
 						funding_txout, funding,
-						out, funder,
+						out, opener,
 						our_dust_limit,
 						min_fee_to_accept,
 						&closing_txid);

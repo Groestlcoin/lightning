@@ -24,7 +24,9 @@ LIGHTNINGD_COMMON_OBJS :=			\
 	common/bip32.o				\
 	common/blinding.o			\
 	common/bolt11.o				\
+	common/channel_id.o			\
 	common/channel_config.o			\
+	common/coin_mvt.o			\
 	common/configdir.o			\
 	common/crypto_state.o			\
 	common/daemon.o				\
@@ -42,6 +44,7 @@ LIGHTNINGD_COMMON_OBJS :=			\
 	common/htlc_trim.o			\
 	common/htlc_wire.o			\
 	common/key_derive.o			\
+	common/keyset.o				\
 	common/io_lock.o			\
 	common/json.o				\
 	common/json_helpers.o			\
@@ -53,9 +56,11 @@ LIGHTNINGD_COMMON_OBJS :=			\
 	common/onion.o				\
 	common/onionreply.o			\
 	common/param.o				\
+	common/penalty_base.o			\
 	common/per_peer_state.o			\
 	common/permute_tx.o			\
 	common/pseudorand.o			\
+	common/setup.o				\
 	common/sphinx.o				\
 	common/status_wire.o			\
 	common/timeout.o			\
@@ -76,6 +81,7 @@ LIGHTNINGD_SRC :=				\
 	lightningd/channel.c			\
 	lightningd/channel_control.c		\
 	lightningd/closing_control.c		\
+	lightningd/coin_mvts.c			\
 	lightningd/connect_control.c		\
 	lightningd/onion_message.c		\
 	lightningd/gossip_control.c		\
