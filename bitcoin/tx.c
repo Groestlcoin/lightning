@@ -482,7 +482,7 @@ void wally_txid(const struct wally_tx *wtx, struct bitcoin_txid *txid)
 	res = wally_tx_to_bytes(wtx, 0, arr, len, &written);
 	assert(len == written);
 
-	sha256_double(&txid->shad, arr, len);
+	sha256_single(&txid->shad, arr, len);
 	tal_free(arr);
 }
 
