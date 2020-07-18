@@ -5,13 +5,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
-## [0.9.0rc1] - 2020-07-15
+## [0.9.0rc2] - 2020-07-18
 
 ### Added
 
- - mpp: The adaptive multi-part payment modifier will split payments that are failing due to their size into smaller parts, and re-attempted. ([3809](https://github.com/ElementsProject/lightning/pull/3809))
- - mpp: The presplit modifier splits large payments into 10k satoshi parts to maximize chances of performing the payment and to obfuscate the overall amount being sent. ([3809](https://github.com/ElementsProject/lightning/pull/3809))
- - JSON-API: `txprepare` returns a psbt version of the created transaction ([3825](https://github.com/ElementsProject/lightning/pull/3825))
+ - plugin: `pay` was rewritten to use the new payment flow. See `legacypay` for old version ([3809](https://github.com/ElementsProject/lightning/pull/3809))
+ - plugin: `pay` will split payments that are failing due to their size into smaller parts, if recipient supports the `basic_mpp` option ([3809](https://github.com/ElementsProject/lightning/pull/3809))
+ - plugin: `pay` will split large payments into parts of approximately 10k sat if the recipient supports the `basic_mpp` option ([3809](https://github.com/ElementsProject/lightning/pull/3809))
+ - plugin: The pay plugin has a new `--disable-mpp` flag that allows opting out of the above two multi-part payment addition.  ([3809](https://github.com/ElementsProject/lightning/pull/3809))
  - JSON-RPC: new low-level coin selection `fundpsbt` routine. ([3825](https://github.com/ElementsProject/lightning/pull/3825))
  - JSON-RPC: The `pay` command now uses the new payment flow, the new `legacypay` command can be used to issue payment with the legacy code if required. ([3826](https://github.com/ElementsProject/lightning/pull/3826))
  - JSON-RPC: The `keysend` command allows sending to a node without requiring an invoice first. ([3792](https://github.com/ElementsProject/lightning/pull/3792))
@@ -39,7 +40,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
  - build: default compile output is prettier and much less verbose ([3686](https://github.com/ElementsProject/lightning/pull/3686))
  - config: the `plugin-disable` option now works even if specified before the plugin is found. ([3679](https://github.com/ElementsProject/lightning/pull/3679))
  - plugins: The `autoclean` plugin is no longer dynamic (you cannot manage it with the `plugin` RPC command anymore). ([3788](https://github.com/ElementsProject/lightning/pull/3788))
+ - plugin: The `paystatus` output changed as a result of the payment flow rework ([3809](https://github.com/ElementsProject/lightning/pull/3809))
 
+### Deprecated
+
+Note: You should always set `allow-deprecated-apis=false` to test for changes.
+
+ - JSON-RPC: the `legacypay` method from the pay plugin will be removed after `pay` proves stable ([3809](https://github.com/ElementsProject/lightning/pull/3809))
 
 ### Removed
 
@@ -63,7 +70,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
-No security related changes were necessary.
 
 
 ## [0.8.2] - 2020-04-30: "A Scalable Ethereum Blockchain"
@@ -461,6 +467,8 @@ changes.
 
 ### Security
 
+- Fixes CVE-2019-12998 ([Full Disclosure](https://lists.linuxfoundation.org/pipermail/lightning-dev/2019-September/002174.html)).
+
 ## [0.7.0] - 2019-02-28: "Actually an Altcoin"
 
 This release was named by Mark Beckwith @wythe.
@@ -773,7 +781,7 @@ There predate the BOLT specifications, and are only of vague historic interest:
 6. [0.5.1] - 2016-10-21
 7. [0.5.2] - 2016-11-21: "Bitcoin Savings & Trust Daily Interest II"
 
-[0.9.0rc1]: https://github.com/ElementsProject/lightning/releases/tag/v0.9.0rc1
+[0.9.0rc2]: https://github.com/ElementsProject/lightning/releases/tag/v0.9.0rc2
 [0.8.2]: https://github.com/ElementsProject/lightning/releases/tag/v0.8.2
 [0.8.1]: https://github.com/ElementsProject/lightning/releases/tag/v0.8.1
 [0.8.0]: https://github.com/ElementsProject/lightning/releases/tag/v0.8.0

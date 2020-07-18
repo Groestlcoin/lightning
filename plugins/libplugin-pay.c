@@ -627,10 +627,13 @@ static void channel_hints_update(struct payment *root,
 static void payment_result_infer(struct route_hop *route,
 				 struct payment_result *r)
 {
-	int i, len = tal_count(route);
+	int i, len;
+	assert(r != NULL);
+
 	if (r->code == 0 || r->erring_index == NULL || route == NULL)
 		return;
 
+	len = tal_count(route);
 	i = *r->erring_index;
 	assert(i <= len);
 
@@ -658,17 +661,23 @@ payment_waitsendpay_finished(struct command *cmd, const char *buffer,
 	struct route_hop *hop;
 	assert(p->route != NULL);
 
+	p->end_time = time_now();
 	p->result = tal_sendpay_result_from_json(p, buffer, toks);
-	payment_result_infer(p->route, p->result);
 
-	if (p->result == NULL)
-		plugin_err(
-		    p->plugin, "Unable to parse `waitsendpay` result: %.*s",
-		    json_tok_full_len(toks), json_tok_full(buffer, toks));
+	if (p->result == NULL) {
+		plugin_log(p->plugin, LOG_UNUSUAL,
+			   "Unable to parse `waitsendpay` result: %.*s",
+			   json_tok_full_len(toks),
+			   json_tok_full(buffer, toks));
+		payment_set_step(p, PAYMENT_STEP_FAILED);
+		payment_continue(p);
+		return command_still_pending(cmd);
+	}
+
+	payment_result_infer(p->route, p->result);
 
 	if (p->result->state == PAYMENT_COMPLETE) {
 		payment_set_step(p, PAYMENT_STEP_SUCCESS);
-		p->end_time = time_now();
 		payment_continue(p);
 		return command_still_pending(cmd);
 	}
@@ -1054,18 +1063,20 @@ static void payment_finished(struct payment *p)
 	assert((result.leafstates & PAYMENT_STEP_SUCCESS) == 0 ||
 	       result.preimage != NULL);
 
-	if (p->parent == NULL && cmd == NULL) {
-		/* This is the tree root, but we already reported success or
-		 * failure, so noop. */
-		return;
-
-	}  else if (p->parent == NULL) {
-		if (payment_is_success(p)) {
+	if (p->parent == NULL) {
+		/* We are about to reply, unset the pointer to the cmd so we
+		 * don't attempt to return a response twice. */
+		p->cmd = NULL;
+		if (cmd == NULL) {
+			/* This is the tree root, but we already reported
+			 * success or failure, so noop. */
+			return;
+		} else if (payment_is_success(p)) {
 			assert(result.treestates & PAYMENT_STEP_SUCCESS);
 			assert(result.leafstates & PAYMENT_STEP_SUCCESS);
 			assert(result.preimage != NULL);
 
-			ret = jsonrpc_stream_success(p->cmd);
+			ret = jsonrpc_stream_success(cmd);
 			json_add_node_id(ret, "destination", p->destination);
 			json_add_sha256(ret, "payment_hash", p->payment_hash);
 			json_add_timeabs(ret, "created_at", p->start_time);
@@ -1087,9 +1098,6 @@ static void payment_finished(struct payment *p)
 
 			json_add_string(ret, "status", "complete");
 
-			/* Unset the pointer to the cmd so we don't attempt to
-			 * return a response twice. */
-			p->cmd = NULL;
 			if (command_finished(cmd, ret)) {/* Ignore result. */}
 			return;
 		} else if (result.failure == NULL || result.failure->failcode < NODE) {
@@ -1181,6 +1189,10 @@ void payment_set_step(struct payment *p, enum payment_step newstep)
 {
 	p->current_modifier = -1;
 	p->step = newstep;
+
+	/* Any final state needs an end_time */
+	if (p->step >= PAYMENT_STEP_SPLIT)
+		p->end_time = time_now();
 }
 
 void payment_continue(struct payment *p)
