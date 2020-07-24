@@ -69,6 +69,14 @@ struct channel_hint {
 
 	/* Is the channel enabled? */
 	bool enabled;
+
+	/* True if we are one endpoint of this channel */
+	bool local;
+
+	/* How many more htlcs can we send over this channel? Only set if this
+	 * is a local channel, because those are the channels we have exact
+	 * numbers on, and they are the bottleneck onto the network. */
+	u16 htlc_budget;
 };
 
 /* Each payment goes through a number of steps that are always processed in
@@ -224,6 +232,9 @@ struct payment {
 	struct channel_hint *channel_hints;
 	struct node_id *excluded_nodes;
 
+	/* Optional temporarily excluded channel (i.e. this routehint) */
+	struct short_channel_id *temp_exclusion;
+
 	struct payment_result *result;
 
 	/* Did something happen that will cause all future attempts to fail?
@@ -244,6 +255,13 @@ struct payment {
 
 	/* Human readable explanation of why this payment failed. */
 	const char *failreason;
+
+	/* If a failed getroute call can be retried for this payment. Allows
+	 * us for example to signal to any retry modifier that we can retry
+	 * despite getroute not returning a usable route. This can be the case
+	 * if we switch any of the parameters such as destination or
+	 * amount. */
+	bool failroute_retry;
 };
 
 struct payment_modifier {
@@ -288,9 +306,17 @@ struct routehints_data {
 	/* Current routehint, if any. */
 	struct route_info *current_routehint;
 
+	/* Position of the current routehint in the routehints
+	 * array. Inherited and incremented on child payments and reset on
+	 * split. */
+	int offset;
+
 	/* We modify the CLTV in the getroute call, so we need to remember
 	 * what the final cltv delta was so we re-apply it correctly. */
 	u32 final_cltv;
+
+	/* Is the destination reachable without any routehints? */
+	bool destination_reachable;
 };
 
 struct exemptfee_data {
@@ -320,11 +346,13 @@ struct direct_pay_data {
 	struct short_channel_id_dir *chan;
 };
 
-/* Since presplit and adaptive mpp modifiers share the same information we
- * just use the same backing struct. Should they deviate we can create an
- * adaptive_splitter_mod_data struct and populate that. */
 struct presplit_mod_data {
 	bool disable;
+};
+
+struct adaptive_split_mod_data {
+	bool disable;
+	u32 htlc_budget;
 };
 
 /* List of globally available payment modifiers. */
@@ -335,7 +363,7 @@ REGISTER_PAYMENT_MODIFIER_HEADER(shadowroute, struct shadow_route_data);
 REGISTER_PAYMENT_MODIFIER_HEADER(directpay, struct direct_pay_data);
 extern struct payment_modifier waitblockheight_pay_mod;
 REGISTER_PAYMENT_MODIFIER_HEADER(presplit, struct presplit_mod_data);
-REGISTER_PAYMENT_MODIFIER_HEADER(adaptive_splitter, struct presplit_mod_data);
+REGISTER_PAYMENT_MODIFIER_HEADER(adaptive_splitter, struct adaptive_split_mod_data);
 
 /* For the root payment we can seed the channel_hints with the result from
  * `listpeers`, hence avoid channels that we know have insufficient capacity

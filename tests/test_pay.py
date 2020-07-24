@@ -106,10 +106,11 @@ def test_pay_limits(node_factory, compat):
     # It should have retried two more times (one without routehint and one with routehint)
     status = l1.rpc.call('paystatus', {'bolt11': inv['bolt11']})['pay'][0]['attempts']
 
-    # Will directly exclude channels and routehints that don't match our
-    # fee expectations. The first attempt notices that and terminates
-    # directly.
-    assert(len(status) == 1)
+    # We have an internal test to see if we can reach the destination directly
+    # without a routehint, that will enable a NULL-routehint. We will then try
+    # with the provided routehint, and the NULL routehint, resulting in 2
+    # attempts.
+    assert(len(status) == 2)
     assert(status[0]['failure']['code'] == 205)
 
     failmsg = r'CLTV delay exceeds our CLTV budget'
@@ -121,7 +122,7 @@ def test_pay_limits(node_factory, compat):
     # Should also have retried two more times.
     status = l1.rpc.call('paystatus', {'bolt11': inv['bolt11']})['pay'][1]['attempts']
 
-    assert(len(status) == 1)
+    assert(len(status) == 2)
     assert(status[0]['failure']['code'] == 205)
 
     # This works, because fee is less than exemptfee.
@@ -1468,8 +1469,9 @@ def test_pay_retry(node_factory, bitcoind, executor, chainparams):
     # It will try l1->l2->l5, which fails.
     # It will try l1->l2->l3->l5, which fails.
     # It will try l1->l2->l3->l4->l5, which fails.
+    # Finally, fails to find a route.
     inv = l5.rpc.invoice(10**8, 'test_retry2', 'test_retry2')['bolt11']
-    with pytest.raises(RpcError, match=r'3 attempts'):
+    with pytest.raises(RpcError, match=r'4 attempts'):
         l1.rpc.dev_pay(inv, use_shadow=False)
 
 
@@ -2405,9 +2407,12 @@ def test_partial_payment(node_factory, bitcoind, executor):
         l1.rpc.sendpay(route=r124, payment_hash=inv['payment_hash'],
                        msatoshi=1000, bolt11=inv['bolt11'], payment_secret=paysecret, partid=3)
 
-    # But repeat is a NOOP.
-    l1.rpc.sendpay(route=r124, payment_hash=inv['payment_hash'], msatoshi=1000, bolt11=inv['bolt11'], payment_secret=paysecret, partid=1)
-    l1.rpc.sendpay(route=r134, payment_hash=inv['payment_hash'], msatoshi=1000, bolt11=inv['bolt11'], payment_secret=paysecret, partid=2)
+    # But repeat is a NOOP, as long as they're exactly the same!
+    with pytest.raises(RpcError, match=r'Already pending with amount 501msat \(not 499msat\)'):
+        l1.rpc.sendpay(route=r124, payment_hash=inv['payment_hash'], msatoshi=1000, bolt11=inv['bolt11'], payment_secret=paysecret, partid=1)
+
+    l1.rpc.sendpay(route=r134, payment_hash=inv['payment_hash'], msatoshi=1000, bolt11=inv['bolt11'], payment_secret=paysecret, partid=1)
+    l1.rpc.sendpay(route=r124, payment_hash=inv['payment_hash'], msatoshi=1000, bolt11=inv['bolt11'], payment_secret=paysecret, partid=2)
 
     # Make sure they've done the suppress-commitment thing before we unsuppress
     l2.daemon.wait_for_log(r'dev_disconnect')
@@ -2434,6 +2439,14 @@ def test_partial_payment(node_factory, bitcoind, executor):
     assert pay['status'] == 'complete'
     assert pay['number_of_parts'] == 2
     assert pay['amount_sent_msat'] == Millisatoshi(1002)
+
+    # It will immediately succeed if we pay again.
+    pay = l1.rpc.sendpay(route=r124, payment_hash=inv['payment_hash'], msatoshi=1000, bolt11=inv['bolt11'], payment_secret=paysecret, partid=2)
+    assert pay['status'] == 'complete'
+
+    # If we try with an unknown partid, it will refuse.
+    with pytest.raises(RpcError, match=r'Already succeeded'):
+        l1.rpc.sendpay(route=r124, payment_hash=inv['payment_hash'], msatoshi=1000, bolt11=inv['bolt11'], payment_secret=paysecret, partid=3)
 
 
 def test_partial_payment_timeout(node_factory, bitcoind):
@@ -2887,10 +2900,10 @@ def test_mpp_adaptive(node_factory, bitcoind):
 
     ```dot
     digraph {
-      l1 -> l2;
-      l2 -> l4;
-      l1 -> l3;
-      l3 -> l4;
+      l1 -> l2 [label="scid=103x1x1, cap=amt-1"];
+      l2 -> l4 [label="scid=105x1x1, cap=max"];
+      l1 -> l3 [label="scid=107x1x1, cap=max"];
+      l3 -> l4 [label="scid=109x1x1, cap=amt-1"];
     }
     """
     amt = 10**7 - 1
@@ -2939,3 +2952,40 @@ def test_mpp_adaptive(node_factory, bitcoind):
     from pprint import pprint
     pprint(p)
     pprint(l1.rpc.paystatus(inv))
+
+
+def test_pay_fail_unconfirmed_channel(node_factory, bitcoind):
+    '''
+    Replicate #3855.
+    `pay` crash when any direct channel is still
+    unconfirmed.
+    '''
+    l1, l2 = node_factory.get_nodes(2)
+
+    amount_sat = 10 ** 6
+
+    # create l2->l1 channel.
+    l2.fundwallet(amount_sat * 5)
+    l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
+    l2.rpc.fundchannel(l1.info['id'], amount_sat * 3)
+    # channel is still unconfirmed.
+
+    # Attempt to pay from l1 to l2.
+    # This should fail since the channel capacities are wrong.
+    invl2 = l2.rpc.invoice(Millisatoshi(amount_sat * 1000), 'i', 'i')['bolt11']
+    with pytest.raises(RpcError):
+        l1.rpc.pay(invl2)
+
+    # Let the channel confirm.
+    bitcoind.generate_block(6)
+    sync_blockheight(bitcoind, [l1, l2])
+
+    # Now give enough capacity so l1 can pay.
+    invl1 = l1.rpc.invoice(Millisatoshi(amount_sat * 2 * 1000), 'j', 'j')['bolt11']
+    l2.rpc.pay(invl1)
+
+    # Wait for us to recognize that the channel is available
+    wait_for(lambda: l1.rpc.listpeers()['peers'][0]['channels'][0]['spendable_msat'].millisatoshis > amount_sat * 1000)
+
+    # Now l1 can pay to l2.
+    l1.rpc.pay(invl2)
