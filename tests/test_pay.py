@@ -161,6 +161,11 @@ def test_pay_exclude_node(node_factory, bitcoind):
     assert status[0]['failure']['data']['failcodename'] == 'WIRE_TEMPORARY_NODE_FAILURE'
     assert 'failure' in status[1]
 
+    # Get a fresh invoice, but do it before other routes exist, so routehint
+    # will be via l2.
+    inv = l3.rpc.invoice(amount, "test2", 'description')['bolt11']
+    assert only_one(l1.rpc.decodepay(inv)['routes'])[0]['pubkey'] == l2.info['id']
+
     # l1->l4->l5->l3 is the longer route. This makes sure this route won't be
     # tried for the first pay attempt. Just to be sure we also raise the fees
     # that l4 leverages.
@@ -186,8 +191,6 @@ def test_pay_exclude_node(node_factory, bitcoind):
                              .format(scid53),
                              r'update for channel {}/1 now ACTIVE'
                              .format(scid53)])
-
-    inv = l3.rpc.invoice(amount, "test2", 'description')['bolt11']
 
     # This `pay` will work
     l1.rpc.pay(inv)
@@ -2989,3 +2992,28 @@ def test_pay_fail_unconfirmed_channel(node_factory, bitcoind):
 
     # Now l1 can pay to l2.
     l1.rpc.pay(invl2)
+
+
+def test_bolt11_null_after_pay(node_factory, bitcoind):
+    l1, l2 = node_factory.get_nodes(2)
+
+    amount_sat = 10 ** 6
+    # pay a generic bolt11 and test if the label bol11 is null
+    # inside the command listpays
+
+    # create l2->l1 channel.
+    l2.fundwallet(amount_sat * 5)
+    l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
+    l2.rpc.fundchannel(l1.info['id'], amount_sat * 3)
+
+    # Let the channel confirm.
+    bitcoind.generate_block(6)
+    sync_blockheight(bitcoind, [l1, l2])
+
+    amt = Millisatoshi(amount_sat * 2 * 1000)
+    invl1 = l1.rpc.invoice(amt, 'j', 'j')['bolt11']
+    l2.rpc.pay(invl1)
+
+    pays = l2.rpc.listpays()["pays"]
+    assert(pays[0]["bolt11"] == invl1)
+    assert('amount_msat' in pays[0] and pays[0]['amount_msat'] == amt)

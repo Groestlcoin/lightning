@@ -28,6 +28,7 @@ struct payment *payment_new(tal_t *ctx, struct command *cmd,
 	p->route = NULL;
 	p->temp_exclusion = NULL;
 	p->failroute_retry = false;
+	p->bolt11 = NULL;
 
 	/* Copy over the relevant pieces of information. */
 	if (parent != NULL) {
@@ -1028,6 +1029,7 @@ static struct command_result *payment_createonion_success(struct command *cmd,
 	json_object_end(req->js);
 
 	json_add_sha256(req->js, "payment_hash", p->payment_hash);
+	json_add_amount_msat_only(req->js, "msatoshi", p->amount);
 
 	json_array_start(req->js, "shared_secrets");
 	secrets = p->createonion_response->shared_secrets;
@@ -1039,6 +1041,9 @@ static struct command_result *payment_createonion_success(struct command *cmd,
 
 	if (p->label)
 		json_add_string(req->js, "label", p->label);
+
+	if (p->bolt11)
+		json_add_string(req->js, "bolt11", p->bolt11);
 
 	send_outreq(p->plugin, req);
 	return command_still_pending(cmd);
