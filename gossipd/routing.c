@@ -1,6 +1,7 @@
 #include "routing.h"
 #include <arpa/inet.h>
 #include <bitcoin/block.h>
+#include <bitcoin/chainparams.h>
 #include <bitcoin/script.h>
 #include <ccan/array_size/array_size.h>
 #include <ccan/endian/endian.h>
@@ -93,6 +94,8 @@ HTABLE_DEFINE_TYPE(struct pending_node_announce, pending_node_announce_keyof,
 struct unupdated_channel {
 	/* The channel_announcement message */
 	const u8 *channel_announce;
+	/* The feature bitmap within it */
+	const u8 *features;
 	/* The short_channel_id */
 	struct short_channel_id scid;
 	/* The ids of the nodes */
@@ -571,7 +574,8 @@ struct chan *new_chan(struct routing_state *rstate,
 		      const struct short_channel_id *scid,
 		      const struct node_id *id1,
 		      const struct node_id *id2,
-		      struct amount_sat satoshis)
+		      struct amount_sat satoshis,
+		      const u8 *features)
 {
 	struct chan *chan = tal(rstate, struct chan);
 	int n1idx = node_id_idx(id1, id2);
@@ -606,6 +610,8 @@ struct chan *new_chan(struct routing_state *rstate,
 	init_half_chan(rstate, chan, n1idx);
 	init_half_chan(rstate, chan, !n1idx);
 
+	/* Stash hint here about whether we have features */
+	chan->half[0].any_features = tal_bytelen(features) != 0;
 	uintmap_add(&rstate->chanmap, scid->u64, chan);
 
 	/* Initialize shadow structure if it's local */
@@ -1416,7 +1422,7 @@ static u8 *check_channel_announcement(const tal_t *ctx,
 	if (!check_signed_hash_nodeid(&hash, node1_sig, node1_id)) {
 		return towire_errorfmt(ctx, NULL,
 				       "Bad node_signature_1 %s hash %s"
-				       " on node_announcement %s",
+				       " on channel_announcement %s",
 				       type_to_string(ctx,
 						      secp256k1_ecdsa_signature,
 						      node1_sig),
@@ -1428,7 +1434,7 @@ static u8 *check_channel_announcement(const tal_t *ctx,
 	if (!check_signed_hash_nodeid(&hash, node2_sig, node2_id)) {
 		return towire_errorfmt(ctx, NULL,
 				       "Bad node_signature_2 %s hash %s"
-				       " on node_announcement %s",
+				       " on channel_announcement %s",
 				       type_to_string(ctx,
 						      secp256k1_ecdsa_signature,
 						      node2_sig),
@@ -1440,7 +1446,7 @@ static u8 *check_channel_announcement(const tal_t *ctx,
 	if (!check_signed_hash(&hash, bitcoin1_sig, bitcoin1_key)) {
 		return towire_errorfmt(ctx, NULL,
 				       "Bad bitcoin_signature_1 %s hash %s"
-				       " on node_announcement %s",
+				       " on channel_announcement %s",
 				       type_to_string(ctx,
 						      secp256k1_ecdsa_signature,
 						      bitcoin1_sig),
@@ -1452,7 +1458,7 @@ static u8 *check_channel_announcement(const tal_t *ctx,
 	if (!check_signed_hash(&hash, bitcoin2_sig, bitcoin2_key)) {
 		return towire_errorfmt(ctx, NULL,
 				       "Bad bitcoin_signature_2 %s hash %s"
-				       " on node_announcement %s",
+				       " on channel_announcement %s",
 				       type_to_string(ctx,
 						      secp256k1_ecdsa_signature,
 						      bitcoin2_sig),
@@ -1651,6 +1657,7 @@ bool routing_add_channel_announcement(struct routing_state *rstate,
 
 	uc = tal(rstate, struct unupdated_channel);
 	uc->channel_announce = tal_dup_talarr(uc, u8, msg);
+	uc->features = tal_steal(uc, features);
 	uc->added = gossip_time_now(rstate);
 	uc->index = index;
 	uc->sat = sat;
@@ -2098,7 +2105,7 @@ bool routing_add_channel_update(struct routing_state *rstate,
 	if (uc) {
 		assert(!chan);
 		chan = new_chan(rstate, &short_channel_id,
-				&uc->id[0], &uc->id[1], sat);
+				&uc->id[0], &uc->id[1], sat, uc->features);
 	}
 
 	/* Discard older updates */
@@ -2755,96 +2762,6 @@ struct route_hop **get_route(const tal_t *ctx, struct routing_state *rstate,
 	return hops;
 }
 
-void routing_failure(struct routing_state *rstate,
-		     const struct node_id *erring_node_id,
-		     const struct short_channel_id *scid,
-		     int erring_direction,
-		     enum onion_type failcode,
-		     const u8 *channel_update)
-{
-	struct chan **pruned = tal_arr(tmpctx, struct chan *, 0);
-
-	status_debug("Received routing failure 0x%04x (%s), "
-		     "erring node %s, "
-		     "channel %s/%u",
-		     (int) failcode, onion_type_name(failcode),
-		     type_to_string(tmpctx, struct node_id, erring_node_id),
-		     type_to_string(tmpctx, struct short_channel_id, scid),
-		     erring_direction);
-
-	/* lightningd will only extract this if UPDATE is set. */
-	if (channel_update) {
-		u8 *err = handle_channel_update(rstate, channel_update,
-						NULL, NULL);
-		if (err) {
-			status_unusual("routing_failure: "
-				       "bad channel_update %s",
-				       sanitize_error(err, err, NULL));
-			tal_free(err);
-		}
-	} else if (failcode & UPDATE) {
-		status_unusual("routing_failure: "
-			       "UPDATE bit set, no channel_update. "
-			       "failcode: 0x%04x",
-			       (int) failcode);
-	}
-
-	/* We respond to permanent errors, ignore the rest: they're
-	 * for the pay command to worry about.  */
-	if (!(failcode & PERM))
-		return;
-
-	if (failcode & NODE) {
-		struct node *node = get_node(rstate, erring_node_id);
-		if (!node) {
-			status_unusual("routing_failure: Erring node %s not in map",
-				       type_to_string(tmpctx, struct node_id,
-						      erring_node_id));
-		} else {
-			struct chan_map_iter i;
-			struct chan *c;
-
-			status_debug("Deleting node %s",
-				     type_to_string(tmpctx,
-						    struct node_id,
-						    &node->id));
-			for (c = first_chan(node, &i); c; c = next_chan(node, &i)) {
-				/* Set it up to be pruned. */
-				tal_arr_expand(&pruned, c);
-			}
-		}
-	} else {
-		struct chan *chan = get_channel(rstate, scid);
-
-		if (!chan)
-			status_unusual("routing_failure: "
-				       "Channel %s unknown",
-				       type_to_string(tmpctx,
-						      struct short_channel_id,
-						      scid));
-		else {
-			/* This error can be triggered by sendpay if caller
-			 * uses the wrong key for dest. */
-			if (failcode == WIRE_INVALID_ONION_HMAC
-			    && !node_id_eq(&chan->nodes[!erring_direction]->id,
-					   erring_node_id))
-				return;
-
-			status_debug("Deleting channel %s",
-				     type_to_string(tmpctx,
-						    struct short_channel_id,
-						    scid));
-			/* Set it up to be deleted. */
-			tal_arr_expand(&pruned, chan);
-		}
-	}
-
-	/* Now free all the chans and maybe even nodes. */
-	for (size_t i = 0; i < tal_count(pruned); i++)
-		free_chan(rstate, pruned[i]);
-}
-
-
 void route_prune(struct routing_state *rstate)
 {
 	u64 now = gossip_time_now(rstate).ts.tv_sec;
@@ -2904,9 +2821,10 @@ bool handle_local_add_channel(struct routing_state *rstate,
 	struct node_id remote_node_id;
 	struct amount_sat sat;
 	struct chan *chan;
+	u8 *features;
 
-	if (!fromwire_gossipd_local_add_channel(msg, &scid, &remote_node_id,
-						&sat)) {
+	if (!fromwire_gossipd_local_add_channel(msg, msg, &scid, &remote_node_id,
+						&sat, &features)) {
 		status_peer_broken(peer ? &peer->id : NULL,
 				  "Unable to parse local_add_channel message: %s",
 				   tal_hex(msg, msg));
@@ -2925,7 +2843,8 @@ bool handle_local_add_channel(struct routing_state *rstate,
 			  type_to_string(tmpctx, struct short_channel_id, &scid));
 
 	/* Create new (unannounced) channel */
-	chan = new_chan(rstate, &scid, &rstate->local_id, &remote_node_id, sat);
+	chan = new_chan(rstate, &scid, &rstate->local_id, &remote_node_id, sat,
+			features);
 	if (!index)
 		index = gossip_store_add(rstate->gs, msg, 0, false, NULL);
 	chan->bcast.index = index;

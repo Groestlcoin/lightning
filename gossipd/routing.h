@@ -41,6 +41,10 @@ struct half_chan {
 	/* Token bucket */
 	u8 tokens;
 
+	/* Feature cache for parent chan: squeezed in here where it would
+	 * otherwise simply be padding. */
+	u8 any_features;
+
 	/* Minimum and maximum number of msatoshi in an HTLC */
 	struct amount_msat htlc_minimum, htlc_maximum;
 };
@@ -361,7 +365,8 @@ struct chan *new_chan(struct routing_state *rstate,
 		      const struct short_channel_id *scid,
 		      const struct node_id *id1,
 		      const struct node_id *id2,
-		      struct amount_sat sat);
+		      struct amount_sat sat,
+		      const u8 *features);
 
 /* Handlers for incoming messages */
 
@@ -419,13 +424,6 @@ struct route_hop **get_route(const tal_t *ctx, struct routing_state *rstate,
 			     u64 seed,
 			     struct exclude_entry **excluded,
 			     u32 max_hops);
-/* Disable channel(s) based on the given routing failure. */
-void routing_failure(struct routing_state *rstate,
-		     const struct node_id *erring_node,
-		     const struct short_channel_id *erring_channel,
-		     int erring_direction,
-		     enum onion_type failcode,
-		     const u8 *channel_update);
 
 void route_prune(struct routing_state *rstate);
 

@@ -10,6 +10,7 @@
 #include <ccan/tal/path/path.h>
 #include <ccan/tal/str/str.h>
 #include <common/base64.h>
+#include <common/channel_id.h>
 #include <common/derive_basepoints.h>
 #include <common/features.h>
 #include <common/json_command.h>
@@ -343,15 +344,18 @@ static char *opt_add_proxy_addr(const char *arg, struct lightningd *ld)
 
 static char *opt_add_plugin(const char *arg, struct lightningd *ld)
 {
-	plugin_register(ld->plugins, arg);
+	if (plugin_blacklisted(ld->plugins, arg)) {
+		log_info(ld->log, "%s: disabled via disable-plugin", arg);
+		return NULL;
+	}
+	plugin_register(ld->plugins, arg, NULL);
 	return NULL;
 }
 
 static char *opt_disable_plugin(const char *arg, struct lightningd *ld)
 {
-	if (plugin_remove(ld->plugins, arg))
-		return NULL;
-	return tal_fmt(NULL, "Could not find plugin %s", arg);
+	plugin_blacklist(ld->plugins, arg);
+	return NULL;
 }
 
 static char *opt_add_plugin_dir(const char *arg, struct lightningd *ld)
@@ -549,6 +553,9 @@ static void dev_register_opts(struct lightningd *ld)
 	opt_register_noarg("--dev-fail-process-onionpacket", opt_set_bool,
 			   &dev_fail_process_onionpacket,
 			   "Force all processing of onion packets to fail");
+	opt_register_noarg("--dev-no-version-checks", opt_set_bool,
+			   &ld->dev_no_version_checks,
+			   "Skip calling subdaemons with --version on startup");
 }
 #endif /* DEVELOPER */
 
@@ -567,9 +574,6 @@ static const struct config testnet_config = {
 	/* Testnet fees are crazy, allow infinite feerange. */
 	.commitment_fee_min_percent = 0,
 	.commitment_fee_max_percent = 0,
-
-	/* We offer to pay 5 times 2-block fee */
-	.commitment_fee_percent = 500,
 
 	/* Testnet blockspace is free. */
 	.max_concurrent_htlcs = 483,
@@ -615,9 +619,6 @@ static const struct config mainnet_config = {
 	/* Insist between 2 and 20 times the 2-block fee. */
 	.commitment_fee_min_percent = 200,
 	.commitment_fee_max_percent = 2000,
-
-	/* We offer to pay 5 times 2-block fee */
-	.commitment_fee_percent = 500,
 
 	/* While up to 483 htlcs are possible we do 30 by default (as eclair does) to save blockspace */
 	.max_concurrent_htlcs = 30,
@@ -820,9 +821,6 @@ static void register_opts(struct lightningd *ld)
 	opt_register_arg("--commit-fee-max=<percent>", opt_set_u32, opt_show_u32,
 			 &ld->config.commitment_fee_max_percent,
 			 "Maximum percentage of fee to accept for commitment (0 for unlimited)");
-	opt_register_arg("--commit-fee=<percent>", opt_set_u32, opt_show_u32,
-			 &ld->config.commitment_fee_percent,
-			 "Percentage of fee to request for their commitment");
 	opt_register_arg("--cltv-delta", opt_set_u32, opt_show_u32,
 			 &ld->config.cltv_expiry_delta,
 			 "Number of blocks for cltv_expiry_delta");
@@ -1210,6 +1208,9 @@ static void add_config(struct lightningd *ld,
 				      feature_offered(ld->our_features
 						      ->bits[INIT_FEATURE],
 						      OPT_LARGE_CHANNELS));
+		} else if (opt->cb == (void *)plugin_opt_flag_set) {
+			/* Noop, they will get added below along with the
+			 * OPT_HASARG options. */
 		} else {
 			/* Insert more decodes here! */
 			assert(!"A noarg option was added but was not handled");
@@ -1279,8 +1280,9 @@ static void add_config(struct lightningd *ld,
 			json_add_opt_plugins(response, ld->plugins);
 		} else if (opt->cb_arg == (void *)opt_log_level) {
 			json_add_opt_log_levels(response, ld->log);
+		} else if (opt->cb_arg == (void *)opt_disable_plugin) {
+			json_add_opt_disable_plugins(response, ld->plugins);
 		} else if (opt->cb_arg == (void *)opt_add_plugin_dir
-			   || opt->cb_arg == (void *)opt_disable_plugin
 			   || opt->cb_arg == (void *)plugin_opt_set
 			   || opt->cb_arg == (void *)plugin_opt_flag_set) {
 			/* FIXME: We actually treat it as if they specified

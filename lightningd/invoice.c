@@ -302,8 +302,15 @@ invoice_check_payment(const tal_t *ctx,
 	 *    - MUST fail the HTLC.
 	 *    - MUST return an `incorrect_or_unknown_payment_details` error.
 	 */
-	if (!wallet_invoice_find_unpaid(ld->wallet, &invoice, payment_hash))
+	if (!wallet_invoice_find_unpaid(ld->wallet, &invoice, payment_hash)) {
+		log_debug(ld->log, "Unknown paid invoice %s",
+			  type_to_string(tmpctx, struct sha256, payment_hash));
+		if (wallet_invoice_find_by_rhash(ld->wallet, &invoice, payment_hash)) {
+			log_debug(ld->log, "ALREADY paid invoice %s",
+				  type_to_string(tmpctx, struct sha256, payment_hash));
+		}
 		return NULL;
+	}
 
 	details = wallet_invoice_details(ctx, ld->wallet, invoice);
 
@@ -342,11 +349,22 @@ invoice_check_payment(const tal_t *ctx,
 	if (details->msat != NULL) {
 		struct amount_msat twice;
 
-		if (amount_msat_less(msat, *details->msat))
+		if (amount_msat_less(msat, *details->msat)) {
+			log_debug(ld->log, "Attept to pay %s with amount %s < %s",
+				  type_to_string(tmpctx, struct sha256,
+						 &details->rhash),
+				  type_to_string(tmpctx, struct amount_msat, &msat),
+				  type_to_string(tmpctx, struct amount_msat, details->msat));
 			return tal_free(details);
+		}
 
 		if (amount_msat_add(&twice, *details->msat, *details->msat)
 		    && amount_msat_greater(msat, twice)) {
+			log_debug(ld->log, "Attept to pay %s with amount %s > %s",
+				  type_to_string(tmpctx, struct sha256,
+						 &details->rhash),
+				  type_to_string(tmpctx, struct amount_msat, details->msat),
+				  type_to_string(tmpctx, struct amount_msat, &twice));
 			/* BOLT #4:
 			 *
 			 * - if the amount paid is more than twice the amount
@@ -719,6 +737,9 @@ static void gossipd_incoming_channels_reply(struct subd *gossipd,
 	json_add_sha256(response, "payment_hash", &details->rhash);
 	json_add_u64(response, "expires_at", details->expiry_time);
 	json_add_string(response, "bolt11", details->bolt11);
+
+	notify_invoice_creation(info->cmd->ld, info->b11->msat,
+				info->payment_preimage, info->label);
 
 	/* Warn if there's not sufficient incoming capacity. */
 	if (tal_count(info->b11->routes) == 0) {

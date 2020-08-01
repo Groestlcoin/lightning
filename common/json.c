@@ -1,25 +1,15 @@
 /* JSON core and helpers */
-#include <arpa/inet.h>
 #include <assert.h>
-#include <bitcoin/preimage.h>
-#include <bitcoin/privkey.h>
-#include <bitcoin/pubkey.h>
-#include <bitcoin/short_channel_id.h>
-#include <bitcoin/tx.h>
 #include <ccan/build_assert/build_assert.h>
 #include <ccan/json_escape/json_escape.h>
 #include <ccan/mem/mem.h>
 #include <ccan/str/hex/hex.h>
 #include <ccan/tal/str/str.h>
 #include <ccan/time/time.h>
-#include <common/amount.h>
 #include <common/json.h>
 #include <common/json_stream.h>
-#include <common/node_id.h>
 #include <common/overflows.h>
-#include <common/type_to_string.h>
 #include <common/utils.h>
-#include <common/wireaddr.h>
 #include <ctype.h>
 #include <errno.h>
 #include <inttypes.h>
@@ -235,10 +225,13 @@ bool json_to_bool(const char *buffer, const jsmntok_t *tok, bool *b)
 	return false;
 }
 
-bool json_to_secret(const char *buffer, const jsmntok_t *tok, struct secret *dest)
+bool json_to_sha256(const char *buffer, const jsmntok_t *tok, struct sha256 *dest)
 {
-	return hex_decode(buffer + tok->start, tok->end - tok->start,
-			  dest->data, sizeof(struct secret));
+	if (tok->type != JSMN_STRING)
+		return false;
+
+	return hex_decode(buffer + tok->start, tok->end - tok->start, dest,
+			  sizeof(struct sha256));
 }
 
 u8 *json_tok_bin_from_hex(const tal_t *ctx, const char *buffer, const jsmntok_t *tok)
@@ -253,12 +246,6 @@ u8 *json_tok_bin_from_hex(const tal_t *ctx, const char *buffer, const jsmntok_t 
 		return tal_free(result);
 
 	return result;
-}
-
-bool json_to_preimage(const char *buffer, const jsmntok_t *tok, struct preimage *preimage)
-{
-	size_t hexlen = tok->end - tok->start;
-	return hex_decode(buffer + tok->start, hexlen, preimage->r, sizeof(preimage->r));
 }
 
 bool json_tok_is_num(const char *buffer, const jsmntok_t *tok)
@@ -323,6 +310,235 @@ const jsmntok_t *json_get_arr(const jsmntok_t tok[], size_t index)
 	return NULL;
 }
 
+/*-----------------------------------------------------------------------------
+JSMN Result Validation Starts
+-----------------------------------------------------------------------------*/
+/*~ LIBJSMN is a fast, small JSON parsing library.
+ *
+ * "Fast, small" means it does not, in fact, do a
+ * lot of checking for invalid JSON.
+ *
+ * For example, by itself it would accept the strings
+ * `{"1" "2" "3" "4"}` and `["key": 1 2 3 4]` as valid.
+ * Obviously those are not in any way valid JSON.
+ *
+ * This part of the code performs some filtering so
+ * that at least some of the invalid JSON that
+ * LIBJSMN accepts, will be rejected by
+ * json_parse_input.
+ */
+
+/*~ These functions are used in JSMN validation.
+ *
+ * The calling convention is that the "current" token
+ * is passed in as the first argument, and after the
+ * validator, is returned from the function.
+ *
+ *      p = validate_jsmn_datum(p, end, valid);
+ *
+ * The reason has to do with typical C ABIs.
+ * Usually, the first few arguments are passed in via
+ * register, and the return value is also returned
+ * via register.
+ * This calling convention generally ensures that
+ * the current token pointer `p` is always in a
+ * register and is never forced into memory by the
+ * compiler.
+ *
+ * These functions are pre-declared here as they
+ * are interrecursive.
+ * Note that despite the recursion, `p` is only ever
+ * advanced, and there is only ever one `p` value,
+ * thus the overall algorithm is strict O(n)
+ * (*not* amortized) in time.
+ * The recursion does mean the algorithm is O(d)
+ * in memory (specifically stack frames), where d
+ * is the nestedness of objects in the input.
+ * This may become an issue later if we are in a
+ * stack-limited environment, such as if we actually
+ * went and used threads.
+ */
+/* Validate a *single* datum.  */
+static const jsmntok_t *
+validate_jsmn_datum(const jsmntok_t *p,
+		    const jsmntok_t *end,
+		    bool *valid);
+/*~ Validate a key-value pair.
+ *
+ * In JSMN, objects are not dictionaries.
+ * Instead, they are a sequence of datums.
+ *
+ * In fact, objects and arrays in JSMN are "the same",
+ * they only differ in delimiter characters.
+ *
+ * Of course, in "real" JSON, an object is a dictionary
+ * of key-value pairs.
+ *
+ * So what JSMN does is that the syntax "key": "value"
+ * is considered a *single* datum, a string "key"
+ * that contains a value "value".
+ *
+ * Indeed, JSMN accepts `["key": "value"]` as well as
+ * `{"item1", "item2"}`.
+ * The entire point of the validate_jsmn_result function
+ * is to reject such improper arrays and objects.
+ */
+static const jsmntok_t *
+validate_jsmn_keyvalue(const jsmntok_t *p,
+		       const jsmntok_t *end,
+		       bool *valid);
+
+static const jsmntok_t *
+validate_jsmn_datum(const jsmntok_t *p,
+		    const jsmntok_t *end,
+		    bool *valid)
+{
+	int i;
+	int sz;
+
+	if (p >= end) {
+		*valid = false;
+		return p;
+	}
+
+	switch (p->type) {
+	case JSMN_UNDEFINED:
+	case JSMN_STRING:
+	case JSMN_PRIMITIVE:
+		/* These types should not have sub-datums.  */
+		if (p->size != 0)
+			*valid = false;
+		else
+			++p;
+		break;
+
+	case JSMN_ARRAY:
+		/* Save the array size; we will advance p.  */
+		sz = p->size;
+		++p;
+		for (i = 0; i < sz; ++i) {
+			/* Arrays should only contain standard JSON datums.  */
+			p = validate_jsmn_datum(p, end, valid);
+			if (!*valid)
+				break;
+		}
+		break;
+
+	case JSMN_OBJECT:
+		/* Save the object size; we will advance p.  */
+		sz = p->size;
+		++p;
+		for (i = 0; i < sz; ++i) {
+			/* Objects should only contain key-value pairs.  */
+			p = validate_jsmn_keyvalue(p, end, valid);
+			if (!*valid)
+				break;
+		}
+		break;
+
+	default:
+		*valid = false;
+		break;
+	}
+
+	return p;
+}
+/* Key-value pairs *must* be strings with size 1.  */
+static inline const jsmntok_t *
+validate_jsmn_keyvalue(const jsmntok_t *p,
+		       const jsmntok_t *end,
+		       bool *valid)
+{
+	if (p >= end) {
+		*valid = false;
+		return p;
+	}
+
+	/* Check key.
+	 *
+	 * JSMN parses the syntax `"key": "value"` as a
+	 * JSMN_STRING of size 1, containing the value
+	 * datum as a sub-datum.
+	 *
+	 * Thus, keys in JSON objects are really strings
+	 * that "contain" the value, thus we check if
+	 * the size is 1.
+	 *
+	 * JSMN supports a non-standard syntax such as
+	 * `"key": 1 2 3 4`, which it considers as a
+	 * string object that contains a sequence of
+	 * sub-datums 1 2 3 4.
+	 * The check below that p->size == 1 also
+	 * incidentally rejects that non-standard
+	 * JSON.
+	 */
+	if (p->type != JSMN_STRING || p->size != 1) {
+		*valid = false;
+		return p;
+	}
+
+	++p;
+	return validate_jsmn_datum(p, end, valid);
+}
+
+/** validate_jsmn_parse_output
+ *
+ * @brief Validates the result of jsmn_parse.
+ *
+ * @desc LIBJMSN is a small fast library, not a
+ * comprehensive library.
+ *
+ * This simply means that LIBJSMN will accept a
+ * *lot* of very strange text that is technically
+ * not JSON.
+ *
+ * For example, LIBJSMN would accept the strings
+ * `{"1" "2" "3" "4"}` and `["key": 1 2 3 4]` as valid.
+ *
+ * This can lead to strange sequences of jsmntok_t
+ * objects.
+ * Unfortunately, most of our code assumes that
+ * the data fed into our JSON-RPC interface is
+ * valid JSON, and in particular is not invalid
+ * JSON that tickles LIBJSMN into emitting
+ * strange sequences of `jsmntok_t`.
+ *
+ * This function detects such possible problems
+ * and returns false if such an issue is found.
+ * If so, it is probably unsafe to pass the
+ * `jsmntok_t` generated by LIBJSMN to any other
+ * parts of our code.
+ *
+ * @param p - The first jsmntok_t token to process.
+ * This function does not assume that semantically
+ * only one JSON datum is processed; it does expect
+ * a sequence of complete JSON datums (which is
+ * what LIBJSMN *should* output).
+ * @param end - One past the end of jsmntok_t.
+ * Basically, this function is assured to read tokens
+ * starting at p up to end - 1.
+ * If p >= end, this will not validate anything and
+ * trivially return true.
+ *
+ * @return true if there appears to be no problem
+ * with the jsmntok_t sequence outputted by
+ * `jsmn_parse`, false otherwise.
+ */
+static bool
+validate_jsmn_parse_output(const jsmntok_t *p, const jsmntok_t *end)
+{
+	bool valid = true;
+
+	while (p < end && valid)
+		p = validate_jsmn_datum(p, end, &valid);
+
+	return valid;
+}
+
+/*-----------------------------------------------------------------------------
+JSMN Result Validation Ends
+-----------------------------------------------------------------------------*/
+
 jsmntok_t *json_parse_input(const tal_t *ctx,
 			    const char *input, int len, bool *valid)
 {
@@ -360,7 +576,7 @@ again:
 	ret = json_next(toks) - toks;
 
 	/* Cut to length and return. */
-	*valid = true;
+	*valid = validate_jsmn_parse_output(toks, toks + ret);
 	tal_resize(&toks, ret + 1);
 	/* Make sure last one is always referenceable. */
 	toks[ret].type = -1;
@@ -474,112 +690,6 @@ const jsmntok_t *json_delve(const char *buffer,
        return tok;
 }
 
-void json_add_node_id(struct json_stream *response,
-		      const char *fieldname,
-		      const struct node_id *id)
-{
-	json_add_hex(response, fieldname, id->k, sizeof(id->k));
-}
-
-void json_add_pubkey(struct json_stream *response,
-		     const char *fieldname,
-		     const struct pubkey *key)
-{
-	u8 der[PUBKEY_CMPR_LEN];
-
-	pubkey_to_der(der, key);
-	json_add_hex(response, fieldname, der, sizeof(der));
-}
-
-void json_add_txid(struct json_stream *result, const char *fieldname,
-		   const struct bitcoin_txid *txid)
-{
-	char hex[hex_str_size(sizeof(*txid))];
-
-	bitcoin_txid_to_hex(txid, hex, sizeof(hex));
-	json_add_string(result, fieldname, hex);
-}
-
-void json_add_short_channel_id(struct json_stream *response,
-			       const char *fieldname,
-			       const struct short_channel_id *scid)
-{
-	json_add_member(response, fieldname, true, "%dx%dx%d",
-			short_channel_id_blocknum(scid),
-			short_channel_id_txnum(scid),
-			short_channel_id_outnum(scid));
-}
-
-void json_add_address(struct json_stream *response, const char *fieldname,
-		      const struct wireaddr *addr)
-{
-	json_object_start(response, fieldname);
-	char *addrstr = tal_arr(response, char, INET6_ADDRSTRLEN);
-	if (addr->type == ADDR_TYPE_IPV4) {
-		inet_ntop(AF_INET, addr->addr, addrstr, INET_ADDRSTRLEN);
-		json_add_string(response, "type", "ipv4");
-		json_add_string(response, "address", addrstr);
-		json_add_num(response, "port", addr->port);
-	} else if (addr->type == ADDR_TYPE_IPV6) {
-		inet_ntop(AF_INET6, addr->addr, addrstr, INET6_ADDRSTRLEN);
-		json_add_string(response, "type", "ipv6");
-		json_add_string(response, "address", addrstr);
-		json_add_num(response, "port", addr->port);
-	} else if (addr->type == ADDR_TYPE_TOR_V2) {
-		json_add_string(response, "type", "torv2");
-		json_add_string(response, "address", fmt_wireaddr_without_port(tmpctx, addr));
-		json_add_num(response, "port", addr->port);
-	} else if (addr->type == ADDR_TYPE_TOR_V3) {
-		json_add_string(response, "type", "torv3");
-		json_add_string(response, "address", fmt_wireaddr_without_port(tmpctx, addr));
-		json_add_num(response, "port", addr->port);
-	}
-	json_object_end(response);
-}
-
-void json_add_address_internal(struct json_stream *response,
-			       const char *fieldname,
-			       const struct wireaddr_internal *addr)
-{
-	switch (addr->itype) {
-	case ADDR_INTERNAL_SOCKNAME:
-		json_object_start(response, fieldname);
-		json_add_string(response, "type", "local socket");
-		json_add_string(response, "socket", addr->u.sockname);
-		json_object_end(response);
-		return;
-	case ADDR_INTERNAL_ALLPROTO:
-		json_object_start(response, fieldname);
-		json_add_string(response, "type", "any protocol");
-		json_add_num(response, "port", addr->u.port);
-		json_object_end(response);
-		return;
-	case ADDR_INTERNAL_AUTOTOR:
-		json_object_start(response, fieldname);
-		json_add_string(response, "type", "Tor generated address");
-		json_add_address(response, "service", &addr->u.torservice.address);
-		json_object_end(response);
-		return;
-	case ADDR_INTERNAL_STATICTOR:
-		json_object_start(response, fieldname);
-		json_add_string(response, "type", "Tor from blob generated static address");
-		json_add_address(response, "service", &addr->u.torservice.address);
-		json_object_end(response);
-		return;
-	case ADDR_INTERNAL_FORPROXY:
-		json_object_start(response, fieldname);
-		json_add_string(response, "type", "unresolved");
-		json_add_string(response, "name", addr->u.unresolved.name);
-		json_add_num(response, "port", addr->u.unresolved.port);
-		json_object_end(response);
-		return;
-	case ADDR_INTERNAL_WIREADDR:
-		json_add_address(response, fieldname, &addr->u.wireaddr);
-		return;
-	}
-	abort();
-}
-
 void json_add_num(struct json_stream *result, const char *fieldname, unsigned int value)
 {
 	json_add_member(result, fieldname, false, "%u", value);
@@ -658,13 +768,6 @@ void json_add_hex_talarr(struct json_stream *result,
 	json_add_hex(result, fieldname, data, tal_bytelen(data));
 }
 
-void json_add_tx(struct json_stream *result,
-		 const char *fieldname,
-		 const struct bitcoin_tx *tx)
-{
-	json_add_hex_talarr(result, fieldname, linearize_tx(tmpctx, tx));
-}
-
 void json_add_escaped_string(struct json_stream *result, const char *fieldname,
 			     const struct json_escape *esc TAKES)
 {
@@ -679,42 +782,6 @@ void json_add_escaped_string(struct json_stream *result, const char *fieldname,
 	}
 	if (taken(esc))
 		tal_free(esc);
-}
-
-void json_add_amount_msat_compat(struct json_stream *result,
-				 struct amount_msat msat,
-				 const char *rawfieldname,
-				 const char *msatfieldname)
-{
-	json_add_u64(result, rawfieldname, msat.millisatoshis); /* Raw: low-level helper */
-	json_add_amount_msat_only(result, msatfieldname, msat);
-}
-
-void json_add_amount_msat_only(struct json_stream *result,
-			  const char *msatfieldname,
-			  struct amount_msat msat)
-{
-	json_add_string(result, msatfieldname,
-			type_to_string(tmpctx, struct amount_msat, &msat));
-}
-
-void json_add_amount_sat_compat(struct json_stream *result,
-				struct amount_sat sat,
-				const char *rawfieldname,
-				const char *msatfieldname)
-{
-	json_add_u64(result, rawfieldname, sat.satoshis); /* Raw: low-level helper */
-	json_add_amount_sat_only(result, msatfieldname, sat);
-}
-
-void json_add_amount_sat_only(struct json_stream *result,
-			 const char *msatfieldname,
-			 struct amount_sat sat)
-{
-	struct amount_msat msat;
-	if (amount_sat_to_msat(&msat, sat))
-		json_add_string(result, msatfieldname,
-				type_to_string(tmpctx, struct amount_msat, &msat));
 }
 
 void json_add_timeabs(struct json_stream *result, const char *fieldname,
@@ -733,24 +800,6 @@ void json_add_time(struct json_stream *result, const char *fieldname,
 		(unsigned long)ts.tv_sec,
 		(unsigned)ts.tv_nsec);
 	json_add_string(result, fieldname, timebuf);
-}
-
-void json_add_secret(struct json_stream *response, const char *fieldname,
-		     const struct secret *secret)
-{
-	json_add_hex(response, fieldname, secret, sizeof(struct secret));
-}
-
-void json_add_sha256(struct json_stream *result, const char *fieldname,
-		     const struct sha256 *hash)
-{
-	json_add_hex(result, fieldname, hash, sizeof(*hash));
-}
-
-void json_add_preimage(struct json_stream *result, const char *fieldname,
-		     const struct preimage *preimage)
-{
-	json_add_hex(result, fieldname, preimage, sizeof(*preimage));
 }
 
 void json_add_tok(struct json_stream *result, const char *fieldname,

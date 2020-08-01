@@ -21,6 +21,7 @@ import struct
 import subprocess
 import threading
 import time
+import warnings
 
 BITCOIND_CONFIG = {
     "regtest": 1,
@@ -488,6 +489,9 @@ class LightningD(TailableProc):
             'ignore-fee-limits': 'false',
             'bitcoin-rpcuser': BITCOIND_CONFIG['rpcuser'],
             'bitcoin-rpcpassword': BITCOIND_CONFIG['rpcpassword'],
+
+            # Make sure we don't touch any existing config files in the user's $HOME
+            'bitcoin-datadir': lightning_dir,
         }
 
         for k, v in opts.items():
@@ -575,6 +579,9 @@ class LightningNode(object):
             self.daemon.opts["dev-disconnect"] = "dev_disconnect"
         if DEVELOPER:
             self.daemon.opts["dev-fail-on-subdaemon-fail"] = None
+            # Don't run --version on every subdaemon if we're valgrinding and slow.
+            if SLOW_MACHINE and VALGRIND:
+                self.daemon.opts["dev-no-version-checks"] = None
             self.daemon.env["LIGHTNINGD_DEV_MEMLEAK"] = "1"
             if os.getenv("DEBUG_SUBD"):
                 self.daemon.opts["dev-debugger"] = os.getenv("DEBUG_SUBD")
@@ -597,6 +604,9 @@ class LightningNode(object):
                 '--error-exitcode=7',
                 '--log-file={}/valgrind-errors.%p'.format(self.daemon.lightning_dir)
             ]
+            # Reduce precision of errors, speeding startup and reducing memory greatly:
+            if SLOW_MACHINE:
+                self.daemon.cmd_prefix += ['--read-inline-info=no']
 
     def connect(self, remote_node):
         self.rpc.connect(remote_node.info['id'], '127.0.0.1', remote_node.daemon.port)
@@ -871,9 +881,10 @@ class LightningNode(object):
             elif params == [100, 'ECONOMICAL']:
                 feerate = feerates[3] * 4
             else:
-                raise ValueError("Don't have a feerate set for {}/{}.".format(
+                warnings.warn("Don't have a feerate set for {}/{}.".format(
                     params[0], params[1],
                 ))
+                feerate = 42
             return {
                 'id': r['id'],
                 'error': None,

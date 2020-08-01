@@ -1,24 +1,44 @@
 #include "db.h"
 
+#include <bitcoin/psbt.h>
+#include <bitcoin/script.h>
 #include <ccan/array_size/array_size.h>
 #include <ccan/tal/str/str.h>
+#include <common/derive_basepoints.h>
+#include <common/key_derive.h>
 #include <common/node_id.h>
 #include <common/onionreply.h>
 #include <common/version.h>
+#include <hsmd/gen_hsm_wire.h>
 #include <inttypes.h>
+#include <lightningd/channel.h>
 #include <lightningd/lightningd.h>
 #include <lightningd/log.h>
 #include <lightningd/plugin_hook.h>
 #include <wallet/db_common.h>
+#include <wallet/wallet.h>
+#include <wally_bip32.h>
+#include <wire/wire_sync.h>
 
 #define NSEC_IN_SEC 1000000000
 
 struct migration {
 	const char *sql;
-	void (*func)(struct lightningd *ld, struct db *db);
+	void (*func)(struct lightningd *ld, struct db *db,
+		     const struct ext_key *bip32_base);
 };
 
-static void migrate_pr2342_feerate_per_channel(struct lightningd *ld, struct db *db);
+static void migrate_pr2342_feerate_per_channel(struct lightningd *ld, struct db *db,
+					       const struct ext_key *bip32_base);
+
+static void migrate_our_funding(struct lightningd *ld, struct db *db,
+				const struct ext_key *bip32_base);
+
+static void migrate_last_tx_to_psbt(struct lightningd *ld, struct db *db,
+				    const struct ext_key *bip32_base);
+
+static void fillin_missing_scriptpubkeys(struct lightningd *ld, struct db *db,
+					 const struct ext_key *bip32_base);
 
 /* Do not reorder or remove elements from this array, it is used to
  * migrate existing databases from a previous state, based on the
@@ -596,6 +616,23 @@ static struct migration dbmigrations[] = {
      * Turn anything in transition into a WIRE_TEMPORARY_NODE_FAILURE. */
     {SQL("ALTER TABLE channel_htlcs ADD localfailmsg BLOB;"), NULL},
     {SQL("UPDATE channel_htlcs SET localfailmsg=decode('2002', 'hex') WHERE malformed_onion != 0 AND direction = 1;"), NULL},
+    {SQL("ALTER TABLE channels ADD our_funding_satoshi BIGINT DEFAULT 0;"), migrate_our_funding},
+    {SQL("CREATE TABLE penalty_bases ("
+	 "  channel_id BIGINT REFERENCES channels(id) ON DELETE CASCADE"
+	 ", commitnum BIGINT"
+	 ", txid BLOB"
+	 ", outnum INTEGER"
+	 ", amount BIGINT"
+	 ", PRIMARY KEY (channel_id, commitnum)"
+	 ");"), NULL},
+    /* For incoming HTLCs, we now keep track of whether or not we provided
+     * the preimage for it, or not. */
+    {SQL("ALTER TABLE channel_htlcs ADD we_filled INTEGER;"), NULL},
+    /* We track the counter for coin_moves, as a convenience for notification consumers */
+    {SQL("INSERT INTO vars (name, intval) VALUES ('coin_moves_count', 0);"), NULL},
+    {NULL, migrate_last_tx_to_psbt},
+    {SQL("ALTER TABLE outputs ADD reserved_til INTEGER DEFAULT NULL;"), NULL},
+    {NULL, fillin_missing_scriptpubkeys},
 };
 
 /* Leak tracking. */
@@ -948,7 +985,8 @@ static int db_get_version(struct db *db)
 /**
  * db_migrate - Apply all remaining migrations from the current version
  */
-static void db_migrate(struct lightningd *ld, struct db *db)
+static void db_migrate(struct lightningd *ld, struct db *db,
+		       const struct ext_key *bip32_base)
 {
 	/* Attempt to read the version from the database */
 	int current, orig, available;
@@ -975,7 +1013,7 @@ static void db_migrate(struct lightningd *ld, struct db *db)
 			tal_free(stmt);
 		}
 		if (dbmigrations[current].func)
-			dbmigrations[current].func(ld, db);
+			dbmigrations[current].func(ld, db, bip32_base);
 	}
 
 	/* Finally update the version number in the version table */
@@ -1007,14 +1045,15 @@ u32 db_data_version_get(struct db *db)
 	return version;
 }
 
-struct db *db_setup(const tal_t *ctx, struct lightningd *ld)
+struct db *db_setup(const tal_t *ctx, struct lightningd *ld,
+		    const struct ext_key *bip32_base)
 {
 	struct db *db = db_open(ctx, ld->wallet_dsn);
 	db->log = new_log(db, ld->log_book, NULL, "database");
 
 	db_begin_transaction(db);
 
-	db_migrate(ld, db);
+	db_migrate(ld, db, bip32_base);
 
 	db->data_version = db_data_version_get(db);
 	db_commit_transaction(db);
@@ -1060,7 +1099,8 @@ void db_set_intvar(struct db *db, char *varname, s64 val)
 }
 
 /* Will apply the current config fee settings to all channels */
-static void migrate_pr2342_feerate_per_channel(struct lightningd *ld, struct db *db)
+static void migrate_pr2342_feerate_per_channel(struct lightningd *ld, struct db *db,
+					       const struct ext_key *bip32_base)
 {
 	struct db_stmt *stmt = db_prepare_v2(
 	    db, SQL("UPDATE channels SET feerate_base = ?, feerate_ppm = ?;"));
@@ -1069,6 +1109,198 @@ static void migrate_pr2342_feerate_per_channel(struct lightningd *ld, struct db 
 	db_bind_int(stmt, 1, ld->config.fee_per_satoshi);
 
 	db_exec_prepared_v2(stmt);
+	tal_free(stmt);
+}
+
+/* We've added a column `our_funding_satoshis`, since channels can now
+ * have funding for either channel participant. We need to 'backfill' this
+ * data, however. We can do this using the fact that our_funding_satoshi
+ * is the same as the funding_satoshi for every channel where we are
+ * the `funder`
+ */
+static void migrate_our_funding(struct lightningd *ld, struct db *db,
+				const struct ext_key *bip32_base)
+{
+	struct db_stmt *stmt;
+
+	/* Statement to update record */
+	stmt = db_prepare_v2(db, SQL("UPDATE channels"
+				     " SET our_funding_satoshi = funding_satoshi"
+				     " WHERE funder = 0;")); /* 0 == LOCAL */
+	db_exec_prepared_v2(stmt);
+	if (stmt->error)
+		db_fatal("Error migrating funding satoshis to our_funding (%s)",
+			 stmt->error);
+
+	tal_free(stmt);
+}
+
+void fillin_missing_scriptpubkeys(struct lightningd *ld, struct db *db,
+				  const struct ext_key *bip32_base)
+{
+	struct db_stmt *stmt;
+
+	stmt = db_prepare_v2(db, SQL("SELECT"
+				     " type"
+				     ", keyindex"
+				     ", prev_out_tx"
+				     ", prev_out_index"
+				     ", channel_id"
+				     ", peer_id"
+				     ", commitment_point"
+				     " FROM outputs"
+				     " WHERE scriptpubkey IS NULL;"));
+
+	db_query_prepared(stmt);
+	while (db_step(stmt)) {
+		int type;
+		u8 *scriptPubkey;
+		struct bitcoin_txid txid;
+		u32 outnum, keyindex;
+		struct pubkey key;
+		struct db_stmt *update_stmt;
+
+		type = db_column_int(stmt, 0);
+		keyindex = db_column_int(stmt, 1);
+		db_column_txid(stmt, 2, &txid);
+		outnum = db_column_int(stmt, 3);
+
+		/* This indiciates whether or not we have 'close_info' */
+		if (!db_column_is_null(stmt, 4)) {
+			struct pubkey *commitment_point;
+			struct node_id peer_id;
+			u64 channel_id;
+			u8 *msg;
+
+			channel_id = db_column_u64(stmt, 4);
+			db_column_node_id(stmt, 5, &peer_id);
+			if (!db_column_is_null(stmt, 6)) {
+				commitment_point = tal(stmt, struct pubkey);
+				db_column_pubkey(stmt, 6, commitment_point);
+			} else
+				commitment_point = NULL;
+
+			/* Have to go ask the HSM to derive the pubkey for us */
+			msg = towire_hsm_get_output_scriptpubkey(NULL,
+								 channel_id,
+								 &peer_id,
+								 commitment_point);
+			if (!wire_sync_write(ld->hsm_fd, take(msg)))
+				fatal("Could not write to HSM: %s", strerror(errno));
+			msg = wire_sync_read(stmt, ld->hsm_fd);
+			if (!fromwire_hsm_get_output_scriptpubkey_reply(stmt, msg,
+									&scriptPubkey))
+				fatal("HSM gave bad hsm_get_output_scriptpubkey_reply %s",
+				      tal_hex(msg, msg));
+		} else {
+			/* Build from bip32_base */
+			bip32_pubkey(bip32_base, &key, keyindex);
+			if (type == p2sh_wpkh) {
+				u8 *redeemscript = bitcoin_redeem_p2sh_p2wpkh(stmt, &key);
+				scriptPubkey = scriptpubkey_p2sh(tmpctx, redeemscript);
+			} else
+				scriptPubkey = scriptpubkey_p2wpkh(stmt, &key);
+		}
+
+		update_stmt = db_prepare_v2(db, SQL("UPDATE outputs"
+						    " SET scriptpubkey = ?"
+						    " WHERE prev_out_tx = ? "
+						    "   AND prev_out_index = ?"));
+		db_bind_blob(update_stmt, 0, scriptPubkey, tal_bytelen(scriptPubkey));
+		db_bind_txid(update_stmt, 1, &txid);
+		db_bind_int(update_stmt, 2, outnum);
+		db_exec_prepared_v2(update_stmt);
+		tal_free(update_stmt);
+	}
+
+	tal_free(stmt);
+}
+
+/* We're moving everything over to PSBTs from tx's, particularly our last_tx's
+ * which are commitment transactions for channels.
+ * This migration loads all of the last_tx's and 're-formats' them into psbts,
+ * adds the required input witness utxo information, and then saves it back to disk
+ * */
+void migrate_last_tx_to_psbt(struct lightningd *ld, struct db *db,
+			     const struct ext_key *bip32_base)
+{
+	struct db_stmt *stmt, *update_stmt;
+
+	stmt = db_prepare_v2(db, SQL("SELECT "
+				     "  c.id"
+				     ", p.node_id"
+				     ", c.last_tx"
+				     ", c.funding_satoshi"
+				     ", c.fundingkey_remote"
+				     ", c.last_sig"
+				     " FROM channels c"
+				     "  LEFT OUTER JOIN peers p"
+				     "  ON p.id = c.peer_id;"));
+
+	db_query_prepared(stmt);
+	while (db_step(stmt)) {
+		struct bitcoin_tx *last_tx;
+		struct amount_sat funding_sat;
+		struct node_id peer_id;
+		struct pubkey local_funding_pubkey, remote_funding_pubkey;
+		struct basepoints local_basepoints UNUSED;
+		struct bitcoin_signature last_sig;
+		u64 cdb_id;
+		u8 *funding_wscript;
+
+		cdb_id = db_column_u64(stmt, 0);
+		last_tx = db_column_tx(stmt, stmt, 2);
+		assert(last_tx != NULL);
+
+		/* If we've forgotten about the peer_id
+		 * because we closed / forgot the channel,
+		 * we can skip this. */
+		if (db_column_is_null(stmt, 1))
+			continue;
+		db_column_node_id(stmt, 1, &peer_id);
+		db_column_amount_sat(stmt, 3, &funding_sat);
+		db_column_pubkey(stmt, 4, &remote_funding_pubkey);
+
+		get_channel_basepoints(ld, &peer_id, cdb_id,
+				       &local_basepoints, &local_funding_pubkey);
+
+		funding_wscript = bitcoin_redeem_2of2(stmt, &local_funding_pubkey,
+						      &remote_funding_pubkey);
+
+		if (is_elements(chainparams)) {
+			/*FIXME: persist asset tags */
+			struct amount_asset asset;
+			asset = amount_sat_to_asset(&funding_sat,
+						    chainparams->fee_asset_tag);
+			psbt_elements_input_init_witness(last_tx->psbt,
+							 0, funding_wscript,
+							 &asset, NULL);
+		} else
+			psbt_input_set_prev_utxo_wscript(last_tx->psbt,
+							 0, funding_wscript,
+							 funding_sat);
+
+		if (!db_column_signature(stmt, 5, &last_sig.s))
+			abort();
+
+		last_sig.sighash_type = SIGHASH_ALL;
+		if (!psbt_input_set_partial_sig(last_tx->psbt, 0,
+						&remote_funding_pubkey, &last_sig))
+			abort();
+		psbt_input_add_pubkey(last_tx->psbt, 0,
+		    &local_funding_pubkey);
+		psbt_input_add_pubkey(last_tx->psbt, 0,
+		    &remote_funding_pubkey);
+
+		update_stmt = db_prepare_v2(db, SQL("UPDATE channels"
+						    " SET last_tx = ?"
+						    " WHERE id = ?;"));
+		db_bind_psbt(update_stmt, 0, last_tx->psbt);
+		db_bind_int(update_stmt, 1, cdb_id);
+		db_exec_prepared_v2(update_stmt);
+		tal_free(update_stmt);
+	}
+
 	tal_free(stmt);
 }
 
@@ -1215,6 +1447,14 @@ void db_bind_tx(struct db_stmt *stmt, int col, const struct bitcoin_tx *tx)
 	db_bind_blob(stmt, col, ser, tal_count(ser));
 }
 
+void db_bind_psbt(struct db_stmt *stmt, int col, const struct wally_psbt *psbt)
+{
+	size_t bytes_written;
+	const u8 *ser = psbt_get_bytes(stmt, psbt, &bytes_written);
+	assert(ser);
+	db_bind_blob(stmt, col, ser, bytes_written);
+}
+
 void db_bind_amount_msat(struct db_stmt *stmt, int pos,
 			 const struct amount_msat *msat)
 {
@@ -1332,6 +1572,17 @@ struct bitcoin_tx *db_column_tx(const tal_t *ctx, struct db_stmt *stmt, int col)
 	const u8 *src = db_column_blob(stmt, col);
 	size_t len = db_column_bytes(stmt, col);
 	return pull_bitcoin_tx(ctx, &src, &len);
+}
+
+struct bitcoin_tx *db_column_psbt_to_tx(const tal_t *ctx, struct db_stmt *stmt, int col)
+{
+	struct wally_psbt *psbt;
+	const u8 *src = db_column_blob(stmt, col);
+	size_t len = db_column_bytes(stmt, col);
+	psbt = psbt_from_bytes(ctx, src, len);
+	if (!psbt)
+		return NULL;
+	return bitcoin_tx_with_psbt(ctx, psbt);
 }
 
 void *db_column_arr_(const tal_t *ctx, struct db_stmt *stmt, int col,

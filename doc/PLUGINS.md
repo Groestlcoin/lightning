@@ -324,11 +324,25 @@ to a peer was lost.
 
 ### `invoice_payment`
 
-A notification for topic `invoice_payment` is sent every time an invoie is paid.
+A notification for topic `invoice_payment` is sent every time an invoice is paid.
 
 ```json
 {
   "invoice_payment": {
+    "label": "unique-label-for-invoice",
+    "preimage": "0000000000000000000000000000000000000000000000000000000000000000",
+    "msat": "10000msat"
+  }
+}
+
+```
+### `invoice_creation`
+
+A notification for topic `invoice_creation` is sent every time an invoice is created.
+
+```json
+{
+  "invoice_creation": {
     "label": "unique-label-for-invoice",
     "preimage": "0000000000000000000000000000000000000000000000000000000000000000",
     "msat": "10000msat"
@@ -510,6 +524,95 @@ returns the result of sendpay in specified time or timeout, but
 `sendpay_failure` will always return the result anytime when sendpay
 fails if is was subscribed.
 
+
+### `coin_movement`
+
+A notification for topic `coin_movement` is sent to record the
+movement of coins.  It is only triggered by finalized ledger updates,
+i.e. only definitively resolved HTLCs or confirmed bitcoin transactions.
+
+```json
+{
+	"coin_movement": {
+		"version":1,
+		"node_id":"03a7103a2322b811f7369cbb27fb213d30bbc0b012082fed3cad7e4498da2dc56b",
+		"movement_idx":0,
+		"type":"chain_mvt",
+		"account_id":"wallet",
+		"txid":"0159693d8f3876b4def468b208712c630309381e9d106a9836fa0a9571a28722", // (`chain_mvt` type only, mandatory)
+		"utxo_txid":"0159693d8f3876b4def468b208712c630309381e9d106a9836fa0a9571a28722", // (`chain_mvt` type only, optional)
+		"vout":1, // (`chain_mvt` type only, optional)
+		"payment_hash": "xxx", // (either type, optional on `chain_mvt`)
+		"part_id": 0, // (`channel_mvt` type only, mandatory)
+		"credit":"2000000000msat",
+		"debit":"0msat",
+		"tag":"deposit",
+		"blockheight":102, // (`channel_mvt` type only. may be null)
+		"timestamp":1585948198,
+		"coin_type":"bc"
+	}
+}
+```
+
+`version` indicates which version of the coin movement data struct this
+notification adheres to.
+
+`node_id` specifies the node issuing the coin movement.
+
+`movement_idx` is an increment-only counter for coin moves emitted by this node.
+
+`type` marks the underlying mechanism which moved these coins. There are two
+'types' of `coin_movements`:
+  - `channel_mvt`s, which occur as a result of htlcs being resolved and,
+  - `chain_mvt`s, which occur as a result of bitcoin txs being mined.
+
+`account_id` is the name of this account. The node's wallet is named 'wallet',
+all channel funds' account are the channel id.
+
+`txid` is the transaction id of the bitcoin transaction that triggered this
+ledger event. `utxo_txid` and `vout` identify the bitcoin output which triggered
+this notification. (`chain_mvt` only) In most cases, the `utxo_txid` will be the
+same as the `txid`, except for `spend_track` notficiations.  Notifications tagged
+`chain_fees` and `journal_entry` do not have a `utxo_txid` as they're not
+represented in the utxo set.
+
+`payment_hash` is the hash of the preimage used to move this payment. Only
+present for HTLC mediated moves (both `chain_mvt` and `channel_mvt`)
+A `chain_mvt` will have a `payment_hash` iff it's recording an htlc that was
+fulfilled onchain.
+
+`part_id` is an identifier for parts of a multi-part payment. useful for
+aggregating payments for an invoice or to indicate why a payment hash appears
+multiple times. `channel_mvt` only
+
+`credit` and `debit` are millisatoshi denominated amounts of the fund movement. A
+'credit' is funds deposited into an account; a `debit` is funds withdrawn.
+
+
+`tag` is a movement descriptor. Current tags are as follows:
+ - `deposit`: funds deposited
+ - `withdrawal`: funds withdrawn
+ - `chain_fees`: funds paid for onchain fees. `chain_mvt` only
+ - `penalty`: funds paid or gained from a penalty tx. `chain_mvt` only
+ - `invoice`: funds paid to or recieved from an invoice. `channel_mvt` only
+ - `routed`: funds routed through this node. `channel_mvt` only
+ - `journal_entry`: a balance reconciliation event, typically triggered
+                    by a penalty tx onchain. `chain_mvt` only
+ - `onchain_htlc`: funds moved via an htlc onchain. `chain_mvt` only
+ - `pushed`: funds pushed to peer. `channel_mvt` only.
+ - `spend_track`:  informational notification about a wallet utxo spend. `chain_mvt` only.
+
+`blockheight` is the block the txid is included in. `chain_mvt` only. In the
+case that an output is considered dust, c-lightning does not track its return to
+our wallet. In those cases, the blockheight will be `null`, as they're recorded
+before confirmation.
+
+The `timestamp` is seconds since Unix epoch of the node's machine time
+at the time lightningd broadcasts the notification.
+
+`coin_type` is the BIP173 name for the coin which moved.
+
+
 ## Hooks
 
 Hooks allow a plugin to define custom behavior for `lightningd`
@@ -589,6 +692,45 @@ the string `disconnect` or `continue`.  If `disconnect` and
 there's a member `error_message`, that member is sent to the peer
 before disconnection.
 
+
+### `commitment_revocation`
+
+This hook is called whenever a channel state is updated, and the old state was
+revoked. State updates in Lightning consist of the following steps:
+
+ 1. Proposal of a new state commitment in the form of a commitment transaction
+ 2. Exchange of signatures for the agreed upon commitment transaction
+ 3. Verification that the signatures match the commitment transaction
+ 4. Exchange of revocation secrets that could be used to penalize an eventual misbehaving party
+
+The `commitment_revocation` hook is used to inform the plugin about the state
+transition being completed, and deliver the penalty transaction. The penalty
+transaction could then be sent to a watchtower that automaticaly reacts in
+case one party attempts to settle using a revoked commitment.
+
+The payload consists of the following information:
+
+```json
+{
+	"commitment_txid": "58eea2cf538cfed79f4d6b809b920b40bb6b35962c4bb4cc81f5550a7728ab05",
+	"penalty_tx": "02000000000101...ac00000000"
+}
+```
+
+Notice that the `commitment_txid` could also be extracted from the sole input
+of the `penalty_tx`, however it is enclosed so plugins don't have to include
+the logic to parse transactions.
+
+Not included are the `htlc_success` and `htlc_failure` transactions that
+may also be spending `commitment_tx` outputs. This is because these
+transactions are much more dynamic and have a predictable timeout, allowing
+wallets to ensure a quick checkin when the CLTV of the HTLC is about to
+expire.
+
+The `commitment_revocation` hook is a chained hook, i.e., multiple plugins can
+register it, and they will be called in the order they were registered in.
+Plugins should always return `{"result": "continue"}`, otherwise subsequent
+hook subscribers would not get called.
 
 ### `db_write`
 
@@ -958,12 +1100,12 @@ can use from 1 to 5 plugin(s) registering these 5 commands for gathering Bitcoin
 data. Each plugin must follow the below specification for `lightningd` to operate.
 
 
-### `getchainfo`
+### `getchaininfo`
 
 Called at startup, it's used to check the network `lightningd` is operating on and to
 get the sync status of the backend.
 
-The plugin must respond to `getchainfo` with the following fields:
+The plugin must respond to `getchaininfo` with the following fields:
     - `chain` (string), the network name as introduced in bip70
     - `headercount` (number), the number of fetched block headers
     - `blockcount` (number), the number of fetched block body

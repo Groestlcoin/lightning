@@ -7,8 +7,10 @@
 #include <ccan/tal/str/str.h>
 #include <channeld/gen_channel_wire.h>
 #include <common/blinding.h>
+#include <common/coin_mvt.h>
 #include <common/ecdh.h>
 #include <common/json_command.h>
+#include <common/json_helpers.h>
 #include <common/jsonrpc_errors.h>
 #include <common/onion.h>
 #include <common/onionreply.h>
@@ -20,6 +22,7 @@
 #include <gossipd/gen_gossip_wire.h>
 #include <hsmd/gen_hsm_wire.h>
 #include <lightningd/chaintopology.h>
+#include <lightningd/coin_mvts.h>
 #include <lightningd/htlc_end.h>
 #include <lightningd/htlc_set.h>
 #include <lightningd/json.h>
@@ -78,7 +81,8 @@ static bool htlc_in_update_state(struct channel *channel,
 
 	wallet_htlc_update(channel->peer->ld->wallet,
 			   hin->dbid, newstate, hin->preimage,
-			   hin->badonion, hin->failonion, NULL);
+			   hin->badonion, hin->failonion, NULL,
+			   hin->we_filled);
 
 	hin->hstate = newstate;
 	return true;
@@ -92,9 +96,10 @@ static bool htlc_out_update_state(struct channel *channel,
 			     "out"))
 		return false;
 
+	bool we_filled = false;
 	wallet_htlc_update(channel->peer->ld->wallet, hout->dbid, newstate,
 			   hout->preimage, 0, hout->failonion,
-			   hout->failmsg);
+			   hout->failmsg, &we_filled);
 
 	hout->hstate = newstate;
 	return true;
@@ -183,11 +188,12 @@ static void failmsg_update_reply(struct subd *gossipd,
 				    cbdata->hin->shared_secret,
 				    failmsg);
 
+	bool we_filled = false;
 	wallet_htlc_update(gossipd->ld->wallet,
 			   cbdata->hin->dbid, cbdata->hin->hstate,
 			   cbdata->hin->preimage,
 			   cbdata->hin->badonion,
-			   cbdata->hin->failonion, NULL);
+			   cbdata->hin->failonion, NULL, &we_filled);
 
 	failed_htlc = mk_failed_htlc(tmpctx,
 				     cbdata->hin, cbdata->hin->failonion);
@@ -277,10 +283,13 @@ void local_fail_in_htlc_needs_update(struct htlc_in *hin,
 }
 
 /* Helper to create (common) WIRE_INCORRECT_OR_UNKNOWN_PAYMENT_DETAILS */
-const u8 *failmsg_incorrect_or_unknown(const tal_t *ctx,
-				       struct lightningd *ld,
-				       const struct htlc_in *hin)
+const u8 *failmsg_incorrect_or_unknown_(const tal_t *ctx,
+					struct lightningd *ld,
+					const struct htlc_in *hin,
+					const char *file, int line)
 {
+	log_debug(ld->log, "WIRE_INCORRECT_OR_UNKNOWN_PAYMENT_DETAILS: %s:%u",
+		  file, line);
 	return towire_incorrect_or_unknown_payment_details(
 		ctx, hin->msat,
 		get_block_height(ld->topology));
@@ -295,7 +304,8 @@ static void fail_out_htlc(struct htlc_out *hout,
 	assert(hout->failmsg || hout->failonion);
 
 	if (hout->am_origin) {
-		payment_failed(hout->key.channel->peer->ld, hout, localfail);
+		payment_failed(hout->key.channel->peer->ld, hout, localfail,
+			       failmsg_needs_update);
 		if (taken(failmsg_needs_update))
 			tal_free(failmsg_needs_update);
 	} else if (hout->in) {
@@ -419,7 +429,7 @@ void fulfill_htlc(struct htlc_in *hin, const struct preimage *preimage)
 	}
 
 	if (channel_on_chain(channel)) {
-		msg = towire_onchain_known_preimage(hin, preimage);
+		msg = towire_onchain_known_preimage(hin, preimage, false);
 	} else {
 		struct fulfilled_htlc fulfilled_htlc;
 		fulfilled_htlc.id = hin->key.id;
@@ -549,7 +559,7 @@ static void rcvd_htlc_reply(struct subd *subd, const u8 *msg, const int *fds UNU
 			char *localfail = tal_fmt(msg, "%s: %s",
 						  onion_type_name(fromwire_peektype(failmsg)),
 						  failurestr);
-			payment_failed(ld, hout, localfail);
+			payment_failed(ld, hout, localfail, NULL);
 
 		} else if (hout->in) {
 			struct onionreply *failonion;
@@ -849,6 +859,8 @@ htlc_accepted_hook_try_resolve(struct htlc_accepted_hook_payload *request,
 		towire_u16(&unknown_details, 0x400f);
 		local_fail_in_htlc(hin, take(unknown_details));
 	} else {
+		hin->we_filled = tal(hin, bool);
+		*hin->we_filled = true;
 		fulfill_htlc(hin, payment_preimage);
 	}
 }
@@ -1239,6 +1251,7 @@ static void fulfill_our_htlc_out(struct channel *channel, struct htlc_out *hout,
 				 const struct preimage *preimage)
 {
 	struct lightningd *ld = channel->peer->ld;
+	bool we_filled = false;
 
 	assert(!hout->preimage);
 	hout->preimage = tal_dup(hout, struct preimage, preimage);
@@ -1246,7 +1259,7 @@ static void fulfill_our_htlc_out(struct channel *channel, struct htlc_out *hout,
 
 	wallet_htlc_update(ld->wallet, hout->dbid, hout->hstate,
 			   hout->preimage, 0, hout->failonion,
-			   hout->failmsg);
+			   hout->failmsg, &we_filled);
 	/* Update channel stats */
 	wallet_channel_stats_incr_out_fulfilled(ld->wallet,
 						channel->dbid,
@@ -1413,16 +1426,18 @@ void onchain_failed_our_htlc(const struct channel *channel,
 	/* Force state to something which expects a failure, and save to db */
 	hout->hstate = RCVD_REMOVE_HTLC;
 	htlc_out_check(hout, __func__);
+
+	bool we_filled = false;
 	wallet_htlc_update(ld->wallet, hout->dbid, hout->hstate,
 			   hout->preimage, 0, hout->failonion,
-			   hout->failmsg);
+			   hout->failmsg, &we_filled);
 
 	if (hout->am_origin) {
 		assert(why != NULL);
 		char *localfail = tal_fmt(channel, "%s: %s",
 					  onion_type_name(WIRE_PERMANENT_CHANNEL_FAILURE),
 					  why);
-		payment_failed(ld, hout, localfail);
+		payment_failed(ld, hout, localfail, NULL);
 		tal_free(localfail);
 	} else if (hout->in) {
 		local_fail_in_htlc(hout->in,
@@ -1450,6 +1465,8 @@ static void remove_htlc_in(struct channel *channel, struct htlc_in *hin)
 	/* If we fulfilled their HTLC, credit us. */
 	if (hin->preimage) {
 		struct amount_msat oldamt = channel->our_msat;
+		const struct channel_coin_mvt *mvt;
+
 		if (!amount_msat_add(&channel->our_msat, channel->our_msat,
 				     hin->msat)) {
 			channel_internal_error(channel,
@@ -1468,6 +1485,14 @@ static void remove_htlc_in(struct channel *channel, struct htlc_in *hin)
 		if (amount_msat_greater(channel->our_msat,
 					channel->msat_to_us_max))
 			channel->msat_to_us_max = channel->our_msat;
+
+		/* Coins have definitively moved, log a movement */
+		if (hin->we_filled)
+			mvt = new_channel_mvt_invoice_hin(hin, hin, channel);
+		else
+			mvt = new_channel_mvt_routed_hin(hin, hin, channel);
+
+		notify_channel_mvt(channel->peer->ld, mvt);
 	}
 
 	tal_free(hin);
@@ -1487,6 +1512,7 @@ static void remove_htlc_out(struct channel *channel, struct htlc_out *hout)
 	if (!hout->preimage) {
 		fail_out_htlc(hout, NULL, NULL);
 	} else {
+		const struct channel_coin_mvt *mvt;
 		struct amount_msat oldamt = channel->our_msat;
 		/* We paid for this HTLC, so deduct balance. */
 		if (!amount_msat_sub(&channel->our_msat, channel->our_msat,
@@ -1507,6 +1533,14 @@ static void remove_htlc_out(struct channel *channel, struct htlc_out *hout)
 					 &channel->our_msat));
 		if (amount_msat_less(channel->our_msat, channel->msat_to_us_min))
 			channel->msat_to_us_min = channel->our_msat;
+
+		/* Coins have definitively moved, log a movement */
+		if (hout->am_origin)
+			mvt = new_channel_mvt_invoice_hout(hout, hout, channel);
+		else
+			mvt = new_channel_mvt_routed_hout(hout, hout, channel);
+
+		notify_channel_mvt(channel->peer->ld, mvt);
 	}
 
 	tal_free(hout);
@@ -1668,15 +1702,17 @@ void peer_sending_commitsig(struct channel *channel, const u8 *msg)
 	struct bitcoin_signature commit_sig;
 	secp256k1_ecdsa_signature *htlc_sigs;
 	struct lightningd *ld = channel->peer->ld;
+	struct penalty_base *pbase;
 
 	channel->htlc_timeout = tal_free(channel->htlc_timeout);
 
 	if (!fromwire_channel_sending_commitsig(msg, msg,
 						&commitnum,
+						&pbase,
 						&fee_states,
 						&changed_htlcs,
 						&commit_sig, &htlc_sigs)
-	    || !fee_states_valid(fee_states, channel->funder)) {
+	    || !fee_states_valid(fee_states, channel->opener)) {
 		channel_internal_error(channel, "bad channel_sending_commitsig %s",
 				       tal_hex(channel, msg));
 		return;
@@ -1716,7 +1752,7 @@ void peer_sending_commitsig(struct channel *channel, const u8 *msg)
 	channel->channel_info.fee_states = tal_steal(channel, fee_states);
 	adjust_channel_feerate_bounds(channel,
 				      get_feerate(fee_states,
-						  channel->funder,
+						  channel->opener,
 						  REMOTE));
 
 	if (!peer_save_commitsig_sent(channel, commitnum))
@@ -1727,6 +1763,9 @@ void peer_sending_commitsig(struct channel *channel, const u8 *msg)
 	tal_free(channel->last_sent_commit);
 	channel->last_sent_commit = tal_steal(channel, changed_htlcs);
 	wallet_channel_save(ld->wallet, channel);
+
+	if (pbase)
+		wallet_penalty_base_add(ld->wallet, channel->dbid, pbase);
 
 	/* Tell it we've got it, and to go ahead with commitment_signed. */
 	subd_send_msg(channel->owner,
@@ -1871,7 +1910,7 @@ void peer_got_commitsig(struct channel *channel, const u8 *msg)
 					    &failed,
 					    &changed,
 					    &tx)
-	    || !fee_states_valid(fee_states, channel->funder)) {
+	    || !fee_states_valid(fee_states, channel->opener)) {
 		channel_internal_error(channel,
 				    "bad fromwire_channel_got_commitsig %s",
 				    tal_hex(channel, msg));
@@ -1901,7 +1940,7 @@ void peer_got_commitsig(struct channel *channel, const u8 *msg)
 	log_debug(channel->log,
 		  "got commitsig %"PRIu64
 		  ": feerate %u, %zu added, %zu fulfilled, %zu failed, %zu changed",
-		  commitnum, get_feerate(fee_states, channel->funder, LOCAL),
+		  commitnum, get_feerate(fee_states, channel->opener, LOCAL),
 		  tal_count(added), tal_count(fulfilled),
 		  tal_count(failed), tal_count(changed));
 
@@ -1934,7 +1973,7 @@ void peer_got_commitsig(struct channel *channel, const u8 *msg)
 	channel->channel_info.fee_states = tal_steal(channel, fee_states);
 	adjust_channel_feerate_bounds(channel,
 				      get_feerate(fee_states,
-						  channel->funder,
+						  channel->opener,
 						  LOCAL));
 
 	/* Since we're about to send revoke, bump state again. */
@@ -1965,6 +2004,41 @@ void update_per_commit_point(struct channel *channel,
 	ci->remote_per_commit = *per_commitment_point;
 }
 
+struct commitment_revocation_payload {
+	struct bitcoin_txid commitment_txid;
+	const struct bitcoin_tx *penalty_tx;
+	struct wallet *wallet;
+	u64 channel_id;
+	u64 commitnum;
+};
+
+static void commitment_revocation_hook_serialize(
+    struct commitment_revocation_payload *payload, struct json_stream *stream)
+{
+	json_add_txid(stream, "commitment_txid", &payload->commitment_txid);
+	json_add_tx(stream, "penalty_tx", payload->penalty_tx);
+}
+
+static void
+commitment_revocation_hook_cb(struct commitment_revocation_payload *p STEALS){
+	wallet_penalty_base_delete(p->wallet, p->channel_id, p->commitnum);
+}
+
+static bool
+commitment_revocation_hook_deserialize(struct commitment_revocation_payload *p,
+				       const char *buffer,
+				       const jsmntok_t *toks)
+{
+	return true;
+}
+
+
+REGISTER_PLUGIN_HOOK(commitment_revocation,
+		     commitment_revocation_hook_deserialize,
+		     commitment_revocation_hook_cb,
+		     commitment_revocation_hook_serialize,
+		     struct commitment_revocation_payload *);
+
 void peer_got_revoke(struct channel *channel, const u8 *msg)
 {
 	u64 revokenum;
@@ -1976,13 +2050,18 @@ void peer_got_revoke(struct channel *channel, const u8 *msg)
 	size_t i;
 	struct lightningd *ld = channel->peer->ld;
 	struct fee_states *fee_states;
+	struct penalty_base *pbase;
+	struct commitment_revocation_payload *payload;
+	struct bitcoin_tx *penalty_tx;
 
 	if (!fromwire_channel_got_revoke(msg, msg,
 					 &revokenum, &per_commitment_secret,
 					 &next_per_commitment_point,
 					 &fee_states,
-					 &changed)
-	    || !fee_states_valid(fee_states, channel->funder)) {
+					 &changed,
+					 &pbase,
+					 &penalty_tx)
+	    || !fee_states_valid(fee_states, channel->opener)) {
 		channel_internal_error(channel, "bad fromwire_channel_got_revoke %s",
 				    tal_hex(channel, msg));
 		return;
@@ -2074,6 +2153,17 @@ void peer_got_revoke(struct channel *channel, const u8 *msg)
 					     : fromwire_peektype(failmsgs[i]));
 	}
 	wallet_channel_save(ld->wallet, channel);
+
+	if (penalty_tx == NULL)
+		return;
+
+	payload = tal(tmpctx, struct commitment_revocation_payload);
+	payload->commitment_txid = pbase->txid;
+	payload->penalty_tx = tal_steal(payload, penalty_tx);
+	payload->wallet = ld->wallet;
+	payload->channel_id = channel->dbid;
+	payload->commitnum = pbase->commitment_num;
+	plugin_hook_call_commitment_revocation(ld, payload);
 }
 
 
@@ -2526,4 +2616,5 @@ static const struct json_command listforwards_command = {
 	"List all forwarded payments and their information", false,
 	"List all forwarded payments and their information"
 };
+
 AUTODATA(json_command, &listforwards_command);

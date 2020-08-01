@@ -32,9 +32,6 @@ struct config {
 	/* Minimum percent of fee rate we'll accept. */
 	u32 commitment_fee_min_percent;
 
-	/* Percent of fee rate we'll use. */
-	u32 commitment_fee_percent;
-
 	/* Minimum CLTV to subtract from incoming HTLCs to outgoing */
 	u32 cltv_expiry_delta;
 
@@ -51,7 +48,7 @@ struct config {
 	/* How long between changing commit and sending COMMIT message. */
 	u32 commit_time_ms;
 
-	/* Do we let the funder set any fee rate they want */
+	/* Do we let the opener set any fee rate they want */
 	bool ignore_fee_limits;
 
 	/* Number of blocks to rescan from the current head, or absolute
@@ -200,15 +197,15 @@ struct lightningd {
 	 * if we are the fundee. */
 	u32 max_funding_unconfirmed;
 
-	/* If we want to debug a subdaemon/plugin. */
-	const char *dev_debug_subprocess;
-
 	/* RPC which asked us to shutdown, if non-NULL */
 	struct io_conn *stop_conn;
 	/* RPC response to send once we've shut down. */
 	const char *stop_response;
 
 #if DEVELOPER
+	/* If we want to debug a subdaemon/plugin. */
+	const char *dev_debug_subprocess;
+
 	/* If we have a --dev-disconnect file */
 	int dev_disconnect_fd;
 
@@ -243,6 +240,8 @@ struct lightningd {
 	/* For slow tests (eg protocol tests) don't die if HTLC not
 	 * committed in 30 secs */
 	bool dev_no_htlc_timeout;
+
+	bool dev_no_version_checks;
 #endif /* DEVELOPER */
 
 	/* tor support */
@@ -268,6 +267,10 @@ struct lightningd {
 	alt_subdaemon_map alt_subdaemons;
 
 	enum lightningd_state state;
+
+	/* Total number of coin moves we've seen, since
+	 * coin move tracking was cool */
+	s64 coin_moves_count;
 };
 
 /* Turning this on allows a tal allocation to return NULL, rather than aborting.

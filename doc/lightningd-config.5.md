@@ -203,6 +203,9 @@ automatically by `lightningd`.
 If set, you will be prompted to enter a password used to encrypt the `hsm_secret`.
 Note that once you encrypt the `hsm_secret` this option will be mandatory for
 `lightningd` to start.
+If there is no `hsm_secret` yet, `lightningd` will create a new encrypted secret.
+If you have an unencrypted `hsm_secret` you want to encrypt on-disk, or vice versa,
+see lightning-hsmtool(8).
 
 ### Lightning node customization options
 
@@ -270,8 +273,8 @@ Confirmations required for the funding transaction when the other side
 opens a channel before the channel is usable.
 
  **commit-fee**=*PERCENT*
-The percentage of *estimatesmartfee 2* to use for the bitcoin
-transaction which funds a channel: can be greater than 100.
+The percentage of *estimatesmartfee 2/CONSERVATIVE* to use for the commitment
+transactions: default is 100.
 
  **commit-fee-min**=*PERCENT*
  **commit-fee-max**=*PERCENT*
@@ -305,6 +308,14 @@ up space in the database.
  **autocleaninvoice-expired-by**=*SECONDS*
 Control how long invoices must have been expired before they are cleaned
 (if *autocleaninvoice-cycle* is non-zero).
+
+Payment control options:
+
+ **disable-mpp**
+Disable the multi-part payment sending support in the `pay` plugin. By default
+the MPP support is enabled, but it can be desirable to disable in situations
+in which each payment should result in a single HTLC being forwarded in the
+network.
 
 ### Networking options
 
@@ -434,9 +445,11 @@ including the default built-in plugin directory. You can still add
 normal effect.
 
  **disable-plugin**=*PLUGIN*
-If *PLUGIN* contains a /, plugins with the same path as *PLUGIN* are
-disabled. Otherwise, any plugin with that base name is disabled,
-whatever directory it is in.
+If *PLUGIN* contains a /, plugins with the same path as *PLUGIN* will
+not be loaded at startup. Otherwise, no plugin with that base name will
+be loaded at startup, whatever directory it is in.  This option is useful for
+disabling a single plugin inside a directory.  You can still explicitly
+load plugins which have been disabled, using lightning-plugin(7) `start`.
 
 BUGS
 ----
@@ -455,6 +468,7 @@ SEE ALSO
 --------
 
 lightning-listconfigs(7) lightning-setchannelfee(7) lightningd(8)
+lightning-hsmtool(8)
 
 RESOURCES
 ---------

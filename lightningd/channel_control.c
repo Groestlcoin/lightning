@@ -2,9 +2,11 @@
 #include <bitcoin/script.h>
 #include <ccan/cast/cast.h>
 #include <channeld/gen_channel_wire.h>
+#include <common/coin_mvt.h>
 #include <common/features.h>
 #include <common/gossip_constants.h>
 #include <common/json_command.h>
+#include <common/json_helpers.h>
 #include <common/jsonrpc_errors.h>
 #include <common/memleak.h>
 #include <common/per_peer_state.h>
@@ -17,6 +19,7 @@
 #include <inttypes.h>
 #include <lightningd/channel_control.h>
 #include <lightningd/closing_control.h>
+#include <lightningd/coin_mvts.h>
 #include <lightningd/hsm_control.h>
 #include <lightningd/jsonrpc.h>
 #include <lightningd/lightningd.h>
@@ -38,7 +41,8 @@ static void update_feerates(struct lightningd *ld, struct channel *channel)
 
 	msg = towire_channel_feerates(NULL, feerate,
 				      feerate_min(ld, NULL),
-				      feerate_max(ld, NULL));
+				      feerate_max(ld, NULL),
+				      try_get_feerate(ld->topology, FEERATE_PENALTY));
 	subd_send_msg(channel->owner, take(msg));
 }
 
@@ -73,6 +77,54 @@ void notify_feerate_change(struct lightningd *ld)
 	}
 }
 
+static void record_channel_open(struct channel *channel)
+{
+	struct channel_id channel_id;
+	struct chain_coin_mvt *mvt;
+	struct amount_msat channel_open_amt;
+	u32 blockheight;
+
+	u8 *ctx = tal(NULL, u8);
+
+	/* figure out the 'account name' */
+	derive_channel_id(&channel_id, &channel->funding_txid,
+			  channel->funding_outnum);
+
+	blockheight = short_channel_id_blocknum(channel->scid);
+
+	/* FIXME: logic here will change for dual funded channels */
+	if (channel->opener == LOCAL) {
+		if (!amount_sat_to_msat(&channel_open_amt, channel->funding))
+			fatal("Unable to convert funding %s to msat",
+			      type_to_string(tmpctx, struct amount_sat,
+					     &channel->funding));
+
+		/* if we pushed sats, we should decrement that from the channel balance */
+		if (amount_msat_greater(channel->push, AMOUNT_MSAT(0))) {
+			mvt = new_coin_pushed(ctx, type_to_string(tmpctx,
+								  struct channel_id,
+								  &channel_id),
+					      &channel->funding_txid,
+					      blockheight, channel->push);
+			notify_chain_mvt(channel->peer->ld, mvt);
+		}
+	} else {
+		/* we're not the funder, we record our 'opening balance' anyway
+		 * (there's a small chance we were pushed some satoshis, otherwise
+		 * it's zero) */
+		channel_open_amt = channel->our_msat;
+	}
+
+	mvt = new_coin_deposit(ctx,
+			       type_to_string(tmpctx, struct channel_id,
+					      &channel_id),
+			       &channel->funding_txid,
+			       channel->funding_outnum,
+			       blockheight, channel_open_amt);
+	notify_chain_mvt(channel->peer->ld, mvt);
+	tal_free(ctx);
+}
+
 static void lockin_complete(struct channel *channel)
 {
 	/* We set this once we're locked in. */
@@ -92,6 +144,7 @@ static void lockin_complete(struct channel *channel)
 	/* Fees might have changed (and we use IMMEDIATE once we're funded),
 	 * so update now. */
 	try_update_feerates(channel->peer->ld, channel);
+	record_channel_open(channel);
 }
 
 /* We were informed by channeld that it announced the channel and sent
@@ -385,13 +438,15 @@ void peer_start_channeld(struct channel *channel,
 	bool reached_announce_depth;
 	struct secret last_remote_per_commit_secret;
 	secp256k1_ecdsa_signature *remote_ann_node_sig, *remote_ann_bitcoin_sig;
+	struct penalty_base *pbases;
 
 	hsmfd = hsm_get_client_fd(ld, &channel->peer->id,
 				  channel->dbid,
 				  HSM_CAP_SIGN_GOSSIP
 				  | HSM_CAP_ECDH
 				  | HSM_CAP_COMMITMENT_POINT
-				  | HSM_CAP_SIGN_REMOTE_TX);
+				  | HSM_CAP_SIGN_REMOTE_TX
+				  | HSM_CAP_SIGN_ONCHAIN_TX);
 
 	channel_set_owner(channel,
 			  new_channel_subd(ld,
@@ -463,6 +518,9 @@ void peer_start_channeld(struct channel *channel,
 		return;
 	}
 
+	pbases = wallet_penalty_base_load_for_channel(
+	    tmpctx, channel->peer->ld->wallet, channel->dbid);
+
 	initmsg = towire_channel_init(tmpctx,
 				      chainparams,
  				      ld->our_features,
@@ -475,13 +533,14 @@ void peer_start_channeld(struct channel *channel,
 				      channel->channel_info.fee_states,
 				      feerate_min(ld, NULL),
 				      feerate_max(ld, NULL),
+				      try_get_feerate(ld->topology, FEERATE_PENALTY),
 				      &channel->last_sig,
 				      pps,
 				      &channel->channel_info.remote_fundingkey,
 				      &channel->channel_info.theirbase,
 				      &channel->channel_info.remote_per_commit,
 				      &channel->channel_info.old_remote_per_commit,
-				      channel->funder,
+				      channel->opener,
 				      channel->feerate_base,
 				      channel->feerate_ppm,
 				      channel->our_msat,
@@ -517,13 +576,14 @@ void peer_start_channeld(struct channel *channel,
 				       * negotiated now! */
 				      channel->option_static_remotekey,
 				      IFDEV(ld->dev_fast_gossip, false),
-				      IFDEV(dev_fail_process_onionpacket, false));
+				      IFDEV(dev_fail_process_onionpacket, false),
+				      pbases);
 
 	/* We don't expect a response: we are triggered by funding_depth_cb. */
 	subd_send_msg(channel->owner, take(initmsg));
 
 	/* On restart, feerate might not be what we expect: adjust now. */
-	if (channel->funder == LOCAL)
+	if (channel->opener == LOCAL)
 		try_update_feerates(ld, channel);
 }
 
@@ -583,7 +643,7 @@ is_fundee_should_forget(struct lightningd *ld,
 	 */
 
 	/* Only applies if we are fundee. */
-	if (channel->funder == LOCAL)
+	if (channel->opener == LOCAL)
 		return false;
 
 	/* Does not apply if we already saw the funding tx. */
@@ -692,7 +752,8 @@ static void process_check_funding_broadcast(struct bitcoind *bitcoind,
 
 	if (txout != NULL) {
 		for (size_t i = 0; i < tal_count(cancel->forgets); i++)
-			was_pending(command_fail(cancel->forgets[i], LIGHTNINGD,
+			was_pending(command_fail(cancel->forgets[i],
+				    FUNDING_CANCEL_NOT_SAFE,
 				    "The funding transaction has been broadcast, "
 				    "please consider `close` or `dev-fail`! "));
 		tal_free(cancel->forgets);
@@ -707,47 +768,41 @@ static void process_check_funding_broadcast(struct bitcoind *bitcoind,
 }
 
 struct command_result *cancel_channel_before_broadcast(struct command *cmd,
-						       const char *buffer,
-						       struct peer *peer,
-						       const jsmntok_t *cidtok)
+						       struct peer *peer)
 {
 	struct channel *cancel_channel;
 	struct channel_to_cancel *cc = tal(cmd, struct channel_to_cancel);
+	struct channel *channel;
 
 	cc->peer = peer->id;
-	if (!cidtok) {
-		struct channel *channel;
-
-		cancel_channel = NULL;
-		list_for_each(&peer->channels, channel, list) {
-			if (cancel_channel) {
-				return command_fail(cmd, LIGHTNINGD,
-						    "Multiple channels:"
-						    " please specify channel_id");
-			}
-			cancel_channel = channel;
-		}
-		if (!cancel_channel)
-			return command_fail(cmd, LIGHTNINGD,
-					    "No channels matching that peer_id");
-		derive_channel_id(&cc->cid,
-				  &cancel_channel->funding_txid,
-				  cancel_channel->funding_outnum);
-	} else {
-		if (!json_tok_channel_id(buffer, cidtok, &cc->cid))
-			return command_fail(cmd, JSONRPC2_INVALID_PARAMS,
-					    "Invalid channel_id parameter.");
-
-		cancel_channel = find_channel_by_id(peer, &cc->cid);
-		if (!cancel_channel)
-			return command_fail(cmd, LIGHTNINGD,
-					    "Channel ID not found: '%.*s'",
-					    cidtok->end - cidtok->start,
-					    buffer + cidtok->start);
+	cancel_channel = NULL;
+	list_for_each(&peer->channels, channel, list) {
+		/* After `fundchannel_complete`, channel is in
+		 * `CHANNELD_AWAITING_LOCKIN` state.
+		 *
+		 * TODO: This assumes only one channel at a time
+		 * can be in this state, which is true at the
+		 * time of this writing, but may change *if* we
+		 * ever implement multiple channels per peer.
+		 */
+		if (channel->state != CHANNELD_AWAITING_LOCKIN)
+			continue;
+		cancel_channel = channel;
+		break;
 	}
+	if (!cancel_channel)
+		return command_fail(cmd, FUNDING_NOTHING_TO_CANCEL,
+				    "No channels being opened or "
+				    "awaiting lock-in for "
+				    "peer_id %s",
+				    type_to_string(tmpctx, struct node_id,
+						   &peer->id));
+	derive_channel_id(&cc->cid,
+			  &cancel_channel->funding_txid,
+			  cancel_channel->funding_outnum);
 
-	if (cancel_channel->funder == REMOTE)
-		return command_fail(cmd, LIGHTNINGD,
+	if (cancel_channel->opener == REMOTE)
+		return command_fail(cmd, FUNDING_CANCEL_NOT_SAFE,
 				    "Cannot cancel channel that was "
 				    "initiated by peer");
 
@@ -757,13 +812,13 @@ struct command_result *cancel_channel_before_broadcast(struct command *cmd,
 	if (wallet_transaction_type(cmd->ld->wallet,
 				   &cancel_channel->funding_txid,
 				   &type))
-		return command_fail(cmd, LIGHTNINGD,
+		return command_fail(cmd, FUNDING_CANCEL_NOT_SAFE,
 				    "Has the funding transaction been broadcast? "
 				    "Please use `close` or `dev-fail` instead.");
 
 	if (channel_has_htlc_out(cancel_channel) ||
 	    channel_has_htlc_in(cancel_channel)) {
-		return command_fail(cmd, LIGHTNINGD,
+		return command_fail(cmd, FUNDING_CANCEL_NOT_SAFE,
 				    "This channel has HTLCs attached and it is "
 				    "not safe to cancel. Has the funding transaction "
 				    "been broadcast? Please use `close` or `dev-fail` "
@@ -813,7 +868,8 @@ static struct command_result *json_dev_feerate(struct command *cmd,
 
 	msg = towire_channel_feerates(NULL, *feerate,
 				      feerate_min(cmd->ld, NULL),
-				      feerate_max(cmd->ld, NULL));
+				      feerate_max(cmd->ld, NULL),
+				      try_get_feerate(cmd->ld->topology, FEERATE_PENALTY));
 	subd_send_msg(channel->owner, take(msg));
 
 	response = json_stream_success(cmd);

@@ -4,13 +4,12 @@ SUBMODULES =					\
 	external/jsmn				\
 	external/libbacktrace
 
+TOP := ../..
 ifdef BUILD
 CROSSCOMPILE_OPTS := --host="$(MAKE_HOST)" --build="$(BUILD)"
-TARGET_DIR := external/"$(MAKE_HOST)"
-TOP := ../..
+TARGET_DIR := external/$(MAKE_HOST)
 else
-TARGET_DIR := external
-TOP := ..
+TARGET_DIR := external/$(shell ${CC} -dumpmachine)
 endif
 
 LIBSODIUM_HEADERS := external/libsodium/src/libsodium/include/sodium.h
@@ -63,7 +62,11 @@ $(LIBWALLY_HEADERS) $(LIBSECP_HEADERS): submodcheck
 $(TARGET_DIR)/libsecp256k1.% $(TARGET_DIR)/libwallycore.%: $(TARGET_DIR)/libwally-core-build/src/secp256k1/libsecp256k1.la $(TARGET_DIR)/libwally-core-build/src/libwallycore.la
 	#GRS patch
 	grep -rl 'wally_sha256d' external/libwally-core/src/transaction.c | xargs sed -i 's/wally_sha256d/wally_sha256/g';exit 0
+	grep -rl 'wally_sha256d' external/libwally-core/src/sign.c | xargs sed -i 's/wally_sha256d/wally_sha256/g';exit 0
+	grep -rl 'x18' external/libwally-core/src/sign.c | xargs sed -i 's/x18/x1c/g';exit 0
+	grep -rl 'Bitcoin Signed Message:' external/libwally-core/src/sign.c | xargs sed -i 's/Bitcoin Signed Message:/GroestlCoin Signed Message:/g';exit 0
 	grep -rl '21000000' external/libwally-core/include/wally_transaction.h | xargs sed -i 's/21000000/105000000/g';exit 0
+	grep -rl 'wally_sha256d' external/libwally-core/src/psbt.c | xargs sed -i 's/wally_sha256d/wally_sha256/g';exit 0
 	#*********
 	$(MAKE) -C $(TARGET_DIR)/libwally-core-build DESTDIR=$$(pwd)/$(TARGET_DIR) install-exec
 
@@ -104,13 +107,13 @@ clean: external-clean
 
 external-clean:
 	$(RM) $(EXTERNAL_LIBS) $(TARGET_DIR)/*.la $(TARGET_DIR)/*.o
+	$(RM) $(TARGET_DIR)/jsmn-build/jsmn.o
 	if [ -f ${TARGET_DIR}/libsodium-build/Makefile ]; then make -C ${TARGET_DIR}/libsodium-build clean; fi
 	if [ -f ${TARGET_DIR}/libwally-core-build/Makefile ]; then make -C ${TARGET_DIR}/libwally-core-build clean; fi
 	if [ -f ${TARGET_DIR}/libwally-core-build/src/Makefile ]; then make -C ${TARGET_DIR}/libwally-core-build/src clean; fi
+	if [ -f ${TARGET_DIR}/libacktrace-build/Makefile ]; then make -C ${TARGET_DIR}/libbacktrace-build/src clean; fi
 
 external-distclean:
 	make -C external/libsodium distclean || true
-	$(RM) -rf ${TARGET_DIR}/libbacktrace-build
-	$(RM) ${TARGET_DIR}/libsodium-build/src/libsodium/libsodium.la
-	$(RM) ${TARGET_DIR}/libwally-core-build/src/secp256k1/libsecp256k1.la ${TARGET_DIR}/libwally-core-build/src/libwallycore.la
+	$(RM) -rf ${TARGET_DIR}/libbacktrace-build ${TARGET_DIR}/libsodium-build ${TARGET_DIR}/libwally-core-build ${TARGET_DIR}/jsmn-build
 	$(RM) -r `git status --ignored --porcelain external/libwally-core | grep '^!! ' | cut -c3-`

@@ -6,7 +6,9 @@ from pyln.client import RpcError, Millisatoshi
 from pyln.proto import Invoice
 from utils import (
     DEVELOPER, only_one, sync_blockheight, TIMEOUT, wait_for, TEST_NETWORK,
-    DEPRECATED_APIS, expected_peer_features, expected_node_features
+    DEPRECATED_APIS, expected_peer_features, expected_node_features,
+    expected_channel_features, account_balance,
+    check_coin_moves, first_channel_id, check_coin_moves_idx
 )
 
 import json
@@ -194,9 +196,10 @@ def test_plugin_dir(node_factory):
 
 def test_plugin_slowinit(node_factory):
     """Tests that the 'plugin' RPC command times out if plugin doesnt respond"""
+    os.environ['SLOWINIT_TIME'] = '61'
     n = node_factory.get_node()
 
-    with pytest.raises(RpcError, match="Timed out while waiting for plugin response"):
+    with pytest.raises(RpcError, match='failed to respond to \'init\' in time, terminating.'):
         n.rpc.plugin_start(os.path.join(os.getcwd(), "tests/plugins/slow_init.py"))
 
     # It's not actually configured yet, see what happens;
@@ -228,7 +231,7 @@ def test_plugin_command(node_factory):
     # Make sure the plugin behaves normally after stop and restart
     assert("Successfully stopped helloworld.py."
            == n.rpc.plugin_stop(plugin="helloworld.py")["result"])
-    n.daemon.wait_for_log(r"Killing plugin: helloworld.py")
+    n.daemon.wait_for_log(r"Killing plugin: stopped by lightningd via RPC")
     n.rpc.plugin_start(plugin=os.path.join(os.getcwd(), "contrib/plugins/helloworld.py"))
     n.daemon.wait_for_log(r"Plugin helloworld.py initialized")
     assert("Hello world" == n.rpc.call(method="hello"))
@@ -236,7 +239,7 @@ def test_plugin_command(node_factory):
     # Now stop the helloworld plugin
     assert("Successfully stopped helloworld.py."
            == n.rpc.plugin_stop(plugin="helloworld.py")["result"])
-    n.daemon.wait_for_log(r"Killing plugin: helloworld.py")
+    n.daemon.wait_for_log(r"Killing plugin: stopped by lightningd via RPC")
     # Make sure that the 'hello' command from the helloworld.py plugin
     # is not available anymore.
     cmd = [hlp for hlp in n.rpc.help()["help"] if "hello" in hlp["command"]]
@@ -259,17 +262,27 @@ def test_plugin_command(node_factory):
     with pytest.raises(RpcError, match=r"Plugin exited before completing handshake."):
         n2.rpc.plugin_start(plugin=os.path.join(os.getcwd(), "tests/plugins/broken.py"))
 
+    # Test that we can add a directory with more than one new plugin in it.
+    try:
+        n.rpc.plugin_startdir(os.path.join(os.getcwd(), "tests/plugins"))
+    except RpcError:
+        pass
+
+    # Usually, it crashes after the above return.
+    n.rpc.stop()
+
 
 def test_plugin_disable(node_factory):
     """--disable-plugin works"""
     plugin_dir = os.path.join(os.getcwd(), 'contrib/plugins')
-    # We need plugin-dir before disable-plugin!
+    # We used to need plugin-dir before disable-plugin!
     n = node_factory.get_node(options=OrderedDict([('plugin-dir', plugin_dir),
                                                    ('disable-plugin',
                                                     '{}/helloworld.py'
                                                     .format(plugin_dir))]))
     with pytest.raises(RpcError):
         n.rpc.hello(name='Sun')
+    assert n.daemon.is_in_log('helloworld.py: disabled via disable-plugin')
 
     # Also works by basename.
     n = node_factory.get_node(options=OrderedDict([('plugin-dir', plugin_dir),
@@ -277,6 +290,45 @@ def test_plugin_disable(node_factory):
                                                     'helloworld.py')]))
     with pytest.raises(RpcError):
         n.rpc.hello(name='Sun')
+    assert n.daemon.is_in_log('helloworld.py: disabled via disable-plugin')
+
+    # Other order also works!
+    n = node_factory.get_node(options=OrderedDict([('disable-plugin',
+                                                    'helloworld.py'),
+                                                   ('plugin-dir', plugin_dir)]))
+    with pytest.raises(RpcError):
+        n.rpc.hello(name='Sun')
+    assert n.daemon.is_in_log('helloworld.py: disabled via disable-plugin')
+
+    # Both orders of explicit specification work.
+    n = node_factory.get_node(options=OrderedDict([('disable-plugin',
+                                                    'helloworld.py'),
+                                                   ('plugin',
+                                                    '{}/helloworld.py'
+                                                    .format(plugin_dir))]))
+    with pytest.raises(RpcError):
+        n.rpc.hello(name='Sun')
+    assert n.daemon.is_in_log('helloworld.py: disabled via disable-plugin')
+
+    # Both orders of explicit specification work.
+    n = node_factory.get_node(options=OrderedDict([('plugin',
+                                                    '{}/helloworld.py'
+                                                    .format(plugin_dir)),
+                                                   ('disable-plugin',
+                                                    'helloworld.py')]))
+    with pytest.raises(RpcError):
+        n.rpc.hello(name='Sun')
+    assert n.daemon.is_in_log('helloworld.py: disabled via disable-plugin')
+
+    # Still disabled if we load directory.
+    n.rpc.plugin_startdir(directory=os.path.join(os.getcwd(), "contrib/plugins"))
+    n.daemon.wait_for_log('helloworld.py: disabled via disable-plugin')
+
+    # Check that list works
+    n = node_factory.get_node(options={'disable-plugin':
+                                       ['something-else.py', 'helloworld.py']})
+
+    assert n.rpc.listconfigs()['disable-plugin'] == ['something-else.py', 'helloworld.py']
 
 
 def test_plugin_hook(node_factory, executor):
@@ -449,7 +501,7 @@ def test_invoice_payment_hook(node_factory):
     l1, l2 = node_factory.line_graph(2, opts=opts)
 
     # This one works
-    inv1 = l2.rpc.invoice(123000, 'label', 'description', preimage='1' * 64)
+    inv1 = l2.rpc.invoice(1230, 'label', 'description', preimage='1' * 64)
     l1.rpc.pay(inv1['bolt11'])
 
     l2.daemon.wait_for_log('label=label')
@@ -457,12 +509,12 @@ def test_invoice_payment_hook(node_factory):
     l2.daemon.wait_for_log('preimage=' + '1' * 64)
 
     # This one will be rejected.
-    inv2 = l2.rpc.invoice(123000, 'label2', 'description', preimage='0' * 64)
+    inv2 = l2.rpc.invoice(1230, 'label2', 'description', preimage='0' * 64)
     with pytest.raises(RpcError):
         l1.rpc.pay(inv2['bolt11'])
 
     pstatus = l1.rpc.call('paystatus', [inv2['bolt11']])['pay'][0]
-    assert pstatus['attempts'][0]['failure']['data']['failcodename'] == 'WIRE_TEMPORARY_NODE_FAILURE'
+    assert pstatus['attempts'][-1]['failure']['data']['failcodename'] == 'WIRE_TEMPORARY_NODE_FAILURE'
 
     l2.daemon.wait_for_log('label=label2')
     l2.daemon.wait_for_log('msat=')
@@ -475,7 +527,7 @@ def test_invoice_payment_hook_hold(node_factory):
     opts = [{}, {'plugin': os.path.join(os.getcwd(), 'tests/plugins/hold_invoice.py'), 'holdtime': TIMEOUT / 2}]
     l1, l2 = node_factory.line_graph(2, opts=opts)
 
-    inv1 = l2.rpc.invoice(123000, 'label', 'description', preimage='1' * 64)
+    inv1 = l2.rpc.invoice(1230, 'label', 'description', preimage='1' * 64)
     l1.rpc.pay(inv1['bolt11'])
 
 
@@ -690,6 +742,24 @@ def test_invoice_payment_notification(node_factory):
     l1.rpc.dev_pay(inv1['bolt11'], use_shadow=False)
 
     l2.daemon.wait_for_log(r"Received invoice_payment event for label {},"
+                           " preimage {}, and amount of {}msat"
+                           .format(label, preimage, msats))
+
+
+@unittest.skipIf(not DEVELOPER, "needs to deactivate shadow routing")
+def test_invoice_creation_notification(node_factory):
+    """
+    Test the 'invoice_creation' notification
+    """
+    opts = [{}, {"plugin": os.path.join(os.getcwd(), "contrib/plugins/helloworld.py")}]
+    l1, l2 = node_factory.line_graph(2, opts=opts)
+
+    msats = 12345
+    preimage = '1' * 64
+    label = "a_descriptive_label"
+    l2.rpc.invoice(msats, label, 'description', preimage=preimage)
+
+    l2.daemon.wait_for_log(r"Received invoice_creation event for label {},"
                            " preimage {}, and amount of {}msat"
                            .format(label, preimage, msats))
 
@@ -932,9 +1002,9 @@ def test_plugin_feature_announce(node_factory):
     registers an individual featurebit for each of the locations we can stash
     feature bits in:
 
-     - 1 << 101 for `init` messages
-     - 1 << 103 for `node_announcement`
-     - 1 << 105 for bolt11 invoices
+     - 1 << 201 for `init` messages
+     - 1 << 203 for `node_announcement`
+     - 1 << 205 for bolt11 invoices
 
     """
     plugin = os.path.join(os.path.dirname(__file__), 'plugins/feature-test.py')
@@ -944,18 +1014,18 @@ def test_plugin_feature_announce(node_factory):
     )
 
     # Check the featurebits we've set in the `init` message from
-    # feature-test.py. (1 << 101) results in 13 bytes featutebits (000d) and
-    # has a leading 0x20.
-    assert l1.daemon.is_in_log(r'\[OUT\] 001000.*000d20{:0>24}'.format(expected_peer_features()))
+    # feature-test.py.
+    assert l1.daemon.is_in_log(r'\[OUT\] 001000022200....{}'
+                               .format(expected_peer_features(extra=[201])))
 
     # Check the invoice featurebit we set in feature-test.py
     inv = l1.rpc.invoice(123, 'lbl', 'desc')['bolt11']
     details = Invoice.decode(inv)
-    assert(details.featurebits.int & (1 << 105) != 0)
+    assert(details.featurebits.int & (1 << 205) != 0)
 
     # Check the featurebit set in the `node_announcement`
     node = l1.rpc.listnodes(l1.info['id'])['nodes'][0]
-    assert(int(node['features'], 16) & (1 << 103) != 0)
+    assert node['features'] == expected_node_features(extra=[203])
 
 
 def test_hook_chaining(node_factory):
@@ -1178,14 +1248,18 @@ def test_feature_set(node_factory):
     fs = l1.rpc.call('getfeatureset')
     assert fs['init'] == expected_peer_features()
     assert fs['node'] == expected_node_features()
-    assert fs['channel'] == ''
+    assert fs['channel'] == expected_channel_features()
     assert 'invoice' in fs
 
 
 def test_replacement_payload(node_factory):
     """Test that htlc_accepted plugin hook can replace payload"""
     plugin = os.path.join(os.path.dirname(__file__), 'plugins/replace_payload.py')
-    l1, l2 = node_factory.line_graph(2, opts=[{}, {"plugin": plugin}])
+    l1, l2 = node_factory.line_graph(
+        2,
+        opts=[{}, {"plugin": plugin}],
+        wait_for_announce=True
+    )
 
     # Replace with an invalid payload.
     l2.rpc.call('setpayload', ['0000'])
@@ -1200,3 +1274,263 @@ def test_replacement_payload(node_factory):
         l1.rpc.pay(inv)
 
     assert l2.daemon.wait_for_log("Attept to pay.*with wrong secret")
+
+
+@unittest.skipIf(not DEVELOPER, "Requires dev_sign_last_tx")
+def test_watchtower(node_factory, bitcoind, directory, chainparams):
+    """Test watchtower hook.
+
+    l1 and l2 open a channel, make a couple of updates and then l1 cheats on
+    l2 while that one is offline. The watchtower plugin meanwhile stashes all
+    the penalty transactions and we release the one matching the offending
+    commitment transaction.
+
+    """
+    p = os.path.join(os.path.dirname(__file__), "plugins/watchtower.py")
+    l1, l2 = node_factory.line_graph(
+        2,
+        opts=[{'may_fail': True, 'allow_broken_log': True}, {'plugin': p}]
+    )
+
+    # Force a new commitment
+    l1.rpc.pay(l2.rpc.invoice(25000000, 'lbl1', 'desc1')['bolt11'])
+
+    tx = l1.rpc.dev_sign_last_tx(l2.info['id'])['tx']
+
+    # Now make sure it is out of date
+    l1.rpc.pay(l2.rpc.invoice(25000000, 'lbl2', 'desc2')['bolt11'])
+
+    # l2 stops watching the chain, allowing the watchtower to react
+    l2.stop()
+
+    # Now l1 cheats
+    bitcoind.rpc.sendrawtransaction(tx)
+    time.sleep(1)
+    bitcoind.generate_block(1)
+
+    wt_file = os.path.join(
+        l2.daemon.lightning_dir,
+        chainparams['name'],
+        'watchtower.csv'
+    )
+
+    cheat_tx = bitcoind.rpc.decoderawtransaction(tx)
+    for l in open(wt_file, 'r'):
+        txid, penalty = l.strip().split(', ')
+        if txid == cheat_tx['txid']:
+            # This one should succeed, since it is a response to the cheat_tx
+            bitcoind.rpc.sendrawtransaction(penalty)
+            break
+
+    # Need this to check that l2 gets the funds
+    penalty_meta = bitcoind.rpc.decoderawtransaction(penalty)
+
+    time.sleep(1)
+    bitcoind.generate_block(1)
+
+    # Make sure l2's normal penalty_tx doesn't reach the network
+    def mock_sendrawtransaction(tx):
+        print("NOT broadcasting", tx)
+
+    l2.daemon.rpcproxy.mock_rpc('sendrawtransaction', mock_sendrawtransaction)
+
+    # Restart l2, and it should continue where the watchtower left off:
+    l2.start()
+
+    # l2 will still try to broadcast its latest commitment tx, but it'll fail
+    # since l1 has cheated. All commitments share the same prefix, so look for
+    # that.
+    penalty_prefix = tx[:(4 + 1 + 36) * 2]  # version, txin_count, first txin in hex
+    l2.daemon.wait_for_log(r'Expected error broadcasting tx {}'.format(penalty_prefix))
+
+    # Now make sure the penalty output ends up in our wallet
+    fund_txids = [o['txid'] for o in l2.rpc.listfunds()['outputs']]
+    assert(penalty_meta['txid'] in fund_txids)
+
+
+def test_plugin_fail(node_factory):
+    """Test that a plugin which fails (not during a command)"""
+    plugin = os.path.join(os.path.dirname(__file__), 'plugins/fail_by_itself.py')
+    l1 = node_factory.get_node(options={"plugin": plugin})
+
+    time.sleep(2)
+    # It should clean up!
+    assert 'failcmd' not in [h['command'] for h in l1.rpc.help()['help']]
+
+    l1.rpc.plugin_start(plugin)
+    time.sleep(2)
+    # It should clean up!
+    assert 'failcmd' not in [h['command'] for h in l1.rpc.help()['help']]
+
+
+@unittest.skipIf(not DEVELOPER, "without DEVELOPER=1, gossip v slow")
+def test_coin_movement_notices(node_factory, bitcoind, chainparams):
+    """Verify that coin movements are triggered correctly.
+    """
+
+    l1_l2_mvts = [
+        {'type': 'chain_mvt', 'credit': 0, 'debit': 0, 'tag': 'deposit'},
+        {'type': 'channel_mvt', 'credit': 100001001, 'debit': 0, 'tag': 'routed'},
+        {'type': 'channel_mvt', 'credit': 0, 'debit': 50000000, 'tag': 'routed'},
+        {'type': 'channel_mvt', 'credit': 100000000, 'debit': 0, 'tag': 'invoice'},
+        {'type': 'channel_mvt', 'credit': 0, 'debit': 50000000, 'tag': 'invoice'},
+        {'type': 'chain_mvt', 'credit': 0, 'debit': 1, 'tag': 'chain_fees'},
+        {'type': 'chain_mvt', 'credit': 0, 'debit': 100001000, 'tag': 'withdrawal'},
+    ]
+    if chainparams['elements']:
+        l2_l3_mvts = [
+            {'type': 'chain_mvt', 'credit': 1000000000, 'debit': 0, 'tag': 'deposit'},
+            {'type': 'channel_mvt', 'credit': 0, 'debit': 100000000, 'tag': 'routed'},
+            {'type': 'channel_mvt', 'credit': 50000501, 'debit': 0, 'tag': 'routed'},
+            {'type': 'chain_mvt', 'credit': 0, 'debit': 8955501, 'tag': 'chain_fees'},
+            {'type': 'chain_mvt', 'credit': 0, 'debit': 941045000, 'tag': 'withdrawal'},
+        ]
+
+        l2_wallet_mvts = [
+            {'type': 'chain_mvt', 'credit': 2000000000, 'debit': 0, 'tag': 'deposit'},
+            {'type': 'chain_mvt', 'credit': 0, 'debit': 0, 'tag': 'spend_track'},
+            {'type': 'chain_mvt', 'credit': 0, 'debit': 991900000, 'tag': 'withdrawal'},
+            {'type': 'chain_mvt', 'credit': 0, 'debit': 1000000000, 'tag': 'withdrawal'},
+            {'type': 'chain_mvt', 'credit': 0, 'debit': 8100000, 'tag': 'chain_fees'},
+            {'type': 'chain_mvt', 'credit': 991900000, 'debit': 0, 'tag': 'deposit'},
+            {'type': 'chain_mvt', 'credit': 100001000, 'debit': 0, 'tag': 'deposit'},
+            {'type': 'chain_mvt', 'credit': 941045000, 'debit': 0, 'tag': 'deposit'},
+        ]
+    else:
+        l2_l3_mvts = [
+            {'type': 'chain_mvt', 'credit': 1000000000, 'debit': 0, 'tag': 'deposit'},
+            {'type': 'channel_mvt', 'credit': 0, 'debit': 100000000, 'tag': 'routed'},
+            {'type': 'channel_mvt', 'credit': 50000501, 'debit': 0, 'tag': 'routed'},
+            {'type': 'chain_mvt', 'credit': 0, 'debit': 5430501, 'tag': 'chain_fees'},
+            {'type': 'chain_mvt', 'credit': 0, 'debit': 944570000, 'tag': 'withdrawal'},
+        ]
+
+        l2_wallet_mvts = [
+            {'type': 'chain_mvt', 'credit': 2000000000, 'debit': 0, 'tag': 'deposit'},
+            {'type': 'chain_mvt', 'credit': 0, 'debit': 0, 'tag': 'spend_track'},
+            {'type': 'chain_mvt', 'credit': 0, 'debit': 995425000, 'tag': 'withdrawal'},
+            {'type': 'chain_mvt', 'credit': 0, 'debit': 1000000000, 'tag': 'withdrawal'},
+            {'type': 'chain_mvt', 'credit': 0, 'debit': 4575000, 'tag': 'chain_fees'},
+            {'type': 'chain_mvt', 'credit': 995425000, 'debit': 0, 'tag': 'deposit'},
+            {'type': 'chain_mvt', 'credit': 100001000, 'debit': 0, 'tag': 'deposit'},
+            {'type': 'chain_mvt', 'credit': 944570000, 'debit': 0, 'tag': 'deposit'},
+        ]
+
+    l1, l2, l3 = node_factory.line_graph(3, opts=[
+        {'may_reconnect': True},
+        {'may_reconnect': True, 'plugin': os.path.join(os.getcwd(), 'tests/plugins/coin_movements.py')},
+        {'may_reconnect': True},
+    ], wait_for_announce=True)
+
+    bitcoind.generate_block(5)
+    wait_for(lambda: len(l1.rpc.listchannels()['channels']) == 4)
+    amount = 10**8
+
+    payment_hash13 = l3.rpc.invoice(amount, "first", "desc")['payment_hash']
+    route = l1.rpc.getroute(l3.info['id'], amount, 1)['route']
+
+    # status: offered -> settled
+    l1.rpc.sendpay(route, payment_hash13)
+    l1.rpc.waitsendpay(payment_hash13)
+
+    # status: offered -> failed
+    route = l1.rpc.getroute(l3.info['id'], amount, 1)['route']
+    payment_hash13 = "f" * 64
+    with pytest.raises(RpcError):
+        l1.rpc.sendpay(route, payment_hash13)
+        l1.rpc.waitsendpay(payment_hash13)
+
+    # go the other direction
+    payment_hash31 = l1.rpc.invoice(amount // 2, "first", "desc")['payment_hash']
+    route = l3.rpc.getroute(l1.info['id'], amount // 2, 1)['route']
+    l3.rpc.sendpay(route, payment_hash31)
+    l3.rpc.waitsendpay(payment_hash31)
+
+    # receive a payment (endpoint)
+    payment_hash12 = l2.rpc.invoice(amount, "first", "desc")['payment_hash']
+    route = l1.rpc.getroute(l2.info['id'], amount, 1)['route']
+    l1.rpc.sendpay(route, payment_hash12)
+    l1.rpc.waitsendpay(payment_hash12)
+
+    # send a payment (originator)
+    payment_hash21 = l1.rpc.invoice(amount // 2, "second", "desc")['payment_hash']
+    route = l2.rpc.getroute(l1.info['id'], amount // 2, 1)['route']
+    l2.rpc.sendpay(route, payment_hash21)
+    l2.rpc.waitsendpay(payment_hash21)
+
+    # restart to test index
+    l2.restart()
+    wait_for(lambda: all(p['channels'][0]['state'] == 'CHANNELD_NORMAL' for p in l2.rpc.listpeers()['peers']))
+
+    # close the channels down
+    chan1 = l2.get_channel_scid(l1)
+    chan3 = l2.get_channel_scid(l3)
+    chanid_1 = first_channel_id(l2, l1)
+    chanid_3 = first_channel_id(l2, l3)
+
+    l2.rpc.close(chan1)
+    l2.daemon.wait_for_logs([
+        ' to CLOSINGD_COMPLETE',
+        'sendrawtx exit 0',
+    ])
+    assert account_balance(l2, chanid_1) == 100001001
+    bitcoind.generate_block(6)
+    sync_blockheight(bitcoind, [l2])
+    l2.daemon.wait_for_log('{}.*FUNDING_TRANSACTION/FUNDING_OUTPUT->MUTUAL_CLOSE depth'.format(l1.info['id']))
+
+    l2.rpc.close(chan3)
+    l2.daemon.wait_for_logs([
+        ' to CLOSINGD_COMPLETE',
+        'sendrawtx exit 0',
+    ])
+    assert account_balance(l2, chanid_3) == 950000501
+    bitcoind.generate_block(6)
+    sync_blockheight(bitcoind, [l2])
+    l2.daemon.wait_for_log('{}.*FUNDING_TRANSACTION/FUNDING_OUTPUT->MUTUAL_CLOSE depth'.format(l3.info['id']))
+
+    # Ending channel balance should be zero
+    assert account_balance(l2, chanid_1) == 0
+    assert account_balance(l2, chanid_3) == 0
+
+    # Verify we recorded all the movements we expect
+    check_coin_moves(l2, chanid_1, l1_l2_mvts, chainparams)
+    check_coin_moves(l2, chanid_3, l2_l3_mvts, chainparams)
+    check_coin_moves(l2, 'wallet', l2_wallet_mvts, chainparams)
+    check_coin_moves_idx(l2)
+
+
+def test_3847_repro(node_factory, bitcoind):
+    """Reproduces the issue in #3847: duplicate response from plugin
+
+    l2 holds on to HTLCs until the deadline expires. Then we allow them
+    through and either should terminate the payment attempt, and the second
+    would return a redundant result.
+
+    """
+    l1, l2, l3 = node_factory.line_graph(3, opts=[
+        {},
+        {},
+        {
+            'plugin': os.path.join(os.getcwd(), 'tests/plugins/hold_htlcs.py'),
+            'hold-time': 11,
+            'hold-result': 'fail',
+        },
+    ], wait_for_announce=True)
+    wait_for(lambda: len(l1.rpc.listchannels()['channels']) == 4)
+
+    # Amount sufficient to trigger the presplit modifier
+    amt = 20 * 1000 * 1000
+
+    i1 = l3.rpc.invoice(
+        msatoshi=amt, label="direct", description="desc"
+    )['bolt11']
+    with pytest.raises(RpcError):
+        l1.rpc.pay(i1, retry_for=10)
+
+    # We wait for at least two parts, and the bug would cause the `pay` plugin
+    # to crash
+    l1.daemon.wait_for_logs([r'Payment deadline expired, not retrying'] * 2)
+
+    # This call to paystatus would fail if the pay plugin crashed (it's
+    # provided by the plugin)
+    l1.rpc.paystatus(i1)

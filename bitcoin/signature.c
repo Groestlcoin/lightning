@@ -5,10 +5,12 @@
 #include "signature.h"
 #include "tx.h"
 #include <assert.h>
+#include <bitcoin/psbt.h>
 #include <ccan/cast/cast.h>
 #include <ccan/mem/mem.h>
 #include <common/type_to_string.h>
 #include <common/utils.h>
+#include <wire/wire.h>
 
 #undef DEBUG
 #ifdef DEBUG
@@ -118,11 +120,15 @@ void bitcoin_tx_hash_for_sig(const struct bitcoin_tx *tx, unsigned int in,
 {
 	int ret;
 	u8 value[9];
-	u64 satoshis = tx->input_amounts[in]->satoshis /* Raw: sig-helper */;
+	u64 input_val_sats;
+	struct amount_sat input_amt;
 	int flags = WALLY_TX_FLAG_USE_WITNESS;
 
+	input_amt = psbt_input_get_amount(tx->psbt, in);
+	input_val_sats = input_amt.satoshis; /* Raw: type conversion */
+
 	if (is_elements(chainparams)) {
-		ret = wally_tx_confidential_value_from_satoshi(satoshis, value, sizeof(value));
+		ret = wally_tx_confidential_value_from_satoshi(input_val_sats, value, sizeof(value));
 		assert(ret == WALLY_OK);
 		ret = wally_tx_get_elements_signature_hash(
 		    tx->wtx, in, script, tal_bytelen(script), value,
@@ -131,7 +137,7 @@ void bitcoin_tx_hash_for_sig(const struct bitcoin_tx *tx, unsigned int in,
 		assert(ret == WALLY_OK);
 	} else {
 		ret = wally_tx_get_btc_signature_hash(
-		    tx->wtx, in, script, tal_bytelen(script), satoshis,
+		    tx->wtx, in, script, tal_bytelen(script), input_val_sats,
 		    sighash_type, flags, dest->sha.u.u8, sizeof(*dest));
 		assert(ret == WALLY_OK);
 	}
@@ -323,3 +329,19 @@ static char *bitcoin_signature_to_hexstr(const tal_t *ctx,
 	return tal_hexstr(ctx, der, len);
 }
 REGISTER_TYPE_TO_STRING(bitcoin_signature, bitcoin_signature_to_hexstr);
+
+void fromwire_bitcoin_signature(const u8 **cursor, size_t *max,
+				struct bitcoin_signature *sig)
+{
+	fromwire_secp256k1_ecdsa_signature(cursor, max, &sig->s);
+	sig->sighash_type = fromwire_u8(cursor, max);
+	if (!sighash_type_valid(sig->sighash_type))
+		fromwire_fail(cursor, max);
+}
+
+void towire_bitcoin_signature(u8 **pptr, const struct bitcoin_signature *sig)
+{
+	assert(sighash_type_valid(sig->sighash_type));
+	towire_secp256k1_ecdsa_signature(pptr, &sig->s);
+	towire_u8(pptr, sig->sighash_type);
+}

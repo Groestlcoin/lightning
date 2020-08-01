@@ -9,6 +9,9 @@ from pyln.testing.utils import (
     DEVELOPER, TIMEOUT, VALGRIND, DEPRECATED_APIS, sync_blockheight, only_one,
     wait_for, TailableProc, env
 )
+from utils import (
+    check_coin_moves, account_balance
+)
 from ephemeral_port_reserve import reserve
 from utils import EXPERIMENTAL_FEATURES
 
@@ -444,6 +447,7 @@ def test_htlc_in_timeout(node_factory, bitcoind, executor):
     l2.daemon.wait_for_log('onchaind complete, forgetting peer')
 
 
+@unittest.skipIf(not TEST_NETWORK == 'regtest', 'must be on bitcoin network')
 @unittest.skipIf(not DEVELOPER, "needs DEVELOPER=1")
 def test_bech32_funding(node_factory, chainparams):
     # Don't get any funds from previous runs.
@@ -472,10 +476,15 @@ def test_bech32_funding(node_factory, chainparams):
     assert only_one(fundingtx['vin'])['txid'] == res['wallettxid']
 
 
-def test_withdraw(node_factory, bitcoind, chainparams):
+def test_withdraw_misc(node_factory, bitcoind, chainparams):
+    # We track channel balances, to verify that accounting is ok.
+    coin_mvt_plugin = os.path.join(os.getcwd(), 'tests/plugins/coin_movements.py')
+
     amount = 1000000
     # Don't get any funds from previous runs.
-    l1 = node_factory.get_node(random_hsm=True)
+    l1 = node_factory.get_node(random_hsm=True,
+                               options={'plugin': coin_mvt_plugin},
+                               feerates=(7500, 7500, 7500, 7500))
     l2 = node_factory.get_node(random_hsm=True)
     addr = l1.rpc.newaddr()['bech32']
 
@@ -596,6 +605,60 @@ def test_withdraw(node_factory, bitcoind, chainparams):
     # This should fail, can't even afford fee.
     with pytest.raises(RpcError, match=r'Cannot afford transaction'):
         l1.rpc.withdraw(waddr, 'all')
+
+    bitcoind.generate_block(1)
+    sync_blockheight(bitcoind, [l1])
+    assert account_balance(l1, 'wallet') == 0
+
+    wallet_moves = [
+        {'type': 'chain_mvt', 'credit': 2000000000, 'debit': 0, 'tag': 'deposit'},
+        {'type': 'chain_mvt', 'credit': 2000000000, 'debit': 0, 'tag': 'deposit'},
+        {'type': 'chain_mvt', 'credit': 2000000000, 'debit': 0, 'tag': 'deposit'},
+        {'type': 'chain_mvt', 'credit': 2000000000, 'debit': 0, 'tag': 'deposit'},
+        {'type': 'chain_mvt', 'credit': 2000000000, 'debit': 0, 'tag': 'deposit'},
+        {'type': 'chain_mvt', 'credit': 2000000000, 'debit': 0, 'tag': 'deposit'},
+        {'type': 'chain_mvt', 'credit': 2000000000, 'debit': 0, 'tag': 'deposit'},
+        {'type': 'chain_mvt', 'credit': 2000000000, 'debit': 0, 'tag': 'deposit'},
+        {'type': 'chain_mvt', 'credit': 2000000000, 'debit': 0, 'tag': 'deposit'},
+        {'type': 'chain_mvt', 'credit': 2000000000, 'debit': 0, 'tag': 'deposit'},
+        {'type': 'chain_mvt', 'credit': 0, 'debit': 0, 'tag': 'spend_track'},
+        {'type': 'chain_mvt', 'credit': 0, 'debit': 0, 'tag': 'spend_track'},
+        {'type': 'chain_mvt', 'credit': 0, 'debit': 1993745000, 'tag': 'withdrawal'},
+        {'type': 'chain_mvt', 'credit': 0, 'debit': 2000000000, 'tag': 'withdrawal'},
+        {'type': 'chain_mvt', 'credit': 0, 'debit': 6255000, 'tag': 'chain_fees'},
+        {'type': 'chain_mvt', 'credit': 0, 'debit': 0, 'tag': 'spend_track'},
+        {'type': 'chain_mvt', 'credit': 0, 'debit': 0, 'tag': 'spend_track'},
+        {'type': 'chain_mvt', 'credit': 0, 'debit': 1993745000, 'tag': 'withdrawal'},
+        {'type': 'chain_mvt', 'credit': 0, 'debit': 2000000000, 'tag': 'withdrawal'},
+        {'type': 'chain_mvt', 'credit': 0, 'debit': 6255000, 'tag': 'chain_fees'},
+        {'type': 'chain_mvt', 'credit': 1993745000, 'debit': 0, 'tag': 'deposit'},
+        {'type': 'chain_mvt', 'credit': 1993745000, 'debit': 0, 'tag': 'deposit'},
+        {'type': 'chain_mvt', 'credit': 0, 'debit': 0, 'tag': 'spend_track'},
+        {'type': 'chain_mvt', 'credit': 0, 'debit': 0, 'tag': 'spend_track'},
+        {'type': 'chain_mvt', 'credit': 0, 'debit': 1993745000, 'tag': 'withdrawal'},
+        {'type': 'chain_mvt', 'credit': 0, 'debit': 2000000000, 'tag': 'withdrawal'},
+        {'type': 'chain_mvt', 'credit': 0, 'debit': 6255000, 'tag': 'chain_fees'},
+        {'type': 'chain_mvt', 'credit': 1993745000, 'debit': 0, 'tag': 'deposit'},
+        {'type': 'chain_mvt', 'credit': 0, 'debit': 0, 'tag': 'spend_track'},
+        {'type': 'chain_mvt', 'credit': 0, 'debit': 0, 'tag': 'spend_track'},
+        {'type': 'chain_mvt', 'credit': 0, 'debit': 1993385000, 'tag': 'withdrawal'},
+        {'type': 'chain_mvt', 'credit': 0, 'debit': 2000000000, 'tag': 'withdrawal'},
+        {'type': 'chain_mvt', 'credit': 0, 'debit': 6615000, 'tag': 'chain_fees'},
+        {'type': 'chain_mvt', 'credit': 1993385000, 'debit': 0, 'tag': 'deposit'},
+        {'type': 'chain_mvt', 'credit': 0, 'debit': 0, 'tag': 'spend_track'},
+        {'type': 'chain_mvt', 'credit': 0, 'debit': 0, 'tag': 'spend_track'},
+        {'type': 'chain_mvt', 'credit': 0, 'debit': 0, 'tag': 'spend_track'},
+        {'type': 'chain_mvt', 'credit': 0, 'debit': 0, 'tag': 'spend_track'},
+        {'type': 'chain_mvt', 'credit': 0, 'debit': 0, 'tag': 'spend_track'},
+        {'type': 'chain_mvt', 'credit': 0, 'debit': 0, 'tag': 'spend_track'},
+        {'type': 'chain_mvt', 'credit': 0, 'debit': 11961135000, 'tag': 'withdrawal'},
+        {'type': 'chain_mvt', 'credit': 0, 'debit': 13485000, 'tag': 'chain_fees'},
+        {'type': 'chain_mvt', 'credit': 11961135000, 'debit': 0, 'tag': 'deposit'},
+        {'type': 'chain_mvt', 'credit': 0, 'debit': 0, 'tag': 'spend_track'},
+        {'type': 'chain_mvt', 'credit': 0, 'debit': 11957490000, 'tag': 'withdrawal'},
+        {'type': 'chain_mvt', 'credit': 0, 'debit': 3645000, 'tag': 'chain_fees'},
+    ]
+    check_coin_moves(l1, 'wallet', wallet_moves, chainparams)
 
 
 def test_minconf_withdraw(node_factory, bitcoind):
@@ -990,6 +1053,28 @@ def test_cli(node_factory):
                      '   ]',
                      '}']
 
+    # Make sure we omit top-levels and don't include format hint, when -H forced
+    out = subprocess.check_output(['cli/lightning-cli',
+                                   '--network={}'.format(TEST_NETWORK),
+                                   '--lightning-dir={}'
+                                   .format(l1.daemon.lightning_dir),
+                                   '-H',
+                                   'help']).decode('utf-8')
+    lines = out.splitlines()
+    assert [l for l in lines if l.startswith('help=')] == []
+    assert [l for l in lines if l.startswith('format-hint=')] == []
+
+    # Flat format is great for grep.  LONG LIVE UNIX!
+    out = subprocess.check_output(['cli/lightning-cli',
+                                   '--network={}'.format(TEST_NETWORK),
+                                   '--lightning-dir={}'
+                                   .format(l1.daemon.lightning_dir),
+                                   '-F',
+                                   'help']).decode('utf-8')
+    lines = out.splitlines()
+    # Everything is a help[XX]= line, except format-hint.
+    assert [l for l in lines if not re.search(r'^help\[[0-9]*\].', l)] == ['format-hint=simple']
+
 
 def test_daemon_option(node_factory):
     """
@@ -1129,9 +1214,11 @@ def test_funding_reorg_remote_lags(node_factory, bitcoind):
 
     l2.daemon.rpcproxy.mock_rpc('getblockhash', no_more_blocks)
 
-    # Reorg changes short_channel_id 103x1x0 to 103x2x0, l1 sees it, restarts channeld
-    bitcoind.simple_reorg(102, 1)                   # heights 102 - 108
-    l1.daemon.wait_for_log(r'Peer transient failure .* short_channel_id changed to 103x2x0 \(was 103x1x0\)')
+    # Reorg changes short_channel_id 103x1x0 to 104x1x0, l1 sees it, restarts channeld
+    bitcoind.simple_reorg(103, 1)                   # heights 103 - 108
+    # But now it's height 104, we need another block to make it announcable.
+    bitcoind.generate_block(1)
+    l1.daemon.wait_for_log(r'Peer transient failure .* short_channel_id changed to 104x1x0 \(was 103x1x0\)')
 
     wait_for(lambda: only_one(l2.rpc.listpeers()['peers'][0]['channels'])['status'] == [
         'CHANNELD_NORMAL:Reconnected, and reestablished.',
@@ -1141,7 +1228,7 @@ def test_funding_reorg_remote_lags(node_factory, bitcoind):
     l2.daemon.rpcproxy.mock_rpc('getblockhash', None)
 
     wait_for(lambda: [c['active'] for c in l2.rpc.listchannels('103x1x0')['channels']] == [False, False])
-    wait_for(lambda: [c['active'] for c in l2.rpc.listchannels('103x2x0')['channels']] == [True, True])
+    wait_for(lambda: [c['active'] for c in l2.rpc.listchannels('104x1x0')['channels']] == [True, True])
 
     wait_for(lambda: only_one(l2.rpc.listpeers()['peers'][0]['channels'])['status'] == [
         'CHANNELD_NORMAL:Reconnected, and reestablished.',
@@ -1278,11 +1365,14 @@ def test_reserve_enforcement(node_factory, executor):
 
 
 @unittest.skipIf(not DEVELOPER, "needs dev_disconnect")
-def test_htlc_send_timeout(node_factory, bitcoind):
+def test_htlc_send_timeout(node_factory, bitcoind, compat):
     """Test that we don't commit an HTLC to an unreachable node."""
     # Feerates identical so we don't get gratuitous commit to update them
-    l1 = node_factory.get_node(options={'log-level': 'io'},
-                               feerates=(7500, 7500, 7500, 7500))
+    l1 = node_factory.get_node(
+        options={'log-level': 'io'},
+        feerates=(7500, 7500, 7500, 7500)
+    )
+
     # Blackhole it after it sends HTLC_ADD to l3.
     l2 = node_factory.get_node(disconnect=['0WIRE_UPDATE_ADD_HTLC'],
                                options={'log-level': 'io'},
@@ -1308,7 +1398,7 @@ def test_htlc_send_timeout(node_factory, bitcoind):
             timedout = True
 
     inv = l3.rpc.invoice(123000, 'test_htlc_send_timeout', 'description')
-    with pytest.raises(RpcError, match=r'Ran out of routes to try after 1 attempt: see paystatus') as excinfo:
+    with pytest.raises(RpcError, match=r'Ran out of routes to try after [0-9]+ attempt[s]?') as excinfo:
         l1.rpc.pay(inv['bolt11'])
 
     err = excinfo.value
@@ -1371,7 +1461,7 @@ def test_feerates(node_factory):
     # Query feerates (shouldn't give any!)
     wait_for(lambda: len(l1.rpc.feerates('perkw')['perkw']) == 2)
     feerates = l1.rpc.feerates('perkw')
-    assert feerates['warning'] == 'Some fee estimates unavailable: groestlcoind startup?'
+    assert feerates['warning_missing_feerates'] == 'Some fee estimates unavailable: groestlcoind startup?'
     assert 'perkb' not in feerates
     assert feerates['perkw']['max_acceptable'] == 2**32 - 1
     assert feerates['perkw']['min_acceptable'] == 253
@@ -1380,7 +1470,7 @@ def test_feerates(node_factory):
 
     wait_for(lambda: len(l1.rpc.feerates('perkb')['perkb']) == 2)
     feerates = l1.rpc.feerates('perkb')
-    assert feerates['warning'] == 'Some fee estimates unavailable: groestlcoind startup?'
+    assert feerates['warning_missing_feerates'] == 'Some fee estimates unavailable: groestlcoind startup?'
     assert 'perkw' not in feerates
     assert feerates['perkb']['max_acceptable'] == (2**32 - 1)
     assert feerates['perkb']['min_acceptable'] == 253 * 4
@@ -1393,7 +1483,7 @@ def test_feerates(node_factory):
     wait_for(lambda: len(l1.rpc.feerates('perkw')['perkw']) == 3)
     feerates = l1.rpc.feerates('perkw')
     assert feerates['perkw']['unilateral_close'] == 15000
-    assert feerates['warning'] == 'Some fee estimates unavailable: groestlcoind startup?'
+    assert feerates['warning_missing_feerates'] == 'Some fee estimates unavailable: groestlcoind startup?'
     assert 'perkb' not in feerates
     assert feerates['perkw']['max_acceptable'] == 15000 * 10
     assert feerates['perkw']['min_acceptable'] == 253
@@ -1405,7 +1495,7 @@ def test_feerates(node_factory):
     assert feerates['perkw']['unilateral_close'] == 15000
     assert feerates['perkw']['htlc_resolution'] == 11000
     assert feerates['perkw']['penalty'] == 11000
-    assert feerates['warning'] == 'Some fee estimates unavailable: groestlcoind startup?'
+    assert feerates['warning_missing_feerates'] == 'Some fee estimates unavailable: groestlcoind startup?'
     assert 'perkb' not in feerates
     assert feerates['perkw']['max_acceptable'] == 15000 * 10
     assert feerates['perkw']['min_acceptable'] == 253
@@ -1420,7 +1510,7 @@ def test_feerates(node_factory):
     for t in types:
         if t not in ("unilateral_close", "htlc_resolution", "penalty"):
             assert feerates['perkb'][t] == 25000
-    assert feerates['warning'] == 'Some fee estimates unavailable: groestlcoind startup?'
+    assert feerates['warning_missing_feerates'] == 'Some fee estimates unavailable: groestlcoind startup?'
     assert 'perkw' not in feerates
     assert feerates['perkb']['max_acceptable'] == 15000 * 4 * 10
     assert feerates['perkb']['min_acceptable'] == 253 * 4
@@ -1796,6 +1886,8 @@ def test_list_features_only(node_factory):
                 'option_payment_secret/odd',
                 'option_basic_mpp/odd',
                 ]
+    if EXPERIMENTAL_FEATURES:
+        expected += ['option_unknown_102/odd']
     assert features == expected
 
 
@@ -2291,3 +2383,28 @@ def test_getsharedsecret(node_factory):
     # knowing only the public key of the other.
     assert (l1.rpc.getsharedsecret(l2.info["id"])["shared_secret"]
             == l2.rpc.getsharedsecret(l1.info["id"])["shared_secret"])
+
+
+def test_commitfee_option(node_factory):
+    """Sanity check for the --commit-fee startup option."""
+    l1, l2 = node_factory.get_nodes(2, opts=[{"commit-fee": "200"}, {}])
+
+    mock_wu = 5000
+    for l in [l1, l2]:
+        l.set_feerates((mock_wu, 0, 0, 0), True)
+    l1_commit_fees = l1.rpc.call("estimatefees")["unilateral_close"]
+    l2_commit_fees = l2.rpc.call("estimatefees")["unilateral_close"]
+
+    assert l1_commit_fees == 2 * l2_commit_fees == 2 * 4 * mock_wu  # WU->VB
+
+
+def test_listtransactions(node_factory):
+    """Sanity check for the listtransactions RPC command"""
+    l1, l2 = node_factory.get_nodes(2, opts=[{}, {}])
+
+    wallettxid = l1.openchannel(l2, 10**4)["wallettxid"]
+    txids = [i["txid"] for tx in l1.rpc.listtransactions()["transactions"]
+             for i in tx["inputs"]]
+    # The txid of the transaction funding the channel is present, and
+    # represented as little endian (like bitcoind and explorers).
+    assert wallettxid in txids

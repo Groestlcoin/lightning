@@ -8,9 +8,11 @@
 #include <common/fee_states.h>
 #include <common/funding_tx.h>
 #include <common/json_command.h>
+#include <common/json_helpers.h>
 #include <common/jsonrpc_errors.h>
 #include <common/key_derive.h>
 #include <common/param.h>
+#include <common/penalty_base.h>
 #include <common/per_peer_state.h>
 #include <common/utils.h>
 #include <common/wallet_tx.h>
@@ -32,6 +34,7 @@
 #include <lightningd/plugin_hook.h>
 #include <lightningd/subd.h>
 #include <openingd/gen_opening_wire.h>
+#include <string.h>
 #include <wire/gen_common_wire.h>
 #include <wire/wire.h>
 #include <wire/wire_sync.h>
@@ -64,7 +67,7 @@ struct uncommitted_channel {
 
 	/* These are *not* filled in by new_uncommitted_channel: */
 
-	/* Minimum funding depth (if funder == REMOTE). */
+	/* Minimum funding depth (if opener == REMOTE). */
 	u32 minimum_depth;
 
 	/* Our channel config. */
@@ -174,6 +177,7 @@ wallet_commit_channel(struct lightningd *ld,
 {
 	struct channel *channel;
 	struct amount_msat our_msat;
+	struct amount_sat local_funding;
 	s64 final_key_idx;
 	bool option_static_remotekey;
 
@@ -193,8 +197,11 @@ wallet_commit_channel(struct lightningd *ld,
 						  &funding));
 			return NULL;
 		}
-	} else
+		local_funding = funding;
+	} else {
 		our_msat = push;
+		local_funding = AMOUNT_SAT(0);
+	}
 
 	channel_info->fee_states = new_fee_states(uc, uc->fc ? LOCAL : REMOTE,
 						  &feerate);
@@ -238,6 +245,7 @@ wallet_commit_channel(struct lightningd *ld,
 			      funding_outnum,
 			      funding,
 			      push,
+			      local_funding,
 			      false, /* !remote_funding_locked */
 			      NULL, /* no scid yet */
 			      /* The three arguments below are msatoshi_to_us,
@@ -275,17 +283,44 @@ wallet_commit_channel(struct lightningd *ld,
 	return channel;
 }
 
+/** cancel_after_fundchannel_complete_success
+ *
+ * @brief Called to cancel a `fundchannel` after
+ * a `fundchannel_complete` succeeds.
+ *
+ * @desc Specifically, this is called when a
+ * `fundchannel_cancel` is blocked due to a
+ * parallel `fundchannel_complete` still running.
+ * After the `fundchannel_complete` succeeds, we
+ * invoke this function to cancel the funding
+ * after all.
+ *
+ * In effect, this forces the `fundchannel_cancel`
+ * to be invoked after the `fundchannel_complete`
+ * succeeds, leading to a reasonable serial
+ * execution.
+ *
+ * @param cmd - The `fundchannel_cancel` command
+ * that wants to cancel this.
+ * @param channel - The channel being cancelled.
+ */
+static void
+cancel_after_fundchannel_complete_success(struct command *cmd,
+					  struct channel *channel)
+{
+	was_pending(cancel_channel_before_broadcast(cmd, channel->peer));
+}
+
 static void funding_success(struct channel *channel)
 {
 	struct json_stream *response;
 	struct funding_channel *fc = channel->peer->uncommitted_channel->fc;
 	struct command *cmd = fc->cmd;
 
-	/* Well, those cancels didn't work! */
+	/* Well, those cancels now need to trigger!  */
 	for (size_t i = 0; i < tal_count(fc->cancels); i++)
-		was_pending(command_fail(fc->cancels[i], LIGHTNINGD,
-					 "Funding succeeded before cancel. "
-					 "Try fundchannel_cancel again."));
+		cancel_after_fundchannel_complete_success(fc->cancels[i],
+							  channel);
 
 	response = json_stream_success(cmd);
 	json_add_string(response, "channel_id",
@@ -369,6 +404,7 @@ static void opening_funder_finished(struct subd *openingd, const u8 *resp,
 	struct lightningd *ld = openingd->ld;
 	u8 *remote_upfront_shutdown_script;
 	struct per_peer_state *pps;
+	struct penalty_base *pbase;
 
 	/* This is a new channel_info.their_config so set its ID to 0 */
 	channel_info.their_config.id = 0;
@@ -376,6 +412,7 @@ static void opening_funder_finished(struct subd *openingd, const u8 *resp,
 	if (!fromwire_opening_funder_reply(resp, resp,
 					   &channel_info.their_config,
 					   &remote_commit,
+					   &pbase,
 					   &remote_commit_sig,
 					   &pps,
 					   &channel_info.theirbase.revocation,
@@ -430,6 +467,9 @@ static void opening_funder_finished(struct subd *openingd, const u8 *resp,
 	/* Needed for the success statement */
 	derive_channel_id(&fc->cid, &channel->funding_txid, funding_txout);
 
+	if (pbase)
+		wallet_penalty_base_add(ld->wallet, channel->dbid, pbase);
+
 	funding_success(channel);
 	peer_start_channeld(channel, pps, NULL, false);
 
@@ -459,6 +499,7 @@ static void opening_fundee_finished(struct subd *openingd,
 	struct channel *channel;
 	u8 *remote_upfront_shutdown_script, *local_upfront_shutdown_script;
 	struct per_peer_state *pps;
+	struct penalty_base *pbase;
 
 	log_debug(uc->log, "Got opening_fundee_finish_response");
 
@@ -466,26 +507,27 @@ static void opening_fundee_finished(struct subd *openingd,
 	channel_info.their_config.id = 0;
 
 	if (!fromwire_opening_fundee(tmpctx, reply,
-					   &channel_info.their_config,
-					   &remote_commit,
-					   &remote_commit_sig,
-					   &pps,
-					   &channel_info.theirbase.revocation,
-					   &channel_info.theirbase.payment,
-					   &channel_info.theirbase.htlc,
-					   &channel_info.theirbase.delayed_payment,
-					   &channel_info.remote_per_commit,
-					   &channel_info.remote_fundingkey,
-					   &funding_txid,
-					   &funding_outnum,
-					   &funding,
-					   &push,
-					   &channel_flags,
-					   &feerate,
-					   &funding_signed,
-				           &uc->our_config.channel_reserve,
-					   &local_upfront_shutdown_script,
-				           &remote_upfront_shutdown_script)) {
+				     &channel_info.their_config,
+				     &remote_commit,
+				     &pbase,
+				     &remote_commit_sig,
+				     &pps,
+				     &channel_info.theirbase.revocation,
+				     &channel_info.theirbase.payment,
+				     &channel_info.theirbase.htlc,
+				     &channel_info.theirbase.delayed_payment,
+				     &channel_info.remote_per_commit,
+				     &channel_info.remote_fundingkey,
+				     &funding_txid,
+				     &funding_outnum,
+				     &funding,
+				     &push,
+				     &channel_flags,
+				     &feerate,
+				     &funding_signed,
+				     &uc->our_config.channel_reserve,
+				     &local_upfront_shutdown_script,
+				     &remote_upfront_shutdown_script)) {
 		log_broken(uc->log, "bad OPENING_FUNDEE_REPLY %s",
 			   tal_hex(reply, reply));
 		uncommitted_channel_disconnect(uc, LOG_BROKEN,
@@ -532,6 +574,9 @@ static void opening_fundee_finished(struct subd *openingd,
 	/* Tell plugins about the success */
 	notify_channel_opened(ld, &channel->peer->id, &channel->funding,
 			      &channel->funding_txid, &channel->remote_funding_locked);
+
+	if (pbase)
+		wallet_penalty_base_add(ld->wallet, channel->dbid, pbase);
 
 	/* On to normal operation! */
 	peer_start_channeld(channel, pps, funding_signed, false);
@@ -1083,12 +1128,10 @@ static struct command_result *json_fund_channel_cancel(struct command *cmd,
 
 	struct node_id *id;
 	struct peer *peer;
-	const jsmntok_t *cidtok;
 	u8 *msg;
 
 	if (!param(cmd, buffer, params,
 		   p_req("id", param_node_id, &id),
-		   p_opt("channel_id", param_tok, &cidtok),
 		   NULL))
 		return command_param_failed();
 
@@ -1099,7 +1142,8 @@ static struct command_result *json_fund_channel_cancel(struct command *cmd,
 
 	if (peer->uncommitted_channel) {
 		if (!peer->uncommitted_channel->fc || !peer->uncommitted_channel->fc->inflight)
-			return command_fail(cmd, LIGHTNINGD, "No channel funding in progress.");
+			return command_fail(cmd, FUNDING_NOTHING_TO_CANCEL,
+					    "No channel funding in progress.");
 
 		/* Make sure this gets notified if we succeed or cancel */
 		tal_arr_expand(&peer->uncommitted_channel->fc->cancels, cmd);
@@ -1108,7 +1152,8 @@ static struct command_result *json_fund_channel_cancel(struct command *cmd,
 		return command_still_pending(cmd);
 	}
 
-	return cancel_channel_before_broadcast(cmd, buffer, peer, cidtok);
+	/* Handle `fundchannel_cancel` after `fundchannel_complete`.  */
+	return cancel_channel_before_broadcast(cmd, peer);
 }
 
 /**
