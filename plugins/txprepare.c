@@ -505,28 +505,28 @@ static struct command_result *json_withdraw(struct command *cmd,
 static const struct plugin_command commands[] = {
 	{
 		"txprepare",
-		"bitcoin",
+		"groestlcoin",
 		"Create a transaction, with option to spend in future (either txsend and txdiscard)",
 		"Create an unsigned transaction paying {outputs} with optional {feerate}, {minconf} and {utxos}",
 		json_txprepare
 	},
 	{
 		"txdiscard",
-		"bitcoin",
+		"groestlcoin",
 		"Discard a transaction created by txprepare",
 		"Discard a transcation by {txid}",
 		json_txdiscard
 	},
 	{
 		"txsend",
-		"bitcoin",
+		"groestlcoin",
 		"Send a transaction created by txprepare",
 		"Send a transacation by {txid}",
 		json_txsend
 	},
 	{
 		"withdraw",
-		"bitcoin",
+		"groestlcoin",
 		"Send funds to {destination} address",
 		"Send to {destination} {satoshi} (or 'all') at optional {feerate} using utxos from {minconf} or {utxos}.",
 		json_withdraw

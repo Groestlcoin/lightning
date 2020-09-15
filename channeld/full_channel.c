@@ -1079,7 +1079,7 @@ bool can_opener_afford_feerate(const struct channel *channel, u32 feerate_per_kw
 	if (channel->option_anchor_outputs
 	    && !amount_sat_add(&fee, fee, AMOUNT_SAT(660)))
 		status_failed(STATUS_FAIL_INTERNAL_ERROR,
-			      "Cannot add 660 sats to %s for anchor",
+			      "Cannot add 660 gros to %s for anchor",
 			      type_to_string(tmpctx, struct amount_sat,
 					     &fee));
 
