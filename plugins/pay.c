@@ -1810,9 +1810,6 @@ static struct command_result *listsendpays_done(struct command *cmd,
 		if (b11tok)
 			b11 = json_strdup(cmd, buf, b11tok);
 
-		if (destinationtok)
-			json_to_node_id(buf, destinationtok, &destination);
-
 		pm = pay_map_get(&pay_map, &payment_hash);
 		if (!pm) {
 			pm = tal(cmd, struct pay_mpp);
