@@ -1,6 +1,7 @@
 from concurrent import futures
 from pyln.testing.db import SqliteDbProvider, PostgresDbProvider
 from pyln.testing.utils import NodeFactory, BitcoinD, ElementsD, env, DEVELOPER, LightningNode, TEST_DEBUG
+from typing import Dict
 
 import logging
 import os
@@ -13,7 +14,7 @@ import tempfile
 
 # A dict in which we count how often a particular test has run so far. Used to
 # give each attempt its own numbered directory, and avoid clashes.
-__attempts = {}
+__attempts: Dict[str, int] = {}
 
 
 @pytest.fixture(scope="session")
@@ -174,6 +175,7 @@ def teardown_checks(request):
 @pytest.fixture
 def node_factory(request, directory, test_name, bitcoind, executor, db_provider, teardown_checks, node_cls):
     nf = NodeFactory(
+        request,
         test_name,
         bitcoind,
         executor,

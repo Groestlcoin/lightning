@@ -8,6 +8,15 @@ CONFIG_VAR_FILE=config.vars
 CONFIG_HEADER=ccan/config.h
 BASE_WARNFLAGS="-Wall -Wundef -Wmissing-prototypes -Wmissing-declarations -Wstrict-prototypes -Wold-style-definition -Werror"
 
+: ${PKG_CONFIG=pkg-config}
+
+# You can set PG_CONFIG in the environment to direct configure to call
+# a specific 'pg_config' binary. If you set it to an empty string, then
+# PostgreSQL support will be explicitly disabled, even if a 'pg_config'
+# binary exists in your PATH. If you leave it unset, then the following
+# line enables the automagic detection that most users want.
+: ${PG_CONFIG=pg_config}
+
 usage_with_default()
 {
     if [ $# = 4 ]; then
@@ -68,20 +77,18 @@ default_pytest()
     done
 }
 
-require()
+check_command()
 {
     name="$1"
-    resolution="$2"
-    shift 2
+    shift 1
 
     echo -n "checking for $name... "
     if "$@" 2>/dev/null; then
 	echo 'found'
-	return
+	return 0
     fi
     echo 'not found'
-    echo "$resolution" >&2
-    exit 1
+    return 1
 }
 
 default_valgrind_setting()
@@ -226,11 +233,23 @@ if [ "$ASAN" = "1" ]; then
     fi
 fi
 
-# Doesn't set a var, but makes sure it exists
-require 'python3-mako' "You need the mako module for python3: see doc/INSTALL.md" python3 -c 'import mako'
+SQLITE3_CFLAGS=""
+SQLITE3_LDLIBS="-lsqlite3"
+if command -v "${PKG_CONFIG}" >/dev/null; then
+    SQLITE3_CFLAGS="$("${PKG_CONFIG}" --silence-errors --cflags sqlite3 || :)"
+    SQLITE3_LDLIBS="$("${PKG_CONFIG}" --silence-errors --libs sqlite3 || :)"
+fi
+
+POSTGRES_INCLUDE=""
+POSTGRES_LDLIBS=""
+if command -v "${PG_CONFIG}" >/dev/null; then
+    POSTGRES_INCLUDE="-I$("${PG_CONFIG}" --includedir)"
+    POSTGRES_LDLIBS="-L$("${PG_CONFIG}" --libdir) -lpq"
+fi
 
 rm -f $CONFIG_VAR_FILE.$$
-$CONFIGURATOR --extra-tests --autotools-style --var-file=$CONFIG_VAR_FILE.$$ --header-file=$CONFIG_HEADER --configurator-cc="$CONFIGURATOR_CC" --wrapper="$CONFIGURATOR_WRAPPER" "$CC" ${CWARNFLAGS-$BASE_WARNFLAGS} $CDEBUGFLAGS $COPTFLAGS -I/usr/local/include -L/usr/local/lib <<EOF
+$CONFIGURATOR --extra-tests --autotools-style --var-file=$CONFIG_VAR_FILE.$$ --header-file=$CONFIG_HEADER --configurator-cc="$CONFIGURATOR_CC" --wrapper="$CONFIGURATOR_WRAPPER" "$CC" ${CWARNFLAGS-$BASE_WARNFLAGS} $CDEBUGFLAGS $COPTFLAGS -I/usr/local/include -L/usr/local/lib $SQLITE3_CFLAGS $POSTGRES_INCLUDE <<EOF
+
 var=HAVE_GOOD_LIBSODIUM
 desc=libsodium with IETF chacha20 variants
 style=DEFINES_EVERYTHING|EXECUTE|MAY_NOT_COMPILE
@@ -256,7 +275,7 @@ int main(void)
 var=HAVE_SQLITE3_EXPANDED_SQL
 desc=sqlite3_expanded_sql
 style=DEFINES_EVERYTHING|EXECUTE|MAY_NOT_COMPILE
-link=-lsqlite3
+link=$SQLITE3_LDLIBS
 code=
 #include <sqlite3.h>
 #include <stdio.h>
@@ -270,7 +289,7 @@ int main(void)
 var=HAVE_SQLITE3
 desc=sqlite3
 style=DEFINES_EVERYTHING|EXECUTE|MAY_NOT_COMPILE
-link=-lsqlite3
+link=$SQLITE3_LDLIBS
 code=
 #include <sqlite3.h>
 #include <stdio.h>
@@ -284,9 +303,9 @@ int main(void)
 var=HAVE_POSTGRES
 desc=postgres
 style=DEFINES_EVERYTHING|EXECUTE|MAY_NOT_COMPILE
-link=-lpq
+link=$POSTGRES_LDLIBS
 code=
-#include <postgresql/libpq-fe.h>
+#include <libpq-fe.h>
 #include <stdio.h>
 
 int main(void)
@@ -338,6 +357,13 @@ int main(void)
 }
 /*END*/
 EOF
+
+if check_command 'python3-mako' python3 -c 'import mako'; then
+    HAVE_PYTHON3_MAKO=1
+else
+    HAVE_PYTHON3_MAKO=0
+fi
+
 mv $CONFIG_VAR_FILE.$$ $CONFIG_VAR_FILE
 
 # Now we can finally set our warning flags
@@ -353,6 +379,10 @@ add_var CONFIGURATOR_CC "$CONFIGURATOR_CC"
 add_var CWARNFLAGS "$CWARNFLAGS"
 add_var CDEBUGFLAGS "$CDEBUGFLAGS"
 add_var COPTFLAGS "$COPTFLAGS"
+add_var SQLITE3_CFLAGS "$SQLITE3_CFLAGS"
+add_var SQLITE3_LDLIBS "$SQLITE3_LDLIBS"
+add_var POSTGRES_INCLUDE "$POSTGRES_INCLUDE"
+add_var POSTGRES_LDLIBS "$POSTGRES_LDLIBS"
 add_var VALGRIND "$VALGRIND"
 add_var DEVELOPER "$DEVELOPER" $CONFIG_HEADER
 add_var EXPERIMENTAL_FEATURES "$EXPERIMENTAL_FEATURES" $CONFIG_HEADER
@@ -361,6 +391,7 @@ add_var PYTEST "$PYTEST"
 add_var STATIC "$STATIC"
 add_var ASAN "$ASAN"
 add_var TEST_NETWORK "$TEST_NETWORK"
+add_var HAVE_PYTHON3_MAKO "$HAVE_PYTHON3_MAKO"
 
 # Hack to avoid sha256 name clash with libwally: will be fixed when that
 # becomes a standalone shared lib.

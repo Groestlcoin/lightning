@@ -40,6 +40,8 @@ struct plugin {
 	/* To read from lightningd */
 	char *buffer;
 	size_t used, len_read;
+	jsmn_parser parser;
+	jsmntok_t *toks;
 
 	/* To write to lightningd */
 	struct json_stream **js_arr;
@@ -49,6 +51,8 @@ struct plugin {
 	struct json_stream **rpc_js_arr;
 	char *rpc_buffer;
 	size_t rpc_used, rpc_len_read;
+	jsmn_parser rpc_parser;
+	jsmntok_t *rpc_toks;
 	/* Tracking async RPC requests */
 	UINTMAP(struct out_req *) out_reqs;
 	u64 next_outreq_id;
@@ -442,12 +446,12 @@ static const jsmntok_t *read_rpc_reply(const tal_t *ctx,
 				       int *reqlen)
 {
 	const jsmntok_t *toks;
-	bool valid;
 
 	*reqlen = read_json_from_rpc(plugin);
 
-	toks = json_parse_input(ctx, membuf_elems(&plugin->rpc_conn->mb), *reqlen, &valid);
-	if (!valid)
+	toks = json_parse_simple(ctx,
+				 membuf_elems(&plugin->rpc_conn->mb), *reqlen);
+	if (!toks)
 		plugin_err(plugin, "Malformed JSON reply '%.*s'",
 			   *reqlen, membuf_elems(&plugin->rpc_conn->mb));
 
@@ -568,10 +572,24 @@ send_outreq(struct plugin *plugin, const struct out_req *req)
 }
 
 static struct command_result *
-handle_getmanifest(struct command *getmanifest_cmd)
+handle_getmanifest(struct command *getmanifest_cmd,
+		   const char *buf,
+		   const jsmntok_t *getmanifest_params)
 {
 	struct json_stream *params = jsonrpc_stream_success(getmanifest_cmd);
 	struct plugin *p = getmanifest_cmd->plugin;
+	const jsmntok_t *dep;
+
+	/* This was added post 0.9.0 */
+	dep = json_get_member(buf, getmanifest_params, "allow-deprecated-apis");
+	if (!dep)
+		deprecated_apis = true;
+	else {
+		if (!json_to_bool(buf, dep, &deprecated_apis))
+			plugin_err(p, "Invalid allow-deprecated-apis '%.*s'",
+				   json_tok_full_len(dep),
+				   json_tok_full(buf, dep));
+	}
 
 	json_array_start(params, "options");
 	for (size_t i = 0; i < tal_count(p->opts); i++) {
@@ -579,6 +597,7 @@ handle_getmanifest(struct command *getmanifest_cmd)
 		json_add_string(params, "name", p->opts[i].name);
 		json_add_string(params, "type", p->opts[i].type);
 		json_add_string(params, "description", p->opts[i].description);
+		json_add_bool(params, "deprecated", p->opts[i].deprecated);
 		json_object_end(params);
 	}
 	json_array_end(params);
@@ -593,6 +612,7 @@ handle_getmanifest(struct command *getmanifest_cmd)
 		if (p->commands[i].long_description)
 			json_add_string(params, "long_description",
 					p->commands[i].long_description);
+		json_add_bool(params, "deprecated", p->commands[i].deprecated);
 		json_object_end(params);
 	}
 	json_array_end(params);
@@ -632,44 +652,44 @@ static void rpc_conn_finished(struct io_conn *conn,
 
 static bool rpc_read_response_one(struct plugin *plugin)
 {
-	bool valid;
-	const jsmntok_t *toks, *jrtok;
+	const jsmntok_t *jrtok;
+	bool complete;
 
-	/* FIXME: This could be done more efficiently by storing the
-	 * toks and doing an incremental parse, like lightning-cli
-	 * does. */
-	toks = json_parse_input(NULL, plugin->rpc_buffer, plugin->rpc_used,
-				&valid);
-	if (!toks) {
-		if (!valid) {
-			plugin_err(plugin, "Failed to parse RPC JSON response '%.*s'",
-				   (int)plugin->rpc_used, plugin->rpc_buffer);
-			return false;
-		}
+	if (!json_parse_input(&plugin->rpc_parser, &plugin->rpc_toks,
+			      plugin->rpc_buffer, plugin->rpc_used, &complete)) {
+		plugin_err(plugin, "Failed to parse RPC JSON response '%.*s'",
+			   (int)plugin->rpc_used, plugin->rpc_buffer);
+		return false;
+	}
+
+	if (!complete) {
 		/* We need more. */
 		return false;
 	}
 
 	/* Empty buffer? (eg. just whitespace). */
-	if (tal_count(toks) == 1) {
+	if (tal_count(plugin->rpc_toks) == 1) {
 		plugin->rpc_used = 0;
+		jsmn_init(&plugin->rpc_parser);
+		toks_reset(plugin->rpc_toks);
 		return false;
 	}
 
-	jrtok = json_get_member(plugin->rpc_buffer, toks, "jsonrpc");
+	jrtok = json_get_member(plugin->rpc_buffer, plugin->rpc_toks, "jsonrpc");
 	if (!jrtok) {
 		plugin_err(plugin, "JSON-RPC message does not contain \"jsonrpc\" field: '%.*s'",
                                    (int)plugin->rpc_used, plugin->rpc_buffer);
 		return false;
 	}
 
-	handle_rpc_reply(plugin, toks);
+	handle_rpc_reply(plugin, plugin->rpc_toks);
 
 	/* Move this object out of the buffer */
-	memmove(plugin->rpc_buffer, plugin->rpc_buffer + toks[0].end,
-		tal_count(plugin->rpc_buffer) - toks[0].end);
-	plugin->rpc_used -= toks[0].end;
-	tal_free(toks);
+	memmove(plugin->rpc_buffer, plugin->rpc_buffer + plugin->rpc_toks[0].end,
+		tal_count(plugin->rpc_buffer) - plugin->rpc_toks[0].end);
+	plugin->rpc_used -= plugin->rpc_toks[0].end;
+	jsmn_init(&plugin->rpc_parser);
+	toks_reset(plugin->rpc_toks);
 
 	return true;
 }
@@ -765,7 +785,6 @@ static struct command_result *handle_init(struct command *cmd,
 	struct sockaddr_un addr;
 	size_t i;
 	char *dir, *network;
-	struct json_out *param_obj;
 	struct plugin *p = cmd->plugin;
 	bool with_rpc = p->rpc_conn != NULL;
 
@@ -812,11 +831,6 @@ static struct command_result *handle_init(struct command *cmd,
 		membuf_init(&p->rpc_conn->mb, tal_arr(p, char, READ_CHUNKSIZE),
 			    READ_CHUNKSIZE, membuf_tal_realloc);
 
-		param_obj = json_out_obj(NULL, "config", "allow-deprecated-apis");
-		deprecated_apis =
-			streq(rpc_delve(tmpctx, p, "listconfigs", take(param_obj),
-					".allow-deprecated-apis"),
-			      "true");
 	}
 
 	opttok = json_get_member(buf, params, "options");
@@ -1022,7 +1036,7 @@ static void ld_command_handle(struct plugin *plugin,
 
 	if (!plugin->manifested) {
 		if (streq(cmd->methodname, "getmanifest")) {
-			handle_getmanifest(cmd);
+			handle_getmanifest(cmd, plugin->buffer, paramstok);
 			plugin->manifested = true;
 			return;
 		}
@@ -1083,40 +1097,40 @@ static void ld_command_handle(struct plugin *plugin,
  */
 static bool ld_read_json_one(struct plugin *plugin)
 {
-	bool valid;
-	const jsmntok_t *toks;
+	bool complete;
 	struct command *cmd = tal(plugin, struct command);
 
-	/* FIXME: This could be done more efficiently by storing the
-	 * toks and doing an incremental parse, like lightning-cli
-	 * does. */
-	toks = json_parse_input(NULL, plugin->buffer, plugin->used,
-				&valid);
-	if (!toks) {
-		if (!valid) {
-			plugin_err(plugin, "Failed to parse JSON response '%.*s'",
-				   (int)plugin->used, plugin->buffer);
-			return false;
-		}
+	if (!json_parse_input(&plugin->parser, &plugin->toks,
+			      plugin->buffer, plugin->used,
+			      &complete)) {
+		plugin_err(plugin, "Failed to parse JSON response '%.*s'",
+			   (int)plugin->used, plugin->buffer);
+		return false;
+	}
+
+	if (!complete) {
 		/* We need more. */
 		return false;
 	}
 
 	/* Empty buffer? (eg. just whitespace). */
-	if (tal_count(toks) == 1) {
+	if (tal_count(plugin->toks) == 1) {
+		toks_reset(plugin->toks);
+		jsmn_init(&plugin->parser);
 		plugin->used = 0;
 		return false;
 	}
 
 	/* FIXME: Spark doesn't create proper jsonrpc 2.0!  So we don't
 	 * check for "jsonrpc" here. */
-	ld_command_handle(plugin, cmd, toks);
+	ld_command_handle(plugin, cmd, plugin->toks);
 
 	/* Move this object out of the buffer */
-	memmove(plugin->buffer, plugin->buffer + toks[0].end,
-		tal_count(plugin->buffer) - toks[0].end);
-	plugin->used -= toks[0].end;
-	tal_free(toks);
+	memmove(plugin->buffer, plugin->buffer + plugin->toks[0].end,
+		tal_count(plugin->buffer) - plugin->toks[0].end);
+	plugin->used -= plugin->toks[0].end;
+	toks_reset(plugin->toks);
+	jsmn_init(&plugin->parser);
 
 	return true;
 }
@@ -1215,11 +1229,15 @@ static struct plugin *new_plugin(const tal_t *ctx,
 	p->js_arr = tal_arr(p, struct json_stream *, 0);
 	p->used = 0;
 	p->len_read = 0;
+	jsmn_init(&p->parser);
+	p->toks = toks_alloc(p);
 	/* Async RPC */
 	p->rpc_buffer = tal_arr(p, char, 64);
 	p->rpc_js_arr = tal_arr(p, struct json_stream *, 0);
 	p->rpc_used = 0;
 	p->rpc_len_read = 0;
+	jsmn_init(&p->rpc_parser);
+	p->rpc_toks = toks_alloc(p);
 	p->next_outreq_id = 0;
 	uintmap_init(&p->out_reqs);
 
@@ -1252,6 +1270,7 @@ static struct plugin *new_plugin(const tal_t *ctx,
 		o.description = va_arg(ap, const char *);
 		o.handle = va_arg(ap, char *(*)(const char *str, void *arg));
 		o.arg = va_arg(ap, void *);
+		o.deprecated = va_arg(ap, int); /* bool gets promoted! */
 		tal_arr_expand(&p->opts, o);
 	}
 

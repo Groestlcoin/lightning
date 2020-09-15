@@ -57,9 +57,11 @@ interface.
 
 ### The `getmanifest` method
 
-The `getmanifest` method is required for all plugins and will be called on
-startup without any params. It MUST return a JSON object similar to
-this example:
+The `getmanifest` method is required for all plugins and will be
+called on startup with optional parameters (in particular, it may have
+`allow-deprecated-apis: false`, but you should accept, and ignore,
+other parameters).  It MUST return a JSON object similar to this
+example:
 
 ```json
 {
@@ -68,7 +70,8 @@ this example:
       "name": "greeting",
       "type": "string",
       "default": "World",
-      "description": "What name should I call you?"
+      "description": "What name should I call you?",
+      "deprecated": false
     }
   ],
   "rpcmethods": [
@@ -81,7 +84,8 @@ this example:
       "name": "gettime",
       "usage": "",
       "description": "Returns the current time in {timezone}",
-      "long_description": "Returns the current time in the timezone that is given as the only parameter.\nThis description may be quite long and is allowed to span multiple lines."
+      "long_description": "Returns the current time in the timezone that is given as the only parameter.\nThis description may be quite long and is allowed to span multiple lines.",
+      "deprecated": false
     }
   ],
   "subscriptions": [
@@ -114,6 +118,11 @@ through verbatim. Notice that the `name`, `description` and `usage` fields
 are mandatory, while the `long_description` can be omitted (it'll be
 set to `description` if it was not provided). `usage` should surround optional
 parameter names in `[]`.
+
+`options` and `rpcmethods` can mark themselves `deprecated: true` if
+you plan on removing them: this will disable them if the user sets
+`allow-deprecated-apis` to false (which every developer should do,
+right?).
 
 The `dynamic` indicates if the plugin can be managed after `lightningd`
 has been started. Critical plugins that should not be stopped should set it
@@ -197,7 +206,21 @@ simple JSON object containing the options:
   "configuration": {
     "lightning-dir": "/home/user/.lightning/testnet",
     "rpc-file": "lightning-rpc",
-    "startup": true
+    "startup": true,
+    "network": "testnet",
+    "feature_set": {
+        "init": "02aaa2",
+        "node": "8000000002aaa2",
+        "channel": "",
+        "invoice": "028200"
+    },
+    "proxy": {
+        "type": "ipv4",
+        "address": "127.0.0.1",
+        "port": 9050
+    },
+    "torv3-enabled": true,
+    "use_proxy_always": false
   }
 }
 ```
@@ -296,6 +319,24 @@ into a block.
     "funding_txid": "4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b",
     "funding_locked": false
   }
+}
+```
+
+### `channel_state_changed`
+
+A notification for topic `channel_state_changed` is sent every time a channel
+changes its state. The notification includes the peer and channel ids as well
+as the old and the new channel states.
+
+```json
+{
+    "channel_state_changed": {
+        "peer_id": "03bc9337c7a28bb784d67742ebedd30a93bacdf7e4ca16436ef3798000242b2251",
+        "channel_id": "a2d0851832f0e30a0cf778a826d72f077ca86b69f72677e0267f23f63a0599b4",
+        "short_channel_id" : "561820x1020x1",
+        "old_state": "CHANNELD_NORMAL",
+        "new_state": "CHANNELD_SHUTTING_DOWN"
+    }
 }
 ```
 
@@ -1155,8 +1196,11 @@ The plugin must respond to `gettxout` with the following fields:
 
 ### `sendrawtransaction`
 
-This call takes one parameter, a string representing a hex-encoded Bitcoin
-transaction.
+This call takes two parameters,
+a string `tx` representing a hex-encoded Bitcoin transaction,
+and a boolean `allowhighfees`, which if set means suppress
+any high-fees check implemented in the backend, since the given
+transaction may have fees that are very high.
 
 The plugin must broadcast it and respond with the following fields:
     - `success` (boolean), which is `true` if the broadcast succeeded

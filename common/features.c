@@ -69,11 +69,55 @@ static const struct feature_style feature_styles[] = {
 			  [NODE_ANNOUNCE_FEATURE] = FEATURE_REPRESENT,
 			  [CHANNEL_FEATURE] = FEATURE_DONT_REPRESENT } },
 #if EXPERIMENTAL_FEATURES
+	{ OPT_ANCHOR_OUTPUTS,
+	  .copy_style = { [INIT_FEATURE] = FEATURE_REPRESENT,
+			  [NODE_ANNOUNCE_FEATURE] = FEATURE_REPRESENT,
+			  [CHANNEL_FEATURE] = FEATURE_DONT_REPRESENT } },
 	{ OPT_ONION_MESSAGES,
 	  .copy_style = { [INIT_FEATURE] = FEATURE_REPRESENT,
 			  [NODE_ANNOUNCE_FEATURE] = FEATURE_REPRESENT,
 			  [BOLT11_FEATURE] = FEATURE_REPRESENT,
 			  [CHANNEL_FEATURE] = FEATURE_REPRESENT_AS_OPTIONAL} },
+
+	{ OPT_DUAL_FUND,
+	  .copy_style = { [INIT_FEATURE] = FEATURE_REPRESENT,
+			  [NODE_ANNOUNCE_FEATURE] = FEATURE_REPRESENT,
+			  [BOLT11_FEATURE] = FEATURE_REPRESENT,
+			  [CHANNEL_FEATURE] = FEATURE_DONT_REPRESENT} },
+#endif
+};
+
+struct dependency {
+	size_t depender;
+	size_t must_also_have;
+};
+
+static const struct dependency feature_deps[] = {
+	/* BOLT #9:
+	 * Name                | Description  | Context  | Dependencies  |
+	 *...
+	 * `gossip_queries_ex` | ...          | ...      | `gossip_queries` |
+	 *...
+	 * `payment_secret`    | ...          | ...      | `var_onion_optin` |
+	 *...
+	 * `basic_mpp`         | ...          | ...      | `payment_secret` |
+	 */
+	{ OPT_GOSSIP_QUERIES_EX, OPT_GOSSIP_QUERIES },
+	{ OPT_PAYMENT_SECRET, OPT_VAR_ONION },
+	{ OPT_BASIC_MPP, OPT_PAYMENT_SECRET },
+	/* BOLT #9:
+	 * Name                | Description  | Context  | Dependencies  |
+	 *...
+	 * `option_anchor_outputs` | ...      | ...      | `option_static_remotekey`
+	 */
+#if EXPERIMENTAL_FEATURES
+	{ OPT_ANCHOR_OUTPUTS, OPT_STATIC_REMOTEKEY },
+	/* BOLT-7b04b1461739c5036add61782d58ac490842d98b #9:
+	 * Name                | Description  | Context  | Dependencies  |
+	 * ...
+	 * `option_dual_fund`  | ...          | ...      | `option_anchor_outputs`
+	 */
+	{ OPT_DUAL_FUND, OPT_ANCHOR_OUTPUTS },
 #endif
 };
 
@@ -224,6 +268,22 @@ bool feature_negotiated(const struct feature_set *our_features,
 		&& feature_offered(our_features->bits[INIT_FEATURE], f);
 }
 
+bool feature_check_depends(const u8 *their_features,
+			   size_t *depender, size_t *missing_dependency)
+{
+	for (size_t i = 0; i < ARRAY_SIZE(feature_deps); i++) {
+		if (!feature_offered(their_features, feature_deps[i].depender))
+			continue;
+		if (feature_offered(their_features,
+				    feature_deps[i].must_also_have))
+			continue;
+		*depender = feature_deps[i].depender;
+		*missing_dependency = feature_deps[i].must_also_have;
+		return false;
+	}
+	return true;
+}
+
 /**
  * all_supported_features - Check if we support what's being asked
  *
@@ -279,6 +339,8 @@ static const char *feature_name(const tal_t *ctx, size_t f)
 		"option_static_remotekey",
 		"option_payment_secret",
 		"option_basic_mpp",
+		"option_support_large_channel",
+		"option_anchor_outputs",
 	};
 
 	if (f / 2 >= ARRAY_SIZE(fnames))

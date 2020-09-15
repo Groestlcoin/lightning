@@ -79,7 +79,6 @@
 #include <lightningd/memdump.h>
 #include <lightningd/onchain_control.h>
 #include <lightningd/options.h>
-#include <onchaind/onchain_wire.h>
 #include <signal.h>
 #include <sodium.h>
 #include <sys/resource.h>
@@ -281,6 +280,16 @@ static struct lightningd *new_lightningd(const tal_t *ctx)
 	 */
 	ld->rpc_filemode = 0600;
 
+	/*~ This is the exit code to use on exit.
+	 * Set to NULL meaning we are not interested in exiting yet.
+	 */
+	ld->exit_code = NULL;
+
+	/*~ We maintain a round-robin list of channels.
+	 * This round-robin list of channels is used to ensure that
+	 * each invoice we generate has a different set of channels.  */
+	ld->rr_counter = 0;
+
 	return ld;
 }
 
@@ -469,9 +478,9 @@ static const char *find_my_pkglibexec_path(struct lightningd *ld,
 
 	/*~ The plugin dir is in ../libexec/c-lightning/plugins, which (unlike
 	 * those given on the command line) does not need to exist. */
-	add_plugin_dir(ld->plugins,
-		       path_join(tmpctx, pkglibexecdir, "plugins"),
-		       true);
+	plugins_set_builtin_plugins_dir(ld->plugins,
+					path_join(tmpctx,
+						  pkglibexecdir, "plugins"));
 
 	/*~ Sometimes take() can be more efficient, since the routine can
 	 * manipulate the string in place.  This is the case here. */
@@ -484,10 +493,11 @@ static const char *find_daemon_dir(struct lightningd *ld, const char *argv0)
 	const char *my_path = find_my_directory(ld, argv0);
 	/* If we're running in-tree, all the subdaemons are with lightningd. */
 	if (has_all_subdaemons(my_path)) {
-		/* In this case, look in ../plugins */
-		add_plugin_dir(ld->plugins,
-			       path_join(tmpctx, my_path, "../plugins"),
-			       true);
+		/* In this case, look for built-in plugins in ../plugins */
+		plugins_set_builtin_plugins_dir(ld->plugins,
+						path_join(tmpctx,
+							  my_path,
+							  "../plugins"));
 		return my_path;
 	}
 
@@ -727,6 +737,7 @@ static struct feature_set *default_features(const tal_t *ctx)
 		OPTIONAL_FEATURE(OPT_GOSSIP_QUERIES_EX),
 		OPTIONAL_FEATURE(OPT_STATIC_REMOTEKEY),
 #if EXPERIMENTAL_FEATURES
+		OPTIONAL_FEATURE(OPT_ANCHOR_OUTPUTS),
 		OPTIONAL_FEATURE(OPT_ONION_MESSAGES),
 #endif
 	};
@@ -751,6 +762,14 @@ static void hsm_ecdh_failed(enum status_failreason fail,
 	fatal("hsm failure: %s", fmt);
 }
 
+/*~ This signals to the mainloop that some part wants to cleanly exit now.  */
+void lightningd_exit(struct lightningd *ld, int exit_code)
+{
+	ld->exit_code = tal(ld, int);
+	*ld->exit_code = exit_code;
+	io_break(ld);
+}
+
 int main(int argc, char *argv[])
 {
 	struct lightningd *ld;
@@ -762,6 +781,8 @@ int main(int argc, char *argv[])
 	struct htlc_in_map *unconnected_htlcs_in;
 	struct ext_key *bip32_base;
 	struct rlimit nofile = {1024, 1024};
+
+	int exit_code = 0;
 
 	/*~ Make sure that we limit ourselves to something reasonable. Modesty
 	 *  is a virtue. */
@@ -914,9 +935,6 @@ int main(int argc, char *argv[])
 		       min_blockheight, max_blockheight);
 
 	db_begin_transaction(ld->wallet->db);
-	/*~ Tell the wallet to start figuring out what to do for any reserved
-	 * unspent outputs we may have crashed with. */
-	wallet_clean_utxos(ld->wallet, ld->topology->bitcoind);
 
 	/*~ Pull peers, channels and HTLCs from db. Needs to happen after the
 	 *  topology is initialized since some decisions rely on being able to
@@ -1002,10 +1020,17 @@ int main(int argc, char *argv[])
 	assert(io_loop_ret == ld);
 	ld->state = LD_STATE_SHUTDOWN;
 
-	/* Keep this fd around, to write final response at the end. */
-	stop_fd = io_conn_fd(ld->stop_conn);
-	io_close_taken_fd(ld->stop_conn);
-	stop_response = tal_steal(NULL, ld->stop_response);
+	/* Were we exited via `lightningd_exit`?  */
+	if (ld->exit_code) {
+		exit_code = *ld->exit_code;
+		stop_fd = -1;
+		stop_response = NULL;
+	} else {
+		/* Keep this fd around, to write final response at the end. */
+		stop_fd = io_conn_fd(ld->stop_conn);
+		io_close_taken_fd(ld->stop_conn);
+		stop_response = tal_steal(NULL, ld->stop_response);
+	}
 
 	shutdown_subdaemons(ld);
 
@@ -1017,7 +1042,6 @@ int main(int argc, char *argv[])
 	 * unreserving UTXOs (see #1737) */
 	db_begin_transaction(ld->wallet->db);
 	tal_free(ld->jsonrpc);
-	free_unreleased_txs(ld->wallet);
 	db_commit_transaction(ld->wallet->db);
 
 	/* Clean our our HTLC maps, since they use malloc. */
@@ -1040,11 +1064,13 @@ int main(int argc, char *argv[])
 
 	daemon_shutdown();
 
-	/* Finally, send response to shutdown command */
-	write_all(stop_fd, stop_response, strlen(stop_response));
-	close(stop_fd);
-	tal_free(stop_response);
+	/* Finally, send response to shutdown command if appropriate.  */
+	if (stop_fd >= 0) {
+		write_all(stop_fd, stop_response, strlen(stop_response));
+		close(stop_fd);
+		tal_free(stop_response);
+	}
 
 	/*~ Farewell.  Next stop: hsmd/hsmd.c. */
-	return 0;
+	return exit_code;
 }

@@ -18,7 +18,7 @@ This auto-connection can fail if C-lightning does not know how to contact
 the target node; see \fBlightning-connect\fR(7)\.
 Once the
 transaction is confirmed, normal channel operations may begin\. Readiness
-is indicated by \fBlistpeers\fR reporting a \fIstate\fR of CHANNELD_NORMAL
+is indicated by \fBlistpeers\fR reporting a \fIstate\fR of \fBCHANNELD_NORMAL\fR
 for the channel\.
 
 
@@ -69,6 +69,7 @@ unrecoverable once pushed\.
 .SH RETURN VALUE
 
 On success, the \fItx\fR and \fItxid\fR of the transaction is returned, as well
+as the \fIoutnum\fR indicating the output index which creates the channel, as well
 as the \fIchannel_id\fR of the newly created channel\. On failure, an error
 is reported and the channel is not funded\.
 
@@ -95,8 +96,10 @@ channel parameters (funding limits, channel reserves, fees, etc\.)\.
 .SH SEE ALSO
 
 \fBlightning-connect\fR(7), lightning-listfunds(), \fBlightning-listpeers\fR(7),
-\fBlightning-feerates\fR(7)
+\fBlightning-feerates\fR(7), \fBlightning-multifundchannel\fR(7)
 
 .SH RESOURCES
 
 Main web site: \fIhttps://github.com/ElementsProject/lightning\fR
+
+\" SHA256STAMP:f885008c6e60738b1ec9c5def19cc0877b0f9a72498ffa60e9fb3277ed9d9919

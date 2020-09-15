@@ -7,9 +7,9 @@
 #include <common/jsonrpc_errors.h>
 #include <common/utils.h>
 #include <common/wire_error.h>
-#include <connectd/gen_connect_wire.h>
+#include <connectd/connectd_wiregen.h>
 #include <errno.h>
-#include <hsmd/gen_hsm_wire.h>
+#include <hsmd/hsmd_wiregen.h>
 #include <inttypes.h>
 #include <lightningd/channel.h>
 #include <lightningd/connect_control.h>
@@ -18,6 +18,7 @@
 #include <lightningd/jsonrpc.h>
 #include <lightningd/lightningd.h>
 #include <lightningd/log.h>
+#include <lightningd/notification.h>
 #include <lightningd/opening_control.h>
 #include <lightningd/peer_control.h>
 #include <lightningd/subd.h>
@@ -43,7 +44,7 @@ void channel_set_owner(struct channel *channel, struct subd *owner)
 			 */
 			if (channel->peer->ld->connectd) {
 				u8 *msg;
-				msg = towire_connectctl_peer_disconnected(
+				msg = towire_connectd_peer_disconnected(
 						NULL,
 						&channel->peer->id);
 				subd_send_msg(channel->peer->ld->connectd,
@@ -130,12 +131,12 @@ void get_channel_basepoints(struct lightningd *ld,
 	u8 *msg;
 
 	assert(dbid != 0);
-	msg = towire_hsm_get_channel_basepoints(NULL, peer_id, dbid);
+	msg = towire_hsmd_get_channel_basepoints(NULL, peer_id, dbid);
 	if (!wire_sync_write(ld->hsm_fd, take(msg)))
 		fatal("Could not write to HSM: %s", strerror(errno));
 
 	msg = wire_sync_read(tmpctx, ld->hsm_fd);
-	if (!fromwire_hsm_get_channel_basepoints_reply(msg, local_basepoints,
+	if (!fromwire_hsmd_get_channel_basepoints_reply(msg, local_basepoints,
 						       local_funding_pubkey))
 		fatal("HSM gave bad hsm_get_channel_basepoints_reply %s",
 		      tal_hex(msg, msg));
@@ -163,6 +164,7 @@ struct channel *new_channel(struct peer *peer, u64 dbid,
 			    bool remote_funding_locked,
 			    /* NULL or stolen */
 			    struct short_channel_id *scid,
+			    struct channel_id *cid,
 			    struct amount_msat our_msat,
 			    struct amount_msat msat_to_us_min,
 			    struct amount_msat msat_to_us_max,
@@ -170,7 +172,7 @@ struct channel *new_channel(struct peer *peer, u64 dbid,
 			    struct bitcoin_tx *last_tx,
 			    const struct bitcoin_signature *last_sig,
 			    /* NULL or stolen */
-			    secp256k1_ecdsa_signature *last_htlc_sigs,
+			    const struct bitcoin_signature *last_htlc_sigs,
 			    const struct channel_info *channel_info,
 			    /* NULL or stolen */
 			    u8 *remote_shutdown_scriptpubkey,
@@ -189,7 +191,8 @@ struct channel *new_channel(struct peer *peer, u64 dbid,
 			    u32 feerate_base,
 			    u32 feerate_ppm,
 			    const u8 *remote_upfront_shutdown_script,
-			    bool option_static_remotekey)
+			    bool option_static_remotekey,
+			    bool option_anchor_outputs)
 {
 	struct channel *channel = tal(peer->ld, struct channel);
 
@@ -231,6 +234,7 @@ struct channel *new_channel(struct peer *peer, u64 dbid,
 	channel->our_funds = our_funds;
 	channel->remote_funding_locked = remote_funding_locked;
 	channel->scid = tal_steal(channel, scid);
+	channel->cid = *cid;
 	channel->our_msat = our_msat;
 	channel->msat_to_us_min = msat_to_us_min;
 	channel->msat_to_us_max = msat_to_us_max;
@@ -270,9 +274,11 @@ struct channel *new_channel(struct peer *peer, u64 dbid,
 	channel->remote_upfront_shutdown_script
 		= tal_steal(channel, remote_upfront_shutdown_script);
 	channel->option_static_remotekey = option_static_remotekey;
+	channel->option_anchor_outputs = option_anchor_outputs;
 	channel->forgets = tal_arr(channel, struct command *, 0);
 
 	list_add_tail(&peer->channels, &channel->list);
+	channel->rr_number = peer->ld->rr_counter++;
 	tal_add_destructor(channel, destroy_channel);
 
 	/* Make sure we see any spends using this key */
@@ -379,6 +385,8 @@ void channel_set_state(struct channel *channel,
 		       enum channel_state old_state,
 		       enum channel_state state)
 {
+	struct channel_id cid;
+
 	log_info(channel->log, "State changed from %s to %s",
 		 channel_state_name(channel), channel_state_str(state));
 	if (channel->state != old_state)
@@ -389,6 +397,17 @@ void channel_set_state(struct channel *channel,
 
 	/* TODO(cdecker) Selectively save updated fields to DB */
 	wallet_channel_save(channel->peer->ld->wallet, channel);
+
+	/* plugin notification channel_state_changed */
+	if (state != old_state) {  /* see issue #4029 */
+		derive_channel_id(&cid, &channel->funding_txid, channel->funding_outnum);
+		notify_channel_state_changed(channel->peer->ld,
+					     &channel->peer->id,
+					     &cid,
+					     channel->scid,
+					     old_state,
+					     state);
+	}
 }
 
 void channel_fail_permanent(struct channel *channel, const char *fmt, ...)
@@ -396,7 +415,6 @@ void channel_fail_permanent(struct channel *channel, const char *fmt, ...)
 	struct lightningd *ld = channel->peer->ld;
 	va_list ap;
 	char *why;
-	struct channel_id cid;
 
 	va_start(ap, fmt);
 	why = tal_vfmt(tmpctx, fmt, ap);
@@ -406,12 +424,9 @@ void channel_fail_permanent(struct channel *channel, const char *fmt, ...)
 		    channel_state_name(channel), why);
 
 	/* We can have multiple errors, eg. onchaind failures. */
-	if (!channel->error) {
-		derive_channel_id(&cid,
-				  &channel->funding_txid,
-				  channel->funding_outnum);
-		channel->error = towire_errorfmt(channel, &cid, "%s", why);
-	}
+	if (!channel->error)
+		channel->error = towire_errorfmt(channel,
+						 &channel->cid, "%s", why);
 
 	channel_set_owner(channel, NULL);
 	/* Drop non-cooperatively (unilateral) to chain. */
@@ -427,7 +442,6 @@ void channel_fail_forget(struct channel *channel, const char *fmt, ...)
 {
 	va_list ap;
 	char *why;
-	struct channel_id cid;
 
 	assert(channel->opener == REMOTE &&
 	       channel->state == CHANNELD_AWAITING_LOCKIN);
@@ -439,12 +453,9 @@ void channel_fail_forget(struct channel *channel, const char *fmt, ...)
 		    "forget channel",
 		    channel_state_name(channel), why);
 
-	if (!channel->error) {
-		derive_channel_id(&cid,
-				  &channel->funding_txid,
-				  channel->funding_outnum);
-		channel->error = towire_errorfmt(channel, &cid, "%s", why);
-	}
+	if (!channel->error)
+		channel->error = towire_errorfmt(channel,
+						 &channel->cid, "%s", why);
 
 	delete_channel(channel);
 	tal_free(why);

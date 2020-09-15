@@ -40,6 +40,10 @@ const u8 *gossip_store_get_private_update(const tal_t *ctx UNNEEDED,
 					  struct gossip_store *gs UNNEEDED,
 					  u64 offset UNNEEDED)
 { fprintf(stderr, "gossip_store_get_private_update called!\n"); abort(); }
+/* Generated stub for gossip_store_mark_channel_deleted */
+void gossip_store_mark_channel_deleted(struct gossip_store *gs UNNEEDED,
+				       const struct short_channel_id *scid UNNEEDED)
+{ fprintf(stderr, "gossip_store_mark_channel_deleted called!\n"); abort(); }
 /* Generated stub for json_add_member */
 void json_add_member(struct json_stream *js UNNEEDED,
 		     const char *fieldname UNNEEDED,
@@ -79,9 +83,6 @@ bool nannounce_different(struct gossip_store *gs UNNEEDED,
 /* Generated stub for notleak_ */
 void *notleak_(const void *ptr UNNEEDED, bool plus_children UNNEEDED)
 { fprintf(stderr, "notleak_ called!\n"); abort(); }
-/* Generated stub for onion_type_name */
-const char *onion_type_name(int e UNNEEDED)
-{ fprintf(stderr, "onion_type_name called!\n"); abort(); }
 /* Generated stub for peer_supplied_good_gossip */
 void peer_supplied_good_gossip(struct peer *peer UNNEEDED, size_t amount UNNEEDED)
 { fprintf(stderr, "peer_supplied_good_gossip called!\n"); abort(); }

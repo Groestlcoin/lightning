@@ -95,6 +95,7 @@ The objects in the *channels* array will have at least these fields:
   a number followed by a string unit.
 * *total\_msat*: A string describing the total capacity of the channel;
   a number followed by a string unit.
+* *features*: An array of feature names supported by this channel.
 
 These fields may exist if the channel has gotten beyond the `"OPENINGD"`
 state, or in various circumstances:
@@ -240,3 +241,4 @@ RESOURCES
 Main web site: <https://github.com/ElementsProject/lightning> Lightning
 RFC site (BOLT \#9):
 <https://github.com/lightningnetwork/lightning-rfc/blob/master/09-features.md>
+

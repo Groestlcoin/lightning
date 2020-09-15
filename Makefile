@@ -24,7 +24,7 @@ CCANDIR := ccan
 
 # Where we keep the BOLT RFCs
 BOLTDIR := ../lightning-rfc/
-BOLTVERSION := 9e8e29af9b9a922eb114b2c716205d0772946e56
+BOLTVERSION := 7e8c478aef0d23a445845b7d297b0e804583697c
 
 -include config.vars
 
@@ -32,7 +32,7 @@ SORT=LC_ALL=C sort
 
 
 ifeq ($V,1)
-VERBOSE = $(ECHO) $(2); $(2)
+VERBOSE = $(ECHO) '$(2)'; $(2)
 else
 VERBOSE = $(ECHO) $(1); $(2)
 endif
@@ -196,18 +196,22 @@ CCAN_HEADERS :=						\
 	$(CCANDIR)/ccan/typesafe_cb/typesafe_cb.h	\
 	$(CCANDIR)/ccan/utf8/utf8.h
 
-ALL_GEN_HEADERS += gen_version.h
-
 CDUMP_OBJS := ccan-cdump.o ccan-strmap.o
 
 BOLT_GEN := tools/generate-wire.py
 WIRE_GEN := $(BOLT_GEN)
-BOLT_DEPS := $(BOLT_GEN)
 
-ALL_PROGRAMS =
+# If you use wiregen, you're dependent on the tool and its templates
+WIRE_GEN_DEPS := $(WIRE_GEN) $(wildcard tools/gen/*_template)
+
+# These are filled by individual Makefiles
+ALL_PROGRAMS :=
+ALL_TEST_PROGRAMS :=
+ALL_C_SOURCES :=
+ALL_C_HEADERS := gen_header_versions.h gen_list_of_builtin_plugins.h gen_version.h
 
 CPPFLAGS += -DBINTOPKGLIBEXECDIR="\"$(shell sh tools/rel.sh $(bindir) $(pkglibexecdir))\""
-CFLAGS = $(CPPFLAGS) $(CWARNFLAGS) $(CDEBUGFLAGS) $(COPTFLAGS) -I $(CCANDIR) $(EXTERNAL_INCLUDE_FLAGS) -I . -I/usr/local/include $(FEATURES) $(COVFLAGS) $(DEV_CFLAGS) -DSHACHAIN_BITS=48 -DJSMN_PARENT_LINKS $(PIE_CFLAGS) $(COMPAT_CFLAGS) -DBUILD_ELEMENTS=1
+CFLAGS = $(CPPFLAGS) $(CWARNFLAGS) $(CDEBUGFLAGS) $(COPTFLAGS) -I $(CCANDIR) $(EXTERNAL_INCLUDE_FLAGS) -I . -I/usr/local/include $(SQLITE3_CFLAGS) $(POSTGRES_INCLUDE) $(FEATURES) $(COVFLAGS) $(DEV_CFLAGS) -DSHACHAIN_BITS=48 -DJSMN_PARENT_LINKS $(PIE_CFLAGS) $(COMPAT_CFLAGS) -DBUILD_ELEMENTS=1
 # If CFLAGS is already set in the environment of make (to whatever value, it
 # does not matter) then it would export it to subprocesses with the above value
 # we set, including CWARNFLAGS which by default contains -Wall -Werror. This
@@ -223,19 +227,19 @@ ifeq ($(STATIC),1)
 # For MacOS, Jacob Rapoport <jacob@rumblemonkey.com> changed this to:
 #  -L/usr/local/lib -Wl,-lgmp -lsqlite3 -lz -Wl,-lm -lpthread -ldl $(COVFLAGS)
 # But that doesn't static link.
-LDLIBS = -L/usr/local/lib -Wl,-dn -lgmp -lsqlite3 -lz -Wl,-dy -lm -lpthread -ldl $(COVFLAGS)
+LDLIBS = -L/usr/local/lib -Wl,-dn -lgmp $(SQLITE3_LDLIBS) -lz -Wl,-dy -lm -lpthread -ldl $(COVFLAGS)
 else
-LDLIBS = -L/usr/local/lib -lm -lgmp -lsqlite3 -lz $(COVFLAGS)
+LDLIBS = -L/usr/local/lib -lm -lgmp $(SQLITE3_LDLIBS) -lz $(COVFLAGS)
 endif
 
 # If we have the postgres client library we need to link against it as well
 ifeq ($(HAVE_POSTGRES),1)
-LDLIBS += -lpq
+LDLIBS += $(POSTGRES_LDLIBS)
 endif
 
 default: show-flags all-programs all-test-programs doc-all
 
-show-flags:
+show-flags: config.vars
 	@$(ECHO) "CC: $(CC) $(CFLAGS) -c -o"
 	@$(ECHO) "LD: $(LINK.o) $(filter-out %.a,$^) $(LOADLIBES) $(EXTERNAL_LDLIBS) $(LDLIBS) -o"
 
@@ -248,6 +252,34 @@ config.vars:
 
 %.o: %.c
 	@$(call VERBOSE, "cc $<", $(CC) $(CFLAGS) -c -o $@ $<)
+
+# '_exp' inserted before _wiregen.[ch] to demark experimental
+# spec-derived headers, which are *not* committed into git.
+ifeq ($(EXPERIMENTAL_FEATURES),1)
+EXP := _exp
+else
+EXP :=
+endif
+
+# Git doesn't maintain timestamps, so we only regen if sources actually changed:
+# We place the SHA inside some generated files so we can tell if they need updating.
+# Usage: $(call SHA256STAMP_CHANGED)
+SHA256STAMP_CHANGED = [ x"`sed -n 's/.*SHA256STAMP://p' $@ 2>/dev/null`" != x"`cat $(filter-out FORCE,$^) | sha256sum | cut -c1-64`" ]
+# Usage: $(call SHA256STAMP,commentprefix)
+SHA256STAMP = echo '$(1) SHA256STAMP:'`cat $(filter-out FORCE,$^) | sha256sum | cut -c1-64` >> $@
+
+# generate-wire.py --page [header|impl] hdrfilename wirename < csv > file
+%_wiregen.h: %_wire.csv $(WIRE_GEN_DEPS)
+	@if $(call SHA256STAMP_CHANGED); then $(call VERBOSE,"wiregen $@",tools/generate-wire.py --page header $($@_args) $@ `basename $< .csv | sed 's/_exp_/_/'` < $< > $@ && $(call SHA256STAMP,//)); fi
+
+%_wiregen.c: %_wire.csv $(WIRE_GEN_DEPS)
+	@if $(call SHA256STAMP_CHANGED); then $(call VERBOSE,"wiregen $@",tools/generate-wire.py --page impl $($@_args) ${@:.c=.h} `basename $< .csv | sed 's/_exp_/_/'` < $< > $@ && $(call SHA256STAMP,//)); fi
+
+%_printgen.h: %_wire.csv $(WIRE_GEN_DEPS)
+	@if $(call SHA256STAMP_CHANGED); then $(call VERBOSE,"printgen $@",tools/generate-wire.py -s -P --page header $($@_args) $@ `basename $< .csv | sed 's/_exp_/_/'` < $< > $@ && $(call SHA256STAMP,//)); fi
+
+%_printgen.c: %_wire.csv $(WIRE_GEN_DEPS)
+	@if $(call SHA256STAMP_CHANGED); then $(call VERBOSE,"printgen $@",tools/generate-wire.py -s -P --page impl $($@_args) ${@:.c=.h} `basename $< .csv | sed 's/_exp_/_/'` < $< > $@ && $(call SHA256STAMP,//)); fi
 
 include external/Makefile
 include bitcoin/Makefile
@@ -268,8 +300,29 @@ include tools/Makefile
 include plugins/Makefile
 include tests/plugins/Makefile
 
-# Git doesn't maintain timestamps, so we only regen if git says we should.
-CHANGED_FROM_GIT = [ x"`git log $@ | head -n1`" != x"`git log $< | head -n1`" -o x"`git diff $<`" != x"" ]
+# We make pretty much everything depend on these.
+ALL_GEN_HEADERS := $(filter gen%.h %printgen.h %wiregen.h,$(ALL_C_HEADERS))
+ALL_GEN_SOURCES := $(filter gen%.c %printgen.c %wiregen.c,$(ALL_C_SOURCES))
+ALL_NONGEN_SRCFILES := $(filter-out gen%.h %printgen.h %wiregen.h,$(ALL_C_HEADERS)) $(filter-out gen%.c %printgen.c %wiregen.c,$(ALL_C_SOURCES))
+
+# Don't delete these intermediaries.
+.PRECIOUS: $(ALL_GEN_HEADERS) $(ALL_GEN_SOURCES)
+
+# Every single object file.
+ALL_OBJS := $(ALL_C_SOURCES:.c=.o)
+
+# We always regen wiregen and printgen files, since SHA256STAMP protects against
+# spurious rebuilds.
+$(filter %printgen.h %printgen.c %wiregen.h %wiregen.c, $(ALL_C_HEADERS) $(ALL_C_SOURCES)): FORCE
+
+# Generated from PLUGINS definition in plugins/Makefile
+gen_list_of_builtin_plugins.h : plugins/Makefile Makefile
+	@echo GEN $@
+	@rm -f $@ || true
+	@echo 'static const char *list_of_builtin_plugins[] = {' >> $@
+	@echo '$(PLUGINS)' | sed 's@plugins/\([^ 	]*\)@"\1",@g'>> $@
+	@echo 'NULL' >> $@
+	@echo '};' >> $@
 
 ifneq ($(TEST_GROUP_COUNT),)
 PYTEST_OPTS += --test-group=$(TEST_GROUP) --test-group-count=$(TEST_GROUP_COUNT)
@@ -327,12 +380,12 @@ LOCAL_BOLTDIR=.tmp.lightningrfc
 bolt-precheck:
 	@[ -d $(BOLTDIR) ] || exit 0; set -e; if [ -z "$(BOLTVERSION)" ]; then rm -rf $(LOCAL_BOLTDIR); ln -sf $(BOLTDIR) $(LOCAL_BOLTDIR); exit 0; fi; [ "$$(git -C $(LOCAL_BOLTDIR) rev-list --max-count=1 HEAD 2>/dev/null)" != "$(BOLTVERSION)" ] || exit 0; rm -rf $(LOCAL_BOLTDIR) && git clone -q $(BOLTDIR) $(LOCAL_BOLTDIR) && cd $(LOCAL_BOLTDIR) && git checkout -q $(BOLTVERSION)
 
-check-source-bolt: $(ALL_TEST_PROGRAMS:%=bolt-check/%.c)
+check-source-bolt: $(ALL_NONGEN_SRCFILES:%=bolt-check/%)
 
 check-whitespace/%: %
 	@if grep -Hn '[ 	]$$' $<; then echo Extraneous whitespace found >&2; exit 1; fi
 
-check-whitespace: check-whitespace/Makefile check-whitespace/tools/check-bolt.c $(ALL_TEST_PROGRAMS:%=check-whitespace/%.c)
+check-whitespace: check-whitespace/Makefile check-whitespace/tools/check-bolt.c $(ALL_NONGEN_SRCFILES:%=check-whitespace/%)
 
 check-markdown:
 	@tools/check-markdown.sh
@@ -414,9 +467,6 @@ gen_version.h: FORCE
 gen_header_versions.h: tools/headerversions
 	@tools/headerversions $@
 
-# Rebuild the world if this changes.
-ALL_GEN_HEADERS += gen_header_versions.h
-
 # All binaries require the external libs, ccan and system library versions.
 $(ALL_PROGRAMS) $(ALL_TEST_PROGRAMS): $(EXTERNAL_LIBS) $(CCAN_OBJS)
 
@@ -435,9 +485,6 @@ $(CCAN_OBJS) $(CDUMP_OBJS): $(CCAN_HEADERS) Makefile
 
 # Except for CCAN, we treat everything else as dependent on external/ bitcoin/ common/ wire/ and all generated headers, and Makefile
 $(ALL_OBJS): $(BITCOIN_HEADERS) $(COMMON_HEADERS) $(CCAN_HEADERS) $(WIRE_HEADERS) $(ALL_GEN_HEADERS) $(EXTERNAL_HEADERS) Makefile
-
-# We generate headers in two ways, so regen when either changes (or Makefile)
-$(ALL_GEN_HEADERS): ccan/ccan/cdump/tools/cdump-enumstr $(WIRE_GEN) Makefile
 
 update-ccan:
 	mv ccan ccan.old
@@ -460,12 +507,13 @@ distclean: clean
 maintainer-clean: distclean
 	@echo 'This command is intended for maintainers to use; it'
 	@echo 'deletes files that may need special tools to rebuild.'
+	$(RM) $(ALL_GEN_HEADERS) $(ALL_GEN_SOURCES)
 
 clean:
 	$(RM) $(CCAN_OBJS) $(CDUMP_OBJS) $(ALL_OBJS)
-	$(RM) $(ALL_PROGRAMS) $(ALL_PROGRAMS:=.o)
-	$(RM) $(ALL_TEST_PROGRAMS) $(ALL_TEST_PROGRAMS:=.o)
-	$(RM) gen_*.h ccan/tools/configurator/configurator
+	$(RM) $(ALL_PROGRAMS)
+	$(RM) $(ALL_TEST_PROGRAMS)
+	$(RM) gen_*.h */gen_* ccan/tools/configurator/configurator
 	$(RM) ccan/ccan/cdump/tools/cdump-enumstr.o
 	find . -name '*gcda' -delete
 	find . -name '*gcno' -delete
@@ -533,6 +581,11 @@ PKGLIBEXEC_PROGRAMS = \
 	       lightningd/lightning_hsmd \
 	       lightningd/lightning_onchaind \
 	       lightningd/lightning_openingd
+
+# Only build dualopend if experimental features is on
+ifeq ($(EXPERIMENTAL_FEATURES),1)
+PKGLIBEXEC_PROGRAMS += lightningd/lightning_dualopend
+endif
 
 # $(PLUGINS) is defined in plugins/Makefile.
 

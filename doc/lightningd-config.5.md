@@ -234,8 +234,12 @@ for existing channels, use the RPC call lightning-setchannelfee(7).
 
  **min-capacity-sat**=*SATOSHI*
 Default: 10000. This value defines the minimal effective channel
-capacity in satoshi to accept for channel opening requests. If a peer
-tries to open a channel smaller than this, the opening will be rejected.
+capacity in satoshi to accept for channel opening requests. This will
+reject any opening of a channel which can't pass an HTLC of least this
+value.  Usually this prevents a peer opening a tiny channel, but it
+can also prevent a channel you open with a reasonable amount and the peer
+requesting such a large reserve that the capacity of the channel
+falls below this.
 
  **ignore-fee-limits**=*BOOL*
 Allow nodes which establish channels to us to set any fee they want.
@@ -402,7 +406,7 @@ this to *false* disables that.
 
  **proxy**=*IPADDRESS\[:PORT\]*
 Set a socks proxy to use to connect to Tor nodes (or for all connections
-if **always-use-proxy** is set).
+if **always-use-proxy** is set).  The port defaults to 9050 if not specified.
 
  **always-use-proxy**=*BOOL*
 Always use the **proxy**, even to connect to normal IP addresses (you
@@ -439,10 +443,11 @@ loaded. *DIRECTORY* must exist; this can be specified multiple times to
 add multiple directories.
 
  **clear-plugins**
-This option clears all *plugin* and *plugin-dir* options preceeding it,
+This option clears all *plugin*, *important-plugin*, and *plugin-dir* options
+preceeding it,
 including the default built-in plugin directory. You can still add
-*plugin-dir* and *plugin* options following this and they will have the
-normal effect.
+*plugin-dir*, *plugin*, and *important-plugin* options following this
+and they will have the normal effect.
 
  **disable-plugin**=*PLUGIN*
 If *PLUGIN* contains a /, plugins with the same path as *PLUGIN* will
@@ -450,6 +455,17 @@ not be loaded at startup. Otherwise, no plugin with that base name will
 be loaded at startup, whatever directory it is in.  This option is useful for
 disabling a single plugin inside a directory.  You can still explicitly
 load plugins which have been disabled, using lightning-plugin(7) `start`.
+
+ **important-plugin**=*PLUGIN*
+Speciy a plugin to run as part of C-lightning.
+This can be specified multiple times to add multiple plugins.
+Plugins specified via this option are considered so important, that if the
+plugin stops for any reason (including via lightning-plugin(7) `stop`),
+C-lightning will also stop running.
+This way, you can monitor crashes of important plugins by simply monitoring
+if C-lightning terminates.
+Built-in plugins, which are installed with lightningd(8), are automatically
+considered important.
 
 BUGS
 ----
@@ -480,3 +496,4 @@ COPYING
 
 Note: the modules in the ccan/ directory have their own licenses, but
 the rest of the code is covered by the BSD-style MIT license.
+

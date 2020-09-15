@@ -12,6 +12,7 @@
 #include <common/type_to_string.h>
 #include <common/wireaddr.h>
 #include <errno.h>
+#include <wally_psbt.h>
 
 bool json_to_bitcoin_amount(const char *buffer, const jsmntok_t *tok,
 			    uint64_t *satoshi)
@@ -127,6 +128,13 @@ bool json_to_preimage(const char *buffer, const jsmntok_t *tok, struct preimage 
 	return hex_decode(buffer + tok->start, hexlen, preimage->r, sizeof(preimage->r));
 }
 
+bool json_to_psbt(const tal_t *ctx, const char *buffer,
+		  const jsmntok_t *tok, struct wally_psbt **dest)
+{
+	*dest = psbt_from_b64(ctx, buffer + tok->start, tok->end - tok->start);
+	return dest != NULL;
+}
+
 void json_add_node_id(struct json_stream *response,
 		      const char *fieldname,
 		      const struct node_id *id)
@@ -179,13 +187,14 @@ void json_add_address(struct json_stream *response, const char *fieldname,
 		      const struct wireaddr *addr)
 {
 	json_object_start(response, fieldname);
-	char *addrstr = tal_arr(response, char, INET6_ADDRSTRLEN);
 	if (addr->type == ADDR_TYPE_IPV4) {
+		char addrstr[INET_ADDRSTRLEN];
 		inet_ntop(AF_INET, addr->addr, addrstr, INET_ADDRSTRLEN);
 		json_add_string(response, "type", "ipv4");
 		json_add_string(response, "address", addrstr);
 		json_add_num(response, "port", addr->port);
 	} else if (addr->type == ADDR_TYPE_IPV6) {
+		char addrstr[INET6_ADDRSTRLEN];
 		inet_ntop(AF_INET6, addr->addr, addrstr, INET6_ADDRSTRLEN);
 		json_add_string(response, "type", "ipv6");
 		json_add_string(response, "address", addrstr);

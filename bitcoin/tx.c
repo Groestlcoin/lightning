@@ -16,21 +16,6 @@
 
 #define SEGREGATED_WITNESS_FLAG 0x1
 
-/* FIXME: When wally exposes this, we will clash and can remove this one */
-int wally_tx_clone(struct wally_tx *tx, struct wally_tx **output)
-{
-	u8 *txlin = linearize_wtx(NULL, tx);
-	int flags = WALLY_TX_FLAG_USE_WITNESS;
-	int ret;
-
-	if (chainparams->is_elements)
-		flags |= WALLY_TX_FLAG_USE_ELEMENTS;
-
-	ret = wally_tx_from_bytes(txlin, tal_bytelen(txlin), flags, output);
-	tal_free(txlin);
-	return ret;
-}
-
 struct bitcoin_tx_output *new_tx_output(const tal_t *ctx,
 					struct amount_sat amount,
 					const u8 *script)
@@ -41,19 +26,12 @@ struct bitcoin_tx_output *new_tx_output(const tal_t *ctx,
 	return output;
 }
 
-int bitcoin_tx_add_output(struct bitcoin_tx *tx, const u8 *script,
-			  u8 *wscript, struct amount_sat amount)
+struct wally_tx_output *wally_tx_output(const u8 *script,
+					struct amount_sat amount)
 {
-	size_t i = tx->wtx->num_outputs;
+	u64 satoshis = amount.satoshis; /* Raw: wally API */
 	struct wally_tx_output *output;
-	struct wally_psbt_output *psbt_out;
 	int ret;
-	u64 satoshis = amount.satoshis; /* Raw: low-level helper */
-	const struct chainparams *chainparams = tx->chainparams;
-	assert(i < tx->wtx->outputs_allocation_len);
-
-	assert(tx->wtx != NULL);
-	assert(chainparams);
 
 	if (chainparams->is_elements) {
 		u8 value[9];
@@ -63,15 +41,36 @@ int bitcoin_tx_add_output(struct bitcoin_tx *tx, const u8 *script,
 		ret = wally_tx_elements_output_init_alloc(
 		    script, tal_bytelen(script), chainparams->fee_asset_tag, 33,
 		    value, sizeof(value), NULL, 0, NULL, 0, NULL, 0, &output);
-		assert(ret == WALLY_OK);
+		if (ret != WALLY_OK)
+			return NULL;
+
 		/* Cheat a bit by also setting the numeric satoshi value,
 		 * otherwise we end up converting a number of times */
 		output->satoshi = satoshis;
 	} else {
 		ret = wally_tx_output_init_alloc(satoshis, script,
 						 tal_bytelen(script), &output);
-		assert(ret == WALLY_OK);
+		if (ret != WALLY_OK)
+			return NULL;
 	}
+	return output;
+}
+
+int bitcoin_tx_add_output(struct bitcoin_tx *tx, const u8 *script,
+			  u8 *wscript, struct amount_sat amount)
+{
+	size_t i = tx->wtx->num_outputs;
+	struct wally_tx_output *output;
+	struct wally_psbt_output *psbt_out;
+	int ret;
+	const struct chainparams *chainparams = tx->chainparams;
+	assert(i < tx->wtx->outputs_allocation_len);
+
+	assert(tx->wtx != NULL);
+	assert(chainparams);
+
+	output = wally_tx_output(script, amount);
+	assert(output);
 	ret = wally_tx_add_output(tx->wtx, output);
 	assert(ret == WALLY_OK);
 
@@ -99,11 +98,16 @@ int bitcoin_tx_add_multi_outputs(struct bitcoin_tx *tx,
 	return tx->wtx->num_outputs;
 }
 
+bool elements_wtx_output_is_fee(const struct wally_tx *tx, int outnum)
+{
+	assert(outnum < tx->num_outputs);
+	return chainparams->is_elements &&
+		tx->outputs[outnum].script_len == 0;
+}
+
 bool elements_tx_output_is_fee(const struct bitcoin_tx *tx, int outnum)
 {
-	assert(outnum < tx->wtx->num_outputs);
-	return chainparams->is_elements &&
-	       tx->wtx->outputs[outnum].script_len == 0;
+	return elements_wtx_output_is_fee(tx->wtx, outnum);
 }
 
 struct amount_sat bitcoin_tx_compute_fee_w_inputs(const struct bitcoin_tx *tx,
@@ -188,76 +192,36 @@ int bitcoin_tx_add_input(struct bitcoin_tx *tx, const struct bitcoin_txid *txid,
 			 struct amount_sat amount, const u8 *scriptPubkey,
 			 const u8 *input_wscript)
 {
-	struct wally_tx_input *input;
 	int wally_err;
-	size_t i;
+	int input_num = tx->wtx->num_inputs;
 
-	assert(tx->wtx != NULL);
-	i = tx->wtx->num_inputs;
-	wally_err = wally_tx_input_init_alloc(txid->shad.sha.u.u8,
-					      sizeof(struct bitcoin_txid),
-					      outnum, sequence,
-					      scriptSig, tal_bytelen(scriptSig),
-					      NULL /* Empty witness stack */,
-					      &input);
-	assert(wally_err == WALLY_OK);
-	input->features = chainparams->is_elements ? WALLY_TX_IS_ELEMENTS : 0;
-	wally_tx_add_input(tx->wtx, input);
-	psbt_add_input(tx->psbt, input, i);
+	psbt_append_input(tx->psbt, txid, outnum, sequence, scriptSig,
+			  input_wscript, NULL);
 
 	if (input_wscript) {
-		/* Add the prev output's data into the PSBT struct */
-		if (is_elements(chainparams)) {
-			struct amount_asset asset;
-			/*FIXME: persist asset tags */
-			asset = amount_sat_to_asset(
-					&amount,
-					chainparams->fee_asset_tag);
-			psbt_elements_input_init_witness(tx->psbt, i,
-							 input_wscript,
-							 &asset, NULL);
-		} else
-			psbt_input_set_prev_utxo_wscript(tx->psbt, i,
-							 input_wscript,
-							 amount);
-	} else if (scriptPubkey) {
-		if (is_p2wsh(scriptPubkey, NULL) ||
-			is_p2wpkh(scriptPubkey, NULL) ||
-			/* FIXME: assert that p2sh inputs are
-			 * witness/are accompanied by a
-			 * redeemscript+witnessscript */
-			is_p2sh(scriptPubkey, NULL)) {
-			/* the only way to get here currently with
-			 * a p2sh script is via a p2sh-p2wpkh script
-			 * that we've created ...*/
-			/* BIP0174:
-			 * ** Value: The entire transaction output in
-			 * network serialization which the
-			 * current input spends from.
-			 * This should only be present for
-			 * inputs which spend segwit outputs,
-			 * including P2SH embedded ones.
-			 */
-			if (is_elements(chainparams)) {
-				struct amount_asset asset;
-				/*FIXME: persist asset tags */
-				asset = amount_sat_to_asset(
-						&amount,
-						chainparams->fee_asset_tag);
-				/* FIXME: persist nonces */
-				psbt_elements_input_init(tx->psbt, i,
-							 scriptPubkey,
-							 &asset, NULL);
-			} else
-				psbt_input_set_prev_utxo(tx->psbt, i,
-							 scriptPubkey,
-							 amount);
-		}
+		scriptPubkey = scriptpubkey_p2wsh(tx->psbt, input_wscript);
 	}
 
-	wally_tx_input_free(input);
+	assert(scriptPubkey);
+	psbt_input_set_wit_utxo(tx->psbt, input_num,
+				scriptPubkey, amount);
+	wally_err = wally_tx_add_input(tx->wtx,
+				       &tx->psbt->tx->inputs[input_num]);
+	assert(wally_err == WALLY_OK);
 
-	return i;
+	/* scriptsig isn't actually stored in psbt input, so add that now */
+	wally_tx_set_input_script(tx->wtx, input_num,
+				  scriptSig, tal_bytelen(scriptSig));
+
+	if (is_elements(chainparams)) {
+		struct amount_asset asset;
+		/* FIXME: persist asset tags */
+		asset = amount_sat_to_asset(&amount,
+					    chainparams->fee_asset_tag);
+		/* FIXME: persist nonces */
+		psbt_elements_input_set_asset(tx->psbt, input_num, &asset);
+	}
+	return input_num;
 }
 
 bool bitcoin_tx_check(const struct bitcoin_tx *tx)
@@ -343,7 +307,7 @@ struct amount_asset bitcoin_tx_output_get_amount(const struct bitcoin_tx *tx,
 	return wally_tx_output_get_amount(&tx->wtx->outputs[outnum]);
 }
 
-void bitcoin_tx_output_get_amount_sat(struct bitcoin_tx *tx, int outnum,
+void bitcoin_tx_output_get_amount_sat(const struct bitcoin_tx *tx, int outnum,
 				      struct amount_sat *amount)
 {
 	struct amount_asset asset_amt;
@@ -393,7 +357,7 @@ void bitcoin_tx_input_set_script(struct bitcoin_tx *tx, int innum, u8 *script)
 	/* Also add to the psbt */
 	assert(innum < tx->psbt->num_inputs);
 	in = &tx->psbt->inputs[innum];
-	wally_psbt_input_set_final_script_sig(in, script, tal_bytelen(script));
+	wally_psbt_input_set_final_scriptsig(in, script, tal_bytelen(script));
 }
 
 const u8 *bitcoin_tx_input_get_witness(const tal_t *ctx,
@@ -540,7 +504,7 @@ struct bitcoin_tx *bitcoin_tx_with_psbt(const tal_t *ctx, struct wally_psbt *psb
 					   psbt->tx->locktime);
 	wally_tx_free(tx->wtx);
 	tx->wtx = psbt_finalize(psbt, false);
-	if (!tx->wtx && wally_tx_clone(psbt->tx, &tx->wtx) != WALLY_OK)
+	if (!tx->wtx && wally_tx_clone_alloc(psbt->tx, 0, &tx->wtx) != WALLY_OK)
 		return NULL;
 
 	tal_free(tx->psbt);
@@ -566,14 +530,7 @@ struct bitcoin_tx *pull_bitcoin_tx(const tal_t *ctx, const u8 **cursor,
 
 	tal_add_destructor(tx, bitcoin_tx_destroy);
 
-	/* For whatever reason the length computation gets upset if we tell it
-	 * that we are using elements. It wants to discover it on its own, NO
-	 * CLUES! (Ms. Doyle)
-	 *
-	 * https://github.com/ElementsProject/libwally-core/issues/139
-	 */
-	wally_tx_get_length(tx->wtx, flags & ~WALLY_TX_FLAG_USE_ELEMENTS,
-			    &wsize);
+	wally_tx_get_length(tx->wtx, flags, &wsize);
 
 	tx->chainparams = chainparams;
 

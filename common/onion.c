@@ -5,7 +5,7 @@
 #include <common/ecdh.h>
 #include <common/sphinx.h>
 #include <sodium/crypto_aead_chacha20poly1305.h>
-#include <wire/gen_onion_wire.h>
+#include <wire/onion_wire.h>
 
 /* BOLT #4:
  *
@@ -30,7 +30,7 @@ static u8 *make_v0_hop(const tal_t *ctx,
 	/* Prepend 0 byte for realm */
 	u8 *buf = tal_arrz(ctx, u8, 1);
 	towire_short_channel_id(&buf, scid);
-	towire_u64(&buf, forward.millisatoshis); /* Raw: low-level serializer */
+	towire_amount_msat(&buf, forward);
 	towire_u32(&buf, outgoing_cltv);
 	towire(&buf, padding, ARRAY_SIZE(padding));
 	assert(tal_bytelen(buf) == 1 + 32);
@@ -326,7 +326,7 @@ struct onion_payload *onion_decode(const tal_t *ctx,
 		if (!tlv->amt_to_forward || !tlv->outgoing_cltv_value)
 			goto fail;
 
-		amount_msat_from_u64(&p->amt_to_forward, *tlv->amt_to_forward);
+		p->amt_to_forward = amount_msat(*tlv->amt_to_forward);
 		p->outgoing_cltv = *tlv->outgoing_cltv_value;
 
 		/* BOLT #4:
@@ -400,8 +400,8 @@ struct onion_payload *onion_decode(const tal_t *ctx,
 						    &tlv->payment_data->payment_secret);
 			tal_free(p->total_msat);
 			p->total_msat = tal(p, struct amount_msat);
-			p->total_msat->millisatoshis /* Raw: tu64 on wire */
-				= tlv->payment_data->total_msat;
+			*p->total_msat
+				= amount_msat(tlv->payment_data->total_msat);
 		}
 		tal_free(tlv);
 		return p;

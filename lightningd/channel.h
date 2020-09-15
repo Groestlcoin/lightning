@@ -2,10 +2,12 @@
 #define LIGHTNING_LIGHTNINGD_CHANNEL_H
 #include "config.h"
 #include <ccan/list/list.h>
+#include <common/channel_id.h>
 #include <lightningd/channel_state.h>
 #include <lightningd/peer_htlcs.h>
 #include <wallet/wallet.h>
 
+struct channel_id;
 struct uncommitted_channel;
 
 struct billboard {
@@ -69,6 +71,8 @@ struct channel {
 	/* Channel if locked locally. */
 	struct short_channel_id *scid;
 
+	struct channel_id cid;
+
 	/* Amount going to us, not counting unfinished HTLCs; if we have one. */
 	struct amount_msat our_msat;
 	/* Statistics for min and max our_msatoshi. */
@@ -82,7 +86,7 @@ struct channel {
 	struct bitcoin_tx *last_tx;
 	enum wallet_tx_type last_tx_type;
 	struct bitcoin_signature last_sig;
-	secp256k1_ecdsa_signature *last_htlc_sigs;
+	const struct bitcoin_signature *last_htlc_sigs;
 
 	/* Keys for channel */
 	struct channel_info channel_info;
@@ -131,8 +135,14 @@ struct channel {
 	/* Was this negotiated with `option_static_remotekey? */
 	bool option_static_remotekey;
 
+	/* Was this negotiated with `option_anchor_outputs? */
+	bool option_anchor_outputs;
+
 	/* Any commands trying to forget us. */
 	struct command **forgets;
+
+	/* Our position in the round-robin list.  */
+	u64 rr_number;
 };
 
 struct channel *new_channel(struct peer *peer, u64 dbid,
@@ -157,13 +167,14 @@ struct channel *new_channel(struct peer *peer, u64 dbid,
 			    bool remote_funding_locked,
 			    /* NULL or stolen */
 			    struct short_channel_id *scid STEALS,
+			    struct channel_id *cid,
 			    struct amount_msat our_msatoshi,
 			    struct amount_msat msatoshi_to_us_min,
 			    struct amount_msat msatoshi_to_us_max,
 			    struct bitcoin_tx *last_tx STEALS,
 			    const struct bitcoin_signature *last_sig,
 			    /* NULL or stolen */
-			    secp256k1_ecdsa_signature *last_htlc_sigs STEALS,
+			    const struct bitcoin_signature *last_htlc_sigs STEALS,
 			    const struct channel_info *channel_info,
 			    /* NULL or stolen */
 			    u8 *remote_shutdown_scriptpubkey STEALS,
@@ -183,7 +194,8 @@ struct channel *new_channel(struct peer *peer, u64 dbid,
 			    u32 feerate_ppm,
 			    /* NULL or stolen */
 			    const u8 *remote_upfront_shutdown_script STEALS,
-			    bool option_static_remotekey);
+			    bool option_static_remotekey,
+			    bool option_anchor_outputs);
 
 void delete_channel(struct channel *channel STEALS);
 

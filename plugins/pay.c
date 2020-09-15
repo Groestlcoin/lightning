@@ -5,6 +5,7 @@
 #include <ccan/htable/htable_type.h>
 #include <ccan/intmap/intmap.h>
 #include <ccan/json_out/json_out.h>
+#include <ccan/str/hex/hex.h>
 #include <ccan/tal/str/str.h>
 #include <common/amount.h>
 #include <common/bolt11.h>
@@ -80,6 +81,8 @@ struct pay_status {
 
 	/* Array of payment attempts. */
 	struct pay_attempt *attempts;
+
+	struct sha256 payment_hash;
 };
 
 struct pay_command {
@@ -1266,6 +1269,8 @@ static struct pay_status *add_pay_status(struct pay_command *pc,
 	ps->shadow = NULL;
 	ps->exclusions = NULL;
 	ps->attempts = tal_arr(ps, struct pay_attempt, 0);
+	hex_decode(pc->payment_hash, strlen(pc->payment_hash),
+		   &ps->payment_hash, sizeof(ps->payment_hash));
 
 	list_add_tail(&pay_status, &ps->list);
 	return ps;
@@ -1618,7 +1623,7 @@ static struct command_result *json_paystatus(struct command *cmd,
 	return command_finished(cmd, ret);
 }
 
-static bool attempt_ongoing(const char *b11)
+static bool attempt_ongoing(const struct sha256 *payment_hash)
 {
 	struct pay_status *ps;
 	struct payment *root;
@@ -1628,14 +1633,14 @@ static bool attempt_ongoing(const char *b11)
 	    final_states = PAYMENT_STEP_FAILED | PAYMENT_STEP_SUCCESS;
 
 	list_for_each(&pay_status, ps, list) {
-		if (!streq(b11, ps->bolt11))
+		if (!sha256_eq(payment_hash, &ps->payment_hash))
 			continue;
 		attempt = &ps->attempts[tal_count(ps->attempts)-1];
 		return attempt->result == NULL && attempt->failure == NULL;
 	}
 
 	list_for_each(&payments, root, list) {
-		if (root->bolt11 == NULL || !streq(b11, root->bolt11))
+		if (!sha256_eq(payment_hash, root->payment_hash))
 			continue;
 		res = payment_collect_result(root);
 		diff = res.leafstates & ~final_states;
@@ -1671,7 +1676,7 @@ struct pay_mpp {
 	u32 timestamp;
 
 	/* The destination of the payment, if specified. */
-	struct node_id *destination;
+	const jsmntok_t *destination;
 };
 
 static const struct sha256 *pay_mpp_key(const struct pay_mpp *pm)
@@ -1714,7 +1719,8 @@ static void add_amount_sent(struct plugin *p,
 
 	/* If this is an unannotated partial payment we drop out estimate for
 	 * all parts. */
-	if (msattok == NULL) {
+	/* FIXME: with deprecated_apis, amount_msat can be 'null' */
+	if (msattok == NULL || !json_to_msat(buf, msattok, &recv)) {
 		mpp->amount = tal_free(mpp->amount);
 		return;
 	}
@@ -1725,7 +1731,6 @@ static void add_amount_sent(struct plugin *p,
 	if (mpp->amount == NULL)
 		return;
 
-	json_to_msat(buf, msattok, &recv);
 	if (!amount_msat_add(mpp->amount, *mpp->amount, recv))
 		plugin_log(p, LOG_BROKEN,
 			   "Cannot add amount_msat for %s: %s + %s",
@@ -1743,7 +1748,7 @@ static void add_new_entry(struct json_stream *ret,
 		json_add_string(ret, "bolt11", pm->b11);
 
 	if (pm->destination)
-		json_add_node_id(ret, "destination", pm->destination);
+		json_add_tok(ret, "destination", pm->destination, buf);
 
 	json_add_sha256(ret, "payment_hash", pm->payment_hash);
 	json_add_string(ret, "status", pm->status);
@@ -1788,18 +1793,14 @@ static struct command_result *listsendpays_done(struct command *cmd,
 		return command_fail(cmd, LIGHTNINGD,
 				    "Unexpected non-array result from listsendpays");
 
-	ret = jsonrpc_stream_success(cmd);
-	json_array_start(ret, "pays");
 	json_for_each_arr(i, t, arr) {
-		const jsmntok_t *status, *b11tok, *hashtok, *destinationtok, *createdtok;
+		const jsmntok_t *status, *b11tok, *hashtok, *createdtok;
 		const char *b11 = b11str;
 		struct sha256 payment_hash;
-		struct node_id destination;
 		u32 created_at;
 
 		b11tok = json_get_member(buf, t, "bolt11");
 		hashtok = json_get_member(buf, t, "payment_hash");
-		destinationtok = json_get_member(buf, t, "destination");
 		createdtok = json_get_member(buf, t, "created_at");
 		assert(hashtok != NULL);
 		assert(createdtok != NULL);
@@ -1817,7 +1818,7 @@ static struct command_result *listsendpays_done(struct command *cmd,
 			pm = tal(cmd, struct pay_mpp);
 			pm->payment_hash = tal_dup(pm, struct sha256, &payment_hash);
 			pm->b11 = tal_steal(pm, b11);
-			pm->destination = tal_dup(pm,struct node_id, &destination);
+			pm->destination = json_get_member(buf, t, "destination");
 			pm->label = json_get_member(buf, t, "label");
 			pm->preimage = NULL;
 			pm->amount_sent = AMOUNT_MSAT(0);
@@ -1842,7 +1843,7 @@ static struct command_result *listsendpays_done(struct command *cmd,
 			if (!pm->status || !streq(pm->status, "complete"))
 				pm->status = "pending";
 		} else {
-			if (attempt_ongoing(pm->b11)) {
+			if (attempt_ongoing(pm->payment_hash)) {
 				/* Failed -> pending; don't downgrade success. */
 				if (!pm->status
 				    || !streq(pm->status, "complete"))
@@ -1853,10 +1854,14 @@ static struct command_result *listsendpays_done(struct command *cmd,
 		}
 	}
 
-	/* Now we've collapsed them, provide summary (free mem as we go). */
-	while ((pm = pay_map_first(&pay_map, &it)) != NULL) {
+	/* Now we've collapsed them, provide summary. */
+	ret = jsonrpc_stream_success(cmd);
+	json_array_start(ret, "pays");
+
+	for (pm = pay_map_first(&pay_map, &it);
+	     pm;
+	     pm = pay_map_next(&pay_map, &it)) {
 		add_new_entry(ret, buf, pm);
-		pay_map_del(&pay_map, pm);
 	}
 	pay_map_clear(&pay_map);
 
@@ -1913,9 +1918,10 @@ struct payment_modifier *paymod_mods[] = {
 	&exemptfee_pay_mod,
 	&directpay_pay_mod,
 	&shadowroute_pay_mod,
-	/* NOTE: The order in which these two paymods are executed is
+	/* NOTE: The order in which these three paymods are executed is
 	 * significant!
-	 * routehints *must* execute first before presplit.
+	 * routehints *must* execute first before payee_incoming_limit
+	 * which *must* execute bfore presplit.
 	 *
 	 * FIXME: Giving an ordered list of paymods to the paymod
 	 * system is the wrong interface, given that the order in
@@ -1930,6 +1936,7 @@ struct payment_modifier *paymod_mods[] = {
 	 * use.
 	 */
 	&routehints_pay_mod,
+	&payee_incoming_limit_pay_mod,
 	&presplit_pay_mod,
 	&waitblockheight_pay_mod,
 	&retry_pay_mod,
@@ -2019,6 +2026,7 @@ static struct command_result *json_paymod(struct command *cmd,
 	p->json_buffer = tal_steal(p, buf);
 	p->json_toks = params;
 	p->destination = &b11->receiver_id;
+	p->destination_has_tlv = feature_offered(b11->features, OPT_VAR_ONION);
 	p->payment_hash = tal_dup(p, struct sha256, &b11->payment_hash);
 	p->payment_secret = b11->payment_secret
 				? tal_dup(p, struct secret, b11->payment_secret)

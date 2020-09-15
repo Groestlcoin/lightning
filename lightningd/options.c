@@ -348,7 +348,7 @@ static char *opt_add_plugin(const char *arg, struct lightningd *ld)
 		log_info(ld->log, "%s: disabled via disable-plugin", arg);
 		return NULL;
 	}
-	plugin_register(ld->plugins, arg, NULL);
+	plugin_register(ld->plugins, arg, NULL, false);
 	return NULL;
 }
 
@@ -366,6 +366,16 @@ static char *opt_add_plugin_dir(const char *arg, struct lightningd *ld)
 static char *opt_clear_plugins(struct lightningd *ld)
 {
 	clear_plugins(ld->plugins);
+	return NULL;
+}
+
+static char *opt_important_plugin(const char *arg, struct lightningd *ld)
+{
+	if (plugin_blacklisted(ld->plugins, arg)) {
+		log_info(ld->log, "%s: disabled via disable-plugin", arg);
+		return NULL;
+	}
+	plugin_register(ld->plugins, arg, NULL, true);
 	return NULL;
 }
 
@@ -502,6 +512,27 @@ static char *opt_force_channel_secrets(const char *optarg,
 	return NULL;
 }
 
+static char *opt_force_featureset(const char *optarg,
+				  struct lightningd *ld)
+{
+	char **parts = tal_strsplit(tmpctx, optarg, "/", STR_EMPTY_OK);
+	if (tal_count(parts) != NUM_FEATURE_PLACE)
+		return "Expected 5 feature sets (init, globalinit, node_announce, channel, bolt11) separated by /";
+	for (size_t i = 0; parts[i]; i++) {
+		char **bits = tal_strsplit(tmpctx, parts[i], ",", STR_EMPTY_OK);
+		tal_resize(&ld->our_features->bits[i], 0);
+
+		for (size_t j = 0; bits[j]; j++) {
+			char *endp;
+			long int n = strtol(bits[j], &endp, 10);
+			if (*endp || endp == bits[j])
+				return "Invalid bitnumber";
+			set_feature_bit(&ld->our_features->bits[i], n);
+		}
+	}
+	return NULL;
+}
+
 static void dev_register_opts(struct lightningd *ld)
 {
 	/* We might want to debug plugins, which are started before normal
@@ -556,6 +587,15 @@ static void dev_register_opts(struct lightningd *ld)
 	opt_register_noarg("--dev-no-version-checks", opt_set_bool,
 			   &ld->dev_no_version_checks,
 			   "Skip calling subdaemons with --version on startup");
+	opt_register_early_noarg("--dev-builtin-plugins-unimportant",
+				 opt_set_bool,
+				 &ld->plugins->dev_builtin_plugins_unimportant,
+				 "Make builtin plugins unimportant so you can plugin stop them.");
+	opt_register_arg("--dev-force-features", opt_force_featureset, NULL, ld,
+			 "Force the init/globalinit/node_announce/channel/bolt11 features, each comma-separated bitnumbers");
+	opt_register_arg("--dev-timeout-secs", opt_set_u32, opt_show_u32,
+			 &ld->config.connection_timeout_secs,
+			 "Seconds to timeout if we don't receive INIT from peer");
 }
 #endif /* DEVELOPER */
 
@@ -602,6 +642,9 @@ static const struct config testnet_config = {
 	.min_capacity_sat = 10000,
 
 	.use_v3_autotor = true,
+
+	/* 1 minute should be enough for anyone! */
+	.connection_timeout_secs = 60,
 };
 
 /* aka. "Dude, where's my coins?" */
@@ -626,16 +669,16 @@ static const struct config mainnet_config = {
 	/* BOLT #2:
 	 *
 	 * 1. the `cltv_expiry_delta` for channels, `3R+2G+2S`: if in doubt, a
-	 *   `cltv_expiry_delta` of 12 is reasonable (R=2, G=1, S=2)
+	 *   `cltv_expiry_delta` of at least 34 is reasonable (R=2, G=2, S=12)
 	 */
-	/* R = 2, G = 1, S = 3 */
-	.cltv_expiry_delta = 14,
+	/* R = 2, G = 2, S = 12 */
+	.cltv_expiry_delta = 34,
 
 	/* BOLT #2:
 	 *
 	 * 4. the minimum `cltv_expiry` accepted for terminal payments: the
 	 *    worst case for the terminal node C is `2R+G+S` blocks */
-	.cltv_final = 10,
+	.cltv_final = 18,
 
 	/* Send commit 10msec after receiving; almost immediately. */
 	.commit_time_ms = 10,
@@ -658,6 +701,9 @@ static const struct config mainnet_config = {
 
 	/* Allow to define the default behavior of tor services calls*/
 	.use_v3_autotor = true,
+
+	/* 1 minute should be enough for anyone! */
+	.connection_timeout_secs = 60,
 };
 
 
@@ -774,6 +820,10 @@ static void register_opts(struct lightningd *ld)
 	opt_register_early_arg("--disable-plugin", opt_disable_plugin,
 			       NULL, ld,
 			       "Disable a particular plugin by filename/name");
+
+	opt_register_early_arg("--important-plugin", opt_important_plugin,
+			       NULL, ld,
+			       "Add an important plugin to be run (can be used multiple times). Die if the plugin dies.");
 
 	/* Early, as it suppresses DNS lookups from cmdline too. */
 	opt_register_early_arg("--always-use-proxy",
@@ -1204,7 +1254,7 @@ static void add_config(struct lightningd *ld,
 		} else if (opt->cb == (void *)opt_set_hsm_password) {
 			json_add_bool(response, "encrypted-hsm", ld->encrypted_hsm);
 		} else if (opt->cb == (void *)opt_set_wumbo) {
-			json_add_bool(response, "wumbo",
+			json_add_bool(response, name0,
 				      feature_offered(ld->our_features
 						      ->bits[INIT_FEATURE],
 						      OPT_LARGE_CHANNELS));
@@ -1282,6 +1332,9 @@ static void add_config(struct lightningd *ld,
 			json_add_opt_log_levels(response, ld->log);
 		} else if (opt->cb_arg == (void *)opt_disable_plugin) {
 			json_add_opt_disable_plugins(response, ld->plugins);
+		} else if (opt->cb_arg == (void *)opt_important_plugin) {
+			/* Do nothing, this is already handled by
+			 * opt_add_plugin.  */
 		} else if (opt->cb_arg == (void *)opt_add_plugin_dir
 			   || opt->cb_arg == (void *)plugin_opt_set
 			   || opt->cb_arg == (void *)plugin_opt_flag_set) {
@@ -1347,6 +1400,9 @@ static struct command_result *json_listconfigs(struct command *cmd,
 				response = json_stream_success(cmd);
 			add_config(cmd->ld, response, &opt_table[i],
 				   name+1, len-1);
+			/* If we have more than one long name, first
+			 * is preferred */
+			break;
 		}
 	}
 

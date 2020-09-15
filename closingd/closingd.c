@@ -1,6 +1,6 @@
 #include <bitcoin/script.h>
 #include <ccan/fdpass/fdpass.h>
-#include <closingd/gen_closing_wire.h>
+#include <closingd/closingd_wiregen.h>
 #include <common/close_tx.h>
 #include <common/closing_fee.h>
 #include <common/crypto_sync.h>
@@ -19,8 +19,8 @@
 #include <common/version.h>
 #include <common/wire_error.h>
 #include <errno.h>
-#include <gossipd/gen_gossip_peerd_wire.h>
-#include <hsmd/gen_hsm_wire.h>
+#include <gossipd/gossipd_peerd_wiregen.h>
+#include <hsmd/hsmd_wiregen.h>
 #include <inttypes.h>
 #include <stdio.h>
 #include <unistd.h>
@@ -120,7 +120,7 @@ static struct pubkey get_per_commitment_point(u64 commitment_number)
 	/* Our current per-commitment point is the commitment point in the last
 	 * received signed commitment; HSM gives us that and the previous
 	 * secret (which we don't need). */
-	msg = towire_hsm_get_per_commitment_point(NULL,
+	msg = towire_hsmd_get_per_commitment_point(NULL,
 	                                          commitment_number);
 	if (!wire_sync_write(HSM_FD, take(msg)))
 		status_failed(STATUS_FAIL_HSM_IO,
@@ -132,7 +132,7 @@ static struct pubkey get_per_commitment_point(u64 commitment_number)
 		status_failed(STATUS_FAIL_HSM_IO,
 			      "Reading resp get_per_commitment_point reply: %s",
 			      strerror(errno));
-	if (!fromwire_hsm_get_per_commitment_point_reply(tmpctx, msg,
+	if (!fromwire_hsmd_get_per_commitment_point_reply(tmpctx, msg,
 	                                                 &commitment_point,
 	                                                 &s))
 		status_failed(STATUS_FAIL_HSM_IO,
@@ -203,7 +203,7 @@ static void do_reconnect(struct per_peer_state *pps,
 					  &next_commitment_point)) {
 		peer_failed(pps, channel_id,
 			    "bad reestablish msg: %s %s",
-			    wire_type_name(fromwire_peektype(channel_reestablish)),
+			    peer_wire_name(fromwire_peektype(channel_reestablish)),
 			    tal_hex(tmpctx, channel_reestablish));
 	}
 	status_debug("Got reestablish commit=%"PRIu64" revoke=%"PRIu64,
@@ -279,11 +279,11 @@ static void send_offer(struct per_peer_state *pps,
 	 */
 	/* (We don't do this). */
 	wire_sync_write(HSM_FD,
-			take(towire_hsm_sign_mutual_close_tx(NULL,
+			take(towire_hsmd_sign_mutual_close_tx(NULL,
 							     tx,
 							     &funding_pubkey[REMOTE])));
 	msg = wire_sync_read(tmpctx, HSM_FD);
-	if (!fromwire_hsm_sign_tx_reply(msg, &our_sig))
+	if (!fromwire_hsmd_sign_tx_reply(msg, &our_sig))
 		status_failed(STATUS_FAIL_HSM_IO,
 			      "Bad hsm_sign_mutual_close_tx reply %s",
 			      tal_hex(tmpctx, msg));
@@ -300,7 +300,7 @@ static void tell_master_their_offer(const struct bitcoin_signature *their_sig,
 				    const struct bitcoin_tx *tx,
 				    struct bitcoin_txid *tx_id)
 {
-	u8 *msg = towire_closing_received_signature(NULL, their_sig, tx);
+	u8 *msg = towire_closingd_received_signature(NULL, their_sig, tx);
 	if (!wire_sync_write(REQ_FD, take(msg)))
 		status_failed(STATUS_FAIL_MASTER_IO,
 			      "Writing received to master: %s",
@@ -308,8 +308,8 @@ static void tell_master_their_offer(const struct bitcoin_signature *their_sig,
 
 	/* Wait for master to ack, to make sure it's in db. */
 	msg = wire_sync_read(NULL, REQ_FD);
-	if (!fromwire_closing_received_signature_reply(msg, tx_id))
-		master_badmsg(WIRE_CLOSING_RECEIVED_SIGNATURE_REPLY, msg);
+	if (!fromwire_closingd_received_signature_reply(msg, tx_id))
+		master_badmsg(WIRE_CLOSINGD_RECEIVED_SIGNATURE_REPLY, msg);
 	tal_free(msg);
 }
 
@@ -540,17 +540,16 @@ adjust_offer(struct per_peer_state *pps, const struct channel_id *channel_id,
 		 * one from our previous proposal. So, if the user requested a
 		 * step of 1 satoshi at a time we should just return our end of
 		 * the range from this function. */
-		amount_msat_from_u64(&step_msat,
-				     (fee_negotiation_step - 1) * MSAT_PER_SAT);
+		step_msat = amount_msat((fee_negotiation_step - 1)
+					* MSAT_PER_SAT);
 	} else {
 		/* fee_negotiation_step is e.g. 20 to designate 20% from
 		 * range_len (which is in satoshi), so:
 		 * range_len * fee_negotiation_step / 100 [sat]
 		 * is equivalent to:
 		 * range_len * fee_negotiation_step * 10 [msat] */
-		amount_msat_from_u64(&step_msat,
-				     range_len.satoshis /* Raw: % calc */ *
-					 fee_negotiation_step * 10);
+		step_msat = amount_msat(range_len.satoshis /* Raw: % calc */ *
+					fee_negotiation_step * 10);
 	}
 
 	step_sat = amount_msat_to_sat_round_down(step_msat);
@@ -626,9 +625,10 @@ int main(int argc, char *argv[])
 	status_setup_sync(REQ_FD);
 
 	msg = wire_sync_read(tmpctx, REQ_FD);
-	if (!fromwire_closing_init(ctx, msg,
+	if (!fromwire_closingd_init(ctx, msg,
 				   &chainparams,
 				   &pps,
+				   &channel_id,
 				   &funding_txid, &funding_txout,
 				   &funding,
 				   &funding_pubkey[LOCAL],
@@ -650,7 +650,7 @@ int main(int argc, char *argv[])
 				   &channel_reestablish,
 				   &last_remote_per_commit_secret,
 				   &dev_fast_gossip))
-		master_badmsg(WIRE_CLOSING_INIT, msg);
+		master_badmsg(WIRE_CLOSINGD_INIT, msg);
 
 	/* stdin == requests, 3 == peer, 4 = gossip, 5 = gossip_store, 6 = hsmd */
 	per_peer_state_set_fds(pps, 3, 4, 5);
@@ -670,7 +670,6 @@ int main(int argc, char *argv[])
 	status_debug("fee = %s",
 		     type_to_string(tmpctx, struct amount_sat, &offer[LOCAL]));
 	status_debug("fee negotiation step = %s", fee_negotiation_step_str);
-	derive_channel_id(&channel_id, &funding_txid, funding_txout);
 
 	funding_wscript = bitcoin_redeem_2of2(ctx,
 					      &funding_pubkey[LOCAL],
@@ -792,7 +791,7 @@ int main(int argc, char *argv[])
 		status_unusual("Closing and draining peerfd gave error: %s",
 			       strerror(errno));
 	/* Sending the below will kill us! */
-	wire_sync_write(REQ_FD, take(towire_closing_complete(NULL)));
+	wire_sync_write(REQ_FD, take(towire_closingd_complete(NULL)));
 	tal_free(ctx);
 	daemon_shutdown();
 

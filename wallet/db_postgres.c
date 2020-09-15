@@ -1,14 +1,13 @@
 #include <wallet/db_common.h>
-#include "gen_db_postgres.c"
+#include "db_postgres_sqlgen.c"
 #include <ccan/ccan/tal/str/str.h>
 #include <ccan/endian/endian.h>
 #include <lightningd/log.h>
-#include <sqlite3.h>
 #include <stdio.h>
 
 #if HAVE_POSTGRES
 /* Indented in order not to trigger the inclusion order check */
-  #include <postgresql/libpq-fe.h>
+  #include <libpq-fe.h>
 
 /* Cherry-picked from here: libpq/src/interfaces/ecpg/ecpglib/pg_type.h */
 #define BYTEAOID		17

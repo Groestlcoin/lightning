@@ -6,6 +6,7 @@ from collections import OrderedDict
 from decimal import Decimal
 from ephemeral_port_reserve import reserve
 from pyln.client import LightningRpc
+from pyln.client import Millisatoshi
 
 import json
 import logging
@@ -550,9 +551,10 @@ class LightningD(TailableProc):
 
 
 class LightningNode(object):
-    def __init__(self, node_id, lightning_dir, bitcoind, executor, may_fail=False,
+    def __init__(self, node_id, lightning_dir, bitcoind, executor, valgrind, may_fail=False,
                  may_reconnect=False, allow_broken_log=False,
-                 allow_bad_gossip=False, db=None, port=None, disconnect=None, random_hsm=None, options=None, **kwargs):
+                 allow_bad_gossip=False, db=None, port=None, disconnect=None, random_hsm=None, options=None,
+                 **kwargs):
         self.bitcoin = bitcoind
         self.executor = executor
         self.may_fail = may_fail
@@ -585,7 +587,7 @@ class LightningNode(object):
             self.daemon.env["LIGHTNINGD_DEV_MEMLEAK"] = "1"
             if os.getenv("DEBUG_SUBD"):
                 self.daemon.opts["dev-debugger"] = os.getenv("DEBUG_SUBD")
-            if VALGRIND:
+            if valgrind:
                 self.daemon.env["LIGHTNINGD_DEV_NO_BACKTRACE"] = "1"
             if not may_reconnect:
                 self.daemon.opts["dev-no-reconnect"] = None
@@ -595,7 +597,7 @@ class LightningNode(object):
         dsn = db.get_dsn()
         if dsn is not None:
             self.daemon.opts['wallet'] = dsn
-        if VALGRIND:
+        if valgrind:
             self.daemon.cmd_prefix = [
                 'valgrind',
                 '-q',
@@ -642,6 +644,30 @@ class LightningNode(object):
         self.bitcoin.generate_block(1)
         self.daemon.wait_for_log('Owning output .* txid {} CONFIRMED'.format(txid))
         return addr, txid
+
+    def fundbalancedchannel(self, remote_node, total_capacity, announce=True):
+        '''
+        Creates a perfectly-balanced channel, as all things should be.
+        '''
+        if isinstance(total_capacity, Millisatoshi):
+            total_capacity = int(total_capacity.to_satoshi())
+        else:
+            total_capacity = int(total_capacity)
+
+        self.fundwallet(total_capacity + 10000)
+        self.rpc.connect(remote_node.info['id'], 'localhost', remote_node.port)
+
+        # Make sure the fundchannel is confirmed.
+        num_tx = len(self.bitcoin.rpc.getrawmempool())
+        tx = self.rpc.fundchannel(remote_node.info['id'], total_capacity, feerate='slow', minconf=0, announce=announce, push_msat=Millisatoshi(total_capacity * 500))['tx']
+        wait_for(lambda: len(self.bitcoin.rpc.getrawmempool()) == num_tx + 1)
+        self.bitcoin.generate_block(1)
+
+        # Generate the scid.
+        # NOTE This assumes only the coinbase and the fundchannel is
+        # confirmed in the block.
+        return '{}x1x{}'.format(self.bitcoin.rpc.getblockcount(),
+                                get_tx_p2wsh_outnum(self.bitcoin, tx, total_capacity))
 
     def getactivechannels(self):
         return [c for c in self.rpc.listchannels()['channels'] if c['active']]
@@ -733,18 +759,9 @@ class LightningNode(object):
                                 get_tx_p2wsh_outnum(self.bitcoin, tx, amount))
 
         if wait_for_active:
-            # We wait until gossipd sees both local updates, as well as status NORMAL,
-            # so it can definitely route through.
-            self.daemon.wait_for_logs([r'update for channel {}/0 now ACTIVE'
-                                       .format(scid),
-                                       r'update for channel {}/1 now ACTIVE'
-                                       .format(scid),
-                                       'to CHANNELD_NORMAL'])
-            l2.daemon.wait_for_logs([r'update for channel {}/0 now ACTIVE'
-                                     .format(scid),
-                                     r'update for channel {}/1 now ACTIVE'
-                                     .format(scid),
-                                     'to CHANNELD_NORMAL'])
+            self.wait_channel_active(scid)
+            l2.wait_channel_active(scid)
+
         return scid
 
     def subd_pid(self, subd, peerid=None):
@@ -782,6 +799,15 @@ class LightningNode(object):
             return None
         channel = peers[0]['channels'][0]
         return channel['short_channel_id']
+
+    def get_channel_id(self, other):
+        """Get the channel_id for the channel to the other node.
+        """
+        peers = self.rpc.listpeers(other.info['id'])['peers']
+        if not peers or 'channels' not in peers[0]:
+            return None
+        channel = peers[0]['channels'][0]
+        return channel['channel_id']
 
     def is_channel_active(self, chanid):
         channels = self.rpc.listchannels(chanid)['channels']
@@ -958,7 +984,11 @@ class LightningNode(object):
 class NodeFactory(object):
     """A factory to setup and start `lightningd` daemons.
     """
-    def __init__(self, testname, bitcoind, executor, directory, db_provider, node_cls):
+    def __init__(self, request, testname, bitcoind, executor, directory, db_provider, node_cls):
+        if request.node.get_closest_marker("slow_test") and SLOW_MACHINE:
+            self.valgrind = False
+        else:
+            self.valgrind = VALGRIND
         self.testname = testname
         self.next_id = 1
         self.nodes = []
@@ -1026,8 +1056,8 @@ class NodeFactory(object):
 
     def get_node(self, node_id=None, options=None, dbfile=None,
                  feerates=(15000, 11000, 7500, 3750), start=True,
-                 wait_for_bitcoind_sync=True, expect_fail=False,
-                 cleandir=True, **kwargs):
+                 wait_for_bitcoind_sync=True, may_fail=False,
+                 expect_fail=False, cleandir=True, **kwargs):
 
         node_id = self.get_node_id() if not node_id else node_id
         port = self.get_next_port()
@@ -1042,8 +1072,9 @@ class NodeFactory(object):
         # node.
         db = self.db_provider.get_db(os.path.join(lightning_dir, TEST_NETWORK), self.testname, node_id)
         node = self.node_cls(
-            node_id, lightning_dir, self.bitcoind, self.executor, db=db,
-            port=port, options=options, **kwargs
+            node_id, lightning_dir, self.bitcoind, self.executor, self.valgrind, db=db,
+            port=port, options=options, may_fail=may_fail or expect_fail,
+            **kwargs
         )
 
         # Regtest estimatefee are unusable, so override.
@@ -1071,13 +1102,10 @@ class NodeFactory(object):
                 raise
         return node
 
-    def line_graph(self, num_nodes, fundchannel=True, fundamount=10**6, wait_for_announce=False, opts=None, announce_channels=True):
-        """ Create nodes, connect them and optionally fund channels.
-        """
+    def join_nodes(self, nodes, fundchannel=True, fundamount=10**6, wait_for_announce=False, announce_channels=True) -> None:
+        """Given nodes, connect them in a line, optionally funding a channel"""
         assert not (wait_for_announce and not announce_channels), "You've asked to wait for an announcement that's not coming. (wait_for_announce=True,announce_channels=False)"
-        nodes = self.get_nodes(num_nodes, opts=opts)
-        bitcoin = nodes[0].bitcoin
-        connections = [(nodes[i], nodes[i + 1]) for i in range(0, num_nodes - 1)]
+        connections = [(nodes[i], nodes[i + 1]) for i in range(len(nodes) - 1)]
 
         for src, dst in connections:
             src.rpc.connect(dst.info['id'], 'localhost', dst.port)
@@ -1087,47 +1115,56 @@ class NodeFactory(object):
         if not fundchannel:
             for src, dst in connections:
                 dst.daemon.wait_for_log(r'{}-.*openingd-chan#[0-9]*: Handed peer, entering loop'.format(src.info['id']))
-            return nodes
+            return
 
+        bitcoind = nodes[0].bitcoin
         # If we got here, we want to fund channels
         for src, dst in connections:
             addr = src.rpc.newaddr()['bech32']
-            src.bitcoin.rpc.sendtoaddress(addr, (fundamount + 1000000) / 10**8)
+            bitcoind.rpc.sendtoaddress(addr, (fundamount + 1000000) / 10**8)
 
-        bitcoin.generate_block(1)
+        bitcoind.generate_block(1)
+        sync_blockheight(bitcoind, nodes)
+        txids = []
         for src, dst in connections:
-            wait_for(lambda: len(src.rpc.listfunds()['outputs']) > 0)
-            tx = src.rpc.fundchannel(dst.info['id'], fundamount, announce=announce_channels)
-            wait_for(lambda: tx['txid'] in bitcoin.rpc.getrawmempool())
+            txids.append(src.rpc.fundchannel(dst.info['id'], fundamount, announce=announce_channels)['txid'])
+
+        wait_for(lambda: set(txids).issubset(set(bitcoind.rpc.getrawmempool())))
 
         # Confirm all channels and wait for them to become usable
-        bitcoin.generate_block(1)
+        bitcoind.generate_block(1)
         scids = []
         for src, dst in connections:
             wait_for(lambda: src.channel_state(dst) == 'CHANNELD_NORMAL')
             scid = src.get_channel_scid(dst)
-            src.daemon.wait_for_log(r'Received channel_update for channel {scid}/. now ACTIVE'.format(scid=scid))
             scids.append(scid)
 
+        # Wait for all channels to be active (locally)
+        for i, n in enumerate(scids):
+            nodes[i].wait_channel_active(scids[i])
+            nodes[i + 1].wait_channel_active(scids[i])
+
         if not wait_for_announce:
-            return nodes
+            return
 
-        bitcoin.generate_block(5)
-
-        def both_dirs_ready(n, scid):
-            resp = n.rpc.listchannels(scid)
-            return [a['active'] for a in resp['channels']] == [True, True]
+        bitcoind.generate_block(5)
 
         # Make sure everyone sees all channels: we can cheat and
         # simply check the ends (since it's a line).
-        wait_for(lambda: both_dirs_ready(nodes[0], scids[-1]))
-        wait_for(lambda: both_dirs_ready(nodes[-1], scids[0]))
+        nodes[0].wait_channel_active(scids[-1])
+        nodes[-1].wait_channel_active(scids[0])
 
         # Make sure we have all node announcements, too (just check ends)
         for n in nodes:
             for end in (nodes[0], nodes[-1]):
                 wait_for(lambda: 'alias' in only_one(end.rpc.listnodes(n.info['id'])['nodes']))
 
+    def line_graph(self, num_nodes, fundchannel=True, fundamount=10**6, wait_for_announce=False, opts=None, announce_channels=True):
+        """ Create nodes, connect them and optionally fund channels.
+        """
+        nodes = self.get_nodes(num_nodes, opts=opts)
+
+        self.join_nodes(nodes, fundchannel, fundamount, wait_for_announce, announce_channels)
         return nodes
 
     def killall(self, expected_successes):
@@ -1138,7 +1175,7 @@ class NodeFactory(object):
             leaks = None
             # leak detection upsets VALGRIND by reading uninitialized mem.
             # If it's dead, we'll catch it below.
-            if not VALGRIND and DEVELOPER:
+            if not self.valgrind and DEVELOPER:
                 try:
                     # This also puts leaks in log.
                     leaks = self.nodes[i].rpc.dev_memleak()['leaks']

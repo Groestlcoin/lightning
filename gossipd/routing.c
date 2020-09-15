@@ -15,13 +15,13 @@
 #include <common/type_to_string.h>
 #include <common/wire_error.h>
 #include <common/wireaddr.h>
-#include <gossipd/gen_gossip_peerd_wire.h>
-#include <gossipd/gen_gossip_store.h>
-#include <gossipd/gen_gossip_wire.h>
 #include <gossipd/gossip_generation.h>
+#include <gossipd/gossip_store_wiregen.h>
 #include <gossipd/gossipd.h>
+#include <gossipd/gossipd_peerd_wiregen.h>
+#include <gossipd/gossipd_wiregen.h>
 #include <inttypes.h>
-#include <wire/gen_peer_wire.h>
+#include <wire/peer_wire.h>
 
 #ifndef SUPERVERBOSE
 #define SUPERVERBOSE(...)
@@ -536,7 +536,7 @@ static void bad_gossip_order(const u8 *msg,
 {
 	status_peer_debug(peer ? &peer->id : NULL,
 			  "Bad gossip order: %s before announcement %s",
-			  wire_type_name(fromwire_peektype(msg)),
+			  peer_wire_name(fromwire_peektype(msg)),
 			  details);
 }
 
@@ -650,14 +650,13 @@ static WARN_UNUSED_RESULT bool risk_add_fee(struct amount_msat *risk,
 					    u32 delay, double riskfactor,
 					    u64 riskbias)
 {
-	double r;
+	struct amount_msat riskfee;
 
-	/* Won't overflow on add, just lose precision */
-	r = (double)riskbias + riskfactor * delay * msat.millisatoshis + risk->millisatoshis; /* Raw: to double */
-	if (r > (double)UINT64_MAX)
+	if (!amount_msat_scale(&riskfee, msat, riskfactor * delay))
 		return false;
-	risk->millisatoshis = r; /* Raw: from double */
-	return true;
+	if (!amount_msat_add(&riskfee, riskfee, amount_msat(riskbias)))
+		return false;
+	return amount_msat_add(risk, *risk, riskfee);
 }
 
 /* Check that we can fit through this channel's indicated
@@ -1209,7 +1208,7 @@ find_shorter_route(const tal_t *ctx, struct routing_state *rstate,
 	 * per block delay, which is close enough to zero to not break
 	 * this algorithm, but still provide some bias towards
 	 * low-delay routes. */
-	riskfactor = (double)1.0 / msat.millisatoshis; /* Raw: inversion */
+	riskfactor = amount_msat_ratio(AMOUNT_MSAT(1), msat);
 
 	/* First, figure out if a short route is even possible.
 	 * We set the cost function to ignore total, riskbias 1 and riskfactor
@@ -2091,13 +2090,11 @@ bool routing_add_channel_update(struct routing_state *rstate,
 
 	/* Check timestamp is sane (unless from store). */
 	if (!index && !timestamp_reasonable(rstate, timestamp)) {
-		status_peer_debug(peer ? &peer->id : NULL,
-				  "Ignoring update timestamp %u for %s/%u",
-				  timestamp,
-				  type_to_string(tmpctx,
-						 struct short_channel_id,
-						 &short_channel_id),
-				  direction);
+		SUPERVERBOSE("Ignoring update timestamp %u for %s/%u",
+			     timestamp,
+			     type_to_string(tmpctx, struct short_channel_id,
+					    &short_channel_id),
+			     direction);
 		return false;
 	}
 
@@ -2128,14 +2125,12 @@ bool routing_add_channel_update(struct routing_state *rstate,
 		/* Allow redundant updates once every 7 days */
 		if (timestamp < hc->bcast.timestamp + GOSSIP_PRUNE_INTERVAL(rstate->dev_fast_gossip_prune) / 2
 		    && !cupdate_different(rstate->gs, hc, update)) {
-			status_peer_debug(peer ? &peer->id : NULL,
-					  "Ignoring redundant update for %s/%u"
-					  " (last %u, now %u)",
-					  type_to_string(tmpctx,
-							 struct short_channel_id,
-							 &short_channel_id),
-					  direction,
-					  hc->bcast.timestamp, timestamp);
+			SUPERVERBOSE("Ignoring redundant update for %s/%u"
+				     " (last %u, now %u)",
+				     type_to_string(tmpctx,
+						    struct short_channel_id,
+						    &short_channel_id),
+				     direction, hc->bcast.timestamp, timestamp);
 			/* Ignoring != failing */
 			return true;
 		}
@@ -2222,6 +2217,14 @@ bool routing_add_channel_update(struct routing_state *rstate,
 		process_pending_node_announcement(rstate, &chan->nodes[1]->id);
 		tal_free(uc);
 	}
+
+	status_peer_debug(peer ? &peer->id : NULL,
+			  "Received channel_update for channel %s/%d now %s",
+			  type_to_string(tmpctx, struct short_channel_id,
+					 &short_channel_id),
+			  channel_flags & 0x01,
+			  channel_flags & ROUTING_FLAGS_DISABLED ? "DISABLED" : "ACTIVE");
+
 	return true;
 }
 
@@ -2258,6 +2261,7 @@ void remove_channel_from_store(struct routing_state *rstate,
 	if (is_chan_public(chan)) {
 		update_type = WIRE_CHANNEL_UPDATE;
 		announcment_type = WIRE_CHANNEL_ANNOUNCEMENT;
+		gossip_store_mark_channel_deleted(rstate->gs, &chan->scid);
 	} else {
 		update_type = WIRE_GOSSIP_STORE_PRIVATE_UPDATE;
 		announcment_type = WIRE_GOSSIPD_LOCAL_ADD_CHANNEL;
@@ -2369,13 +2373,6 @@ u8 *handle_channel_update(struct routing_state *rstate, const u8 *update TAKES,
 		return err;
 	}
 
-	status_peer_debug(peer ? &peer->id : NULL,
-			  "Received channel_update for channel %s/%d now %s",
-			  type_to_string(tmpctx, struct short_channel_id,
-					 &short_channel_id),
-			  channel_flags & 0x01,
-			  channel_flags & ROUTING_FLAGS_DISABLED ? "DISABLED" : "ACTIVE");
-
 	routing_add_channel_update(rstate, take(serialized), 0, peer);
 	return NULL;
 }
@@ -2440,13 +2437,6 @@ bool routing_add_node_announcement(struct routing_state *rstate,
 		return false;
 	}
 
-	/* Only log this if *not* loading from store. */
-	if (!index)
-		status_peer_debug(peer ? &peer->id : NULL,
-				  "Received node_announcement for node %s",
-				  type_to_string(tmpctx, struct node_id,
-						 &node_id));
-
 	node = get_node(rstate, &node_id);
 
 	if (node == NULL || !node_has_broadcastable_channels(node)) {
@@ -2501,13 +2491,11 @@ bool routing_add_node_announcement(struct routing_state *rstate,
 		/* Allow redundant updates once every 7 days */
 		if (timestamp < node->bcast.timestamp + GOSSIP_PRUNE_INTERVAL(rstate->dev_fast_gossip_prune) / 2
 		    && !nannounce_different(rstate->gs, node, msg)) {
-			status_peer_debug(peer ? &peer->id : NULL,
-					  "Ignoring redundant nannounce for %s"
-					  " (last %u, now %u)",
-					  type_to_string(tmpctx,
-							 struct node_id,
-							 &node_id),
-					  node->bcast.timestamp, timestamp);
+			SUPERVERBOSE(
+			    "Ignoring redundant nannounce for %s"
+			    " (last %u, now %u)",
+			    type_to_string(tmpctx, struct node_id, &node_id),
+			    node->bcast.timestamp, timestamp);
 			/* Ignoring != failing */
 			return true;
 		}
@@ -2554,6 +2542,14 @@ bool routing_add_node_announcement(struct routing_state *rstate,
 					   NULL);
 		peer_supplied_good_gossip(peer, 1);
 	}
+
+	/* Only log this if *not* loading from store. */
+	if (!index)
+		status_peer_debug(peer ? &peer->id : NULL,
+				  "Received node_announcement for node %s",
+				  type_to_string(tmpctx, struct node_id,
+						 &node_id));
+
 	return true;
 }
 
@@ -2778,10 +2774,16 @@ void route_prune(struct routing_state *rstate)
 		if (!is_chan_public(chan))
 			continue;
 
-		if ((!is_halfchan_defined(&chan->half[0])
-		     || chan->half[0].bcast.timestamp < highwater)
-		    && (!is_halfchan_defined(&chan->half[1])
-			|| chan->half[1].bcast.timestamp < highwater)) {
+		/* BOLT #7:
+		 *   - if a channel's oldest `channel_update`s `timestamp` is
+		 *     older than two weeks (1209600 seconds):
+		 *    - MAY prune the channel.
+		 */
+		/* This is a fancy way of saying "both ends must refresh!" */
+		if (!is_halfchan_defined(&chan->half[0])
+		    || chan->half[0].bcast.timestamp < highwater
+		    || !is_halfchan_defined(&chan->half[1])
+		    || chan->half[1].bcast.timestamp < highwater) {
 			status_debug(
 			    "Pruning channel %s from network view (ages %"PRIu64" and %"PRIu64"s)",
 			    type_to_string(tmpctx, struct short_channel_id,
@@ -2906,7 +2908,7 @@ void remove_all_gossip(struct routing_state *rstate)
 	while ((c = uintmap_first(&rstate->chanmap, &index)) != NULL) {
 		uintmap_del(&rstate->chanmap, index);
 #if DEVELOPER
-		c->sat.satoshis = (unsigned long)c; /* Raw: dev-hack */
+		c->sat = amount_sat((unsigned long)c);
 #endif
 		tal_free(c);
 	}

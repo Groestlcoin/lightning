@@ -5,6 +5,9 @@
 #
 # We generate the files, and then we attempt to compile
 # and run a test case.
+
+# We don't run these at all unless mako is installed.
+ifeq ($(HAVE_PYTHON3_MAKO),1)
 check-units: check-tools
 
 TOOL_TEST_INCL_SRC := tools/test/enum.c
@@ -19,6 +22,10 @@ TOOL_TEST_PROGRAMS := $(TOOL_TEST_OBJS:.o=)
 else
 TOOL_TEST_PROGRAMS :=
 endif
+
+# Get dependencies correct
+ALL_C_SOURCES += $(TOOL_GEN_SRC) $(TOOL_TEST_SRC)
+ALL_C_HEADERS += $(TOOL_GEN_HEADER)
 
 TOOL_TEST_COMMON_OBJS :=		\
 	common/utils.o
@@ -39,7 +46,7 @@ tools/test/gen_test.c.tmp.c: $(TOOLS_WIRE_DEPS)
 tools/test/gen_test.c: tools/test/gen_test.c.tmp.c $(EXTERNAL_HEADERS) tools/test/gen_test.h
 	@MAKE=$(MAKE) tools/update-mocks.sh "$<" $(SUPPRESS_OUTPUT) && mv "$<" "$@"
 
-tools/test/gen_print.h: wire/gen_onion_wire.h $(TOOLS_WIRE_DEPS)
+tools/test/gen_print.h: wire/onion$(EXP)_wiregen.h $(TOOLS_WIRE_DEPS)
 	$(BOLT_GEN) -P --page header $@ test_type < tools/test/test_cases > $@
 
 tools/test/gen_print.c: $(TOOLS_WIRE_DEPS)
@@ -49,6 +56,7 @@ tools/test/gen_print.c: $(TOOLS_WIRE_DEPS)
 ALL_TEST_PROGRAMS += $(TOOL_TEST_PROGRAMS)
 
 check-tools: $(TOOL_TEST_PROGRAMS:%=unittest/%)
+endif # HAVE_PYTHON3_MAKO
 
 update-mocks: tools-update-mocks
 

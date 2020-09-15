@@ -6,6 +6,7 @@
 #include <common/features.h>
 #include <common/utils.h>
 #include <common/version.h>
+#include <common/json_helpers.h>
 #include <lightningd/json.h>
 #include <lightningd/notification.h>
 #include <lightningd/options.h>
@@ -15,6 +16,9 @@
 #include <signal.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+
+/* Only this file can include this generated header! */
+# include <gen_list_of_builtin_plugins.h>
 
 /* How many seconds may the plugin take to reply to the `getmanifest`
  * call? This is the maximum delay to `lightningd --help` and until
@@ -53,6 +57,10 @@ struct plugins *plugins_new(const tal_t *ctx, struct log_book *log_book,
 	p->startup = true;
 	p->json_cmds = tal_arr(p, struct command *, 0);
 	p->blacklist = tal_arr(p, const char *, 0);
+	p->shutdown = false;
+#if DEVELOPER
+	p->dev_builtin_plugins_unimportant = false;
+#endif /* DEVELOPER */
 	uintmap_init(&p->pending_requests);
 	memleak_add_helper(p, memleak_help_pending_requests);
 
@@ -62,6 +70,9 @@ struct plugins *plugins_new(const tal_t *ctx, struct log_book *log_book,
 void plugins_free(struct plugins *plugins)
 {
 	struct plugin *p;
+
+	plugins->shutdown = true;
+
 	/* Plugins are usually the unit of allocation, and they are internally
 	 * consistent, so let's free each plugin first. */
 	while (!list_empty(&plugins->plugins)) {
@@ -105,6 +116,7 @@ struct command_result *plugin_register_all_complete(struct lightningd *ld,
 static void destroy_plugin(struct plugin *p)
 {
 	struct plugin_rpccall *call;
+
 	plugin_hook_unregister_all(p);
 	list_del(&p->list);
 
@@ -118,10 +130,23 @@ static void destroy_plugin(struct plugin *p)
 	/* Don't call this if we're still parsing options! */
 	if (p->plugin_state != UNCONFIGURED)
 		check_plugins_resolved(p->plugins);
+
+	/* If we are shutting down, do not continue to checking if
+	 * the dying plugin is important.  */
+	if (p->plugins->shutdown)
+		return;
+
+	/* Now check if the dying plugin is important.  */
+	if (p->important) {
+		log_broken(p->log,
+			   "Plugin marked as important, "
+			   "shutting down lightningd!");
+		lightningd_exit(p->plugins->ld, 1);
+	}
 }
 
 struct plugin *plugin_register(struct plugins *plugins, const char* path TAKES,
-			       struct command *start_cmd)
+			       struct command *start_cmd, bool important)
 {
 	struct plugin *p, *p_temp;
 
@@ -130,6 +155,9 @@ struct plugin *plugin_register(struct plugins *plugins, const char* path TAKES,
 		if (streq(path, p_temp->cmd)) {
 			if (taken(path))
 				tal_free(path);
+		 	/* If added as "important", upgrade to "important".  */
+			if (important)
+				p_temp->important = true;
 			return NULL;
 		}
 	}
@@ -153,6 +181,8 @@ struct plugin *plugin_register(struct plugins *plugins, const char* path TAKES,
 	list_add_tail(&plugins->plugins, &p->list);
 	tal_add_destructor(p, destroy_plugin);
 	list_head_init(&p->pending_rpccalls);
+
+	p->important = important;
 	return p;
 }
 
@@ -186,6 +216,8 @@ void plugin_blacklist(struct plugins *plugins, const char *name)
 			log_info(plugins->log, "%s: disabled via disable-plugin",
 				 p->cmd);
 			list_del_from(&plugins->plugins, &p->list);
+			/* disable-plugin overrides important-plugin.  */
+			p->important = false;
 			tal_free(p);
 		}
 	}
@@ -355,8 +387,7 @@ static const char *plugin_read_json_one(struct plugin *plugin,
 					bool *complete,
 					bool *destroyed)
 {
-	bool valid;
-	const jsmntok_t *toks, *jrtok, *idtok;
+	const jsmntok_t *jrtok, *idtok;
 	struct plugin_destroyed *pd;
 	const char *err;
 
@@ -364,33 +395,31 @@ static const char *plugin_read_json_one(struct plugin *plugin,
 	/* Note that in the case of 'plugin stop' this can free request (since
 	 * plugin is parent), so detect that case */
 
-	/* FIXME: This could be done more efficiently by storing the
-	 * toks and doing an incremental parse, like lightning-cli
-	 * does. */
-	toks = json_parse_input(plugin->buffer, plugin->buffer, plugin->used,
-				&valid);
-	if (!toks) {
-		if (!valid) {
-			return tal_fmt(plugin,
-				       "Failed to parse JSON response '%.*s'",
-				       (int)plugin->used, plugin->buffer);
-		}
+	if (!json_parse_input(&plugin->parser, &plugin->toks,
+			      plugin->buffer, plugin->used,
+			      complete)) {
+		return tal_fmt(plugin,
+			       "Failed to parse JSON response '%.*s'",
+			       (int)plugin->used, plugin->buffer);
+	}
+
+	if (!*complete) {
 		/* We need more. */
-		*complete = false;
 		return NULL;
 	}
 
 	/* Empty buffer? (eg. just whitespace). */
-	if (tal_count(toks) == 1) {
+	if (tal_count(plugin->toks) == 1) {
 		plugin->used = 0;
+		jsmn_init(&plugin->parser);
+		toks_reset(plugin->toks);
 		/* We need more. */
 		*complete = false;
 		return NULL;
 	}
 
-	*complete = true;
-	jrtok = json_get_member(plugin->buffer, toks, "jsonrpc");
-	idtok = json_get_member(plugin->buffer, toks, "id");
+	jrtok = json_get_member(plugin->buffer, plugin->toks, "jsonrpc");
+	idtok = json_get_member(plugin->buffer, plugin->toks, "id");
 
 	if (!jrtok) {
 		return tal_fmt(
@@ -411,7 +440,7 @@ static const char *plugin_read_json_one(struct plugin *plugin,
 		 *
 		 * https://www.jsonrpc.org/specification#notification
 		 */
-		err = plugin_notification_handle(plugin, toks);
+		err = plugin_notification_handle(plugin, plugin->toks);
 
 	} else {
 		/* When a rpc call is made, the Server MUST reply with
@@ -441,7 +470,7 @@ static const char *plugin_read_json_one(struct plugin *plugin,
 		 *
 		 * https://www.jsonrpc.org/specification#response_object
 		 */
-		err = plugin_response_handle(plugin, toks, idtok);
+		err = plugin_response_handle(plugin, plugin->toks, idtok);
 	}
 
 	/* Corner case: rpc_command hook can destroy plugin for 'plugin
@@ -450,10 +479,11 @@ static const char *plugin_read_json_one(struct plugin *plugin,
 		*destroyed = true;
 	} else {
 		/* Move this object out of the buffer */
-		memmove(plugin->buffer, plugin->buffer + toks[0].end,
-			tal_count(plugin->buffer) - toks[0].end);
-		plugin->used -= toks[0].end;
-		tal_free(toks);
+		memmove(plugin->buffer, plugin->buffer + plugin->toks[0].end,
+			tal_count(plugin->buffer) - plugin->toks[0].end);
+		plugin->used -= plugin->toks[0].end;
+		jsmn_init(&plugin->parser);
+		toks_reset(plugin->toks);
 	}
 	return err;
 }
@@ -462,30 +492,42 @@ static struct io_plan *plugin_read_json(struct io_conn *conn,
 					struct plugin *plugin)
 {
 	bool success;
+	bool have_full;
 
 	log_io(plugin->log, LOG_IO_IN, NULL, "",
 	       plugin->buffer + plugin->used, plugin->len_read);
+
+	/* Our JSON parser is pretty good at incremental parsing, but
+	 * `getrawblock` gives a giant 2MB token, which forces it to re-parse
+	 * every time until we have all of it. However, we can't complete a
+	 * JSON object without a '}', so we do a cheaper check here.
+	 */
+	have_full = memchr(plugin->buffer + plugin->used, '}',
+			   plugin->len_read);
 
 	plugin->used += plugin->len_read;
 	if (plugin->used == tal_count(plugin->buffer))
 		tal_resize(&plugin->buffer, plugin->used * 2);
 
 	/* Read and process all messages from the connection */
-	do {
-		bool destroyed;
-		const char *err;
-		err = plugin_read_json_one(plugin, &success, &destroyed);
+	if (have_full) {
+		do {
+			bool destroyed;
+			const char *err;
+			err =
+			    plugin_read_json_one(plugin, &success, &destroyed);
 
-		/* If it's destroyed, conn is already freed! */
-		if (destroyed)
-			return io_close(NULL);
+			/* If it's destroyed, conn is already freed! */
+			if (destroyed)
+				return io_close(NULL);
 
-		if (err) {
-			plugin_kill(plugin, err);
-			/* plugin_kill frees plugin */
-			return io_close(NULL);
-		}
-	} while (success);
+			if (err) {
+				plugin_kill(plugin, err);
+				/* plugin_kill frees plugin */
+				return io_close(NULL);
+			}
+		} while (success);
+	}
 
 	/* Now read more from the connection */
 	return io_read_partial(plugin->stdout_conn,
@@ -556,6 +598,10 @@ char *plugin_opt_set(const char *arg, struct plugin_opt *popt)
 	char *endp;
 	long long l;
 
+	/* Warn them that this is deprecated */
+	if (popt->deprecated && !deprecated_apis)
+		return tal_fmt(tmpctx, "deprecated option (will be removed!)");
+
 	tal_free(popt->value->as_str);
 
 	popt->value->as_str = tal_strdup(popt, arg);
@@ -599,12 +645,13 @@ static void destroy_plugin_opt(struct plugin_opt *opt)
 static const char *plugin_opt_add(struct plugin *plugin, const char *buffer,
 				  const jsmntok_t *opt)
 {
-	const jsmntok_t *nametok, *typetok, *defaulttok, *desctok;
+	const jsmntok_t *nametok, *typetok, *defaulttok, *desctok, *deptok;
 	struct plugin_opt *popt;
 	nametok = json_get_member(buffer, opt, "name");
 	typetok = json_get_member(buffer, opt, "type");
 	desctok = json_get_member(buffer, opt, "description");
 	defaulttok = json_get_member(buffer, opt, "default");
+	deptok = json_get_member(buffer, opt, "deprecated");
 
 	if (!typetok || !nametok || !desctok) {
 		return tal_fmt(plugin,
@@ -617,6 +664,15 @@ static const char *plugin_opt_add(struct plugin *plugin, const char *buffer,
 	popt->name = tal_fmt(popt, "--%.*s", nametok->end - nametok->start,
 			     buffer + nametok->start);
 	popt->description = NULL;
+	if (deptok) {
+		if (!json_to_bool(buffer, deptok, &popt->deprecated))
+			return tal_fmt(plugin,
+				       "%s: invalid \"deprecated\" field %.*s",
+				       popt->name,
+				       deptok->end - deptok->start,
+				       buffer + deptok->start);
+	} else
+		popt->deprecated = false;
 
 	if (json_tok_streq(buffer, typetok, "string")) {
 		popt->type = "string";
@@ -806,7 +862,8 @@ static const char *plugin_rpcmethod_add(struct plugin *plugin,
 					const char *buffer,
 					const jsmntok_t *meth)
 {
-	const jsmntok_t *nametok, *categorytok, *desctok, *longdesctok, *usagetok;
+	const jsmntok_t *nametok, *categorytok, *desctok, *longdesctok,
+		*usagetok, *deptok;
 	struct json_command *cmd;
 	const char *usage;
 
@@ -815,6 +872,7 @@ static const char *plugin_rpcmethod_add(struct plugin *plugin,
 	desctok = json_get_member(buffer, meth, "description");
 	longdesctok = json_get_member(buffer, meth, "long_description");
 	usagetok = json_get_member(buffer, meth, "usage");
+	deptok = json_get_member(buffer, meth, "deprecated");
 
 	if (!nametok || nametok->type != JSMN_STRING) {
 		return tal_fmt(plugin,
@@ -860,7 +918,16 @@ static const char *plugin_rpcmethod_add(struct plugin *plugin,
 	} else
 		usage = "[params]";
 
-	cmd->deprecated = false;
+	if (deptok) {
+		if (!json_to_bool(buffer, deptok, &cmd->deprecated))
+			return tal_fmt(plugin,
+				       "%s: invalid \"deprecated\" field %.*s",
+				       cmd->name,
+			               deptok->end - deptok->start,
+				       buffer + deptok->start);
+	} else
+		cmd->deprecated = false;
+
 	cmd->dispatch = plugin_rpcmethod_dispatch;
 	if (!jsonrpc_command_add(plugin->plugins->ld->jsonrpc, cmd, usage)) {
 		return tal_fmt(plugin,
@@ -1188,7 +1255,7 @@ char *add_plugin_dir(struct plugins *plugins, const char *dir, bool error_ok)
 			log_info(plugins->log, "%s: disabled via disable-plugin",
 				 fullpath);
 		} else {
-			p = plugin_register(plugins, fullpath, NULL);
+			p = plugin_register(plugins, fullpath, NULL, false);
 			if (!p && !error_ok)
 				return tal_fmt(NULL, "Failed to register %s: %s",
 				               fullpath, strerror(errno));
@@ -1228,7 +1295,7 @@ void plugins_add_default_dir(struct plugins *plugins)
 const char *plugin_send_getmanifest(struct plugin *p)
 {
 	char **cmd;
-	int stdin, stdout;
+	int stdinfd, stdoutfd;
 	struct jsonrpc_request *req;
 	bool debug = false;
 
@@ -1241,19 +1308,24 @@ const char *plugin_send_getmanifest(struct plugin *p)
 	cmd[0] = p->cmd;
 	if (debug)
 		cmd[1] = "--debugger";
-	p->pid = pipecmdarr(&stdin, &stdout, &pipecmd_preserve, cmd);
+	p->pid = pipecmdarr(&stdinfd, &stdoutfd, &pipecmd_preserve, cmd);
 	if (p->pid == -1)
 		return tal_fmt(p, "opening pipe: %s", strerror(errno));
 
 	log_debug(p->plugins->log, "started(%u) %s", p->pid, p->cmd);
 	p->buffer = tal_arr(p, char, 64);
+	jsmn_init(&p->parser);
+	p->toks = toks_alloc(p);
 
 	/* Create two connections, one read-only on top of p->stdout, and one
 	 * write-only on p->stdin */
-	p->stdout_conn = io_new_conn(p, stdout, plugin_stdout_conn_init, p);
-	p->stdin_conn = io_new_conn(p, stdin, plugin_stdin_conn_init, p);
+	p->stdout_conn = io_new_conn(p, stdoutfd, plugin_stdout_conn_init, p);
+	p->stdin_conn = io_new_conn(p, stdinfd, plugin_stdin_conn_init, p);
 	req = jsonrpc_request_start(p, "getmanifest", p->log,
 				    plugin_manifest_cb, p);
+	/* Adding allow-deprecated-apis is part of the deprecation cycle! */
+	if (!deprecated_apis)
+		json_add_bool(req->stream, "allow-deprecated-apis", deprecated_apis);
 	jsonrpc_request_end(req);
 	plugin_request_send(p, req);
 	p->plugin_state = AWAITING_GETMANIFEST_RESPONSE;
@@ -1299,6 +1371,27 @@ void plugins_init(struct plugins *plugins)
 {
 	plugins->default_dir = path_join(plugins, plugins->ld->config_basedir, "plugins");
 	plugins_add_default_dir(plugins);
+
+#if DEVELOPER
+	if (plugins->dev_builtin_plugins_unimportant) {
+		size_t i;
+
+		log_debug(plugins->log, "Builtin plugins now unimportant");
+
+		/* For each builtin plugin, check for a matching plugin
+		 * and make it unimportant.  */
+		for (i = 0; list_of_builtin_plugins[i]; ++i) {
+			const char *name = list_of_builtin_plugins[i];
+			struct plugin *p;
+			list_for_each(&plugins->plugins, p, list) {
+				if (plugin_paths_match(p->cmd, name)) {
+					p->important = false;
+					break;
+				}
+			}
+		}
+	}
+#endif /* DEVELOPER */
 
 	setenv("LIGHTNINGD_PLUGIN", "1", 1);
 	setenv("LIGHTNINGD_VERSION", version(), 1);
@@ -1360,6 +1453,11 @@ plugin_populate_init_request(struct plugin *plugin, struct jsonrpc_request *req)
 	json_add_string(req->stream, "rpc-file", ld->rpc_filename);
 	json_add_bool(req->stream, "startup", plugin->plugins->startup);
 	json_add_string(req->stream, "network", chainparams->network_name);
+	if (ld->proxyaddr) {
+		json_add_address(req->stream, "proxy", ld->proxyaddr);
+		json_add_bool(req->stream, "torv3-enabled", ld->config.use_v3_autotor);
+		json_add_bool(req->stream, "use_proxy_always", ld->use_proxy_always);
+	}
 	json_object_start(req->stream, "feature_set");
 	for (enum feature_place fp = 0; fp < NUM_FEATURE_PLACE; fp++) {
 		if (feature_place_names[fp]) {
@@ -1396,24 +1494,35 @@ void plugins_config(struct plugins *plugins)
 	plugins->startup = false;
 }
 
-void json_add_opt_plugins(struct json_stream *response,
-			  const struct plugins *plugins)
+/** json_add_opt_plugins_array
+ *
+ * @brief add a named array of plugins to the given response,
+ * depending on whether it is important or not important.
+ *
+ * @param response - the `json_stream` to write into.
+ * @param name - the field name of the array.
+ * @param plugins - the plugins object to query.
+ * @param important - match the `important` setting of the
+ * plugins to be added.
+ */
+static
+void json_add_opt_plugins_array(struct json_stream *response,
+				const char *name,
+				const struct plugins *plugins,
+				bool important)
 {
 	struct plugin *p;
-	struct plugin_opt *opt;
 	const char *plugin_name;
+	struct plugin_opt *opt;
 	const char *opt_name;
 
-	/* DEPRECATED: duplicated JSON "plugin" entries */
-	if (deprecated_apis) {
-		list_for_each(&plugins->plugins, p, list) {
-			json_add_string(response, "plugin", p->cmd);
-		}
-	}
-
 	/* we output 'plugins' and their options as an array of substructures */
-	json_array_start(response, "plugins");
+	json_array_start(response, name);
 	list_for_each(&plugins->plugins, p, list) {
+		/* Skip if not matching.  */
+		if (p->important != important)
+			continue;
+
 		json_object_start(response, NULL);
 		json_add_string(response, "path", p->cmd);
 
@@ -1425,6 +1534,9 @@ void json_add_opt_plugins(struct json_stream *response,
 		if (!list_empty(&p->plugin_opts)) {
 			json_object_start(response, "options");
 			list_for_each(&p->plugin_opts, opt, list) {
+				if (!deprecated_apis && opt->deprecated)
+					continue;
+
 				/* Trim the `--` that we added before */
 				opt_name = opt->name + 2;
 				if (opt->value->as_bool) {
@@ -1442,6 +1554,23 @@ void json_add_opt_plugins(struct json_stream *response,
 		json_object_end(response);
 	}
 	json_array_end(response);
+}
+
+void json_add_opt_plugins(struct json_stream *response,
+			  const struct plugins *plugins)
+{
+	struct plugin *p;
+
+	json_add_opt_plugins_array(response, "plugins", plugins, false);
+	json_add_opt_plugins_array(response, "important-plugins", plugins, true);
+
+	/* DEPRECATED: duplicated JSON "plugin" entries */
+	if (deprecated_apis) {
+		list_for_each(&plugins->plugins, p, list) {
+			json_add_string(response, p->important ? "important-plugin" : "plugin", p->cmd);
+		}
+	}
+
 }
 
 void json_add_opt_disable_plugins(struct json_stream *response,
@@ -1524,6 +1653,18 @@ void *plugin_exclusive_loop(struct plugin *plugin)
 struct log *plugin_get_log(struct plugin *plugin)
 {
 	return plugin->log;
+}
+
+void plugins_set_builtin_plugins_dir(struct plugins *plugins,
+				     const char *dir)
+{
+	/*~ Load the builtin plugins as important.  */
+	for (size_t i = 0; list_of_builtin_plugins[i]; ++i)
+		plugin_register(plugins,
+				take(path_join(NULL, dir,
+					       list_of_builtin_plugins[i])),
+				NULL,
+				/* important = */ true);
 }
 
 struct plugin_destroyed {

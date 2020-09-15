@@ -845,6 +845,43 @@ class LightningRpc(UnixDomainSocketRpc):
         }
         return self.call("listsendpays", payload)
 
+    def multifundchannel(self, destinations, feerate=None, minconf=None, utxos=None, minchannels=None, **kwargs):
+        """
+        Fund channels to an array of {destinations},
+        each entry of which is a dict of node {id}
+        and {amount} to fund, and optionally whether
+        to {announce} and how much {push_msat} to
+        give outright to the node.
+        You may optionally specify {feerate},
+        {minconf} depth, and the {utxos} set to use
+        for the single transaction that funds all
+        the channels.
+        """
+        payload = {
+            "destinations": destinations,
+            "feerate": feerate,
+            "minconf": minconf,
+            "utxos": utxos,
+            "minchannels": minchannels,
+        }
+        payload.update({k: v for k, v in kwargs.items()})
+        return self.call("multifundchannel", payload)
+
+    def multiwithdraw(self, outputs, feerate=None, minconf=None, utxos=None, **kwargs):
+        """
+        Send to {outputs}
+        via Bitcoin transaction. Only select outputs
+        with {minconf} confirmations.
+        """
+        payload = {
+            "outputs": outputs,
+            "feerate": feerate,
+            "minconf": minconf,
+            "utxos": utxos,
+        }
+        payload.update({k: v for k, v in kwargs.items()})
+        return self.call("multiwithdraw", payload)
+
     def newaddr(self, addresstype=None):
         """Get a new address of type {addresstype} of the internal wallet.
         """
@@ -1125,7 +1162,7 @@ class LightningRpc(UnixDomainSocketRpc):
         }
         return self.call("unreserveinputs", payload)
 
-    def fundpsbt(self, satoshi, feerate, startweight, minconf=None, reserve=True):
+    def fundpsbt(self, satoshi, feerate, startweight, minconf=None, reserve=True, locktime=None):
         """
         Create a PSBT with inputs sufficient to give an output of satoshi.
         """
@@ -1135,15 +1172,32 @@ class LightningRpc(UnixDomainSocketRpc):
             "startweight": startweight,
             "minconf": minconf,
             "reserve": reserve,
+            "locktime": locktime,
         }
         return self.call("fundpsbt", payload)
 
-    def signpsbt(self, psbt):
+    def utxopsbt(self, satoshi, feerate, startweight, utxos, reserve=True, reservedok=False, locktime=None):
+        """
+        Create a PSBT with given inputs, to give an output of satoshi.
+        """
+        payload = {
+            "satoshi": satoshi,
+            "feerate": feerate,
+            "startweight": startweight,
+            "utxos": utxos,
+            "reserve": reserve,
+            "reservedok": reservedok,
+            "locktime": locktime,
+        }
+        return self.call("utxopsbt", payload)
+
+    def signpsbt(self, psbt, signonly=None):
         """
         Add internal wallet's signatures to PSBT
         """
         payload = {
             "psbt": psbt,
+            "signonly": signonly,
         }
         return self.call("signpsbt", payload)
 

@@ -11,10 +11,6 @@ int unused_main(int argc, char *argv[]);
 /* Generated stub for activate_peers */
 void activate_peers(struct lightningd *ld UNNEEDED)
 { fprintf(stderr, "activate_peers called!\n"); abort(); }
-/* Generated stub for add_plugin_dir */
-char *add_plugin_dir(struct plugins *plugins UNNEEDED, const char *dir UNNEEDED,
-		     bool error_ok UNNEEDED)
-{ fprintf(stderr, "add_plugin_dir called!\n"); abort(); }
 /* Generated stub for begin_topology */
 void begin_topology(struct chain_topology *topo UNNEEDED)
 { fprintf(stderr, "begin_topology called!\n"); abort(); }
@@ -72,9 +68,6 @@ bool feature_set_or(struct feature_set *a UNNEEDED,
 /* Generated stub for free_htlcs */
 void free_htlcs(struct lightningd *ld UNNEEDED, const struct channel *channel UNNEEDED)
 { fprintf(stderr, "free_htlcs called!\n"); abort(); }
-/* Generated stub for free_unreleased_txs */
-void free_unreleased_txs(struct wallet *w UNNEEDED)
-{ fprintf(stderr, "free_unreleased_txs called!\n"); abort(); }
 /* Generated stub for fromwire_bigsize */
 bigsize_t fromwire_bigsize(const u8 **cursor UNNEEDED, size_t *max UNNEEDED)
 { fprintf(stderr, "fromwire_bigsize called!\n"); abort(); }
@@ -207,6 +200,10 @@ void plugins_init(struct plugins *plugins UNNEEDED)
 struct plugins *plugins_new(const tal_t *ctx UNNEEDED, struct log_book *log_book UNNEEDED,
 			    struct lightningd *ld UNNEEDED)
 { fprintf(stderr, "plugins_new called!\n"); abort(); }
+/* Generated stub for plugins_set_builtin_plugins_dir */
+void plugins_set_builtin_plugins_dir(struct plugins *plugins UNNEEDED,
+				     const char *dir UNNEEDED)
+{ fprintf(stderr, "plugins_set_builtin_plugins_dir called!\n"); abort(); }
 /* Generated stub for setup_color_and_alias */
 void setup_color_and_alias(struct lightningd *ld UNNEEDED)
 { fprintf(stderr, "setup_color_and_alias called!\n"); abort(); }
@@ -243,9 +240,6 @@ void waitblockheight_notify_new_block(struct lightningd *ld UNNEEDED,
 /* Generated stub for wallet_blocks_heights */
 void wallet_blocks_heights(struct wallet *w UNNEEDED, u32 def UNNEEDED, u32 *min UNNEEDED, u32 *max UNNEEDED)
 { fprintf(stderr, "wallet_blocks_heights called!\n"); abort(); }
-/* Generated stub for wallet_clean_utxos */
-void wallet_clean_utxos(struct wallet *w UNNEEDED, struct bitcoind *bitcoind UNNEEDED)
-{ fprintf(stderr, "wallet_clean_utxos called!\n"); abort(); }
 /* Generated stub for wallet_network_check */
 bool wallet_network_check(struct wallet *w UNNEEDED)
 { fprintf(stderr, "wallet_network_check called!\n"); abort(); }

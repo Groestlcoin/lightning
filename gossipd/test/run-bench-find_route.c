@@ -82,9 +82,6 @@ bool nannounce_different(struct gossip_store *gs UNNEEDED,
 /* Generated stub for notleak_ */
 void *notleak_(const void *ptr UNNEEDED, bool plus_children UNNEEDED)
 { fprintf(stderr, "notleak_ called!\n"); abort(); }
-/* Generated stub for onion_type_name */
-const char *onion_type_name(int e UNNEEDED)
-{ fprintf(stderr, "onion_type_name called!\n"); abort(); }
 /* Generated stub for peer_supplied_good_gossip */
 void peer_supplied_good_gossip(struct peer *peer UNNEEDED, size_t amount UNNEEDED)
 { fprintf(stderr, "peer_supplied_good_gossip called!\n"); abort(); }
@@ -104,6 +101,9 @@ u8 *towire_errorfmt(const tal_t *ctx UNNEEDED,
 /* Generated stub for towire_gossip_store_channel_amount */
 u8 *towire_gossip_store_channel_amount(const tal_t *ctx UNNEEDED, struct amount_sat satoshis UNNEEDED)
 { fprintf(stderr, "towire_gossip_store_channel_amount called!\n"); abort(); }
+/* Generated stub for towire_gossip_store_delete_chan */
+u8 *towire_gossip_store_delete_chan(const tal_t *ctx UNNEEDED, const struct short_channel_id *scid UNNEEDED)
+{ fprintf(stderr, "towire_gossip_store_delete_chan called!\n"); abort(); }
 /* Generated stub for towire_gossip_store_private_update */
 u8 *towire_gossip_store_private_update(const tal_t *ctx UNNEEDED, const u8 *update UNNEEDED)
 { fprintf(stderr, "towire_gossip_store_private_update called!\n"); abort(); }

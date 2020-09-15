@@ -35,8 +35,7 @@ def test_stop_pending_fundchannel(node_factory, executor):
     freeing the daemon, but that needs a DB transaction to be open.
 
     """
-    l1 = node_factory.get_node()
-    l2 = node_factory.get_node()
+    l1, l2 = node_factory.get_nodes(2)
 
     l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
 
@@ -69,8 +68,8 @@ def test_names(node_factory):
         ('0265b6ab5ec860cd257865d61ef0bbf5b3339c36cbda8b26b74e7f1dca490b6518', 'LOUDPHOTO', '0265b6')
     ]
 
-    for key, alias, color in configs:
-        n = node_factory.get_node()
+    nodes = node_factory.get_nodes(len(configs))
+    for n, (key, alias, color) in zip(nodes, configs):
         assert n.daemon.is_in_log(r'public key {}, alias {}.* \(color #{}\)'
                                   .format(key, alias, color))
 
@@ -128,6 +127,18 @@ def test_bitcoin_failure(node_factory, bitcoind):
     bitcoind.generate_block(5)
     sync_blockheight(bitcoind, [l1])
 
+    # We refuse to start if bitcoind is in `blocksonly`
+    l1.stop()
+    bitcoind.stop()
+    bitcoind.cmd_line += ["-blocksonly"]
+    bitcoind.start()
+
+    l2 = node_factory.get_node(start=False, expect_fail=True)
+    with pytest.raises(ValueError):
+        l2.start(stderr=subprocess.PIPE)
+    assert l2.daemon.is_in_stderr(r".*deactivating transaction relay is not"
+                                  " supported.") is not None
+
 
 def test_bitcoin_ibd(node_factory, bitcoind):
     """Test that we recognize groestlcoin in initial download mode"""
@@ -168,17 +179,19 @@ def test_lightningd_still_loading(node_factory, bitcoind, executor):
         }
 
     # Start it, establish channel, get extra funds.
-    l1, l2 = node_factory.line_graph(2, opts={'may_reconnect': True, 'wait_for_bitcoind_sync': False})
+    l1, l2, l3 = node_factory.get_nodes(3, opts=[{'may_reconnect': True,
+                                                  'wait_for_bitcoind_sync': False},
+                                                 {'may_reconnect': True,
+                                                  'wait_for_bitcoind_sync': False},
+                                                 {}])
+    node_factory.join_nodes([l1, l2])
 
     # Balance l1<->l2 channel
     l1.pay(l2, 10**9 // 2)
 
     l1.stop()
 
-    # Start extra node.
-    l3 = node_factory.get_node()
-
-    # Now make sure it's behind.
+    # Now make sure l2 is behind.
     bitcoind.generate_block(2)
     # Make sure l2/l3 are synced
     sync_blockheight(bitcoind, [l2, l3])
@@ -451,14 +464,10 @@ def test_htlc_in_timeout(node_factory, bitcoind, executor):
 @unittest.skipIf(not DEVELOPER, "needs DEVELOPER=1")
 def test_bech32_funding(node_factory, chainparams):
     # Don't get any funds from previous runs.
-    l1 = node_factory.get_node(random_hsm=True)
-    l2 = node_factory.get_node(random_hsm=True)
-
-    # connect
-    l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
+    l1, l2 = node_factory.line_graph(2, opts={'random_hsm': True}, fundchannel=False)
 
     # fund a bech32 address and then open a channel with it
-    res = l1.openchannel(l2, 20000, 'bech32')
+    res = l1.openchannel(l2, 25000, 'bech32')
     address = res['address']
     assert address.startswith(chainparams['bip173_prefix'])
 
@@ -477,10 +486,17 @@ def test_bech32_funding(node_factory, chainparams):
 
 
 def test_withdraw_misc(node_factory, bitcoind, chainparams):
+    def dont_spend_outputs(n, txid):
+        """Reserve both outputs (we assume there are two!) in case any our ours, so we don't spend change: wrecks accounting checks"""
+        n.rpc.reserveinputs(bitcoind.rpc.createpsbt([{'txid': txid,
+                                                      'vout': 0},
+                                                     {'txid': txid,
+                                                      'vout': 1}], []))
+
     # We track channel balances, to verify that accounting is ok.
     coin_mvt_plugin = os.path.join(os.getcwd(), 'tests/plugins/coin_movements.py')
 
-    amount = 1000000
+    amount = 2000000
     # Don't get any funds from previous runs.
     l1 = node_factory.get_node(random_hsm=True,
                                options={'plugin': coin_mvt_plugin},
@@ -490,7 +506,7 @@ def test_withdraw_misc(node_factory, bitcoind, chainparams):
 
     # Add some funds to withdraw later
     for i in range(10):
-        l1.bitcoin.rpc.sendtoaddress(addr, amount / 10**8 + 0.01)
+        l1.bitcoin.rpc.sendtoaddress(addr, amount / 10**8)
 
     bitcoind.generate_block(1)
     wait_for(lambda: len(l1.rpc.listfunds()['outputs']) == 10)
@@ -506,10 +522,10 @@ def test_withdraw_misc(node_factory, bitcoind, chainparams):
         l1.rpc.withdraw(waddr, 'not an amount')
     with pytest.raises(RpcError):
         l1.rpc.withdraw(waddr, -amount)
-    with pytest.raises(RpcError, match=r'Cannot afford transaction'):
+    with pytest.raises(RpcError, match=r'Could not afford'):
         l1.rpc.withdraw(waddr, amount * 100)
 
-    out = l1.rpc.withdraw(waddr, 2 * amount)
+    out = l1.rpc.withdraw(waddr, amount)
 
     # Make sure bitcoind received the withdrawal
     unspent = l1.bitcoin.rpc.listunspent(0)
@@ -517,21 +533,28 @@ def test_withdraw_misc(node_factory, bitcoind, chainparams):
 
     assert(withdrawal[0]['amount'] == Decimal('0.02'))
 
+    bitcoind.generate_block(1, wait_for_mempool=1)
+    sync_blockheight(bitcoind, [l1])
+
     # Now make sure two of them were marked as spent
     assert l1.db_query('SELECT COUNT(*) as c FROM outputs WHERE status=2')[0]['c'] == 2
+
+    dont_spend_outputs(l1, out['txid'])
 
     # Now send some money to l2.
     # lightningd uses P2SH-P2WPKH
     waddr = l2.rpc.newaddr('bech32')['bech32']
-    l1.rpc.withdraw(waddr, 2 * amount)
+    out = l1.rpc.withdraw(waddr, amount)
     bitcoind.generate_block(1)
 
     # Make sure l2 received the withdrawal.
     wait_for(lambda: len(l2.rpc.listfunds()['outputs']) == 1)
     outputs = l2.db_query('SELECT value FROM outputs WHERE status=0;')
-    assert only_one(outputs)['value'] == 2 * amount
+    assert only_one(outputs)['value'] == amount
 
     # Now make sure an additional two of them were marked as spent
+    sync_blockheight(bitcoind, [l1])
+    dont_spend_outputs(l1, out['txid'])
     assert l1.db_query('SELECT COUNT(*) as c FROM outputs WHERE status=2')[0]['c'] == 4
 
     if chainparams['name'] != 'regtest':
@@ -541,13 +564,16 @@ def test_withdraw_misc(node_factory, bitcoind, chainparams):
     # Address from: https://bc-2.jp/tools/bech32demo/index.html
     waddr = 'bcrt1qw508d6qejxtdg4y5r3zarvary0c5xw7kygt080'
     with pytest.raises(RpcError):
-        l1.rpc.withdraw('xx1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx', 2 * amount)
+        l1.rpc.withdraw('xx1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx', amount)
     with pytest.raises(RpcError):
-        l1.rpc.withdraw('tb1pw508d6qejxtdg4y5r3zarvary0c5xw7kdl9fad', 2 * amount)
+        l1.rpc.withdraw('tb1pw508d6qejxtdg4y5r3zarvary0c5xw7kdl9fad', amount)
     with pytest.raises(RpcError):
-        l1.rpc.withdraw('tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxxxxxx', 2 * amount)
-    l1.rpc.withdraw(waddr, 2 * amount)
-    bitcoind.generate_block(1)
+        l1.rpc.withdraw('tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxxxxxx', amount)
+    out = l1.rpc.withdraw(waddr, amount)
+    bitcoind.generate_block(1, wait_for_mempool=1)
+    sync_blockheight(bitcoind, [l1])
+    dont_spend_outputs(l1, out['txid'])
+
     # Now make sure additional two of them were marked as spent
     assert l1.db_query('SELECT COUNT(*) as c FROM outputs WHERE status=2')[0]['c'] == 6
 
@@ -555,44 +581,53 @@ def test_withdraw_misc(node_factory, bitcoind, chainparams):
     # Address from: https://bc-2.jp/tools/bech32demo/index.html
     waddr = 'bcrt1qrp33g0q5c5txsp9arysrx4k6zdkfs4nce4xj0gdcccefvpysxf3qzf4jry'
     with pytest.raises(RpcError):
-        l1.rpc.withdraw('xx1qrp33g0q5c5txsp9arysrx4k6zdkfs4nce4xj0gdcccefvpysxf3q0sl5k7', 2 * amount)
+        l1.rpc.withdraw('xx1qrp33g0q5c5txsp9arysrx4k6zdkfs4nce4xj0gdcccefvpysxf3q0sl5k7', amount)
     with pytest.raises(RpcError):
-        l1.rpc.withdraw('tb1prp33g0q5c5txsp9arysrx4k6zdkfs4nce4xj0gdcccefvpysxf3qsm03tq', 2 * amount)
+        l1.rpc.withdraw('tb1prp33g0q5c5txsp9arysrx4k6zdkfs4nce4xj0gdcccefvpysxf3qsm03tq', amount)
     with pytest.raises(RpcError):
-        l1.rpc.withdraw('tb1qrp33g0q5c5txsp9arysrx4k6zdkfs4nce4xj0gdcccefvpysxf3qxxxxxx', 2 * amount)
-    l1.rpc.withdraw(waddr, 2 * amount)
-    bitcoind.generate_block(1)
+        l1.rpc.withdraw('tb1qrp33g0q5c5txsp9arysrx4k6zdkfs4nce4xj0gdcccefvpysxf3qxxxxxx', amount)
+    out = l1.rpc.withdraw(waddr, amount)
+    bitcoind.generate_block(1, wait_for_mempool=1)
+    sync_blockheight(bitcoind, [l1])
+    dont_spend_outputs(l1, out['txid'])
     # Now make sure additional two of them were marked as spent
     assert l1.db_query('SELECT COUNT(*) as c FROM outputs WHERE status=2')[0]['c'] == 8
 
     # failure testing for invalid SegWit addresses, from BIP173
     # HRP character out of range
     with pytest.raises(RpcError):
-        l1.rpc.withdraw(' 1nwldj5', 2 * amount)
+        l1.rpc.withdraw(' 1nwldj5', amount)
     # overall max length exceeded
     with pytest.raises(RpcError):
-        l1.rpc.withdraw('an84characterslonghumanreadablepartthatcontainsthenumber1andtheexcludedcharactersbio1569pvx', 2 * amount)
+        l1.rpc.withdraw('an84characterslonghumanreadablepartthatcontainsthenumber1andtheexcludedcharactersbio1569pvx', amount)
     # No separator character
     with pytest.raises(RpcError):
-        l1.rpc.withdraw('pzry9x0s0muk', 2 * amount)
+        l1.rpc.withdraw('pzry9x0s0muk', amount)
     # Empty HRP
     with pytest.raises(RpcError):
-        l1.rpc.withdraw('1pzry9x0s0muk', 2 * amount)
+        l1.rpc.withdraw('1pzry9x0s0muk', amount)
     # Invalid witness version
     with pytest.raises(RpcError):
-        l1.rpc.withdraw('BC13W508D6QEJXTDG4Y5R3ZARVARY0C5XW7KN40WF2', 2 * amount)
+        l1.rpc.withdraw('BC13W508D6QEJXTDG4Y5R3ZARVARY0C5XW7KN40WF2', amount)
     # Invalid program length for witness version 0 (per BIP141)
     with pytest.raises(RpcError):
-        l1.rpc.withdraw('BC1QR508D6QEJXTDG4Y5R3ZARVARYV98GJ9P', 2 * amount)
+        l1.rpc.withdraw('BC1QR508D6QEJXTDG4Y5R3ZARVARYV98GJ9P', amount)
     # Mixed case
     with pytest.raises(RpcError):
-        l1.rpc.withdraw('tb1qrp33g0q5c5txsp9arysrx4k6zdkfs4nce4xj0gdcccefvpysxf3q0sL5k7', 2 * amount)
+        l1.rpc.withdraw('tb1qrp33g0q5c5txsp9arysrx4k6zdkfs4nce4xj0gdcccefvpysxf3q0sL5k7', amount)
     # Non-zero padding in 8-to-5 conversion
     with pytest.raises(RpcError):
-        l1.rpc.withdraw('tb1qrp33g0q5c5txsp9arysrx4k6zdkfs4nce4xj0gdcccefvpysxf3pjxtptv', 2 * amount)
+        l1.rpc.withdraw('tb1qrp33g0q5c5txsp9arysrx4k6zdkfs4nce4xj0gdcccefvpysxf3pjxtptv', amount)
 
-    # Should have 6 outputs available.
-    assert l1.db_query('SELECT COUNT(*) as c FROM outputs WHERE status=0')[0]['c'] == 6
+    # Should have 2 outputs available.
+    assert l1.db_query('SELECT COUNT(*) as c FROM outputs WHERE status=0')[0]['c'] == 2
+
+    # Unreserve everything.
+    inputs = []
+    for out in l1.rpc.listfunds()['outputs']:
+        if out['reserved']:
+            inputs += [{'txid': out['txid'], 'vout': out['output']}]
+    l1.rpc.unreserveinputs(bitcoind.rpc.createpsbt(inputs, []))
 
     # Test withdrawal to self.
     l1.rpc.withdraw(l1.rpc.newaddr('bech32')['bech32'], 'all', minconf=0)
@@ -603,7 +638,7 @@ def test_withdraw_misc(node_factory, bitcoind, chainparams):
     assert l1.db_query('SELECT COUNT(*) as c FROM outputs WHERE status=0')[0]['c'] == 0
 
     # This should fail, can't even afford fee.
-    with pytest.raises(RpcError, match=r'Cannot afford transaction'):
+    with pytest.raises(RpcError, match=r'Could not afford'):
         l1.rpc.withdraw(waddr, 'all')
 
     bitcoind.generate_block(1)
@@ -623,26 +658,34 @@ def test_withdraw_misc(node_factory, bitcoind, chainparams):
         {'type': 'chain_mvt', 'credit': 2000000000, 'debit': 0, 'tag': 'deposit'},
         {'type': 'chain_mvt', 'credit': 0, 'debit': 0, 'tag': 'spend_track'},
         {'type': 'chain_mvt', 'credit': 0, 'debit': 0, 'tag': 'spend_track'},
-        {'type': 'chain_mvt', 'credit': 0, 'debit': 1993745000, 'tag': 'withdrawal'},
-        {'type': 'chain_mvt', 'credit': 0, 'debit': 2000000000, 'tag': 'withdrawal'},
-        {'type': 'chain_mvt', 'credit': 0, 'debit': 6255000, 'tag': 'chain_fees'},
-        {'type': 'chain_mvt', 'credit': 0, 'debit': 0, 'tag': 'spend_track'},
-        {'type': 'chain_mvt', 'credit': 0, 'debit': 0, 'tag': 'spend_track'},
-        {'type': 'chain_mvt', 'credit': 0, 'debit': 1993745000, 'tag': 'withdrawal'},
-        {'type': 'chain_mvt', 'credit': 0, 'debit': 2000000000, 'tag': 'withdrawal'},
-        {'type': 'chain_mvt', 'credit': 0, 'debit': 6255000, 'tag': 'chain_fees'},
-        {'type': 'chain_mvt', 'credit': 1993745000, 'debit': 0, 'tag': 'deposit'},
-        {'type': 'chain_mvt', 'credit': 1993745000, 'debit': 0, 'tag': 'deposit'},
-        {'type': 'chain_mvt', 'credit': 0, 'debit': 0, 'tag': 'spend_track'},
-        {'type': 'chain_mvt', 'credit': 0, 'debit': 0, 'tag': 'spend_track'},
-        {'type': 'chain_mvt', 'credit': 0, 'debit': 1993745000, 'tag': 'withdrawal'},
-        {'type': 'chain_mvt', 'credit': 0, 'debit': 2000000000, 'tag': 'withdrawal'},
+        [
+            {'type': 'chain_mvt', 'credit': 0, 'debit': 2000000000, 'tag': 'withdrawal'},
+            {'type': 'chain_mvt', 'credit': 0, 'debit': 1993745000, 'tag': 'withdrawal'},
+        ],
         {'type': 'chain_mvt', 'credit': 0, 'debit': 6255000, 'tag': 'chain_fees'},
         {'type': 'chain_mvt', 'credit': 1993745000, 'debit': 0, 'tag': 'deposit'},
         {'type': 'chain_mvt', 'credit': 0, 'debit': 0, 'tag': 'spend_track'},
         {'type': 'chain_mvt', 'credit': 0, 'debit': 0, 'tag': 'spend_track'},
-        {'type': 'chain_mvt', 'credit': 0, 'debit': 1993385000, 'tag': 'withdrawal'},
-        {'type': 'chain_mvt', 'credit': 0, 'debit': 2000000000, 'tag': 'withdrawal'},
+        [
+            {'type': 'chain_mvt', 'credit': 0, 'debit': 2000000000, 'tag': 'withdrawal'},
+            {'type': 'chain_mvt', 'credit': 0, 'debit': 1993745000, 'tag': 'withdrawal'},
+        ],
+        {'type': 'chain_mvt', 'credit': 0, 'debit': 6255000, 'tag': 'chain_fees'},
+        {'type': 'chain_mvt', 'credit': 1993745000, 'debit': 0, 'tag': 'deposit'},
+        {'type': 'chain_mvt', 'credit': 0, 'debit': 0, 'tag': 'spend_track'},
+        {'type': 'chain_mvt', 'credit': 0, 'debit': 0, 'tag': 'spend_track'},
+        [
+            {'type': 'chain_mvt', 'credit': 0, 'debit': 2000000000, 'tag': 'withdrawal'},
+            {'type': 'chain_mvt', 'credit': 0, 'debit': 1993745000, 'tag': 'withdrawal'},
+        ],
+        {'type': 'chain_mvt', 'credit': 0, 'debit': 6255000, 'tag': 'chain_fees'},
+        {'type': 'chain_mvt', 'credit': 1993745000, 'debit': 0, 'tag': 'deposit'},
+        {'type': 'chain_mvt', 'credit': 0, 'debit': 0, 'tag': 'spend_track'},
+        {'type': 'chain_mvt', 'credit': 0, 'debit': 0, 'tag': 'spend_track'},
+        [
+            {'type': 'chain_mvt', 'credit': 0, 'debit': 1993385000, 'tag': 'withdrawal'},
+            {'type': 'chain_mvt', 'credit': 0, 'debit': 2000000000, 'tag': 'withdrawal'},
+        ],
         {'type': 'chain_mvt', 'credit': 0, 'debit': 6615000, 'tag': 'chain_fees'},
         {'type': 'chain_mvt', 'credit': 1993385000, 'debit': 0, 'tag': 'deposit'},
         {'type': 'chain_mvt', 'credit': 0, 'debit': 0, 'tag': 'spend_track'},
@@ -659,61 +702,6 @@ def test_withdraw_misc(node_factory, bitcoind, chainparams):
         {'type': 'chain_mvt', 'credit': 0, 'debit': 3645000, 'tag': 'chain_fees'},
     ]
     check_coin_moves(l1, 'wallet', wallet_moves, chainparams)
-
-
-def test_minconf_withdraw(node_factory, bitcoind):
-    """Issue 2518: ensure that ridiculous confirmation levels don't overflow
-
-    The number of confirmations is used to compute a maximum height that is to
-    be accepted. If the current height is smaller than the number of
-    confirmations we wrap around and just select everything. The fix is to
-    clamp the maxheight parameter to a positive small number.
-
-    """
-    amount = 1000000
-    # Don't get any funds from previous runs.
-    l1 = node_factory.get_node(random_hsm=True)
-    addr = l1.rpc.newaddr()['bech32']
-
-    # Add some funds to withdraw later
-    for i in range(10):
-        l1.bitcoin.rpc.sendtoaddress(addr, amount / 10**8 + 0.01)
-
-    bitcoind.generate_block(1)
-
-    wait_for(lambda: len(l1.rpc.listfunds()['outputs']) == 10)
-    with pytest.raises(RpcError):
-        l1.rpc.withdraw(destination=addr, satoshi=10000, feerate='normal', minconf=9999999)
-
-
-def test_addfunds_from_block(node_factory, bitcoind):
-    """Send funds to the daemon without telling it explicitly
-    """
-    # Previous runs with same bitcoind can leave funds!
-    l1 = node_factory.get_node(random_hsm=True)
-
-    addr = l1.rpc.newaddr()['bech32']
-    bitcoind.rpc.sendtoaddress(addr, 0.1)
-    bitcoind.generate_block(1)
-
-    wait_for(lambda: len(l1.rpc.listfunds()['outputs']) == 1)
-
-    outputs = l1.db_query('SELECT value FROM outputs WHERE status=0;')
-    assert only_one(outputs)['value'] == 10000000
-
-    # The address we detect must match what was paid to.
-    output = only_one(l1.rpc.listfunds()['outputs'])
-    assert output['address'] == addr
-
-    # Send all our money to a P2WPKH address this time.
-    addr = l1.rpc.newaddr("bech32")['bech32']
-    l1.rpc.withdraw(addr, "all")
-    bitcoind.generate_block(1)
-    time.sleep(1)
-
-    # The address we detect must match what was paid to.
-    output = only_one(l1.rpc.listfunds()['outputs'])
-    assert output['address'] == addr
 
 
 def test_io_logging(node_factory, executor):
@@ -819,9 +807,13 @@ def test_listconfigs(node_factory, bitcoind, chainparams):
     assert configs['ignore-fee-limits'] is False
     assert configs['log-prefix'] == 'lightning1-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx...'
 
+    # These are aliases, but we don't print the (unofficial!) wumbo.
+    assert 'wumbo' not in configs
+    assert configs['large-channels'] is False
+
     # Test one at a time.
     for c in configs.keys():
-        if c.startswith('#') or c.startswith('plugins'):
+        if c.startswith('#') or c.startswith('plugins') or c == 'important-plugins':
             continue
         oneconfig = l1.rpc.listconfigs(config=c)
         assert(oneconfig[c] == configs[c])
@@ -832,9 +824,9 @@ def test_listconfigs_plugins(node_factory, bitcoind, chainparams):
 
     # assert that we have pay plugin and that plugins have a name and path
     configs = l1.rpc.listconfigs()
-    assert configs['plugins']
-    assert len([p for p in configs['plugins'] if p['name'] == "pay"]) == 1
-    for p in configs['plugins']:
+    assert configs['important-plugins']
+    assert len([p for p in configs['important-plugins'] if p['name'] == "pay"]) == 1
+    for p in configs['important-plugins']:
         assert p['name'] and len(p['name']) > 0
         assert p['path'] and len(p['path']) > 0
         assert os.path.isfile(p['path']) and os.access(p['path'], os.X_OK)
@@ -1368,25 +1360,16 @@ def test_reserve_enforcement(node_factory, executor):
 def test_htlc_send_timeout(node_factory, bitcoind, compat):
     """Test that we don't commit an HTLC to an unreachable node."""
     # Feerates identical so we don't get gratuitous commit to update them
-    l1 = node_factory.get_node(
-        options={'log-level': 'io'},
-        feerates=(7500, 7500, 7500, 7500)
-    )
+    l1, l2, l3 = node_factory.line_graph(3, opts=[{'log-level': 'io',
+                                                   'feerates': (7500, 7500, 7500, 7500)},
+                                                  # Blackhole it after it sends HTLC_ADD to l3.
+                                                  {'log-level': 'io',
+                                                   'feerates': (7500, 7500, 7500, 7500),
+                                                   'disconnect': ['0WIRE_UPDATE_ADD_HTLC']},
+                                                  {}],
+                                         wait_for_announce=True)
 
-    # Blackhole it after it sends HTLC_ADD to l3.
-    l2 = node_factory.get_node(disconnect=['0WIRE_UPDATE_ADD_HTLC'],
-                               options={'log-level': 'io'},
-                               feerates=(7500, 7500, 7500, 7500))
-    l3 = node_factory.get_node()
-
-    l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
-    l2.rpc.connect(l3.info['id'], 'localhost', l3.port)
-
-    l1.fund_channel(l2, 10**6)
-    chanid2 = l2.fund_channel(l3, 10**6)
-
-    # Make sure channels get announced.
-    bitcoind.generate_block(5)
+    chanid2 = l2.get_channel_scid(l3)
 
     # Make sure we have 30 seconds without any incoming traffic from l3 to l2
     # so it tries to ping before sending WIRE_COMMITMENT_SIGNED.
@@ -1443,6 +1426,7 @@ def test_ipv4_and_ipv6(node_factory):
         assert int(bind[0]['port']) == port
 
 
+@unittest.skipIf(TEST_NETWORK == 'liquid-regtest', "Fees on elements are different")
 @unittest.skipIf(
     not DEVELOPER or DEPRECATED_APIS, "Without DEVELOPER=1 we snap to "
     "FEERATE_FLOOR on testnets, and we test the new API."
@@ -1537,8 +1521,13 @@ def test_feerates(node_factory):
     htlc_feerate = feerates["perkw"]["htlc_resolution"]
     htlc_timeout_cost = feerates["onchain_fee_estimates"]["htlc_timeout_satoshis"]
     htlc_success_cost = feerates["onchain_fee_estimates"]["htlc_success_satoshis"]
-    assert htlc_timeout_cost == htlc_feerate * 663 // 1000
-    assert htlc_success_cost == htlc_feerate * 703 // 1000
+    if EXPERIMENTAL_FEATURES:
+        # option_anchor_outputs
+        assert htlc_timeout_cost == htlc_feerate * 666 // 1000
+        assert htlc_success_cost == htlc_feerate * 706 // 1000
+    else:
+        assert htlc_timeout_cost == htlc_feerate * 663 // 1000
+        assert htlc_success_cost == htlc_feerate * 703 // 1000
 
 
 def test_logging(node_factory):
@@ -1605,7 +1594,7 @@ def test_configfile_before_chdir(node_factory):
 def test_json_error(node_factory):
     """Must return valid json even if it quotes our weirdness"""
     l1 = node_factory.get_node()
-    with pytest.raises(RpcError, match=r'Given id is not a channel ID or short channel ID'):
+    with pytest.raises(RpcError, match=r'id: should be a channel ID or short channel ID: invalid token'):
         l1.rpc.close({"tx": "020000000001011490f737edd2ea2175a032b58ea7cd426dfc244c339cd044792096da3349b18a0100000000ffffffff021c900300000000001600140e64868e2f752314bc82a154c8c5bf32f3691bb74da00b00000000002200205b8cd3b914cf67cdd8fa6273c930353dd36476734fbd962102c2df53b90880cd0247304402202b2e3195a35dc694bbbc58942dc9ba59cc01d71ba55c9b0ad0610ccd6a65633702201a849254453d160205accc00843efb0ad1fe0e186efa6a7cee1fb6a1d36c736a012103d745445c9362665f22e0d96e9e766f273f3260dea39c8a76bfa05dd2684ddccf00000000", "txid": "2128c10f0355354479514f4a23eaa880d94e099406d419bbb0d800143accddbb", "channel_id": "bbddcc3a1400d8b0bb19d40694094ed980a8ea234a4f5179443555030fc12820"})
 
     # Should not corrupt following RPC
@@ -1835,7 +1824,7 @@ def test_dev_demux(node_factory):
         l1.rpc.check(command_to_check='dev', subcommand='foobar')
     with pytest.raises(RpcError, match=r'unknown parameter'):
         l1.rpc.check(command_to_check='dev', subcommand='crash', unk=1)
-    with pytest.raises(RpcError, match=r"'msec' should be an integer"):
+    with pytest.raises(RpcError, match=r"msec: should be an integer: invalid token"):
         l1.rpc.check(command_to_check='dev', subcommand='slowcmd', msec='aaa')
     with pytest.raises(RpcError, match=r'missing required parameter'):
         l1.rpc.check(command_to_check='dev', subcommand='rhash')
@@ -1851,9 +1840,9 @@ def test_dev_demux(node_factory):
         l1.rpc.call('dev', {'subcommand': 'crash', 'unk': 1})
     with pytest.raises(RpcError, match=r'too many parameters'):
         l1.rpc.call('dev', ['crash', 1])
-    with pytest.raises(RpcError, match=r"'msec' should be an integer"):
+    with pytest.raises(RpcError, match=r"msec: should be an integer: invalid token"):
         l1.rpc.call('dev', {'subcommand': 'slowcmd', 'msec': 'aaa'})
-    with pytest.raises(RpcError, match=r"'msec' should be an integer"):
+    with pytest.raises(RpcError, match=r"msec: should be an integer: invalid token"):
         l1.rpc.call('dev', ['slowcmd', 'aaa'])
     with pytest.raises(RpcError, match=r'missing required parameter'):
         l1.rpc.call('dev', {'subcommand': 'rhash'})
@@ -1887,6 +1876,7 @@ def test_list_features_only(node_factory):
                 'option_basic_mpp/odd',
                 ]
     if EXPERIMENTAL_FEATURES:
+        expected += ['option_anchor_outputs/odd']
         expected += ['option_unknown_102/odd']
     assert features == expected
 
@@ -2174,7 +2164,7 @@ def test_unix_socket_path_length(node_factory, bitcoind, directory, executor, db
     os.makedirs(lightning_dir)
     db = db_provider.get_db(lightning_dir, "test_unix_socket_path_length", 1)
 
-    l1 = LightningNode(1, lightning_dir, bitcoind, executor, db=db, port=node_factory.get_next_port())
+    l1 = LightningNode(1, lightning_dir, bitcoind, executor, VALGRIND, db=db, port=node_factory.get_next_port())
 
     # `LightningNode.start()` internally calls `LightningRpc.getinfo()` which
     # exercises the socket logic, and raises an issue if it fails.
@@ -2235,8 +2225,8 @@ def test_sendcustommsg(node_factory):
     """
     plugin = os.path.join(os.path.dirname(__file__), "plugins", "custommsg.py")
     opts = {'log-level': 'io', 'plugin': plugin}
-    l1, l2, l3 = node_factory.line_graph(3, opts=opts)
-    l4 = node_factory.get_node(options=opts)
+    l1, l2, l3, l4 = node_factory.get_nodes(4, opts=opts)
+    node_factory.join_nodes([l1, l2, l3])
     l2.connect(l4)
     l3.stop()
     msg = r'ff' * 32
@@ -2402,7 +2392,7 @@ def test_listtransactions(node_factory):
     """Sanity check for the listtransactions RPC command"""
     l1, l2 = node_factory.get_nodes(2, opts=[{}, {}])
 
-    wallettxid = l1.openchannel(l2, 10**4)["wallettxid"]
+    wallettxid = l1.openchannel(l2, 10**5)["wallettxid"]
     txids = [i["txid"] for tx in l1.rpc.listtransactions()["transactions"]
              for i in tx["inputs"]]
     # The txid of the transaction funding the channel is present, and

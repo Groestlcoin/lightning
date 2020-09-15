@@ -33,7 +33,7 @@ class Method(object):
      - HOOK registered to be called synchronously by lightningd
     """
     def __init__(self, name, func, mtype=MethodType.RPCMETHOD, category=None,
-                 desc=None, long_desc=None):
+                 desc=None, long_desc=None, deprecated=False):
         self.name = name
         self.func = func
         self.mtype = mtype
@@ -41,6 +41,7 @@ class Method(object):
         self.background = False
         self.desc = desc
         self.long_desc = long_desc
+        self.deprecated = deprecated
 
 
 class Request(dict):
@@ -94,6 +95,26 @@ class Request(dict):
 
     def _write_result(self, result):
         self.plugin._write_locked(result)
+
+
+# If a hook call fails we need to coerce it into something the main daemon can
+# handle. Returning an error is not an option since we explicitly do not allow
+# those as a response to the calls, otherwise the only option we have is to
+# crash the main daemon. The goal of these is to present a safe fallback
+# should the hook call fail unexpectedly.
+hook_fallbacks = {
+    'htlc_accepted': {
+        'result': 'fail',
+        'failure_message': '2002'  # Fail with a temporary node failure
+    },
+    'peer_connected': {'result': 'continue'},
+    # commitment_revocation cannot recover from failing, let lightningd crash
+    # db_write cannot recover from failing, let lightningd crash
+    'invoice_payment': {'result': 'continue'},
+    'openchannel': {'result': 'reject'},
+    'rpc_command': {'result': 'continue'},
+    'custommsg': {'result': 'continue'},
+}
 
 
 class Plugin(object):
@@ -161,7 +182,7 @@ class Plugin(object):
         self.write_lock = RLock()
 
     def add_method(self, name, func, background=False, category=None, desc=None,
-                   long_desc=None):
+                   long_desc=None, deprecated=False):
         """Add a plugin method to the dispatch table.
 
         The function will be expected at call time (see `_dispatch`)
@@ -191,6 +212,8 @@ class Plugin(object):
         The `category` argument can be used to specify the category of the
         newly created rpc command.
 
+        `deprecated` means that it won't appear unless `allow-deprecated-apis`
+        is true (the default).
         """
         if name in self.methods:
             raise ValueError(
@@ -198,7 +221,7 @@ class Plugin(object):
             )
 
         # Register the function with the name
-        method = Method(name, func, MethodType.RPCMETHOD, category, desc, long_desc)
+        method = Method(name, func, MethodType.RPCMETHOD, category, desc, long_desc, deprecated)
         method.background = background
         self.methods[name] = method
 
@@ -242,7 +265,8 @@ class Plugin(object):
             return f
         return decorator
 
-    def add_option(self, name, default, description, opt_type="string"):
+    def add_option(self, name, default, description, opt_type="string",
+                   deprecated=False):
         """Add an option that we'd like to register with lightningd.
 
         Needs to be called before `Plugin.run`, otherwise we might not
@@ -263,16 +287,18 @@ class Plugin(object):
             'description': description,
             'type': opt_type,
             'value': None,
+            'deprecated': deprecated,
         }
 
-    def add_flag_option(self, name, description):
+    def add_flag_option(self, name, description, deprecated=False):
         """Add a flag option that we'd like to register with lightningd.
 
         Needs to be called before `Plugin.run`, otherwise we might not
         end up getting it set.
 
         """
-        self.add_option(name, None, description, opt_type="flag")
+        self.add_option(name, None, description, opt_type="flag",
+                        deprecated=deprecated)
 
     def get_option(self, name):
         if name not in self.options:
@@ -283,25 +309,27 @@ class Plugin(object):
         else:
             return self.options[name]['default']
 
-    def async_method(self, method_name, category=None, desc=None, long_desc=None):
+    def async_method(self, method_name, category=None, desc=None, long_desc=None, deprecated=False):
         """Decorator to add an async plugin method to the dispatch table.
 
         Internally uses add_method.
         """
         def decorator(f):
             self.add_method(method_name, f, background=True, category=category,
-                            desc=desc, long_desc=long_desc)
+                            desc=desc, long_desc=long_desc,
+                            deprecated=deprecated)
             return f
         return decorator
 
-    def method(self, method_name, category=None, desc=None, long_desc=None):
+    def method(self, method_name, category=None, desc=None, long_desc=None, deprecated=False):
         """Decorator to add a plugin method to the dispatch table.
 
         Internally uses add_method.
         """
         def decorator(f):
             self.add_method(method_name, f, background=False, category=category,
-                            desc=desc, long_desc=long_desc)
+                            desc=desc, long_desc=long_desc,
+                            deprecated=deprecated)
             return f
         return decorator
 
@@ -445,7 +473,18 @@ class Plugin(object):
                 # return a result or raise an exception.
                 request.set_result(result)
         except Exception as e:
-            request.set_exception(e)
+            if name in hook_fallbacks:
+                response = hook_fallbacks[name]
+                self.log((
+                    "Hook handler for {name} failed with an exception. "
+                    "Returning safe fallback response {response} to avoid "
+                    "crashing the main daemon. Please contact the plugin "
+                    "author!"
+                ).format(name=name, response=response), level="error")
+
+                request.set_result(response)
+            else:
+                request.set_exception(e)
             self.log(traceback.format_exc())
 
     def _dispatch_notification(self, request):
@@ -523,6 +562,12 @@ class Plugin(object):
             partial = self._multi_dispatch(msgs)
 
     def _getmanifest(self, **kwargs):
+        if 'allow-deprecated-apis' in kwargs:
+            self.deprecated_apis = kwargs['allow-deprecated-apis']
+        else:
+            # 0.9.0 and before didn't offer this, so assume "yes".
+            self.deprecated_apis = True
+
         methods = []
         hooks = []
         for method in self.methods.values():
