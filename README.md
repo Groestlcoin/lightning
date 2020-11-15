@@ -38,14 +38,19 @@ Pruning (`prune=n` option in `groestlcoin.conf`) is partially supported, see [he
 
 There are 4 supported installation options:
 
-    sudo apt-get update
-    sudo apt-get install -y \
-      autoconf automake build-essential git libtool libgmp-dev \
-      libsqlite3-dev python python3 net-tools zlib1g-dev libsodium-dev
-    git clone https://github.com/Groestlcoin/lightning.git
-    cd lightning
-    ./configure
-    make
+ - Installation from the [Ubuntu PPA][ppa].
+ - Installation of a pre-compiled binary from the [release page][releases] on Github.
+ - Using one of the [provided docker images][dockerhub] on the Docker Hub.
+ - Compiling the source code yourself as described in the [installation documentation](doc/INSTALL.md).
+
+For the impatient here's the gist of it for Ubuntu:
+
+```bash
+sudo apt-get install -y software-properties-common
+sudo add-apt-repository -u ppa:groestlcoin/groestlcoin
+sudo add-apt-repository -u ppa:groestlcoin/ppa
+sudo apt-get install groestlcoind lightningd
+```
 
 ### Starting `lightningd`
 
@@ -136,8 +141,7 @@ lightning-cli connect <node_id> <ip> [<port>]
 lightning-cli fundchannel <node_id> <amount_in_satoshis>
 ```
 
-This opens a connection and, on top of that connection, then opens
-a channel.
+This opens a connection and, on top of that connection, then opens a channel.
 The funding transaction needs 3 confirmation in order for the channel to be usable, and 6 to be announced for others to use.
 You can check the status of the channel using `lightning-cli listpeers`, which after 3 confirmations (1 on testnet) should say that `state` is `CHANNELD_NORMAL`; after 6 confirmations you can use `lightning-cli listchannels` to verify that the `public` field is now `true`.
 

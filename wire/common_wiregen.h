@@ -41,4 +41,4 @@ bool fromwire_custommsg_out(const tal_t *ctx, const void *p, u8 **msg);
 
 
 #endif /* LIGHTNING_WIRE_COMMON_WIREGEN_H */
-// SHA256STAMP:1526dd638eeeb6b2a5170d7135a8bd80d91bcfa2ce8afa337d31209616e6cb9a
+// SHA256STAMP:c8a40362138ff8fcffde2285cda2c85cdfbf66a19591d4bd61066dbe21eda68c

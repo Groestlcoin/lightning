@@ -42,6 +42,9 @@ u64 fromwire_u64(const u8 **cursor UNNEEDED, size_t *max UNNEEDED)
 /* Generated stub for fromwire_u8 */
 u8 fromwire_u8(const u8 **cursor UNNEEDED, size_t *max UNNEEDED)
 { fprintf(stderr, "fromwire_u8 called!\n"); abort(); }
+/* Generated stub for pseudorand_u64 */
+uint64_t pseudorand_u64(void)
+{ fprintf(stderr, "pseudorand_u64 called!\n"); abort(); }
 /* Generated stub for towire */
 void towire(u8 **pptr UNNEEDED, const void *data UNNEEDED, size_t len UNNEEDED)
 { fprintf(stderr, "towire called!\n"); abort(); }
@@ -55,18 +58,6 @@ void towire_secp256k1_ecdsa_signature(u8 **pptr UNNEEDED,
 /* Generated stub for towire_sha256 */
 void towire_sha256(u8 **pptr UNNEEDED, const struct sha256 *sha256 UNNEEDED)
 { fprintf(stderr, "towire_sha256 called!\n"); abort(); }
-/* Generated stub for towire_tx_add_input */
-u8 *towire_tx_add_input(const tal_t *ctx UNNEEDED, const struct channel_id *channel_id UNNEEDED, u16 serial_id UNNEEDED, const u8 *prevtx UNNEEDED, u32 prevtx_vout UNNEEDED, u32 sequence UNNEEDED, const u8 *script UNNEEDED, const struct tlv_tx_add_input_tlvs *tlvs UNNEEDED)
-{ fprintf(stderr, "towire_tx_add_input called!\n"); abort(); }
-/* Generated stub for towire_tx_add_output */
-u8 *towire_tx_add_output(const tal_t *ctx UNNEEDED, const struct channel_id *channel_id UNNEEDED, u16 serial_id UNNEEDED, u64 sats UNNEEDED, const u8 *script UNNEEDED)
-{ fprintf(stderr, "towire_tx_add_output called!\n"); abort(); }
-/* Generated stub for towire_tx_remove_input */
-u8 *towire_tx_remove_input(const tal_t *ctx UNNEEDED, const struct channel_id *channel_id UNNEEDED, u16 serial_id UNNEEDED)
-{ fprintf(stderr, "towire_tx_remove_input called!\n"); abort(); }
-/* Generated stub for towire_tx_remove_output */
-u8 *towire_tx_remove_output(const tal_t *ctx UNNEEDED, const struct channel_id *channel_id UNNEEDED, u16 serial_id UNNEEDED)
-{ fprintf(stderr, "towire_tx_remove_output called!\n"); abort(); }
 /* Generated stub for towire_u16 */
 void towire_u16(u8 **pptr UNNEEDED, u16 v UNNEEDED)
 { fprintf(stderr, "towire_u16 called!\n"); abort(); }
@@ -114,7 +105,7 @@ static void add_in_out_with_serial(struct wally_psbt *psbt,
 			       NULL, NULL, NULL);
 	if (!in)
 		abort();
-	psbt_input_add_serial_id(in, serial_id);
+	psbt_input_set_serial_id(psbt, in, serial_id);
 
 	script = tal_arr(tmpctx, u8, 20);
 	memset(script, default_value, 20);
@@ -122,7 +113,25 @@ static void add_in_out_with_serial(struct wally_psbt *psbt,
 	out = psbt_append_output(psbt, script, sat);
 	if (!out)
 		abort();
-	psbt_output_add_serial_id(out, serial_id);
+	psbt_output_set_serial_id(psbt, out, serial_id);
+}
+
+/* Try changing up the serial ids */
+static void change_serials(void)
+{
+	struct wally_psbt *psbt;
+
+	psbt = create_psbt(tmpctx, 1, 1, 0);
+	add_in_out_with_serial(psbt, 10, 1);
+
+	psbt_output_set_serial_id(psbt, &psbt->outputs[0], 2);
+	assert(psbt_find_serial_output(psbt, 2) == 0);
+	assert(psbt_find_serial_output(psbt, 10) == -1);
+
+	psbt_input_set_serial_id(psbt, &psbt->inputs[0], 4);
+	assert(psbt_find_serial_input(psbt, 4) == 0);
+	assert(psbt_find_serial_input(psbt, 10) == -1);
+
 }
 
 int main(int argc, const char *argv[])
@@ -136,8 +145,10 @@ int main(int argc, const char *argv[])
 
 	/* Create two psbts! */
 	end = create_psbt(tmpctx, 1, 1, 0);
+	tal_wally_start();
 	if (wally_psbt_clone_alloc(end, flags, &start) != WALLY_OK)
 		abort();
+	tal_wally_end(tmpctx);
 	diff_count(start, end, 0, 0);
 	diff_count(end, start, 0, 0);
 
@@ -147,22 +158,28 @@ int main(int argc, const char *argv[])
 	diff_count(end, start, 0, 1);
 
 	/* Add another one, before previous */
+	tal_wally_start();
 	if (wally_psbt_clone_alloc(end, flags, &start) != WALLY_OK)
 		abort();
+	tal_wally_end(tmpctx);
 	add_in_out_with_serial(end, 5, 2);
 	diff_count(start, end, 1, 0);
 	diff_count(end, start, 0, 1);
 
 	/* Add another, at end */
+	tal_wally_start();
 	if (wally_psbt_clone_alloc(end, flags, &start) != WALLY_OK)
 		abort();
+	tal_wally_end(tmpctx);
 	add_in_out_with_serial(end, 15, 3);
 	diff_count(start, end, 1, 0);
 	diff_count(end, start, 0, 1);
 
 	/* Add another, in middle */
+	tal_wally_start();
 	if (wally_psbt_clone_alloc(end, flags, &start) != WALLY_OK)
 		abort();
+	tal_wally_end(tmpctx);
 	add_in_out_with_serial(end, 11, 4);
 	diff_count(start, end, 1, 0);
 	diff_count(end, start, 0, 1);
@@ -171,8 +188,10 @@ int main(int argc, const char *argv[])
 	 * (we accomplish this by removing and then
 	 * readding an input/output with the same serial_id
 	 * but different value) */
+	tal_wally_start();
 	if (wally_psbt_clone_alloc(end, flags, &start) != WALLY_OK)
 		abort();
+	tal_wally_end(tmpctx);
 	psbt_rm_output(end, 0);
 	psbt_rm_input(end, 0);
 	add_in_out_with_serial(end, 5, 5);
@@ -182,8 +201,8 @@ int main(int argc, const char *argv[])
 	/* Add some extra unknown info to a PSBT */
 	u8 *key = psbt_make_key(tmpctx, 0x05, NULL);
 	char *val = tal_fmt(tmpctx, "hello");
-	psbt_input_add_unknown(&end->inputs[1], key, val, tal_bytelen(val));
-	psbt_input_add_unknown(&start->inputs[1], key, val, tal_bytelen(val));
+	psbt_input_set_unknown(end, &end->inputs[1], key, val, tal_bytelen(val));
+	psbt_input_set_unknown(start, &start->inputs[1], key, val, tal_bytelen(val));
 
 	/* Swap locations */
 	struct wally_map_item tmp;
@@ -194,6 +213,8 @@ int main(int argc, const char *argv[])
 	/* We expect nothing to change ? */
 	diff_count(start, end, 1, 1);
 	diff_count(end, start, 1, 1);
+
+	change_serials();
 
 	/* No memory leaks please */
 	common_shutdown();

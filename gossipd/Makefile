@@ -51,7 +51,9 @@ GOSSIPD_COMMON_OBJS :=				\
 	common/onionreply.o			\
 	common/per_peer_state.o			\
 	common/ping.o				\
+	common/psbt_open.o			\
 	common/pseudorand.o			\
+	common/private_channel_announcement.o	\
 	common/random_select.o			\
 	common/setup.o				\
 	common/status.o				\
@@ -67,10 +69,6 @@ GOSSIPD_COMMON_OBJS :=				\
 	connectd/connectd_gossipd_wiregen.o	\
 	lightningd/gossip_msg.o			\
 	wire/onion$(EXP)_wiregen.o
-
-ifeq ($(EXPERIMENTAL_FEATURES),1)
-GOSSIPD_COMMON_OBJS += common/psbt_open.o
-endif
 
 lightningd/lightning_gossipd: $(GOSSIPD_OBJS) $(GOSSIPD_COMMON_OBJS) $(BITCOIN_OBJS) $(WIRE_OBJS) $(HSMD_CLIENT_OBJS)
 

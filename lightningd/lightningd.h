@@ -26,12 +26,6 @@ struct config {
 	/* How many confirms until we consider an anchor "settled". */
 	u32 anchor_confirms;
 
-	/* Maximum percent of fee rate we'll accept. */
-	u32 commitment_fee_max_percent;
-
-	/* Minimum percent of fee rate we'll accept. */
-	u32 commitment_fee_min_percent;
-
 	/* Minimum CLTV to subtract from incoming HTLCs to outgoing */
 	u32 cltv_expiry_delta;
 
@@ -184,6 +178,8 @@ struct lightningd {
 	struct list_head sendpay_commands;
 	/* Outstanding close commands. */
 	struct list_head close_commands;
+	/* Outstanding openchannel_signed commands. */
+	struct list_head open_commands;
 	/* Outstanding ping commands. */
 	struct list_head ping_commands;
 

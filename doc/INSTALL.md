@@ -5,13 +5,14 @@ Install
 2. [Ubuntu](#to-build-on-ubuntu)
 3. [Fedora](#to-build-on-fedora)
 4. [FreeBSD](#to-build-on-freebsd)
-5. [NixOS](#to-build-on-nixos)
-6. [macOS](#to-build-on-macos)
-7. [Android](#to-cross-compile-for-android)
-8. [Raspberry Pi](#to-cross-compile-for-raspberry-pi)
-9. [Armbian](#to-compile-for-armbian)
-10. [Alpine](#to-compile-for-alpine)
-11. [Additional steps](#additional-steps)
+5. [OpenBSD](#to-build-on-openbsd)
+6. [NixOS](#to-build-on-nixos)
+7. [macOS](#to-build-on-macos)
+8. [Android](#to-cross-compile-for-android)
+9. [Raspberry Pi](#to-cross-compile-for-raspberry-pi)
+10. [Armbian](#to-compile-for-armbian)
+11. [Alpine](#to-compile-for-alpine)
+12. [Additional steps](#additional-steps)
 
 Library Requirements
 --------------------

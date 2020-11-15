@@ -4,6 +4,7 @@
 #include <bitcoin/pubkey.h>
 #include <common/amount.h>
 #include <common/channel_config.h>
+#include <common/channel_id.h>
 #include <common/derive_basepoints.h>
 #include <common/status_levels.h>
 
@@ -27,6 +28,9 @@ struct uncommitted_channel {
 	/* Reserved dbid for if we become a real struct channel */
 	u64 dbid;
 
+	/* Channel id, v2 opens only */
+	struct channel_id cid;
+
 	/* For logging */
 	struct log *log;
 
@@ -41,6 +45,11 @@ struct uncommitted_channel {
 
 	/* Public key for funding tx. */
 	struct pubkey local_funding_pubkey;
+
+	/* If true, we are already in fundee-mode and any future
+	 * `fundchannel_start` on our end should fail.
+	 */
+	bool got_offer;
 
 	/* These are *not* filled in by new_uncommitted_channel: */
 
@@ -74,6 +83,10 @@ struct funding_channel {
 
 	/* Any commands trying to cancel us. */
 	struct command **cancels;
+
+	/* Place to stash the per-peer-state while we wait
+	 * for them to get back to us with signatures */
+	struct per_peer_state *pps;
 };
 
 struct uncommitted_channel *
@@ -101,4 +114,11 @@ void channel_config(struct lightningd *ld,
 		    struct channel_config *ours,
 		    u32 *max_to_self_delay,
 		    struct amount_msat *min_effective_htlc_capacity);
+
+#if DEVELOPER
+struct command;
+/* Calls report_leak_info() async. */
+void opening_dev_memleak(struct command *cmd);
+#endif
+
 #endif /* LIGHTNING_LIGHTNINGD_OPENING_COMMON_H */

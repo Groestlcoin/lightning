@@ -129,7 +129,7 @@ static bool my_sha256(void *digest, const void *data, size_t datasz)
 static
 bool my_dblsha256(void *hash, const void *data, size_t datasz)
 {
-		
+
 		return my_sha256(hash, data, datasz);
 }
 

@@ -71,6 +71,14 @@ struct multifundchannel_destination {
 	const u8 *funding_script;
 	const char *funding_addr;
 
+	/* The bitcoin address to close to */
+	const char *close_to_str;
+
+	/* The scriptpubkey we will close to. Only set if
+	 * peer supports opt_upfront_shutdownscript and
+	 * we passsed in a valid close_to_str */
+	const u8 *close_to_script;
+
 	/* The amount to be funded for this destination.
 	If the specified amount is "all" then the `all`
 	flag is set, and the amount is initially 0 until
@@ -139,8 +147,17 @@ struct multifundchannel_command {
 	*/
 	size_t pending;
 
-	/* The feerate desired by the user.  */
+	/* The feerate desired by the user.
+	 * If cmtmt_feerate_str is present, will only be used
+	 * for the funding transaction. */
 	const char *feerate_str;
+
+	/* The feerate desired by the user for
+	 * the channel commitment and HTLC txs.
+	 * If not provided, defaults to the feerate_str
+	 * value. */
+	const char *cmtmt_feerate_str;
+
 	/* The minimum number of confirmations for owned
 	UTXOs to be selected.
 	*/
@@ -516,6 +533,11 @@ param_destinations_array(struct command *cmd, const char *name,
 			   p_opt_def("announce", param_bool, &announce, true),
 			   p_opt_def("push_msat", param_msat, &push_msat,
 				     AMOUNT_MSAT(0)),
+			   /* FIXME: do address validation here?
+			    * Note that it will fail eventually (when
+			    * passed in to fundchannel_start) if invalid*/
+			   p_opt("close_to", param_string,
+				 &dest->close_to_str),
 			   NULL))
 			return command_param_failed();
 
@@ -864,13 +886,10 @@ perform_fundpsbt(struct multifundchannel_command *mfc)
 		 * inputs, that estimation should be correct.
 		 */
 		startweight = bitcoin_tx_core_weight(1, num_outs)
-			    + ( bitcoin_tx_output_weight( 1 /* OP_0 */
-							+ 1 /* OP_PUSHDATA */
-							+ 32 /* P2WSH */
-							)
+			    + ( bitcoin_tx_output_weight(
+					BITCOIN_SCRIPTPUBKEY_P2WSH_LEN)
 			      * num_outs
-			      )
-			    ;
+			      );
 		json_add_string(req->js, "startweight",
 				tal_fmt(tmpctx, "%zu", startweight));
 	}
@@ -1001,10 +1020,8 @@ handle_mfc_change(struct multifundchannel_command *mfc)
 	 * Get the weight of a change output and how much it
 	 * costs.
 	 */
-	change_weight = bitcoin_tx_output_weight( 1 /* OP_0 */
-						+ 1 /* OP_PUSHDATA */
-						+ 20 /* P2WPKH */
-						);
+	change_weight = bitcoin_tx_output_weight(
+				BITCOIN_SCRIPTPUBKEY_P2WPKH_LEN);
 	change_fee = amount_tx_fee(mfc->feerate_per_kw, change_weight);
 	/* The limit is equal to the change_fee plus the dust limit.  */
 	if (!amount_sat_add(&change_min_limit,
@@ -1151,11 +1168,15 @@ fundchannel_start_dest(struct multifundchannel_destination *dest)
 	json_add_string(req->js, "amount",
 			fmt_amount_sat(tmpctx, &dest->amount));
 
-	if (mfc->feerate_str)
+	if (mfc->cmtmt_feerate_str)
+		json_add_string(req->js, "feerate", mfc->cmtmt_feerate_str);
+	else if (mfc->feerate_str)
 		json_add_string(req->js, "feerate", mfc->feerate_str);
 	json_add_bool(req->js, "announce", dest->announce);
 	json_add_string(req->js, "push_msat",
 			fmt_amount_msat(tmpctx, &dest->push_msat));
+	if (dest->close_to_str)
+		json_add_string(req->js, "close_to", dest->close_to_str);
 
 	send_outreq(cmd->plugin, req);
 }
@@ -1172,6 +1193,7 @@ fundchannel_start_ok(struct command *cmd,
 	struct multifundchannel_command *mfc = dest->mfc;
 	const jsmntok_t *address_tok;
 	const jsmntok_t *script_tok;
+	const jsmntok_t *close_to_tok;
 
 	plugin_log(mfc->cmd->plugin, LOG_DBG,
 		   "mfc %"PRIu64", dest %u: fundchannel_start %s done.",
@@ -1203,6 +1225,16 @@ fundchannel_start_ok(struct command *cmd,
 			   "return parseable 'scriptpubkey': %.*s",
 			   json_tok_full_len(script_tok),
 			   json_tok_full(buf, script_tok));
+
+	close_to_tok = json_get_member(buf, result, "close_to");
+	/* Only returned if a) we requested and b) peer supports
+	 * opt_upfront_shutdownscript */
+	if (close_to_tok) {
+		dest->close_to_script =
+			json_tok_bin_from_hex(dest->mfc, buf, close_to_tok);
+	} else
+		dest->close_to_script = NULL;
+
 
 	dest->state = MULTIFUNDCHANNEL_STARTED;
 
@@ -1392,7 +1424,7 @@ perform_funding_tx_finalize(struct multifundchannel_command *mfc)
 
 	/* Generate the TXID.  */
 	mfc->txid = tal(mfc, struct bitcoin_txid);
-	psbt_txid(mfc->psbt, mfc->txid, NULL);
+	psbt_txid(NULL, mfc->psbt, mfc->txid, NULL);
 
 	plugin_log(mfc->cmd->plugin, LOG_DBG,
 		   "mfc %"PRIu64": funding tx %s: %s",
@@ -1773,6 +1805,9 @@ multifundchannel_finished(struct multifundchannel_command *mfc)
 		json_add_node_id(out, "id", &mfc->destinations[i].id);
 		json_add_string(out, "channel_id", mfc->destinations[i].channel_id);
 		json_add_num(out, "outnum", mfc->destinations[i].outnum);
+		if (mfc->destinations[i].close_to_script)
+			json_add_hex_talarr(out, "close_to",
+				mfc->destinations[i].close_to_script);
 		json_object_end(out);
 	}
 	json_array_end(out);
@@ -1959,7 +1994,7 @@ json_multifundchannel(struct command *cmd,
 		      const jsmntok_t *params)
 {
 	struct multifundchannel_destination *dests;
-	const char *feerate_str;
+	const char *feerate_str, *cmtmt_feerate_str;
 	u32 *minconf;
 	const jsmntok_t *utxos_tok;
 	u32 *minchannels;
@@ -1972,6 +2007,7 @@ json_multifundchannel(struct command *cmd,
 		   p_opt_def("minconf", param_number, &minconf, 1),
 		   p_opt("utxos", param_tok, &utxos_tok),
 		   p_opt("minchannels", param_positive_number, &minchannels),
+		   p_opt("commitment_feerate", param_string, &cmtmt_feerate_str),
 		   NULL))
 		return command_param_failed();
 
@@ -1988,6 +2024,7 @@ json_multifundchannel(struct command *cmd,
 		mfc->destinations[i].mfc = mfc;
 
 	mfc->feerate_str = feerate_str;
+	mfc->cmtmt_feerate_str = cmtmt_feerate_str;
 	mfc->minconf = *minconf;
 	if (utxos_tok)
 		mfc->utxos_str = tal_strndup(mfc, json_tok_full(buf, utxos_tok),

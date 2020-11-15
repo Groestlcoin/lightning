@@ -645,6 +645,18 @@ static struct migration dbmigrations[] = {
     {SQL("ALTER TABLE outputs ADD option_anchor_outputs INTEGER"
 	 " DEFAULT 0;"), NULL},
     {SQL("ALTER TABLE channels ADD full_channel_id BLOB DEFAULT NULL;"), fillin_missing_channel_id},
+    {SQL("ALTER TABLE channels ADD funding_psbt BLOB DEFAULT NULL;"), NULL},
+    /* Channel closure reason */
+    {SQL("ALTER TABLE channels ADD closer INTEGER DEFAULT 2;"), NULL},
+    {SQL("ALTER TABLE channels ADD state_change_reason INTEGER DEFAULT 0;"), NULL},
+    {SQL("CREATE TABLE channel_state_changes ("
+	 "  channel_id BIGINT REFERENCES channels(id) ON DELETE CASCADE,"
+	 "  timestamp BIGINT,"
+	 "  old_state INTEGER,"
+	 "  new_state INTEGER,"
+	 "  cause INTEGER,"
+	 "  message TEXT"
+	 ");"), NULL},
 };
 
 /* Leak tracking. */
@@ -1253,7 +1265,7 @@ static void fillin_missing_channel_id(struct lightningd *ld, struct db *db,
 		struct channel_id cid;
 		u32 outnum;
 
-		id = db_column_int(stmt, 0);
+		id = db_column_u64(stmt, 0);
 		db_column_txid(stmt, 1, &funding_txid);
 		outnum = db_column_int(stmt, 2);
 		derive_channel_id(&cid, &funding_txid, outnum);
@@ -1262,7 +1274,7 @@ static void fillin_missing_channel_id(struct lightningd *ld, struct db *db,
 						    " SET full_channel_id = ?"
 						    " WHERE id = ?;"));
 		db_bind_channel_id(update_stmt, 0, &cid);
-		db_bind_int(update_stmt, 1, id);
+		db_bind_u64(update_stmt, 1, id);
 
 		db_exec_prepared_v2(update_stmt);
 		tal_free(update_stmt);
@@ -1647,12 +1659,16 @@ struct bitcoin_tx *db_column_tx(const tal_t *ctx, struct db_stmt *stmt, int col)
 	return pull_bitcoin_tx(ctx, &src, &len);
 }
 
-struct bitcoin_tx *db_column_psbt_to_tx(const tal_t *ctx, struct db_stmt *stmt, int col)
+struct wally_psbt *db_column_psbt(const tal_t *ctx, struct db_stmt *stmt, int col)
 {
-	struct wally_psbt *psbt;
 	const u8 *src = db_column_blob(stmt, col);
 	size_t len = db_column_bytes(stmt, col);
-	psbt = psbt_from_bytes(ctx, src, len);
+	return psbt_from_bytes(ctx, src, len);
+}
+
+struct bitcoin_tx *db_column_psbt_to_tx(const tal_t *ctx, struct db_stmt *stmt, int col)
+{
+	struct wally_psbt *psbt = db_column_psbt(ctx, stmt, col);
 	if (!psbt)
 		return NULL;
 	return bitcoin_tx_with_psbt(ctx, psbt);

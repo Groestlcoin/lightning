@@ -60,17 +60,17 @@ page.
 Bitcoin control options:
 
  **network**=*NETWORK*
-Select the network parameters (*bitcoin*, *testnet*, or *regtest*).
+Select the network parameters (*bitcoin*, *testnet*, *signet*, or *regtest*).
 This is not valid within the per-network configuration file.
+
+ **mainnet**
+Alias for *network=bitcoin*.
 
  **testnet**
 Alias for *network=testnet*.
 
  **signet**
 Alias for *network=signet*.
-
- **mainnet**
-Alias for *network=bitcoin*.
 
  **bitcoin-cli**=*PATH*
 The name of *bitcoin-cli* executable to run.
@@ -194,7 +194,7 @@ The following is an example of a postgresql wallet DSN:
 --wallet=postgres://user:pass@localhost:5432/db_name
 ```
 
-This will connect to a the DB server running on `localhost` port `5432`,
+This will connect to a DB server running on `localhost` port `5432`,
 authenticate with username `user` and password `pass`, and then use the
 database `db_name`. The database must exist, but the schema will be managed
 automatically by `lightningd`.
@@ -279,13 +279,6 @@ opens a channel before the channel is usable.
  **commit-fee**=*PERCENT*
 The percentage of *estimatesmartfee 2/CONSERVATIVE* to use for the commitment
 transactions: default is 100.
-
- **commit-fee-min**=*PERCENT*
- **commit-fee-max**=*PERCENT*
-Limits on what onchain fee range we’ll allow when a node opens a channel
-with us, as a percentage of *estimatesmartfee 2*. If they’re outside
-this range, we abort their opening attempt. Note that **commit-fee-max**
-can (should!) be greater than 100.
 
  **max-concurrent-htlcs**=*INTEGER*
 Number of HTLCs one channel can handle concurrently in each direction.
@@ -434,13 +427,16 @@ additional paths too:
 
  **plugin**=*PATH*
 Specify a plugin to run as part of c-lightning. This can be specified
-multiple times to add multiple plugins.
+multiple times to add multiple plugins.  Note that unless plugins themselves
+specify ordering requirements for being called on various hooks, plugins will
+be ordered by commandline, then config file.
 
  **plugin-dir**=*DIRECTORY*
 Specify a directory to look for plugins; all executable files not
 containing punctuation (other than *.*, *-* or *\_) in 'DIRECTORY* are
 loaded. *DIRECTORY* must exist; this can be specified multiple times to
-add multiple directories.
+add multiple directories.  The ordering of plugins within a directory
+is currently unspecified.
 
  **clear-plugins**
 This option clears all *plugin*, *important-plugin*, and *plugin-dir* options

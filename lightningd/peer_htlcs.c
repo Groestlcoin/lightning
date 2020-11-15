@@ -141,7 +141,7 @@ static void tell_channeld_htlc_failed(const struct htlc_in *hin,
 		return;
 
 	/* onchaind doesn't care, it can't do anything but wait */
-	if (channel_on_chain(hin->key.channel))
+	if (!channel_active(hin->key.channel))
 		return;
 
 	subd_send_msg(hin->key.channel->owner,
@@ -889,7 +889,7 @@ static bool htlc_accepted_hook_deserialize(struct htlc_accepted_hook_payload *re
 	struct lightningd *ld = request->ld;
 	struct preimage payment_preimage;
 	const jsmntok_t *resulttok, *paykeytok, *payloadtok;
-	u8 *payload;
+	u8 *payload, *failonion;
 
 	if (!toks || !buffer)
 		return true;
@@ -929,9 +929,29 @@ static bool htlc_accepted_hook_deserialize(struct htlc_accepted_hook_payload *re
 
 	if (json_tok_streq(buffer, resulttok, "fail")) {
 		u8 *failmsg;
-		const jsmntok_t *failmsgtok, *failcodetok;
+		const jsmntok_t *failoniontok, *failmsgtok, *failcodetok;
 
+		failoniontok = json_get_member(buffer, toks, "failure_onion");
 		failmsgtok = json_get_member(buffer, toks, "failure_message");
+
+		if (failoniontok) {
+			failonion = json_tok_bin_from_hex(tmpctx, buffer,
+							  failoniontok);
+			if (!failonion)
+				fatal("Bad failure_onion for htlc_accepted"
+				      " hook: %.*s",
+				      failoniontok->end -  failoniontok->start,
+				      buffer + failoniontok->start);
+
+			if (failmsgtok)
+				log_broken(ld->log, "Both 'failure_onion' and"
+					   "'failure_message' provided."
+					   " Ignoring 'failure_message'.");
+
+			fail_in_htlc(hin, take(new_onionreply(NULL,
+							      failonion)));
+			return false;
+		}
 		if (failmsgtok) {
 			failmsg = json_tok_bin_from_hex(NULL, buffer,
 							failmsgtok);
@@ -940,6 +960,8 @@ static bool htlc_accepted_hook_deserialize(struct htlc_accepted_hook_payload *re
 				      " hook: %.*s",
 				      failmsgtok->end - failmsgtok->start,
 				      buffer + failmsgtok->start);
+			local_fail_in_htlc(hin, take(failmsg));
+			return false;
 		} else if (deprecated_apis
 			   && (failcodetok = json_get_member(buffer, toks,
 							     "failure_code"))) {
@@ -951,10 +973,13 @@ static bool htlc_accepted_hook_deserialize(struct htlc_accepted_hook_payload *re
 				      - failcodetok->start,
 				      buffer + failcodetok->start);
 			failmsg = convert_failcode(NULL, ld, failcode);
-		} else
+			local_fail_in_htlc(hin, take(failmsg));
+			return false;
+		} else {
 			failmsg = towire_temporary_node_failure(NULL);
-		local_fail_in_htlc(hin, take(failmsg));
-		return false;
+			local_fail_in_htlc(hin, take(failmsg));
+			return false;
+		}
 	} else if (json_tok_streq(buffer, resulttok, "resolve")) {
 		paykeytok = json_get_member(buffer, toks, "payment_key");
 		if (!paykeytok)
@@ -987,17 +1012,6 @@ static void htlc_accepted_hook_serialize(struct htlc_accepted_hook_payload *p,
 	if (p->payload) {
 		switch (p->payload->type) {
 		case ONION_V0_PAYLOAD:
-			if (deprecated_apis) {
-				json_object_start(s, "per_hop_v0");
-				json_add_string(s, "realm", "00");
-				json_add_short_channel_id(s, "short_channel_id",
-							  p->payload->forward_channel);
-				json_add_amount_msat_only(s, "forward_amount",
-							  p->payload->amt_to_forward);
-				json_add_u64(s, "outgoing_cltv_value",
-					     p->payload->outgoing_cltv);
-				json_object_end(s);
-			}
 			json_add_string(s, "type", "legacy");
 			break;
 
@@ -1746,8 +1760,8 @@ void peer_sending_commitsig(struct channel *channel, const u8 *msg)
 
 	/* FIXME: We could detect if this changed, and adjust bounds and write
 	 * it to db iff it has. */
-	tal_free(channel->channel_info.fee_states);
-	channel->channel_info.fee_states = tal_steal(channel, fee_states);
+	tal_free(channel->fee_states);
+	channel->fee_states = tal_steal(channel, fee_states);
 	adjust_channel_feerate_bounds(channel,
 				      get_feerate(fee_states,
 						  channel->opener,
@@ -1966,8 +1980,8 @@ void peer_got_commitsig(struct channel *channel, const u8 *msg)
 		}
 	}
 
-	tal_free(channel->channel_info.fee_states);
-	channel->channel_info.fee_states = tal_steal(channel, fee_states);
+	tal_free(channel->fee_states);
+	channel->fee_states = tal_steal(channel, fee_states);
 	adjust_channel_feerate_bounds(channel,
 				      get_feerate(fee_states,
 						  channel->opener,
@@ -2110,15 +2124,16 @@ void peer_got_revoke(struct channel *channel, const u8 *msg)
 				      shachain_index(revokenum),
 				      &per_commitment_secret)) {
 		channel_fail_permanent(channel,
-				    "Bad per_commitment_secret %s for %"PRIu64,
-				    type_to_string(msg, struct secret,
-						   &per_commitment_secret),
-				    revokenum);
+				       REASON_PROTOCOL,
+				       "Bad per_commitment_secret %s for %"PRIu64,
+				       type_to_string(msg, struct secret,
+						      &per_commitment_secret),
+				       revokenum);
 		return;
 	}
 
-	tal_free(channel->channel_info.fee_states);
-	channel->channel_info.fee_states = tal_steal(channel, fee_states);
+	tal_free(channel->fee_states);
+	channel->fee_states = tal_steal(channel, fee_states);
 
 	/* FIXME: Check per_commitment_secret -> per_commit_point */
 	update_per_commit_point(channel, &next_per_commitment_point);
@@ -2331,11 +2346,12 @@ void htlcs_notify_new_block(struct lightningd *ld, u32 height)
 				continue;
 
 			channel_fail_permanent(hout->key.channel,
-					    "Offered HTLC %"PRIu64
-					    " %s cltv %u hit deadline",
-					    hout->key.id,
-					    htlc_state_name(hout->hstate),
-					    hout->cltv_expiry);
+					       REASON_PROTOCOL,
+					       "Offered HTLC %"PRIu64
+					       " %s cltv %u hit deadline",
+					       hout->key.id,
+					       htlc_state_name(hout->hstate),
+					       hout->cltv_expiry);
 			removed = true;
 		}
 	/* Iteration while removing is safe, but can skip entries! */
@@ -2379,11 +2395,12 @@ void htlcs_notify_new_block(struct lightningd *ld, u32 height)
 				continue;
 
 			channel_fail_permanent(channel,
-					    "Fulfilled HTLC %"PRIu64
-					    " %s cltv %u hit deadline",
-					    hin->key.id,
-					    htlc_state_name(hin->hstate),
-					    hin->cltv_expiry);
+					       REASON_PROTOCOL,
+					       "Fulfilled HTLC %"PRIu64
+					       " %s cltv %u hit deadline",
+					       hin->key.id,
+					       htlc_state_name(hin->hstate),
+					       hin->cltv_expiry);
 			removed = true;
 		}
 	/* Iteration while removing is safe, but can skip entries! */

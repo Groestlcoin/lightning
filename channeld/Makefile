@@ -1,7 +1,7 @@
 #! /usr/bin/make
 
 CHANNELD_HEADERS :=			\
-	channeld/gen_full_channel_error_names.h	\
+	channeld/full_channel_error_names_gen.h	\
 	channeld/channeld_wiregen.h		\
 	channeld/channeld_htlc.h		\
 	channeld/commit_tx.h			\
@@ -70,6 +70,8 @@ CHANNELD_COMMON_OBJS :=				\
 	common/per_peer_state.o			\
 	common/permute_tx.o			\
 	common/ping.o				\
+	common/psbt_open.o			\
+	common/private_channel_announcement.o	\
 	common/pseudorand.o			\
 	common/read_peer_msg.o			\
 	common/setup.o				\
@@ -85,15 +87,16 @@ CHANNELD_COMMON_OBJS :=				\
 	common/wire_error.o			\
 	common/wireaddr.o			\
 	gossipd/gossipd_peerd_wiregen.o		\
+	gossipd/gossip_store_wiregen.o		\
 	lightningd/gossip_msg.o			\
 	wire/fromwire.o				\
 	wire/towire.o
 
 ifeq ($(EXPERIMENTAL_FEATURES),1)
-CHANNELD_COMMON_OBJS += common/psbt_open.o
+CHANNELD_COMMON_OBJS += common/psbt_internal.o
 endif
 
-channeld/gen_full_channel_error_names.h: channeld/full_channel_error.h ccan/ccan/cdump/tools/cdump-enumstr
+channeld/full_channel_error_names_gen.h: channeld/full_channel_error.h ccan/ccan/cdump/tools/cdump-enumstr
 	ccan/ccan/cdump/tools/cdump-enumstr channeld/full_channel_error.h > $@
 
 lightningd/lightning_channeld: $(CHANNELD_OBJS) $(WIRE_ONION_OBJS) $(CHANNELD_COMMON_OBJS) $(WIRE_OBJS) $(BITCOIN_OBJS) $(HSMD_CLIENT_OBJS)

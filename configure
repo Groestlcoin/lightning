@@ -83,7 +83,7 @@ check_command()
     shift 1
 
     echo -n "checking for $name... "
-    if "$@" 2>/dev/null; then
+    if "$@" >/dev/null 2>&1; then
 	echo 'found'
 	return 0
     fi
@@ -115,11 +115,13 @@ set_defaults()
     COMPAT=${COMPAT:-1}
     STATIC=${STATIC:-0}
     ASAN=${ASAN:-0}
+    UBSAN=${UBSAN:-0}
     PYTEST=${PYTEST-$(default_pytest)}
     COPTFLAGS=${COPTFLAGS-$(default_coptflags "$DEVELOPER")}
     CONFIGURATOR_CC=${CONFIGURATOR_CC-$CC}
     VALGRIND=${VALGRIND:-$(default_valgrind_setting)}
     TEST_NETWORK=${TEST_NETWORK:-regtest}
+    FUZZING=${FUZZING:-0}
 }
 
 usage()
@@ -155,6 +157,9 @@ usage()
     echo "    Static link sqlite3, gmp and zlib libraries"
     usage_with_default "--enable/disable-address-sanitizer" "$ASAN" "enable" "disable"
     echo "    Compile with address-sanitizer"
+    usage_with_default "--enable/disable-ub-sanitizer" "$UBSAN" "enable" "disable"
+    echo "    Compile with undefined behaviour sanitizer"
+    usage_with_default "--enable/disable-fuzzing" "$FUZZING" "enable" "disable"
     exit 1
 }
 
@@ -165,7 +170,7 @@ add_var()
     else
         echo "$1 not found"
     fi
-    echo "$1=$2" >> $CONFIG_VAR_FILE
+    echo "$1=$2" >> $CONFIG_VAR_FILE.$$
     [ -z "$3" ] || echo "#define $1 $2" >> "$3"
 }
 
@@ -206,6 +211,10 @@ for opt in "$@"; do
 	--disable-static) STATIC=0;;
 	--enable-address-sanitizer) ASAN=1;;
 	--disable-address-sanitizer) ASAN=0;;
+	--enable-ub-sanitizer) UBSAN=1;;
+	--disable-ub-sanitize) UBSAN=0;;
+	--enable-fuzzing) FUZZING=1;;
+	--disable-fuzzing) FUZZING=0;;
 	--help|-h) usage;;
 	*)
 	    echo "Unknown option '$opt'" >&2
@@ -223,15 +232,23 @@ $CC ${CWARNFLAGS-$BASE_WARNFLAGS} $CDEBUGFLAGS $COPTFLAGS -o $CONFIGURATOR $CONF
 echo "done"
 
 if [ "$ASAN" = "1" ]; then
-    if [ "$CC" = "clang" ]; then
-	echo "Address sanitizer (ASAN) is currently only supported with gcc"
-	exit 1
-    fi
     if [ "$VALGRIND" = "1" ]; then
 	echo "Address sanitizer (ASAN) and valgrind cannot be enabled at the same time"
 	exit 1
     fi
 fi
+
+if [ "$FUZZING" = "1" ]; then
+	case "$CC" in
+		(*"clang"*)
+			;;
+		(*)
+			echo "Fuzzing is currently only supported with clang."
+			exit 1
+			;;
+	esac
+fi
+
 
 SQLITE3_CFLAGS=""
 SQLITE3_LDLIBS="-lsqlite3"
@@ -247,7 +264,9 @@ if command -v "${PG_CONFIG}" >/dev/null; then
     POSTGRES_LDLIBS="-L$("${PG_CONFIG}" --libdir) -lpq"
 fi
 
-rm -f $CONFIG_VAR_FILE.$$
+# Clean up on exit.
+trap "rm -f $CONFIG_VAR_FILE.$$" 0
+
 $CONFIGURATOR --extra-tests --autotools-style --var-file=$CONFIG_VAR_FILE.$$ --header-file=$CONFIG_HEADER --configurator-cc="$CONFIGURATOR_CC" --wrapper="$CONFIGURATOR_WRAPPER" "$CC" ${CWARNFLAGS-$BASE_WARNFLAGS} $CDEBUGFLAGS $COPTFLAGS -I/usr/local/include -L/usr/local/lib $SQLITE3_CFLAGS $POSTGRES_INCLUDE <<EOF
 
 var=HAVE_GOOD_LIBSODIUM
@@ -364,13 +383,22 @@ else
     HAVE_PYTHON3_MAKO=0
 fi
 
-mv $CONFIG_VAR_FILE.$$ $CONFIG_VAR_FILE
+if echo | check_command sha256sum sha256sum; then
+    SHA256SUM=sha256sum
+elif echo | check_command "shasum -a 256" shasum -a 256; then
+    SHA256SUM="shasum -a 256"
+elif echo | check_command sha256 sha256; then
+    SHA256SUM=sha256
+else
+    echo "*** We need sha256sum, shasum -a 256, or sha256!" >&2
+    exit 1
+fi
 
 # Now we can finally set our warning flags
 if [ -z ${CWARNFLAGS+x} ]; then
     CWARNFLAGS=$(default_cwarnflags "$COPTFLAGS" \
-		    $(sed -n 's/^HAVE_GCC=//p' < $CONFIG_VAR_FILE) \
-		    $(sed -n 's/^HAVE_MODERN_GCC=//p' < $CONFIG_VAR_FILE) )
+		    $(sed -n 's/^HAVE_GCC=//p' < $CONFIG_VAR_FILE.$$) \
+		    $(sed -n 's/^HAVE_MODERN_GCC=//p' < $CONFIG_VAR_FILE.$$) )
 fi
 
 add_var PREFIX "$PREFIX"
@@ -390,9 +418,25 @@ add_var COMPAT "$COMPAT" $CONFIG_HEADER
 add_var PYTEST "$PYTEST"
 add_var STATIC "$STATIC"
 add_var ASAN "$ASAN"
+add_var UBSAN "$UBSAN"
 add_var TEST_NETWORK "$TEST_NETWORK"
 add_var HAVE_PYTHON3_MAKO "$HAVE_PYTHON3_MAKO"
+add_var SHA256SUM "$SHA256SUM"
+add_var FUZZING "$FUZZING"
 
 # Hack to avoid sha256 name clash with libwally: will be fixed when that
 # becomes a standalone shared lib.
 echo '#include "ccan_compat.h"' >> $CONFIG_HEADER
+
+# Now we set them all and check.
+while IFS='=' read VAR VAL; do
+    eval $VAR=\"$VAL\"
+done < $CONFIG_VAR_FILE.$$
+
+if [ "$HAVE_SQLITE3" = 0 -a "$HAVE_POSTGRES" = 0 ]; then
+    # I have no database yet I must schema!)
+    echo "*** We need a database, but neither sqlite3 nor postgres found" >&2
+    exit 1
+fi
+
+mv $CONFIG_VAR_FILE.$$ $CONFIG_VAR_FILE

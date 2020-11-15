@@ -22,7 +22,9 @@ void bitcoind_getutxout_(struct bitcoind *bitcoind UNNEEDED,
 /* Generated stub for bolt11_decode */
 struct bolt11 *bolt11_decode(const tal_t *ctx UNNEEDED, const char *str UNNEEDED,
 			     const struct feature_set *our_features UNNEEDED,
-			     const char *description UNNEEDED, char **fail UNNEEDED)
+			     const char *description UNNEEDED,
+			     const struct chainparams *must_be_chain UNNEEDED,
+			     char **fail UNNEEDED)
 { fprintf(stderr, "bolt11_decode called!\n"); abort(); }
 /* Generated stub for bolt11_encode_ */
 char *bolt11_encode_(const tal_t *ctx UNNEEDED,
@@ -40,11 +42,17 @@ void broadcast_tx(struct chain_topology *topo UNNEEDED,
 				 bool success UNNEEDED,
 				 const char *err))
 { fprintf(stderr, "broadcast_tx called!\n"); abort(); }
+/* Generated stub for channel_change_state_reason_str */
+const char *channel_change_state_reason_str(enum state_change reason UNNEEDED)
+{ fprintf(stderr, "channel_change_state_reason_str called!\n"); abort(); }
 /* Generated stub for channel_fail_forget */
 void channel_fail_forget(struct channel *channel UNNEEDED, const char *fmt UNNEEDED, ...)
 { fprintf(stderr, "channel_fail_forget called!\n"); abort(); }
 /* Generated stub for channel_fail_permanent */
-void channel_fail_permanent(struct channel *channel UNNEEDED, const char *fmt UNNEEDED, ...)
+void channel_fail_permanent(struct channel *channel UNNEEDED,
+			    enum state_change reason UNNEEDED,
+			    const char *fmt UNNEEDED,
+			    ...)
 { fprintf(stderr, "channel_fail_permanent called!\n"); abort(); }
 /* Generated stub for channel_fail_reconnect */
 void channel_fail_reconnect(struct channel *channel UNNEEDED,
@@ -70,11 +78,16 @@ void channel_set_billboard(struct channel *channel UNNEEDED, bool perm UNNEEDED,
 /* Generated stub for channel_set_state */
 void channel_set_state(struct channel *channel UNNEEDED,
 		       enum channel_state old_state UNNEEDED,
-		       enum channel_state state UNNEEDED)
+		       enum channel_state state UNNEEDED,
+		       enum state_change reason UNNEEDED,
+		       char *why UNNEEDED)
 { fprintf(stderr, "channel_set_state called!\n"); abort(); }
 /* Generated stub for channel_state_name */
 const char *channel_state_name(const struct channel *channel UNNEEDED)
 { fprintf(stderr, "channel_state_name called!\n"); abort(); }
+/* Generated stub for channel_state_str */
+const char *channel_state_str(enum channel_state state UNNEEDED)
+{ fprintf(stderr, "channel_state_str called!\n"); abort(); }
 /* Generated stub for channel_tell_depth */
 bool channel_tell_depth(struct lightningd *ld UNNEEDED,
 				 struct channel *channel UNNEEDED,
@@ -275,6 +288,12 @@ void json_array_start(struct json_stream *js UNNEEDED, const char *fieldname UNN
 char *json_member_direct(struct json_stream *js UNNEEDED,
 			 const char *fieldname UNNEEDED, size_t extra UNNEEDED)
 { fprintf(stderr, "json_member_direct called!\n"); abort(); }
+/* Generated stub for json_notify_fmt */
+void json_notify_fmt(struct command *cmd UNNEEDED,
+		     enum log_level level UNNEEDED,
+		     const char *fmt UNNEEDED, ...)
+
+{ fprintf(stderr, "json_notify_fmt called!\n"); abort(); }
 /* Generated stub for json_object_end */
 void json_object_end(struct json_stream *js UNNEEDED)
 { fprintf(stderr, "json_object_end called!\n"); abort(); }
@@ -461,8 +480,8 @@ struct channel *peer_normal_channel(struct peer *peer UNNEEDED)
 /* Generated stub for peer_start_channeld */
 void peer_start_channeld(struct channel *channel UNNEEDED,
 			 struct per_peer_state *pps UNNEEDED,
-			 const u8 *fwd_msg_1 UNNEEDED,
-			 const u8 *fwd_msg_2 UNNEEDED,
+			 const u8 *fwd_msg UNNEEDED,
+			 const struct wally_psbt *psbt UNNEEDED,
 			 bool reconnected UNNEEDED)
 { fprintf(stderr, "peer_start_channeld called!\n"); abort(); }
 /* Generated stub for peer_start_closingd */
@@ -644,6 +663,11 @@ void wallet_invoice_waitone(const tal_t *ctx UNNEEDED,
 /* Generated stub for wallet_peer_delete */
 void wallet_peer_delete(struct wallet *w UNNEEDED, u64 peer_dbid UNNEEDED)
 { fprintf(stderr, "wallet_peer_delete called!\n"); abort(); }
+/* Generated stub for wallet_state_change_get */
+struct state_change_entry *wallet_state_change_get(struct wallet *w UNNEEDED,
+						   const tal_t *ctx UNNEEDED,
+						   u64 channel_id UNNEEDED)
+{ fprintf(stderr, "wallet_state_change_get called!\n"); abort(); }
 /* Generated stub for wallet_total_forward_fees */
 struct amount_msat wallet_total_forward_fees(struct wallet *w UNNEEDED)
 { fprintf(stderr, "wallet_total_forward_fees called!\n"); abort(); }

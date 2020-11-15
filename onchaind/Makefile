@@ -2,7 +2,7 @@
 
 ONCHAIND_HEADERS :=				\
 	onchaind/onchaind_wiregen.h		\
-	onchaind/gen_onchain_types_names.h	\
+	onchaind/onchain_types_names_gen.h	\
 	onchaind/onchain_types.h		\
 	onchaind/onchaind_wire.h
 
@@ -11,7 +11,7 @@ ONCHAIND_SRC := onchaind/onchaind.c	\
 	onchaind/onchaind_wire.c	\
 	onchaind/onchaind.c
 
-onchaind/gen_onchain_types_names.h: onchaind/onchain_types.h ccan/ccan/cdump/tools/cdump-enumstr
+onchaind/onchain_types_names_gen.h: onchaind/onchain_types.h ccan/ccan/cdump/tools/cdump-enumstr
 	ccan/ccan/cdump/tools/cdump-enumstr onchaind/onchain_types.h > $@
 
 ONCHAIND_OBJS := $(ONCHAIND_SRC:.c=.o)
@@ -53,6 +53,8 @@ ONCHAIND_COMMON_OBJS :=				\
 	common/onionreply.o			\
 	common/peer_billboard.o			\
 	common/permute_tx.o			\
+	common/psbt_open.o			\
+	common/pseudorand.o			\
 	common/setup.o				\
 	common/status.o				\
 	common/status_wire.o			\
@@ -62,10 +64,6 @@ ONCHAIND_COMMON_OBJS :=				\
 	common/utxo.o				\
 	common/version.o			\
 	common/wallet.o
-
-ifeq ($(EXPERIMENTAL_FEATURES),1)
-ONCHAIND_COMMON_OBJS += common/psbt_open.o
-endif
 
 lightningd/lightning_onchaind: $(ONCHAIND_OBJS) $(WIRE_ONION_OBJS) $(ONCHAIND_COMMON_OBJS) $(WIRE_OBJS) $(BITCOIN_OBJS) $(HSMD_CLIENT_OBJS)
 

@@ -4,13 +4,14 @@ from pyln.client import RpcError
 from shutil import copyfile
 from utils import (
     only_one, sync_blockheight, wait_for, DEVELOPER, TIMEOUT,
-    account_balance, first_channel_id, basic_fee
+    account_balance, first_channel_id, basic_fee, TEST_NETWORK,
 )
 
 import os
 import queue
 import pytest
 import re
+import subprocess
 import threading
 import unittest
 
@@ -19,7 +20,7 @@ import unittest
 def test_closing(node_factory, bitcoind, chainparams):
     l1, l2 = node_factory.line_graph(2)
     chan = l1.get_channel_scid(l2)
-    fee = basic_fee(7500) if not chainparams['elements'] else 8955
+    fee = basic_fee(3750) if not chainparams['elements'] else 4477
 
     l1.pay(l2, 200000000)
 
@@ -126,6 +127,25 @@ def test_closing_while_disconnected(node_factory, bitcoind, executor):
     wait_for(lambda: len(l2.rpc.listchannels()['channels']) == 0)
 
 
+def test_closing_disconnected_notify(node_factory, bitcoind, executor):
+    l1, l2 = node_factory.line_graph(2)
+
+    l1.pay(l2, 200000000)
+    l2.stop()
+    wait_for(lambda: not only_one(l1.rpc.listpeers(l2.info['id'])['peers'])['connected'])
+
+    out = subprocess.check_output(['cli/lightning-cli',
+                                   '--network={}'.format(TEST_NETWORK),
+                                   '--lightning-dir={}'
+                                   .format(l1.daemon.lightning_dir),
+                                   'close',
+                                   l2.info['id'],
+                                   '5']).decode('utf-8').splitlines()
+    assert out[0] == '# peer is offline, will negotiate once they reconnect (5 seconds before unilateral close).'
+    assert out[1] == '# Timed out, forcing close.'
+    assert not any([line.startswith('#') for line in out[2:]])
+
+
 def test_closing_id(node_factory):
     """Test closing using peer ID and full channel ID
     """
@@ -133,7 +153,7 @@ def test_closing_id(node_factory):
 
     # Close by full channel ID.
     l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
-    l1.fund_channel(l2, 10**6)
+    l1.fundchannel(l2, 10**6)
     cid = l2.rpc.listpeers()['peers'][0]['channels'][0]['channel_id']
     l2.rpc.close(cid)
     wait_for(lambda: not only_one(l1.rpc.listpeers(l2.info['id'])['peers'])['connected'])
@@ -142,7 +162,7 @@ def test_closing_id(node_factory):
     # Close by peer ID.
     l2.rpc.connect(l1.info['id'], 'localhost', l1.port)
     l1.daemon.wait_for_log("Handed peer, entering loop")
-    l2.fund_channel(l1, 10**6)
+    l2.fundchannel(l1, 10**6)
     pid = l1.info['id']
     l2.rpc.close(pid)
     wait_for(lambda: not only_one(l1.rpc.listpeers(l2.info['id'])['peers'])['connected'])
@@ -306,9 +326,9 @@ def test_closing_specified_destination(node_factory, bitcoind, chainparams):
     l1.rpc.connect(l3.info['id'], 'localhost', l3.port)
     l1.rpc.connect(l4.info['id'], 'localhost', l4.port)
 
-    chan12 = l1.fund_channel(l2, 10**6)
-    chan13 = l1.fund_channel(l3, 10**6)
-    chan14 = l1.fund_channel(l4, 10**6)
+    chan12, _ = l1.fundchannel(l2, 10**6)
+    chan13, _ = l1.fundchannel(l3, 10**6)
+    chan14, _ = l1.fundchannel(l4, 10**6)
 
     l1.pay(l2, 100000000)
     l1.pay(l3, 100000000)
@@ -864,22 +884,33 @@ def test_penalty_htlc_tx_timeout(node_factory, bitcoind, chainparams):
     # We track channel balances, to verify that accounting is ok.
     coin_mvt_plugin = os.path.join(os.getcwd(), 'tests/plugins/coin_movements.py')
 
-    l1, l2, l3, l4, l5 = node_factory.get_nodes(5,
-                                                opts=[{'disconnect': ['-WIRE_UPDATE_FULFILL_HTLC'],
-                                                       'may_reconnect': True,
-                                                       'dev-no-reconnect': None},
-                                                      {'plugin': coin_mvt_plugin,
-                                                       'dev-no-reconnect': None,
-                                                       'may_reconnect': True,
-                                                       'allow_broken_log': True},
-                                                      {'plugin': coin_mvt_plugin,
-                                                       'dev-no-reconnect': None,
-                                                       'may_reconnect': True,
-                                                       'allow_broken_log': True},
-                                                      {'dev-no-reconnect': None},
-                                                      {'disconnect': ['-WIRE_UPDATE_FULFILL_HTLC'],
-                                                       'may_reconnect': True,
-                                                       'dev-no-reconnect': None}])
+    l1, l2, l3, l4, l5 = node_factory.get_nodes(
+        5,
+        opts=[
+            {
+                'disconnect': ['-WIRE_UPDATE_FULFILL_HTLC'],
+                'may_reconnect': True,
+                'dev-no-reconnect': None,
+            }, {
+                'plugin': coin_mvt_plugin,
+                'dev-no-reconnect': None,
+                'may_reconnect': True,
+                'allow_broken_log': True,
+            }, {
+                'plugin': coin_mvt_plugin,
+                'dev-no-reconnect': None,
+                'may_reconnect': True,
+                'allow_broken_log': True,
+            }, {
+                'dev-no-reconnect': None,
+            }, {
+                'disconnect': ['-WIRE_UPDATE_FULFILL_HTLC'],
+                'may_reconnect': True,
+                'dev-no-reconnect': None,
+                'allow_broken_log': True,
+            }
+        ]
+    )
 
     node_factory.join_nodes([l1, l2, l3, l4], wait_for_announce=True)
     node_factory.join_nodes([l3, l5], wait_for_announce=True)
@@ -1011,7 +1042,7 @@ def test_penalty_rbf_normal(node_factory, bitcoind, executor, chainparams):
                                options={'watchtime-blocks': to_self_delay})
 
     l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
-    l1.fund_channel(l2, 10**7)
+    l1.fundchannel(l2, 10**7)
 
     # Trigger an HTLC being added.
     t = executor.submit(l1.pay, l2, 1000000 * 1000)
@@ -1117,7 +1148,7 @@ def test_penalty_rbf_burn(node_factory, bitcoind, executor, chainparams):
                                options={'watchtime-blocks': to_self_delay})
 
     l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
-    l1.fund_channel(l2, 10**7)
+    l1.fundchannel(l2, 10**7)
 
     # Trigger an HTLC being added.
     t = executor.submit(l1.pay, l2, 1000000 * 1000)
@@ -1524,8 +1555,8 @@ def test_onchain_middleman(node_factory, bitcoind):
     # l2 connects to both, so l1 can't reconnect and thus l2 drops to chain
     l2.rpc.connect(l1.info['id'], 'localhost', l1.port)
     l2.rpc.connect(l3.info['id'], 'localhost', l3.port)
-    l2.fund_channel(l1, 10**6)
-    c23 = l2.fund_channel(l3, 10**6)
+    l2.fundchannel(l1, 10**6)
+    c23, _ = l2.fundchannel(l3, 10**6)
     channel_id = first_channel_id(l1, l2)
 
     # Make sure routes finalized.
@@ -1614,8 +1645,8 @@ def test_onchain_middleman_their_unilateral_in(node_factory, bitcoind):
     l2.rpc.connect(l1.info['id'], 'localhost', l1.port)
     l2.rpc.connect(l3.info['id'], 'localhost', l3.port)
 
-    l2.fund_channel(l1, 10**6)
-    c23 = l2.fund_channel(l3, 10**6)
+    l2.fundchannel(l1, 10**6)
+    c23, _ = l2.fundchannel(l3, 10**6)
     channel_id = first_channel_id(l1, l2)
 
     # Make sure routes finalized.
@@ -1725,6 +1756,7 @@ def test_onchain_their_unilateral_out(node_factory, bitcoind):
     l2.bitcoin.generate_block(9)
     l1.wait_for_onchaind_broadcast('OUR_HTLC_TIMEOUT_TO_US',
                                    'THEIR_UNILATERAL/OUR_HTLC')
+    l2.daemon.wait_for_log('Ignoring output .*_UNILATERAL/THEIR_HTLC')
 
     err = q.get(timeout=10)
     if err:
@@ -1862,7 +1894,7 @@ def test_onchain_all_dust(node_factory, bitcoind, executor):
     l2 = node_factory.get_node(disconnect=disconnects, options={'plugin': coin_mvt_plugin})
 
     l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
-    l1.fund_channel(l2, 10**6)
+    l1.fundchannel(l2, 10**6)
     channel_id = first_channel_id(l1, l2)
 
     rhash = l2.rpc.invoice(10**8, 'onchain_timeout', 'desc')['payment_hash']
@@ -1985,7 +2017,7 @@ def test_permfail_new_commit(node_factory, bitcoind, executor):
     l2 = node_factory.get_node(disconnect=disconnects)
 
     l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
-    l1.fund_channel(l2, 10**6)
+    l1.fundchannel(l2, 10**6)
 
     # This will fail at l2's end.
     t = executor.submit(l1.pay, l2, 200000000)
@@ -2287,7 +2319,7 @@ def test_permfail_htlc_in(node_factory, bitcoind, executor):
     l2 = node_factory.get_node(disconnect=disconnects)
 
     l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
-    l1.fund_channel(l2, 10**6)
+    l1.fundchannel(l2, 10**6)
 
     # This will fail at l2's end.
     t = executor.submit(l1.pay, l2, 200000000)
@@ -2334,7 +2366,7 @@ def test_permfail_htlc_out(node_factory, bitcoind, executor):
 
     l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
     l2.daemon.wait_for_log('openingd-chan#1: Handed peer, entering loop'.format(l1.info['id']))
-    l2.fund_channel(l1, 10**6)
+    l2.fundchannel(l1, 10**6)
 
     # This will fail at l2's end.
     t = executor.submit(l2.pay, l1, 200000000)
@@ -2495,7 +2527,7 @@ def test_option_upfront_shutdown_script(node_factory, bitcoind, executor):
 
     l2 = node_factory.get_node()
     l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
-    l1.fund_channel(l2, 1000000, False)
+    l1.fundchannel(l2, 1000000, False)
 
     # This will block, as l12 will send an error but l2 will retry.
     fut = executor.submit(l1.rpc.close, l2.info['id'])
@@ -2512,7 +2544,7 @@ def test_option_upfront_shutdown_script(node_factory, bitcoind, executor):
 
     # Works when l2 closes channel, too.
     l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
-    l1.fund_channel(l2, 1000000, False)
+    l1.fundchannel(l2, 1000000, False)
 
     l2.rpc.close(l1.info['id'])
 

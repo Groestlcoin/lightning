@@ -26,7 +26,6 @@ msgdata,dual_open_init,our_funding_pubkey,pubkey,
 msgdata,dual_open_init,minimum_depth,u32,
 msgdata,dual_open_init,min_feerate,u32,
 msgdata,dual_open_init,max_feerate,u32,
-msgdata,dual_open_init,option_anchor_outputs,bool,
 # Optional msg to send.
 msgdata,dual_open_init,len,u16,
 msgdata,dual_open_init,msg,u8,len
@@ -37,7 +36,9 @@ msgdata,dual_open_got_offer,opener_funding,amount_sat,
 msgdata,dual_open_got_offer,dust_limit_satoshis,amount_sat,
 msgdata,dual_open_got_offer,max_htlc_value_in_flight_msat,amount_msat,
 msgdata,dual_open_got_offer,htlc_minimum_msat,amount_msat,
-msgdata,dual_open_got_offer,feerate_per_kw_funding,u32,
+msgdata,dual_open_got_offer,feerate_funding_max,u32,
+msgdata,dual_open_got_offer,feerate_funding_min,u32,
+msgdata,dual_open_got_offer,feerate_funding_best,u32,
 msgdata,dual_open_got_offer,feerate_per_kw,u32,
 msgdata,dual_open_got_offer,to_self_delay,u16,
 msgdata,dual_open_got_offer,max_accepted_htlcs,u16,
@@ -49,6 +50,7 @@ msgdata,dual_open_got_offer,shutdown_scriptpubkey,u8,shutdown_len
 # master->dualopend: reply back with our first funding info/contribs
 msgtype,dual_open_got_offer_reply,7105
 msgdata,dual_open_got_offer_reply,accepter_funding,amount_sat,
+msgdata,dual_open_got_offer_reply,feerate_funding,u32,
 msgdata,dual_open_got_offer_reply,psbt,wally_psbt,
 msgdata,dual_open_got_offer_reply,shutdown_len,u16,
 msgdata,dual_open_got_offer_reply,our_shutdown_scriptpubkey,?u8,shutdown_len
@@ -85,18 +87,32 @@ msgdata,dual_open_commit_rcvd,remote_shutdown_len,u16,
 msgdata,dual_open_commit_rcvd,remote_shutdown_scriptpubkey,u8,remote_shutdown_len
 
 # dualopend->master: peer updated the psbt
-# master->dualopend: response from hook when asking for next moves
 msgtype,dual_open_psbt_changed,7107
 msgdata,dual_open_psbt_changed,channel_id,channel_id,
+msgdata,dual_open_psbt_changed,funding_serial,u64,
 msgdata,dual_open_psbt_changed,psbt,wally_psbt,
+
+# master->dualopend: we updated the psbt
+msgtype,dual_open_psbt_updated,7108
+msgdata,dual_open_psbt_updated,psbt,wally_psbt,
 
 # master->dualopend: fail this channel open
 msgtype,dual_open_fail,7003
 msgdata,dual_open_fail,reason,wirestring,
 
-# dualopend->master: we failed to negotiation channel
+# dualopend->master: we failed to negotiate channel
 msgtype,dual_open_failed,7004
 msgdata,dual_open_failed,reason,wirestring,
+
+# master->dualopend: hello, I'd like to start a channel open
+msgtype,dual_open_opener_init,7200
+msgdata,dual_open_opener_init,psbt,wally_psbt,
+msgdata,dual_open_opener_init,funding_amount,amount_sat,
+msgdata,dual_open_opener_init,local_shutdown_len,u16,
+msgdata,dual_open_opener_init,local_shutdown_scriptpubkey,u8,local_shutdown_len
+msgdata,dual_open_opener_init,feerate_per_kw,u32,
+msgdata,dual_open_opener_init,feerate_per_kw_funding,u32,
+msgdata,dual_open_opener_init,channel_flags,u8,
 
 # master -> dualopend: do you have a memleak?
 msgtype,dual_open_dev_memleak,7033

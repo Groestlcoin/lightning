@@ -3,12 +3,14 @@
 #include "config.h"
 #include <ccan/list/list.h>
 #include <common/channel_id.h>
+#include <common/per_peer_state.h>
 #include <lightningd/channel_state.h>
 #include <lightningd/peer_htlcs.h>
 #include <wallet/wallet.h>
 
 struct channel_id;
 struct uncommitted_channel;
+struct wally_psbt;
 
 struct billboard {
 	/* Status information to display on listpeers */
@@ -91,6 +93,9 @@ struct channel {
 	/* Keys for channel */
 	struct channel_info channel_info;
 
+	/* Fee status */
+	const struct fee_states *fee_states;
+
 	/* Our local basepoints */
 	struct basepoints local_basepoints;
 
@@ -143,6 +148,15 @@ struct channel {
 
 	/* Our position in the round-robin list.  */
 	u64 rr_number;
+
+	/* PSBT, for v2 channels. Saved until it's sent */
+	struct wally_psbt *psbt;
+
+	/* the one that initiated a bilateral close, NUM_SIDES if unknown. */
+	enum side closer;
+
+	/* Last known state_change cause */
+	enum state_change state_change_cause;
 };
 
 struct channel *new_channel(struct peer *peer, u64 dbid,
@@ -176,6 +190,7 @@ struct channel *new_channel(struct peer *peer, u64 dbid,
 			    /* NULL or stolen */
 			    const struct bitcoin_signature *last_htlc_sigs STEALS,
 			    const struct channel_info *channel_info,
+			    const struct fee_states *fee_states TAKES,
 			    /* NULL or stolen */
 			    u8 *remote_shutdown_scriptpubkey STEALS,
 			    const u8 *local_shutdown_scriptpubkey,
@@ -195,7 +210,10 @@ struct channel *new_channel(struct peer *peer, u64 dbid,
 			    /* NULL or stolen */
 			    const u8 *remote_upfront_shutdown_script STEALS,
 			    bool option_static_remotekey,
-			    bool option_anchor_outputs);
+			    bool option_anchor_outputs,
+			    struct wally_psbt *psbt STEALS,
+			    enum side closer,
+			    enum state_change reason);
 
 void delete_channel(struct channel *channel STEALS);
 
@@ -212,7 +230,10 @@ void channel_fail_reconnect_later(struct channel *channel,
 				  const char *fmt,...) PRINTF_FMT(2,3);
 
 /* Channel has failed, give up on it. */
-void channel_fail_permanent(struct channel *channel, const char *fmt, ...);
+void channel_fail_permanent(struct channel *channel,
+			    enum state_change reason,
+			    const char *fmt,
+			    ...);
 /* Forget the channel. This is only used for the case when we "receive" error
  * during CHANNELD_AWAITING_LOCKIN if we are "fundee". */
 void channel_fail_forget(struct channel *channel, const char *fmt, ...);
@@ -221,7 +242,11 @@ void channel_internal_error(struct channel *channel, const char *fmt, ...);
 
 void channel_set_state(struct channel *channel,
 		       enum channel_state old_state,
-		       enum channel_state state);
+		       enum channel_state state,
+		       enum state_change reason,
+		       char *why);
+
+const char *channel_change_state_reason_str(enum state_change reason);
 
 /* Find a channel which is not onchain, if any */
 struct channel *peer_active_channel(struct peer *peer);
@@ -238,6 +263,11 @@ struct channel *channel_by_dbid(struct lightningd *ld, const u64 dbid);
 
 struct channel *active_channel_by_scid(struct lightningd *ld,
 				       const struct short_channel_id *scid);
+
+/* Get channel by channel_id, optionally returning uncommitted_channel. */
+struct channel *channel_by_cid(struct lightningd *ld,
+			       const struct channel_id *cid,
+			       struct uncommitted_channel **uc);
 
 void channel_set_last_tx(struct channel *channel,
 			 struct bitcoin_tx *tx,

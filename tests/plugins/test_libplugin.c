@@ -18,6 +18,7 @@ static struct command_result *json_helloworld(struct command *cmd,
 		   NULL))
 		return command_param_failed();
 
+	plugin_notify_message(cmd, LOG_INFORM, "Notification from %s", "json_helloworld");
 	if (!name)
 		name = name_option ? name_option : tal_strdup(tmpctx, "world");
 
@@ -117,9 +118,14 @@ static const struct plugin_command commands[] = { {
 	}
 };
 
+static const char *before[] = { "dummy", NULL };
+static const char *after[] = { "dummy", NULL };
+
 static const struct plugin_hook hooks[] = { {
 		"peer_connected",
 		json_peer_connected,
+		before,
+		after
 	}
 };
 

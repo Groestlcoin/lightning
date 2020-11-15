@@ -12,13 +12,14 @@
 #include <hsmd/hsmd_wiregen.h>
 #include <inttypes.h>
 #include <lightningd/channel.h>
+#include <lightningd/channel_state_names_gen.h>
 #include <lightningd/connect_control.h>
-#include <lightningd/gen_channel_state_names.h>
 #include <lightningd/hsm_control.h>
 #include <lightningd/jsonrpc.h>
 #include <lightningd/lightningd.h>
 #include <lightningd/log.h>
 #include <lightningd/notification.h>
+#include <lightningd/opening_common.h>
 #include <lightningd/opening_control.h>
 #include <lightningd/peer_control.h>
 #include <lightningd/subd.h>
@@ -174,6 +175,7 @@ struct channel *new_channel(struct peer *peer, u64 dbid,
 			    /* NULL or stolen */
 			    const struct bitcoin_signature *last_htlc_sigs,
 			    const struct channel_info *channel_info,
+			    const struct fee_states *fee_states TAKES,
 			    /* NULL or stolen */
 			    u8 *remote_shutdown_scriptpubkey,
 			    const u8 *local_shutdown_scriptpubkey,
@@ -192,7 +194,10 @@ struct channel *new_channel(struct peer *peer, u64 dbid,
 			    u32 feerate_ppm,
 			    const u8 *remote_upfront_shutdown_script,
 			    bool option_static_remotekey,
-			    bool option_anchor_outputs)
+			    bool option_anchor_outputs,
+			    struct wally_psbt *psbt STEALS,
+			    enum side closer,
+			    enum state_change reason)
 {
 	struct channel *channel = tal(peer->ld, struct channel);
 
@@ -244,8 +249,7 @@ struct channel *new_channel(struct peer *peer, u64 dbid,
 	channel->last_sig = *last_sig;
 	channel->last_htlc_sigs = tal_steal(channel, last_htlc_sigs);
 	channel->channel_info = *channel_info;
-	channel->channel_info.fee_states
-		= dup_fee_states(channel, channel_info->fee_states);
+	channel->fee_states = dup_fee_states(channel, fee_states);
 	channel->shutdown_scriptpubkey[REMOTE]
 		= tal_steal(channel, remote_shutdown_scriptpubkey);
 	channel->final_key_idx = final_key_idx;
@@ -277,9 +281,18 @@ struct channel *new_channel(struct peer *peer, u64 dbid,
 	channel->option_anchor_outputs = option_anchor_outputs;
 	channel->forgets = tal_arr(channel, struct command *, 0);
 
+	/* If we're already locked in, we no longer need the PSBT */
+	if (!remote_funding_locked && psbt)
+		channel->psbt = tal_steal(channel, psbt);
+	else
+		channel->psbt = tal_free(psbt);
+
 	list_add_tail(&peer->channels, &channel->list);
 	channel->rr_number = peer->ld->rr_counter++;
 	tal_add_destructor(channel, destroy_channel);
+
+	channel->closer = closer;
+	channel->state_change_cause = reason;
 
 	/* Make sure we see any spends using this key */
 	txfilter_add_scriptpubkey(peer->ld->owned_txfilter,
@@ -369,6 +382,35 @@ struct channel *channel_by_dbid(struct lightningd *ld, const u64 dbid)
 	return NULL;
 }
 
+struct channel *channel_by_cid(struct lightningd *ld,
+			       const struct channel_id *cid,
+			       struct uncommitted_channel **uc)
+{
+	struct peer *p;
+	struct channel *channel;
+
+	list_for_each(&ld->peers, p, list) {
+		if (p->uncommitted_channel) {
+			if (channel_id_eq(&p->uncommitted_channel->cid, cid)) {
+				if (uc)
+					*uc = p->uncommitted_channel;
+				return NULL;
+			}
+		}
+		list_for_each(&p->channels, channel, list) {
+			if (channel_id_eq(&channel->cid, cid)) {
+				if (uc)
+					*uc = p->uncommitted_channel;
+				return channel;
+			}
+		}
+	}
+	if (uc)
+		*uc = NULL;
+	return NULL;
+}
+
+
 void channel_set_last_tx(struct channel *channel,
 			 struct bitcoin_tx *tx,
 			 const struct bitcoin_signature *sig,
@@ -383,9 +425,26 @@ void channel_set_last_tx(struct channel *channel,
 
 void channel_set_state(struct channel *channel,
 		       enum channel_state old_state,
-		       enum channel_state state)
+		       enum channel_state state,
+		       enum state_change reason,
+		       char *why)
 {
 	struct channel_id cid;
+	struct timeabs timestamp;
+
+	/* set closer, if known */
+	if (state > CHANNELD_NORMAL && channel->closer == NUM_SIDES) {
+		if (reason == REASON_LOCAL)   channel->closer = LOCAL;
+		if (reason == REASON_USER)    channel->closer = LOCAL;
+		if (reason == REASON_REMOTE)  channel->closer = REMOTE;
+		if (reason == REASON_ONCHAIN) channel->closer = REMOTE;
+	}
+
+	/* use or update state_change_cause, if known */
+	if (reason != REASON_UNKNOWN)
+		channel->state_change_cause = reason;
+	else
+		reason = channel->state_change_cause;
 
 	log_info(channel->log, "State changed from %s to %s",
 		 channel_state_name(channel), channel_state_str(state));
@@ -398,19 +457,46 @@ void channel_set_state(struct channel *channel,
 	/* TODO(cdecker) Selectively save updated fields to DB */
 	wallet_channel_save(channel->peer->ld->wallet, channel);
 
-	/* plugin notification channel_state_changed */
+	/* plugin notification channel_state_changed and DB entry */
 	if (state != old_state) {  /* see issue #4029 */
+		timestamp = time_now();
+		wallet_state_change_add(channel->peer->ld->wallet,
+					channel->dbid,
+					&timestamp,
+					old_state,
+					state,
+					reason,
+					why);
 		derive_channel_id(&cid, &channel->funding_txid, channel->funding_outnum);
 		notify_channel_state_changed(channel->peer->ld,
 					     &channel->peer->id,
 					     &cid,
 					     channel->scid,
+					     &timestamp,
 					     old_state,
-					     state);
+					     state,
+					     reason,
+					     why);
 	}
 }
 
-void channel_fail_permanent(struct channel *channel, const char *fmt, ...)
+const char *channel_change_state_reason_str(enum state_change reason)
+{
+	switch (reason) {
+		case REASON_UNKNOWN:  return "unknown";
+		case REASON_LOCAL:    return "local";
+		case REASON_USER:     return "user";
+		case REASON_REMOTE:   return "remote";
+		case REASON_PROTOCOL: return "protocol";
+		case REASON_ONCHAIN:  return "onchain";
+	}
+	abort();
+}
+
+void channel_fail_permanent(struct channel *channel,
+			    enum state_change reason,
+			    const char *fmt,
+			    ...)
 {
 	struct lightningd *ld = channel->peer->ld;
 	va_list ap;
@@ -433,7 +519,11 @@ void channel_fail_permanent(struct channel *channel, const char *fmt, ...)
 	drop_to_chain(ld, channel, false);
 
 	if (channel_active(channel))
-		channel_set_state(channel, channel->state, AWAITING_UNILATERAL);
+		channel_set_state(channel,
+				  channel->state,
+				  AWAITING_UNILATERAL,
+				  reason,
+				  why);
 
 	tal_free(why);
 }
@@ -475,9 +565,9 @@ void channel_internal_error(struct channel *channel, const char *fmt, ...)
 
 	/* Don't expose internal error causes to remove unless doing dev */
 #if DEVELOPER
-	channel_fail_permanent(channel, "Internal error: %s", why);
+	channel_fail_permanent(channel, REASON_LOCAL, "Internal error: %s", why);
 #else
-	channel_fail_permanent(channel, "Internal error");
+	channel_fail_permanent(channel, REASON_LOCAL, "Internal error");
 #endif
 	tal_free(why);
 }
@@ -508,7 +598,9 @@ static void err_and_reconnect(struct channel *channel,
 
 #if DEVELOPER
 	if (dev_disconnect_permanent(channel->peer->ld)) {
-		channel_fail_permanent(channel, "dev_disconnect permfail");
+		channel_fail_permanent(channel,
+				       REASON_LOCAL,
+				       "dev_disconnect permfail");
 		return;
 	}
 #endif

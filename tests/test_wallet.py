@@ -578,7 +578,7 @@ def test_utxopsbt(node_factory, bitcoind, chainparams):
     assert psbt2['tx']['vin'] == psbt['tx']['vin']
     if chainparams['elements']:
         # elements includes the fee as an output
-        addl_fee = Millisatoshi(fee_val * start_weight // 1000 * 1000)
+        addl_fee = Millisatoshi((fee_val * start_weight + 999) // 1000 * 1000)
         assert psbt2['tx']['vout'][0]['value'] == psbt['tx']['vout'][0]['value'] + addl_fee.to_btc()
     else:
         assert psbt2['tx']['vout'] == psbt['tx']['vout']
@@ -789,14 +789,14 @@ def test_sign_and_send_psbt(node_factory, bitcoind, chainparams):
         bitcoind.rpc.sendrawtransaction(broadcast_tx['tx'])
 
     # Try an empty PSBT
-    with pytest.raises(RpcError, match=r"should be a PSBT, not"):
+    with pytest.raises(RpcError, match=r"psbt: Expected a PSBT: invalid token"):
         l1.rpc.signpsbt('')
-    with pytest.raises(RpcError, match=r"should be a PSBT, not"):
+    with pytest.raises(RpcError, match=r"psbt: Expected a PSBT: invalid token"):
         l1.rpc.sendpsbt('')
 
     # Try an invalid PSBT string
     invalid_psbt = 'cHNidP8BAM0CAAAABJ9446mTRp/ml8OxSLC1hEvrcxG1L02AG7YZ4syHon2sAQAAAAD9////JFJH/NjKwjwrP9myuU68G7t8Q4VIChH0KUkZ5hSAyqcAAAAAAP3///8Uhrj0XDRhGRno8V7qEe4hHvZcmEjt3LQSIXWc+QU2tAEAAAAA/f///wstLikuBrgZJI83VPaY8aM7aPe5U6TMb06+jvGYzQLEAQAAAAD9////AcDGLQAAAAAAFgAUyQltQ/QI6lJgICYsza18hRa5KoEAAAAAAAEBH0BCDwAAAAAAFgAUqc1Qh7Q5kY1noDksmj7cJmHaIbQAAQEfQEIPAAAAAAAWABS3bdYeQbXvBSryHNoyYIiMBwu5rwABASBAQg8AAAAAABepFD1r0NuqAA+R7zDiXrlP7J+/PcNZhwEEFgAUKvGgVL/ThjWE/P1oORVXh/ObucYAAQEgQEIPAAAAAAAXqRRsrE5ugA1VJnAith5+msRMUTwl8ocBBBYAFMrfGCiLi0ZnOCY83ERKJ1sLYMY8A='
-    with pytest.raises(RpcError, match=r"should be a PSBT, not"):
+    with pytest.raises(RpcError, match=r"psbt: Expected a PSBT: invalid token"):
         l1.rpc.signpsbt(invalid_psbt)
 
     wallet_coin_mvts = [
@@ -912,8 +912,10 @@ def test_transaction_annotations(node_factory, bitcoind):
     l1.connect(l2)
     fundingtx = l1.rpc.fundchannel(l2.info['id'], 10**5)
 
-    # We should have one output available, and it should be unconfirmed
+    # We should have one output unreserved, and it should be unconfirmed
     outputs = l1.rpc.listfunds()['outputs']
+    assert len(outputs) == 2
+    outputs = [o for o in outputs if not o['reserved']]
     assert(len(outputs) == 1 and outputs[0]['status'] == 'unconfirmed')
 
     # It should also match the funding txid:
@@ -1041,6 +1043,36 @@ def test_hsmtool_secret_decryption(node_factory):
     l1.daemon.opts.pop("encrypted-hsm")
     l1.daemon.start(stdin=slave_fd, wait_for_initialized=True)
     assert node_id == l1.rpc.getinfo()["id"]
+
+
+@unittest.skipIf(TEST_NETWORK == 'liquid-regtest', '')
+def test_hsmtool_dump_descriptors(node_factory, bitcoind):
+    l1 = node_factory.get_node()
+    l1.fundwallet(10**6)
+
+    # Get a tpub descriptor of lightningd's wallet
+    hsm_path = os.path.join(l1.daemon.lightning_dir, TEST_NETWORK, "hsm_secret")
+    cmd_line = ["tools/hsmtool", "dumponchaindescriptors", hsm_path, "",
+                "testnet"]
+    out = subprocess.check_output(cmd_line).decode("utf8").split("\n")
+    descriptor = [l for l in out if l.startswith("wpkh(tpub")][0]
+
+    # Import the descriptor to bitcoind
+    # FIXME: if we update the testsuite to use the upcoming 0.21 we could use
+    # importdescriptors instead.
+    bitcoind.rpc.importmulti([{
+        "desc": descriptor,
+        # No need to rescan, we'll transact afterward
+        "timestamp": "now",
+        # The default
+        "range": [0, 99]
+    }])
+
+    # Funds sent to lightningd can be retrieved by bitcoind
+    addr = l1.rpc.newaddr()["bech32"]
+    txid = l1.rpc.withdraw(addr, 10**3)["txid"]
+    bitcoind.generate_block(1, txid)
+    assert len(bitcoind.rpc.listunspent(1, 1, [addr])) == 1
 
 
 # this test does a 'listtransactions' on a yet unconfirmed channel

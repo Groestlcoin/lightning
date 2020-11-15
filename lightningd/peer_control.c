@@ -70,8 +70,6 @@ struct close_command {
 	struct command *cmd;
 	/* Channel being closed. */
 	struct channel *channel;
-	/* Should we force the close on timeout? */
-	bool force;
 };
 
 static void destroy_peer(struct peer *peer)
@@ -283,18 +281,14 @@ destroy_close_command(struct close_command *cc)
 static void
 close_command_timeout(struct close_command *cc)
 {
-	if (cc->force)
-		/* This will trigger drop_to_chain, which will trigger
-		 * resolution of the command and destruction of the
-		 * close_command. */
-		channel_fail_permanent(cc->channel,
-				       "Forcibly closed by 'close' command timeout");
-	else
-		/* Fail the command directly, which will resolve the
-		 * command and destroy the close_command. */
-		was_pending(command_fail(cc->cmd, LIGHTNINGD,
-					 "Channel close negotiation not finished "
-					 "before timeout"));
+	/* This will trigger drop_to_chain, which will trigger
+	 * resolution of the command and destruction of the
+	 * close_command. */
+	if (!deprecated_apis)
+		json_notify_fmt(cc->cmd, LOG_INFORM,
+				"Timed out, forcing close.");
+	channel_fail_permanent(cc->channel, REASON_USER,
+			       "Forcibly closed by `close` command timeout");
 }
 
 /* Construct a close command structure and add to ld. */
@@ -302,8 +296,7 @@ static void
 register_close_command(struct lightningd *ld,
 		       struct command *cmd,
 		       struct channel *channel,
-		       unsigned int *timeout,
-		       bool force)
+		       unsigned int timeout)
 {
 	struct close_command *cc;
 	assert(channel);
@@ -312,16 +305,84 @@ register_close_command(struct lightningd *ld,
 	list_add_tail(&ld->close_commands, &cc->list);
 	cc->cmd = cmd;
 	cc->channel = channel;
-	cc->force = force;
 	tal_add_destructor(cc, &destroy_close_command);
 	tal_add_destructor2(channel,
 			    &destroy_close_command_on_channel_destroy,
 			    cc);
-	log_debug(ld->log, "close_command: force = %u, timeout = %i",
-		  force, timeout ? *timeout : -1);
+
+	if (!deprecated_apis && !channel->owner) {
+		char *msg = tal_strdup(tmpctx, "peer is offline, will negotiate once they reconnect");
+		if (timeout)
+			tal_append_fmt(&msg, " (%u seconds before unilateral close)",
+				       timeout);
+		json_notify_fmt(cmd, LOG_INFORM, "%s.", msg);
+	}
+	log_debug(ld->log, "close_command: timeout = %u", timeout);
 	if (timeout)
-		new_reltimer(ld->timers, cc, time_from_sec(*timeout),
+		new_reltimer(ld->timers, cc, time_from_sec(timeout),
 			     &close_command_timeout, cc);
+}
+
+/* Destroy the open command structure in reaction to the
+ * channel being destroyed. */
+static void
+destroy_open_command_on_channel_destroy(struct channel *_ UNUSED,
+					struct open_command *oc)
+{
+	/* The oc has the command as parent, so resolving the
+	 * command destroys the oc and triggers destroy_open_command.
+	 * Clear the oc->channel first so that we will not try to
+	 * remove a destructor. */
+	oc->channel = NULL;
+	was_pending(command_fail(oc->cmd, LIGHTNINGD,
+				 "Channel forgotten before open concluded."));
+}
+
+/* Destroy the open command structure. */
+static void
+destroy_open_command(struct open_command *oc)
+{
+	list_del(&oc->list);
+	/* If destroy_close_command_on_channel_destroy was
+	 * triggered beforehand, it will have cleared
+	 * the channel field, preventing us from removing it
+	 * from an already-destroyed channel. */
+	if (!oc->channel)
+		return;
+	tal_del_destructor2(oc->channel,
+			    &destroy_open_command_on_channel_destroy,
+			    oc);
+}
+
+struct open_command *find_open_command(struct lightningd *ld,
+				       const struct channel *channel)
+{
+	struct open_command *oc, *n;
+
+	list_for_each_safe (&ld->open_commands, oc, n, list) {
+		if (oc->channel != channel)
+			continue;
+		return oc;
+	}
+
+	return NULL;
+}
+
+void register_open_command(struct lightningd *ld,
+			   struct command *cmd,
+			   struct channel *channel)
+{
+	struct open_command *oc;
+	assert(channel);
+
+	oc = tal(cmd, struct open_command);
+	list_add_tail(&ld->open_commands, &oc->list);
+	oc->cmd = cmd;
+	oc->channel = channel;
+	tal_add_destructor(oc, &destroy_open_command);
+	tal_add_destructor2(channel,
+			    &destroy_open_command_on_channel_destroy,
+			    oc);
 }
 
 static bool invalid_last_tx(const struct bitcoin_tx *tx)
@@ -430,7 +491,9 @@ void channel_errmsg(struct channel *channel,
 				    channel->owner->name,
 				    err_for_them ? "sent" : "received", desc);
 	else
-		channel_fail_permanent(channel, "%s: %s ERROR %s",
+		channel_fail_permanent(channel,
+				       err_for_them ? REASON_LOCAL : REASON_PROTOCOL,
+				       "%s: %s ERROR %s",
 				       channel->owner->name,
 				       err_for_them ? "sent" : "received", desc);
 }
@@ -452,7 +515,7 @@ static void json_add_htlcs(struct lightningd *ld,
 	struct htlc_in_map_iter ini;
 	const struct htlc_out *hout;
 	struct htlc_out_map_iter outi;
-	u32 local_feerate = get_feerate(channel->channel_info.fee_states,
+	u32 local_feerate = get_feerate(channel->fee_states,
 					channel->opener, LOCAL);
 
 	/* FIXME: Add more fields. */
@@ -527,7 +590,7 @@ static struct amount_sat commit_txfee(const struct channel *channel,
 	struct htlc_out_map_iter outi;
 	struct lightningd *ld = channel->peer->ld;
 	size_t num_untrimmed_htlcs = 0;
-	u32 feerate = get_feerate(channel->channel_info.fee_states,
+	u32 feerate = get_feerate(channel->fee_states,
 				  channel->opener, side);
 	struct amount_sat dust_limit;
 	struct amount_sat fee;
@@ -699,8 +762,10 @@ static void json_add_channel(struct lightningd *ld,
 			     const struct channel *channel)
 {
 	struct channel_stats channel_stats;
-	struct amount_msat funding_msat;
+	struct amount_msat funding_msat, peer_msats, our_msats;
+	struct amount_sat peer_funded_sats;
 	struct peer *p = channel->peer;
+	struct state_change_entry *state_changes;
 
 	json_object_start(response, key);
 	json_add_string(response, "state", channel_state_name(channel));
@@ -738,6 +803,16 @@ static void json_add_channel(struct lightningd *ld,
 	    response, "private",
 	    !(channel->channel_flags & CHANNEL_FLAGS_ANNOUNCE_CHANNEL));
 
+	/* opener and closer */
+	assert(channel->opener != NUM_SIDES);
+	json_add_string(response, "opener", channel->opener == LOCAL ?
+					    "local" : "remote");
+	if (channel->closer != NUM_SIDES)
+		json_add_string(response, "closer", channel->closer == LOCAL ?
+						    "local" : "remote");
+	else
+		json_add_null(response, "closer");
+
 	json_array_start(response, "features");
 	if (channel->option_static_remotekey)
 		json_add_string(response, NULL, "option_static_remotekey");
@@ -745,36 +820,45 @@ static void json_add_channel(struct lightningd *ld,
 		json_add_string(response, NULL, "option_anchor_outputs");
 	json_array_end(response);
 
-	// FIXME @conscott : Modify this when dual-funded channels
-	// are implemented
-	json_object_start(response, "funding_allocation_msat");
-	if (channel->opener == LOCAL) {
-		json_add_u64(response, node_id_to_hexstr(tmpctx, &p->id), 0);
-		json_add_u64(response, node_id_to_hexstr(tmpctx, &ld->id),
-			     channel->funding.satoshis * 1000); /* Raw: raw JSON field */
-	} else {
-		json_add_u64(response, node_id_to_hexstr(tmpctx, &ld->id), 0);
-		json_add_u64(response, node_id_to_hexstr(tmpctx, &p->id),
-			     channel->funding.satoshis * 1000); /* Raw: raw JSON field */
+	if (!amount_sat_sub(&peer_funded_sats, channel->funding,
+			    channel->our_funds)) {
+		log_broken(channel->log,
+			   "Overflow subtracing funding %s, our funds %s",
+			   type_to_string(tmpctx, struct amount_sat,
+					  &channel->funding),
+			   type_to_string(tmpctx, struct amount_sat,
+					  &channel->our_funds));
+		peer_funded_sats = AMOUNT_SAT(0);
 	}
+	if (!amount_sat_to_msat(&peer_msats, peer_funded_sats)) {
+		log_broken(channel->log,
+			   "Overflow converting peer sats %s to msat",
+			   type_to_string(tmpctx, struct amount_sat,
+					  &peer_funded_sats));
+		peer_msats = AMOUNT_MSAT(0);
+	}
+	if (!amount_sat_to_msat(&our_msats, channel->our_funds)) {
+		log_broken(channel->log,
+			   "Overflow converting peer sats %s to msat",
+			   type_to_string(tmpctx, struct amount_sat,
+					  &channel->our_funds));
+		our_msats = AMOUNT_MSAT(0);
+	}
+
+	json_object_start(response, "funding_allocation_msat");
+	json_add_u64(response, node_id_to_hexstr(tmpctx, &p->id),
+		     peer_msats.millisatoshis); /* Raw: JSON field */
+	json_add_u64(response, node_id_to_hexstr(tmpctx, &ld->id),
+		     our_msats.millisatoshis); /* Raw: JSON field */
 	json_object_end(response);
 
 	json_object_start(response, "funding_msat");
-	if (channel->opener == LOCAL) {
-		json_add_sat_only(response,
-				  node_id_to_hexstr(tmpctx, &p->id),
-				  AMOUNT_SAT(0));
-		json_add_sat_only(response,
-				  node_id_to_hexstr(tmpctx, &ld->id),
-				  channel->funding);
-	} else {
-		json_add_sat_only(response,
-				  node_id_to_hexstr(tmpctx, &ld->id),
-				  AMOUNT_SAT(0));
-		json_add_sat_only(response,
-				  node_id_to_hexstr(tmpctx, &p->id),
-				  channel->funding);
-	}
+	json_add_sat_only(response,
+			  node_id_to_hexstr(tmpctx, &p->id),
+			  peer_funded_sats);
+	json_add_sat_only(response,
+			  node_id_to_hexstr(tmpctx, &ld->id),
+			  channel->our_funds);
 	json_object_end(response);
 
 	if (!amount_sat_to_msat(&funding_msat, channel->funding)) {
@@ -843,6 +927,23 @@ static void json_add_channel(struct lightningd *ld,
 		     channel->channel_info.their_config.to_self_delay);
 	json_add_num(response, "max_accepted_htlcs",
 		     channel->our_config.max_accepted_htlcs);
+
+	state_changes = wallet_state_change_get(ld->wallet, response, channel->dbid);
+	json_array_start(response, "state_changes");
+	for (size_t i = 0; i < tal_count(state_changes); i++) {
+		json_object_start(response, NULL);
+		json_add_timeiso(response, "timestamp",
+				 &state_changes[i].timestamp);
+		json_add_string(response, "old_state",
+				channel_state_str(state_changes[i].old_state));
+		json_add_string(response, "new_state",
+				channel_state_str(state_changes[i].new_state));
+		json_add_string(response, "cause",
+				channel_change_state_reason_str(state_changes[i].cause));
+		json_add_string(response, "message", state_changes[i].message);
+		json_object_end(response);
+	}
+	json_array_end(response);
 
 	json_array_start(response, "status");
 	for (size_t i = 0; i < ARRAY_SIZE(channel->billboard.permanent); i++) {
@@ -951,6 +1052,7 @@ peer_connected_hook_cb(struct peer_connected_hook_payload *payload STEALS,
 #if DEVELOPER
 		if (dev_disconnect_permanent(ld)) {
 			channel_fail_permanent(channel,
+					       REASON_LOCAL,
 					       "dev_disconnect permfail");
 			error = channel->error;
 			goto send_error;
@@ -982,7 +1084,8 @@ peer_connected_hook_cb(struct peer_connected_hook_payload *payload STEALS,
 			assert(!channel->owner);
 
 			channel->peer->addr = addr;
-			peer_start_channeld(channel, payload->pps, NULL, NULL,
+			peer_start_channeld(channel, payload->pps,
+					    NULL, channel->psbt,
 					    true);
 			tal_free(payload);
 			return;
@@ -1127,7 +1230,9 @@ static enum watch_result funding_depth_cb(struct lightningd *ld,
 		if (!mk_short_channel_id(&scid,
 					 loc->blkheight, loc->index,
 					 channel->funding_outnum)) {
-			channel_fail_permanent(channel, "Invalid funding scid %u:%u:%u",
+			channel_fail_permanent(channel,
+					       REASON_LOCAL,
+					       "Invalid funding scid %u:%u:%u",
 					       loc->blkheight, loc->index,
 					       channel->funding_outnum);
 			return DELETE_WATCH;
@@ -1320,9 +1425,7 @@ static struct command_result *json_close(struct command *cmd,
 	const jsmntok_t *idtok;
 	struct peer *peer;
 	struct channel *channel COMPILER_WANTS_INIT("gcc 7.3.0 fails, 8.3 OK");
-	unsigned int *timeout = NULL;
-	bool force = true;
-	bool do_timeout;
+	unsigned int *timeout;
 	const u8 *close_to_script = NULL;
 	bool close_script_set;
 	const char *fee_negotiation_step_str;
@@ -1337,8 +1440,6 @@ static struct command_result *json_close(struct command *cmd,
 			 &fee_negotiation_step_str),
 		   NULL))
 		return command_param_failed();
-
-	do_timeout = (*timeout != 0);
 
 	peer = peer_from_json(cmd->ld, buffer, idtok);
 	if (peer)
@@ -1450,7 +1551,9 @@ static struct command_result *json_close(struct command *cmd,
 		case CHANNELD_NORMAL:
 		case CHANNELD_AWAITING_LOCKIN:
 			channel_set_state(channel,
-					  channel->state, CHANNELD_SHUTTING_DOWN);
+					  channel->state, CHANNELD_SHUTTING_DOWN,
+					  REASON_USER,
+					  "User or plugin invoked close command");
 			/* fallthrough */
 		case CHANNELD_SHUTTING_DOWN:
 			if (channel->owner)
@@ -1466,8 +1569,7 @@ static struct command_result *json_close(struct command *cmd,
 	}
 
 	/* Register this command for later handling. */
-	register_close_command(cmd->ld, cmd, channel,
-			       do_timeout ? timeout : NULL, force);
+	register_close_command(cmd->ld, cmd, channel, *timeout);
 
 	/* If we set `channel->shutdown_scriptpubkey[LOCAL]`, save it. */
 	if (close_script_set)
@@ -2037,7 +2139,9 @@ static struct command_result *json_dev_fail(struct command *cmd,
 				    "Could not find active channel with peer");
 	}
 
-	channel_fail_permanent(channel, "Failing due to dev-fail command");
+	channel_fail_permanent(channel,
+			       REASON_USER,
+			       "Failing due to dev-fail command");
 	return command_success(cmd, json_stream_success(cmd));
 }
 

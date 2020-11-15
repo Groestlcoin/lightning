@@ -43,7 +43,7 @@ def test_stop_pending_fundchannel(node_factory, executor):
     os.kill(l2.daemon.proc.pid, signal.SIGSTOP)
 
     # The fundchannel call will not terminate so run it in a future
-    executor.submit(l1.fund_channel, l2, 10**6)
+    executor.submit(l1.fundchannel, l2, 10**6)
     l1.daemon.wait_for_log('peer_out WIRE_OPEN_CHANNEL')
 
     l1.rpc.stop()
@@ -277,7 +277,7 @@ def test_ping(node_factory):
         l1.daemon.wait_for_log(r'Got pong 1000 bytes \({}\.\.\.\)'
                                .format(l2.info['version']), timeout=1)
 
-    l1.fund_channel(l2, 10**5)
+    l1.fundchannel(l2, 10**5)
 
     # channeld pinging
     ping_tests(l1, l2)
@@ -296,7 +296,7 @@ def test_htlc_sig_persistence(node_factory, bitcoind, executor):
     l2 = node_factory.get_node(disconnect=['+WIRE_COMMITMENT_SIGNED'])
 
     l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
-    l1.fund_channel(l2, 10**6)
+    l1.fundchannel(l2, 10**6)
     f = executor.submit(l1.pay, l2, 31337000)
     l1.daemon.wait_for_log(r'HTLC out 0 RCVD_ADD_ACK_COMMIT->SENT_ADD_ACK_REVOCATION')
     l1.stop()
@@ -347,7 +347,7 @@ def test_htlc_out_timeout(node_factory, bitcoind, executor):
     l2 = node_factory.get_node()
 
     l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
-    chanid = l1.fund_channel(l2, 10**6)
+    chanid, _ = l1.fundchannel(l2, 10**6)
 
     # Wait for route propagation.
     l1.wait_channel_active(chanid)
@@ -414,7 +414,7 @@ def test_htlc_in_timeout(node_factory, bitcoind, executor):
     l2 = node_factory.get_node()
 
     l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
-    chanid = l1.fund_channel(l2, 10**6)
+    chanid, _ = l1.fundchannel(l2, 10**6)
 
     l1.wait_channel_active(chanid)
     sync_blockheight(bitcoind, [l1, l2])
@@ -660,46 +660,46 @@ def test_withdraw_misc(node_factory, bitcoind, chainparams):
         {'type': 'chain_mvt', 'credit': 0, 'debit': 0, 'tag': 'spend_track'},
         [
             {'type': 'chain_mvt', 'credit': 0, 'debit': 2000000000, 'tag': 'withdrawal'},
-            {'type': 'chain_mvt', 'credit': 0, 'debit': 1993745000, 'tag': 'withdrawal'},
+            {'type': 'chain_mvt', 'credit': 0, 'debit': 1993760000, 'tag': 'withdrawal'},
         ],
-        {'type': 'chain_mvt', 'credit': 0, 'debit': 6255000, 'tag': 'chain_fees'},
-        {'type': 'chain_mvt', 'credit': 1993745000, 'debit': 0, 'tag': 'deposit'},
+        {'type': 'chain_mvt', 'credit': 0, 'debit': 6240000, 'tag': 'chain_fees'},
+        {'type': 'chain_mvt', 'credit': 1993760000, 'debit': 0, 'tag': 'deposit'},
         {'type': 'chain_mvt', 'credit': 0, 'debit': 0, 'tag': 'spend_track'},
         {'type': 'chain_mvt', 'credit': 0, 'debit': 0, 'tag': 'spend_track'},
         [
             {'type': 'chain_mvt', 'credit': 0, 'debit': 2000000000, 'tag': 'withdrawal'},
-            {'type': 'chain_mvt', 'credit': 0, 'debit': 1993745000, 'tag': 'withdrawal'},
+            {'type': 'chain_mvt', 'credit': 0, 'debit': 1993760000, 'tag': 'withdrawal'},
         ],
-        {'type': 'chain_mvt', 'credit': 0, 'debit': 6255000, 'tag': 'chain_fees'},
-        {'type': 'chain_mvt', 'credit': 1993745000, 'debit': 0, 'tag': 'deposit'},
+        {'type': 'chain_mvt', 'credit': 0, 'debit': 6240000, 'tag': 'chain_fees'},
+        {'type': 'chain_mvt', 'credit': 1993760000, 'debit': 0, 'tag': 'deposit'},
         {'type': 'chain_mvt', 'credit': 0, 'debit': 0, 'tag': 'spend_track'},
         {'type': 'chain_mvt', 'credit': 0, 'debit': 0, 'tag': 'spend_track'},
         [
             {'type': 'chain_mvt', 'credit': 0, 'debit': 2000000000, 'tag': 'withdrawal'},
-            {'type': 'chain_mvt', 'credit': 0, 'debit': 1993745000, 'tag': 'withdrawal'},
+            {'type': 'chain_mvt', 'credit': 0, 'debit': 1993760000, 'tag': 'withdrawal'},
         ],
-        {'type': 'chain_mvt', 'credit': 0, 'debit': 6255000, 'tag': 'chain_fees'},
-        {'type': 'chain_mvt', 'credit': 1993745000, 'debit': 0, 'tag': 'deposit'},
+        {'type': 'chain_mvt', 'credit': 0, 'debit': 6240000, 'tag': 'chain_fees'},
+        {'type': 'chain_mvt', 'credit': 1993760000, 'debit': 0, 'tag': 'deposit'},
         {'type': 'chain_mvt', 'credit': 0, 'debit': 0, 'tag': 'spend_track'},
         {'type': 'chain_mvt', 'credit': 0, 'debit': 0, 'tag': 'spend_track'},
         [
-            {'type': 'chain_mvt', 'credit': 0, 'debit': 1993385000, 'tag': 'withdrawal'},
+            {'type': 'chain_mvt', 'credit': 0, 'debit': 1993400000, 'tag': 'withdrawal'},
             {'type': 'chain_mvt', 'credit': 0, 'debit': 2000000000, 'tag': 'withdrawal'},
         ],
-        {'type': 'chain_mvt', 'credit': 0, 'debit': 6615000, 'tag': 'chain_fees'},
-        {'type': 'chain_mvt', 'credit': 1993385000, 'debit': 0, 'tag': 'deposit'},
+        {'type': 'chain_mvt', 'credit': 0, 'debit': 6600000, 'tag': 'chain_fees'},
+        {'type': 'chain_mvt', 'credit': 1993400000, 'debit': 0, 'tag': 'deposit'},
         {'type': 'chain_mvt', 'credit': 0, 'debit': 0, 'tag': 'spend_track'},
         {'type': 'chain_mvt', 'credit': 0, 'debit': 0, 'tag': 'spend_track'},
         {'type': 'chain_mvt', 'credit': 0, 'debit': 0, 'tag': 'spend_track'},
         {'type': 'chain_mvt', 'credit': 0, 'debit': 0, 'tag': 'spend_track'},
         {'type': 'chain_mvt', 'credit': 0, 'debit': 0, 'tag': 'spend_track'},
         {'type': 'chain_mvt', 'credit': 0, 'debit': 0, 'tag': 'spend_track'},
-        {'type': 'chain_mvt', 'credit': 0, 'debit': 11961135000, 'tag': 'withdrawal'},
-        {'type': 'chain_mvt', 'credit': 0, 'debit': 13485000, 'tag': 'chain_fees'},
-        {'type': 'chain_mvt', 'credit': 11961135000, 'debit': 0, 'tag': 'deposit'},
+        {'type': 'chain_mvt', 'credit': 0, 'debit': 11961240000, 'tag': 'withdrawal'},
+        {'type': 'chain_mvt', 'credit': 0, 'debit': 13440000, 'tag': 'chain_fees'},
+        {'type': 'chain_mvt', 'credit': 11961240000, 'debit': 0, 'tag': 'deposit'},
         {'type': 'chain_mvt', 'credit': 0, 'debit': 0, 'tag': 'spend_track'},
-        {'type': 'chain_mvt', 'credit': 0, 'debit': 11957490000, 'tag': 'withdrawal'},
-        {'type': 'chain_mvt', 'credit': 0, 'debit': 3645000, 'tag': 'chain_fees'},
+        {'type': 'chain_mvt', 'credit': 0, 'debit': 11957603000, 'tag': 'withdrawal'},
+        {'type': 'chain_mvt', 'credit': 0, 'debit': 3637000, 'tag': 'chain_fees'},
     ]
     check_coin_moves(l1, 'wallet', wallet_moves, chainparams)
 
@@ -1484,15 +1484,16 @@ def test_feerates(node_factory):
     assert feerates['perkw']['max_acceptable'] == 15000 * 10
     assert feerates['perkw']['min_acceptable'] == 253
 
-    # Set ECONOMICAL/4 feerate, for all but min
+    # Set ECONOMICAL/4 feerate, for all but min (so, no mutual_close feerate)
     l1.set_feerates((15000, 11000, 6250, 0), True)
-    wait_for(lambda: len(l1.rpc.feerates('perkb')['perkb']) == len(types) + 2)
+    wait_for(lambda: len(l1.rpc.feerates('perkb')['perkb']) == len(types) - 1 + 2)
     feerates = l1.rpc.feerates('perkb')
     assert feerates['perkb']['unilateral_close'] == 15000 * 4
     assert feerates['perkb']['htlc_resolution'] == 11000 * 4
     assert feerates['perkb']['penalty'] == 11000 * 4
+    assert 'mutual_close' not in feerates['perkb']
     for t in types:
-        if t not in ("unilateral_close", "htlc_resolution", "penalty"):
+        if t not in ("unilateral_close", "htlc_resolution", "penalty", "mutual_close"):
             assert feerates['perkb'][t] == 25000
     assert feerates['warning_missing_feerates'] == 'Some fee estimates unavailable: groestlcoind startup?'
     assert 'perkw' not in feerates
@@ -1506,8 +1507,9 @@ def test_feerates(node_factory):
     assert feerates['perkw']['unilateral_close'] == 15000
     assert feerates['perkw']['htlc_resolution'] == 11000
     assert feerates['perkw']['penalty'] == 11000
+    assert feerates['perkw']['mutual_close'] == 5000
     for t in types:
-        if t not in ("unilateral_close", "htlc_resolution", "penalty"):
+        if t not in ("unilateral_close", "htlc_resolution", "penalty", "mutual_close"):
             assert feerates['perkw'][t] == 25000 // 4
     assert 'warning' not in feerates
     assert 'perkb' not in feerates

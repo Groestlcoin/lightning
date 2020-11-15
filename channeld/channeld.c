@@ -15,6 +15,7 @@
 #include <bitcoin/psbt.h>
 #include <bitcoin/script.h>
 #include <ccan/array_size/array_size.h>
+#include <ccan/asort/asort.h>
 #include <ccan/cast/cast.h>
 #include <ccan/container_of/container_of.h>
 #include <ccan/crypto/hkdf_sha256/hkdf_sha256.h>
@@ -46,6 +47,9 @@
 #include <common/peer_billboard.h>
 #include <common/peer_failed.h>
 #include <common/ping.h>
+#include <common/private_channel_announcement.h>
+#include <common/psbt_internal.h>
+#include <common/psbt_open.h>
 #include <common/read_peer_msg.h>
 #include <common/sphinx.h>
 #include <common/status.h>
@@ -56,6 +60,7 @@
 #include <common/wire_error.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <gossipd/gossip_store_wiregen.h>
 #include <gossipd/gossipd_peerd_wiregen.h>
 #include <hsmd/hsmd_wiregen.h>
 #include <inttypes.h>
@@ -179,6 +184,10 @@ struct peer {
 
 	/* Penalty bases for this channel / peer. */
 	struct penalty_base **pbases;
+
+	/* PSBT. For v2 openchannel set until we are waiting
+	 * for peer's tx_sigs */
+	struct wally_psbt *psbt;
 };
 
 static u8 *create_channel_announcement(const tal_t *ctx, struct peer *peer);
@@ -249,6 +258,34 @@ static const u8 *hsm_req(const tal_t *ctx, const u8 *req TAKES)
 
 	return msg;
 }
+
+static enum tx_role their_tx_role(const struct peer *peer)
+{
+	return peer->channel->opener == LOCAL ?
+		TX_ACCEPTER : TX_INITIATOR;
+}
+
+#if EXPERIMENTAL_FEATURES
+static enum tx_role our_tx_role(const struct peer *peer)
+{
+	return peer->channel->opener == LOCAL ?
+		TX_INITIATOR : TX_ACCEPTER;
+}
+
+static const u8 *psbt_to_tx_sigs_msg(const tal_t *ctx,
+				     const struct peer *peer,
+				     const struct wally_psbt *psbt)
+{
+	const struct witness_stack **ws;
+
+	ws = psbt_to_witness_stacks(tmpctx, psbt,
+				    our_tx_role(peer));
+
+	return towire_tx_signatures(ctx, &peer->channel->cid,
+				   &peer->channel->funding_txid,
+				   ws);
+}
+#endif /* EXPERIMENTAL_FEATURES */
 
 /*
  * The maximum msat that this node will accept for an htlc.
@@ -358,16 +395,20 @@ static const u8 *get_local_channel_update(const tal_t *ctx, struct peer *peer)
 static void make_channel_local_active(struct peer *peer)
 {
 	u8 *msg;
+	const u8 *ann;
 	const u8 *annfeatures = get_agreed_channelfeatures(tmpctx,
 							   peer->our_features,
 							   peer->their_features);
 
+	ann = private_channel_announcement(tmpctx,
+					   &peer->short_channel_ids[LOCAL],
+					   &peer->node_ids[LOCAL],
+					   &peer->node_ids[REMOTE],
+					   annfeatures);
+
 	/* Tell gossipd about local channel. */
-	msg = towire_gossipd_local_add_channel(NULL,
-					       &peer->short_channel_ids[LOCAL],
-					       &peer->node_ids[REMOTE],
-					       peer->channel->funding,
-					       annfeatures);
+	msg = towire_gossip_store_private_channel(NULL,
+						  peer->channel->funding, ann);
  	wire_sync_write(peer->pps->gossip_fd, take(msg));
 
 	/* Tell gossipd and the other side what parameters we expect should
@@ -570,6 +611,13 @@ static void handle_peer_funding_locked(struct peer *peer, const u8 *msg)
 	if (peer->shutdown_sent[LOCAL])
 		return;
 
+	if (peer->psbt && !psbt_side_finalized(peer->psbt,
+					       their_tx_role(peer)))
+		peer_failed(peer->pps,
+			    &peer->channel_id,
+			    "Rcvd `funding_locked` from peer but "
+			    "have not received `tx_signatures`");
+
 	peer->old_remote_per_commit = peer->remote_per_commit;
 	if (!fromwire_funding_locked(msg, &chanid,
 				     &peer->remote_per_commit))
@@ -586,6 +634,7 @@ static void handle_peer_funding_locked(struct peer *peer, const u8 *msg)
 					   &peer->channel_id));
 
 	peer->funding_locked[REMOTE] = true;
+	peer->psbt = tal_free(peer->psbt);
 	wire_sync_write(MASTER_FD,
 			take(towire_channeld_got_funding_locked(NULL,
 						&peer->remote_per_commit)));
@@ -1973,6 +2022,124 @@ static void send_onionmsg(struct peer *peer, const u8 *msg)
 						    onion_routing_packet,
 						    tlvs)));
 }
+
+static void handle_send_tx_sigs(struct peer *peer, const u8 *msg)
+{
+	struct wally_psbt *psbt;
+	struct bitcoin_txid txid;
+
+	if (!fromwire_channeld_send_tx_sigs(tmpctx, msg, &psbt))
+		master_badmsg(WIRE_CHANNELD_SEND_TX_SIGS, msg);
+
+	/* Check that we've got the same / correct PSBT */
+	psbt_txid(NULL, psbt, &txid, NULL);
+	if (!bitcoin_txid_eq(&txid, &peer->channel->funding_txid))
+		status_failed(STATUS_FAIL_INTERNAL_ERROR,
+			      "Txid for passed in PSBT does not match"
+			      " funding txid for channel. Expected %s, "
+			      "received %s",
+			      type_to_string(tmpctx, struct bitcoin_txid,
+					     &peer->channel->funding_txid),
+			      type_to_string(tmpctx, struct bitcoin_txid,
+					     &txid));
+
+	tal_wally_start();
+	if (wally_psbt_combine(peer->psbt, psbt) != WALLY_OK) {
+		tal_wally_end(tal_free(peer->psbt));
+		status_failed(STATUS_FAIL_INTERNAL_ERROR,
+			      "Unable to combine PSBTs");
+	}
+	tal_wally_end(tal_steal(peer, peer->psbt));
+#if EXPERIMENTAL_FEATURES
+	sync_crypto_write(peer->pps,
+		take(psbt_to_tx_sigs_msg(NULL, peer, psbt)));
+#endif /* EXPERIMENTAL_FEATURES */
+}
+
+static void handle_tx_sigs(struct peer *peer, const u8 *msg)
+{
+	struct channel_id cid;
+	struct bitcoin_txid txid;
+	const struct witness_stack **ws;
+
+	size_t j = 0;
+	enum tx_role their_role = their_tx_role(peer);
+
+	if (!fromwire_tx_signatures(tmpctx, msg, &cid, &txid,
+				    cast_const3(
+					 struct witness_stack ***,
+					 &ws)))
+		peer_failed(peer->pps,
+			    &peer->channel_id,
+			    "Bad tx_signatures %s",
+			    tal_hex(msg, msg));
+
+	/* Maybe they didn't get our funding_locked message ? */
+	if (peer->funding_locked[LOCAL]) {
+		status_broken("Got WIRE_TX_SIGNATURES after funding locked "
+			       "for channel %s, ignoring: %s",
+			       type_to_string(tmpctx, struct channel_id,
+					      &peer->channel_id),
+			       tal_hex(tmpctx, msg));
+		return;
+	}
+
+	if (peer->funding_locked[REMOTE])
+		peer_failed(peer->pps,
+			    &peer->channel_id,
+			    "tx_signatures sent after funding_locked %s",
+			    tal_hex(msg, msg));
+
+	if (!peer->psbt) {
+		status_broken("Got WIRE_TX_SIGNATURES with no PSBT "
+			       "for channel %s, ignoring: %s",
+			       type_to_string(tmpctx, struct channel_id,
+					      &peer->channel_id),
+			       tal_hex(tmpctx, msg));
+		return;
+	}
+
+	/* This check only works if they've got inputs we need sigs for.
+	 * In the case where they send duplicate tx_sigs but have no
+	 * sigs, we'll end up re-notifying */
+	if (tal_count(ws) && psbt_side_finalized(peer->psbt, their_role)) {
+		status_info("Got duplicate WIRE_TX_SIGNATURES, "
+			    "already have their sigs. Ignoring");
+		return;
+	}
+
+	/* We put the PSBT + sigs all together */
+	for (size_t i = 0; i < peer->psbt->num_inputs; i++) {
+		struct wally_psbt_input *in =
+			&peer->psbt->inputs[i];
+		u64 in_serial;
+		const struct witness_element **elem;
+
+		if (!psbt_get_serial_id(&in->unknowns, &in_serial)) {
+			status_broken("PSBT input %zu missing serial_id %s",
+				      i, type_to_string(tmpctx,
+							struct wally_psbt,
+							peer->psbt));
+			return;
+		}
+		if (in_serial % 2 != their_role)
+			continue;
+
+		if (j == tal_count(ws))
+			peer_failed(peer->pps, &peer->channel_id,
+				    "Mismatch witness stack count %s",
+				    tal_hex(msg, msg));
+
+		elem = cast_const2(const struct witness_element **,
+				   ws[j++]->witness_element);
+		psbt_finalize_input(peer->psbt, in, elem);
+	}
+
+	/* Send to the peer controller, who will broadcast the funding_tx
+	 * as soon as we've got our sigs */
+	wire_sync_write(MASTER_FD,
+			take(towire_channeld_funding_sigs(NULL, peer->psbt)));
+}
 #endif /* EXPERIMENTAL_FEATURES */
 
 static void handle_unexpected_reestablish(struct peer *peer, const u8 *msg)
@@ -2059,6 +2226,10 @@ static void peer_in(struct peer *peer, const u8 *msg)
 		if (type != WIRE_FUNDING_LOCKED
 		    && type != WIRE_PONG
 		    && type != WIRE_SHUTDOWN
+#if EXPERIMENTAL_FEATURES
+		    /* We expect these for v2 !! */
+		    && type != WIRE_TX_SIGNATURES
+#endif /* EXPERIMENTAL_FEATURES */
 		    /* lnd sends these early; it's harmless. */
 		    && type != WIRE_UPDATE_FEE
 		    && type != WIRE_ANNOUNCEMENT_SIGNATURES) {
@@ -2105,7 +2276,7 @@ static void peer_in(struct peer *peer, const u8 *msg)
 		handle_onion_message(peer, msg);
 		return;
 	case WIRE_TX_SIGNATURES:
-		/* FIXME: verify sigs + weights, broadcast funding tx */
+		handle_tx_sigs(peer, msg);
 		return;
 	case WIRE_INIT_RBF:
 	/* FIXME: handle this here */
@@ -2190,7 +2361,20 @@ static void send_fail_or_fulfill(struct peer *peer, const struct htlc *h)
 	sync_crypto_write(peer->pps, take(msg));
 }
 
-static void resend_commitment(struct peer *peer, const struct changed_htlc *last)
+static int cmp_changed_htlc_id(const struct changed_htlc *a,
+			       const struct changed_htlc *b,
+			       void *unused)
+{
+	/* ids can be the same (sender and receiver are indep) but in
+	 * that case we don't care about order. */
+	if (a->id > b->id)
+		return 1;
+	else if (a->id < b->id)
+		return -1;
+	return 0;
+}
+
+static void resend_commitment(struct peer *peer, struct changed_htlc *last)
 {
 	size_t i;
 	struct bitcoin_signature commit_sig, *htlc_sigs;
@@ -2203,6 +2387,12 @@ static void resend_commitment(struct peer *peer, const struct changed_htlc *last
 	status_debug("Retransmitting commitment, feerate LOCAL=%u REMOTE=%u",
 		     channel_feerate(peer->channel, LOCAL),
 		     channel_feerate(peer->channel, REMOTE));
+
+	/* Note that HTLCs must be *added* in order.  Simplest thing to do
+	 * is to sort them all into ascending ID order here (we could do
+	 * this when we save them in channel_sending_commit, but older versions
+	 * won't have them sorted in the db, so doing it here is better). */
+	asort(last, tal_count(last), cmp_changed_htlc_id, NULL);
 
 	/* BOLT #2:
 	 *
@@ -2607,6 +2797,15 @@ static void peer_reconnect(struct peer *peer,
 		     next_commitment_number,
 		     next_revocation_number);
 
+#if EXPERIMENTAL_FEATURES
+	/* Send our tx_sigs again */
+	if (peer->psbt && psbt_side_finalized(peer->psbt,
+					      our_tx_role(peer))
+		&& !peer->funding_locked[REMOTE])
+		sync_crypto_write(peer->pps,
+			take(psbt_to_tx_sigs_msg(NULL, peer, peer->psbt)));
+#endif /* EXPERIMENTAL_FEATURES */
+
 	/* BOLT #2:
 	 *
 	 *   - if `next_commitment_number` is 1 in both the
@@ -2806,13 +3005,24 @@ static void handle_funding_depth(struct peer *peer, const u8 *msg)
 		peer->depth_togo = peer->channel->minimum_depth - depth;
 
 	} else {
+		/* We were waiting for them to send us their
+		 * `tx_signatures`, but they never did. As a
+		 * result we'll still have the psbt */
+		if (peer->psbt && !psbt_side_finalized(peer->psbt,
+						       their_tx_role(peer))) {
+			peer_failed(peer->pps, &peer->channel_id,
+				    "Funding tx reached funding depth %d "
+				    "but we haven't received peer's "
+				    "tx_signatures",
+				    depth);
+		}
+
 		peer->depth_togo = 0;
 
 		assert(scid);
 		peer->short_channel_ids[LOCAL] = *scid;
 
 		if (!peer->funding_locked[LOCAL]) {
-
 			status_debug("funding_locked: sending commit index %"PRIu64": %s",
 						peer->next_index[LOCAL],
 						type_to_string(tmpctx, struct pubkey,
@@ -3088,10 +3298,10 @@ static void handle_dev_memleak(struct peer *peer, const u8 *msg)
 	struct htable *memtable;
 	bool found_leak;
 
-	memtable = memleak_enter_allocations(tmpctx, msg, msg);
+	memtable = memleak_find_allocations(tmpctx, msg, msg);
 
 	/* Now delete peer and things it has pointers to. */
-	memleak_remove_referenced(memtable, peer);
+	memleak_remove_region(memtable, peer, tal_bytelen(peer));
 
 	found_leak = dump_memleak(memtable);
 	wire_sync_write(MASTER_FD,
@@ -3138,6 +3348,14 @@ static void req_in(struct peer *peer, const u8 *msg)
 		handle_send_error(peer, msg);
 		return;
 #if EXPERIMENTAL_FEATURES
+	case WIRE_CHANNELD_SEND_TX_SIGS:
+		handle_send_tx_sigs(peer, msg);
+		return;
+#else
+	case WIRE_CHANNELD_SEND_TX_SIGS:
+		break;
+#endif /* !EXPERIMENTAL_FEATURES */
+#if EXPERIMENTAL_FEATURES
 	case WIRE_SEND_ONIONMSG:
 		send_onionmsg(peer, msg);
 		return;
@@ -3157,6 +3375,7 @@ static void req_in(struct peer *peer, const u8 *msg)
 	case WIRE_CHANNELD_DEV_MEMLEAK:
 #endif /* DEVELOPER */
 	case WIRE_CHANNELD_INIT:
+	case WIRE_CHANNELD_FUNDING_SIGS:
 	case WIRE_CHANNELD_OFFER_HTLC_REPLY:
 	case WIRE_CHANNELD_SENDING_COMMITSIG:
 	case WIRE_CHANNELD_GOT_COMMITSIG:
@@ -3207,7 +3426,7 @@ static void init_channel(struct peer *peer)
 	enum side opener;
 	struct existing_htlc **htlcs;
 	bool reconnected;
-	u8 *fwd_msg_1, *fwd_msg_2;
+	u8 *fwd_msg;
 	const u8 *msg;
 	struct fee_states *fee_states;
 	u32 minimum_depth;
@@ -3268,8 +3487,7 @@ static void init_channel(struct peer *peer)
 				   &peer->shutdown_sent[REMOTE],
 				   &peer->final_scriptpubkey,
 				   &peer->channel_flags,
-				   &fwd_msg_1,
-				   &fwd_msg_2,
+				   &fwd_msg,
 				   &peer->announce_depth_reached,
 				   &last_remote_per_commit_secret,
 				   &peer->their_features,
@@ -3280,7 +3498,8 @@ static void init_channel(struct peer *peer)
 				   &option_anchor_outputs,
 				   &dev_fast_gossip,
 				   &dev_fail_process_onionpacket,
-				   &pbases)) {
+				   &pbases,
+				   &peer->psbt)) {
 		master_badmsg(WIRE_CHANNELD_INIT, msg);
 	}
 
@@ -3291,6 +3510,11 @@ static void init_channel(struct peer *peer)
 		tal_arr_expand(&peer->pbases,
 			       tal_dup(peer, struct penalty_base, &pbases[i]));
 	tal_free(pbases);
+
+	/* Once the peer has sent locked, we no longer need to re-send
+	 * tx_signatures, hence the PSBT can be free'd */
+	if (peer->funding_locked[REMOTE])
+		peer->psbt = tal_free(peer->psbt);
 
 	/* stdin == requests, 3 == peer, 4 = gossip, 5 = gossip_store, 6 = HSM */
 	per_peer_state_set_fds(peer->pps, 3, 4, 5);
@@ -3372,10 +3596,16 @@ static void init_channel(struct peer *peer)
 		peer_reconnect(peer, &last_remote_per_commit_secret);
 
 	/* If we have a messages to send, send them immediately */
-	if (fwd_msg_1)
-		sync_crypto_write(peer->pps, take(fwd_msg_1));
-	if (fwd_msg_2)
-		sync_crypto_write(peer->pps, take(fwd_msg_2));
+	if (fwd_msg)
+		sync_crypto_write(peer->pps, take(fwd_msg));
+
+#if EXPERIMENTAL_FEATURES
+	/* peer_reconnect does this if needed */
+	if (!reconnected && peer->psbt &&
+			psbt_side_finalized(peer->psbt, our_tx_role(peer)))
+		sync_crypto_write(peer->pps,
+			take(psbt_to_tx_sigs_msg(NULL, peer, peer->psbt)));
+#endif /* EXPERIMENTAL_FEATURES */
 
 	/* Reenable channel */
 	channel_announcement_negotiate(peer);

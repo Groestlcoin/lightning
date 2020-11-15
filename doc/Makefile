@@ -40,6 +40,10 @@ MANPAGES := doc/lightning-cli.1 \
 	doc/lightning-multifundchannel.7 \
 	doc/lightning-multiwithdraw.7 \
 	doc/lightning-newaddr.7 \
+	doc/lightning-notifications.7 \
+	doc/lightning-openchannel_init.7 \
+	doc/lightning-openchannel_signed.7 \
+	doc/lightning-openchannel_update.7 \
 	doc/lightning-pay.7 \
 	doc/lightning-plugin.7 \
 	doc/lightning-reserveinputs.7 \
@@ -66,7 +70,7 @@ MANPAGES := doc/lightning-cli.1 \
 	doc/lightning-listnodes.7 \
 	doc/lightning-listconfigs.7 \
 	doc/lightning-help.7 \
-	doc/lightning-getlog.7 
+	doc/lightning-getlog.7
 
 doc-all: $(MANPAGES) doc/index.rst
 

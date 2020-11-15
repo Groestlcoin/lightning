@@ -151,10 +151,12 @@ static struct command_result *json_unreserveinputs(struct command *cmd,
 		wally_tx_input_get_txid(&psbt->tx->inputs[i], &txid);
 		utxo_tx = wallet_transaction_get(psbt, cmd->ld->wallet,
 						 &txid);
-		if (utxo_tx)
+		if (utxo_tx) {
+			tal_wally_start();
 			wally_psbt_input_set_utxo(&psbt->inputs[i],
 						  utxo_tx->wtx);
-		else
+			tal_wally_end(psbt);
+		} else
 			log_broken(cmd->ld->log,
 				   "No transaction found for UTXO %s",
 				   type_to_string(tmpctx, struct bitcoin_txid,
@@ -232,6 +234,7 @@ static bool inputs_sufficient(struct amount_sat input,
 }
 
 static struct wally_psbt *psbt_using_utxos(const tal_t *ctx,
+					   struct wallet *wallet,
 					   struct utxo **utxos,
 					   const struct ext_key *bip32_base,
 					   u32 nlocktime,
@@ -245,6 +248,7 @@ static struct wally_psbt *psbt_using_utxos(const tal_t *ctx,
 
 	for (size_t i = 0; i < tal_count(utxos); i++) {
 		u32 this_nsequence;
+		struct bitcoin_tx *tx;
 
 		if (utxos[i]->is_p2sh) {
 			bip32_pubkey(bip32_base, &key, utxos[i]->keyindex);
@@ -290,6 +294,20 @@ static struct wally_psbt *psbt_using_utxos(const tal_t *ctx,
 						      psbt->num_inputs - 1,
 						      &asset);
 		}
+
+		/* FIXME: as of 17 sept 2020, elementsd is *at most* at par
+		 * with v0.18.0 of bitcoind, which doesn't support setting
+		 * non-witness and witness utxo data for an input; remove this
+		 * check once elementsd can be updated */
+		if (!is_elements(chainparams)) {
+			/* If we have the transaction for this utxo,
+			 * add it to the PSBT as the non-witness-utxo field.
+			 * Dual-funded channels and some hardware wallets
+			 * require this */
+			tx = wallet_transaction_get(ctx, wallet, &utxos[i]->txid);
+			if (tx)
+				psbt_input_set_utxo(psbt, i, tx->wtx);
+		}
 	}
 
 	return psbt;
@@ -325,7 +343,8 @@ static struct command_result *finish_psbt(struct command *cmd,
 			*locktime -= pseudorand(100);
 	}
 
-	psbt = psbt_using_utxos(cmd, utxos, cmd->ld->wallet->bip32_base,
+	psbt = psbt_using_utxos(cmd, cmd->ld->wallet, utxos,
+				cmd->ld->wallet->bip32_base,
 				*locktime, BITCOIN_TX_RBF_SEQUENCE);
 
 	/* Add a fee output if this is elements */

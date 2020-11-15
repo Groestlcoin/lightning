@@ -1,27 +1,34 @@
 #include <bitcoin/privkey.h>
+#include <ccan/array_size/array_size.h>
 #include <ccan/crypto/hkdf_sha256/hkdf_sha256.h>
 #include <ccan/err/err.h>
 #include <ccan/noerr/noerr.h>
 #include <ccan/read_write_all/read_write_all.h>
-#include <ccan/tal/path/path.h>
 #include <ccan/str/str.h>
+#include <ccan/tal/path/path.h>
+#include <ccan/tal/str/str.h>
 #include <common/bech32.h>
 #include <common/derive_basepoints.h>
+#include <common/descriptor_checksum.h>
 #include <common/node_id.h>
 #include <common/type_to_string.h>
 #include <common/utils.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <inttypes.h>
+#include <limits.h>
 #include <sodium.h>
 #include <sys/stat.h>
+#include <termios.h>
 #include <unistd.h>
+#include <wally_bip39.h>
 
 #define ERROR_HSM_FILE errno
 #define ERROR_USAGE 2
 #define ERROR_LIBSODIUM 3
 #define ERROR_LIBWALLY 4
 #define ERROR_KEYDERIV 5
+#define ERROR_LANG_NOT_SUPPORTED 6
 
 static void show_usage(const char *progname)
 {
@@ -33,6 +40,9 @@ static void show_usage(const char *progname)
 	       "<path/to/hsm_secret> [hsm_secret password]\n");
 	printf("	- guesstoremote <P2WPKH address> <node id> <tries> "
 	       "<path/to/hsm_secret> [hsm_secret password]\n");
+	printf("	- generatehsm <path/to/new//hsm_secret>\n");
+	printf("	- dumponchaindescriptors <path/to/hsm_secret> [password] "
+		"[network]\n");
 	exit(0);
 }
 
@@ -368,6 +378,198 @@ static int guess_to_remote(const char *address, struct node_id *node_id,
 	return 1;
 }
 
+static void get_words(struct words **words) {
+	struct wordlist_lang {
+		char *abbr;
+		char *name;
+	};
+
+	struct wordlist_lang languages[] = {
+		{"en", "English"},
+		{"es", "Spanish"},
+		{"fr", "French"},
+		{"it", "Italian"},
+		{"jp", "Japanese"},
+		{"zhs", "Chinese Simplified"},
+		{"zht", "Chinese Traditional"},
+	};
+
+	printf("Select your language:\n");
+	for (size_t i = 0; i < ARRAY_SIZE(languages); i++) {
+		printf("  %zu) %s (%s)\n", i, languages[i].name, languages[i].abbr);
+	}
+	printf("Select [0-%zu]: ", ARRAY_SIZE(languages));
+
+	char *selected = NULL;
+	size_t size = 0;
+	size_t characters = getline(&selected, &size, stdin);
+	if (characters < 0)
+		errx(ERROR_USAGE, "Could not read line from stdin.");
+
+	/* To distinguish success/failure after call */
+	errno = 0;
+	char *endptr;
+	long val = strtol(selected, &endptr, 10);
+	if (errno == ERANGE || (errno != 0 && val == 0) || endptr == selected || val < 0 || val >= ARRAY_SIZE(languages))
+        errx(ERROR_USAGE, "Invalid language selection, select one from the list [0-6].");
+
+	bip39_get_wordlist(languages[val].abbr, words);
+}
+
+static void get_mnemonic(char *mnemonic) {
+	char *line = NULL;
+	size_t line_size = 0;
+
+	printf("Introduce your BIP39 word list separated by space:\n");
+	size_t characters = getline(&line, &line_size, stdin);
+	if (characters < 0)
+		errx(ERROR_USAGE, "Could not read line from stdin.");
+	line[characters-1] = '\0';
+	strcpy(mnemonic, line);
+	free(line);
+}
+
+static void read_mnemonic(char *mnemonic) {
+	/* Get words for the mnemonic language */
+	struct words *words;
+	get_words(&words);
+
+	/* Get mnemonic */
+	get_mnemonic(mnemonic);
+
+	if (bip39_mnemonic_validate(words, mnemonic) != 0) {
+		errx(ERROR_USAGE, "Invalid mnemonic: \"%s\"", mnemonic);
+	}
+}
+
+static void read_passphrase(char **passphrase) {
+	struct termios current_term, temp_term;
+	printf("Warning: remember that different passphrases yield different "
+	       "bitcoin wallets.\n");
+	printf("If left empty, no password is used (echo is "
+	       "disabled now).\n");
+	printf("Enter your passphrase: \n");
+
+	/* Change terminal options so we do not echo the passphrase */
+	if (tcgetattr(fileno(stdin), &current_term) != 0)
+		errx(ERROR_USAGE, "Could not get current terminal options.");
+	temp_term = current_term;
+	temp_term.c_lflag &= ~ECHO;
+	if (tcsetattr(fileno(stdin), TCSAFLUSH, &temp_term) != 0)
+		errx(ERROR_USAGE, "Could not disable passphrase echoing.");
+	/* If we don't flush we might end up being buffered and we might seem
+	 * to hang while we wait for the password. */
+	fflush(stdout);
+
+	size_t passphrase_size = 0;
+	size_t characters = getline(passphrase, &passphrase_size, stdin);
+	if (characters < 0)
+		errx(ERROR_USAGE, "Could not read passphrase from stdin.");
+
+	/* Newline is not part of the valid passphrase */
+	if ( (*passphrase)[characters-1] == '\n' ) {
+		(*passphrase)[characters-1] = '\0';
+	}
+
+	/* If the user did not introduce any password, we want to set passphrase
+	 * to NULL not to '\0' for libwally */
+	if (strlen(*passphrase) == 0) {
+		free(*passphrase);
+		*passphrase = NULL;
+	}
+
+	if (tcsetattr(fileno(stdin), TCSAFLUSH, &current_term) != 0)
+		errx(ERROR_USAGE, "Could not restore terminal options.");
+}
+
+static int generate_hsm(const char *hsm_secret_path)
+{
+	char mnemonic[BIP39_WORDLIST_LEN];
+	read_mnemonic(mnemonic);
+
+	char *passphrase = NULL;
+	read_passphrase(&passphrase);
+
+	u8 bip32_seed[BIP39_SEED_LEN_512];
+	size_t bip32_seed_len;
+
+	if (bip39_mnemonic_to_seed(mnemonic, passphrase, bip32_seed, sizeof(bip32_seed), &bip32_seed_len) != WALLY_OK)
+		errx(ERROR_LIBWALLY, "Unable to derive BIP32 seed from BIP39 mnemonic");
+
+	int fd = open(hsm_secret_path, O_CREAT|O_EXCL|O_WRONLY, 0400);
+	if (fd < 0) {
+		errx(ERROR_USAGE, "Unable to create hsm_secret file");
+	}
+	if (!write_all(fd, bip32_seed, bip32_seed_len))
+		errx(ERROR_USAGE, "Error writing secret to hsm_secret file");
+
+	if (fsync(fd) != 0)
+		errx(ERROR_USAGE, "Error fsyncing hsm_secret file");
+
+	/* This should never fail if fsync succeeded. But paranoia is good, and bugs exist */
+	if (close(fd) != 0)
+		errx(ERROR_USAGE, "Error closing hsm_secret file");
+
+	printf("New hsm_secret file created at %s\n", hsm_secret_path);
+	printf("Use the `encrypt` command to encrypt the BIP32 seed if needed\n");
+
+	free(passphrase);
+	return 0;
+}
+
+static int dumponchaindescriptors(const char *hsm_secret_path, const char *passwd,
+				  const bool is_testnet)
+{
+	struct secret hsm_secret;
+	u8 bip32_seed[BIP32_ENTROPY_LEN_256];
+	u32 salt = 0;
+	u32 version = is_testnet ?
+		BIP32_VER_TEST_PRIVATE : BIP32_VER_MAIN_PRIVATE;
+	struct ext_key master_extkey;
+	char *enc_xpub, *descriptor;
+	struct descriptor_checksum checksum;
+
+	if (passwd)
+		get_encrypted_hsm_secret(&hsm_secret, hsm_secret_path, passwd);
+	else
+		get_hsm_secret(&hsm_secret, hsm_secret_path);
+
+	/* We use m/0/0/k as the derivation tree for onchain funds. */
+
+	/* The root seed is derived from hsm_secret using hkdf.. */
+	do {
+		hkdf_sha256(bip32_seed, sizeof(bip32_seed),
+			    &salt, sizeof(salt),
+			    &hsm_secret, sizeof(hsm_secret),
+			    "bip32 seed", strlen("bip32 seed"));
+		salt++;
+		/* ..Which is used to derive m/ */
+	} while (bip32_key_from_seed(bip32_seed, sizeof(bip32_seed),
+				     version, 0, &master_extkey) != WALLY_OK);
+
+	if (bip32_key_to_base58(&master_extkey, BIP32_FLAG_KEY_PUBLIC, &enc_xpub) != WALLY_OK)
+		errx(ERROR_LIBWALLY, "Can't encode xpub");
+
+	/* Now we format the descriptor strings (we only ever create P2WPKH and
+	 * P2SH-P2WPKH outputs). */
+
+	descriptor = tal_fmt(NULL, "wpkh(%s/0/0/*)", enc_xpub);
+	if (!descriptor_checksum(descriptor, strlen(descriptor), &checksum))
+		errx(ERROR_LIBWALLY, "Can't derive descriptor checksum for wpkh");
+	printf("%s#%s\n", descriptor, checksum.csum);
+	tal_free(descriptor);
+
+	descriptor = tal_fmt(NULL, "sh(wpkh(%s/0/0/*))", enc_xpub);
+	if (!descriptor_checksum(descriptor, strlen(descriptor), &checksum))
+		errx(ERROR_LIBWALLY, "Can't derive descriptor checksum for sh(wpkh)");
+	printf("%s#%s\n", descriptor, checksum.csum);
+	tal_free(descriptor);
+
+	wally_free_string(enc_xpub);
+
+	return 0;
+}
+
 int main(int argc, char *argv[])
 {
 	const char *method;
@@ -411,6 +613,41 @@ int main(int argc, char *argv[])
 			errx(ERROR_USAGE, "Bad node id");
 		return guess_to_remote(argv[2], &node_id, atol(argv[4]),
 		                       argv[5], argc >= 7 ? argv[6] : NULL);
+	}
+
+	if (streq(method, "generatehsm")) {
+		if (argc != 3)
+			show_usage(argv[0]);
+
+		char *hsm_secret_path = argv[2];
+
+		/* if hsm_secret already exists we abort the process
+		 * we do not want to lose someone else's funds */
+		struct stat st;
+		if (stat(hsm_secret_path, &st) == 0)
+			errx(ERROR_USAGE, "hsm_secret file at %s already exists", hsm_secret_path);
+
+		return generate_hsm(hsm_secret_path);
+	}
+
+	if (streq(method, "dumponchaindescriptors")) {
+		bool is_testnet;
+		if (argc < 3)
+			show_usage(argv[0]);
+
+		if (argc > 4) {
+			is_testnet = streq(argv[4], "testnet");
+			if (!is_testnet && !streq(argv[4], "bitcoin"))
+				errx(ERROR_USAGE, "Network '%s' not supported."
+				     " Supported networks: bitcoin (default),"
+				     " testnet",
+				     argv[4]);
+		} else
+			is_testnet = false;
+
+		return dumponchaindescriptors(argv[2],
+					      argc > 3 && !streq(argv[3], "") ? argv[3] : NULL,
+					      is_testnet);
 	}
 
 	show_usage(argv[0]);

@@ -6,14 +6,13 @@
 #include <ccan/asort/asort.h>
 #include <ccan/ccan/endian/endian.h>
 #include <ccan/ccan/mem/mem.h>
-#include <common/channel_id.h>
+#include <common/pseudorand.h>
 #include <common/utils.h>
-#include <wire/peer_wire.h>
 
-bool psbt_get_serial_id(const struct wally_map *map, u16 *serial_id)
+bool psbt_get_serial_id(const struct wally_map *map, u64 *serial_id)
 {
 	size_t value_len;
-	beint16_t bev;
+	beint64_t bev;
 	void *result = psbt_get_lightning(map, PSBT_TYPE_SERIAL_ID, &value_len);
 	if (!result)
 		return false;
@@ -22,14 +21,14 @@ bool psbt_get_serial_id(const struct wally_map *map, u16 *serial_id)
 		return false;
 
 	memcpy(&bev, result, value_len);
-	*serial_id = be16_to_cpu(bev);
+	*serial_id = be64_to_cpu(bev);
 	return true;
 }
 
 static int compare_serials(const struct wally_map *map_a,
 			   const struct wally_map *map_b)
 {
-	u16 serial_left, serial_right;
+	u64 serial_left, serial_right;
 	bool ok;
 
 	ok = psbt_get_serial_id(map_a, &serial_left);
@@ -66,8 +65,11 @@ static const u8 *linearize_input(const tal_t *ctx,
 	struct wally_psbt *psbt = create_psbt(NULL, 1, 0, 0);
 	size_t byte_len;
 
+	tal_wally_start();
 	if (wally_tx_add_input(psbt->tx, tx_in) != WALLY_OK)
 		abort();
+	tal_wally_end(psbt->tx);
+
 	psbt->inputs[0] = *in;
 	psbt->num_inputs++;
 
@@ -104,8 +106,10 @@ static const u8 *linearize_output(const tal_t *ctx,
 	memset(&txid, 0, sizeof(txid));
 	psbt_append_input(psbt, &txid, 0, 0, NULL, NULL, NULL);
 
+	tal_wally_start();
 	if (wally_tx_add_output(psbt->tx, tx_out) != WALLY_OK)
 		abort();
+	tal_wally_end(psbt->tx);
 
 	psbt->outputs[0] = *out;
 	psbt->num_outputs++;
@@ -215,6 +219,7 @@ void psbt_sort_by_serial_id(struct wally_psbt *psbt)
 		struct type##_set a;				\
 		a.type = from->type##s[index];			\
 		a.tx_##type = from->tx->type##s[index]; 	\
+		a.idx = index;					\
 		tal_arr_expand(&add_to, a);			\
 	} while (0)
 
@@ -316,104 +321,31 @@ struct psbt_changeset *psbt_get_changeset(const tal_t *ctx,
 	return set;
 }
 
-u8 *psbt_changeset_get_next(const tal_t *ctx, struct channel_id *cid,
-			    struct psbt_changeset *set)
-{
-	u16 serial_id;
-	u8 *msg;
 
-	if (tal_count(set->added_ins) != 0) {
-		const struct input_set *in = &set->added_ins[0];
-		u8 *script;
-
-		if (!psbt_get_serial_id(&in->input.unknowns, &serial_id))
-			abort();
-
-		const u8 *prevtx = linearize_wtx(ctx,
-						 in->input.utxo);
-
-		if (in->input.redeem_script_len)
-			script = tal_dup_arr(ctx, u8,
-					     in->input.redeem_script,
-					     in->input.redeem_script_len, 0);
-		else
-			script = NULL;
-
-		msg = towire_tx_add_input(ctx, cid, serial_id,
-					  prevtx, in->tx_input.index,
-					  in->tx_input.sequence,
-					  script,
-					  NULL);
-
-		tal_arr_remove(&set->added_ins, 0);
-		return msg;
-	}
-	if (tal_count(set->rm_ins) != 0) {
-		if (!psbt_get_serial_id(&set->rm_ins[0].input.unknowns,
-					&serial_id))
-			abort();
-
-		msg = towire_tx_remove_input(ctx, cid, serial_id);
-
-		tal_arr_remove(&set->rm_ins, 0);
-		return msg;
-	}
-	if (tal_count(set->added_outs) != 0) {
-		struct amount_sat sats;
-		struct amount_asset asset_amt;
-
-		const struct output_set *out = &set->added_outs[0];
-		if (!psbt_get_serial_id(&out->output.unknowns, &serial_id))
-			abort();
-
-		asset_amt = wally_tx_output_get_amount(&out->tx_output);
-		sats = amount_asset_to_sat(&asset_amt);
-		const u8 *script = wally_tx_output_get_script(ctx,
-							      &out->tx_output);
-
-		msg = towire_tx_add_output(ctx, cid, serial_id,
-					   sats.satoshis, /* Raw: wire interface */
-					   script);
-
-		tal_arr_remove(&set->added_outs, 0);
-		return msg;
-	}
-	if (tal_count(set->rm_outs) != 0) {
-		if (!psbt_get_serial_id(&set->rm_outs[0].output.unknowns,
-					&serial_id))
-			abort();
-
-		msg = towire_tx_remove_output(ctx, cid, serial_id);
-
-		/* Is this a kosher way to move the list forward? */
-		tal_arr_remove(&set->rm_outs, 0);
-		return msg;
-	}
-	return NULL;
-}
-
-void psbt_input_add_serial_id(struct wally_psbt_input *input,
-			      u16 serial_id)
+void psbt_input_set_serial_id(const tal_t *ctx,
+			      struct wally_psbt_input *input,
+			      u64 serial_id)
 {
 	u8 *key = psbt_make_key(tmpctx, PSBT_TYPE_SERIAL_ID, NULL);
-	beint16_t bev = cpu_to_be16(serial_id);
+	beint64_t bev = cpu_to_be64(serial_id);
 
-	psbt_input_add_unknown(input, key, &bev, sizeof(bev));
+	psbt_input_set_unknown(ctx, input, key, &bev, sizeof(bev));
 }
 
 
-void psbt_output_add_serial_id(struct wally_psbt_output *output,
-			       u16 serial_id)
+void psbt_output_set_serial_id(const tal_t *ctx,
+			       struct wally_psbt_output *output,
+			       u64 serial_id)
 {
 	u8 *key = psbt_make_key(tmpctx, PSBT_TYPE_SERIAL_ID, NULL);
-	beint16_t bev = cpu_to_be16(serial_id);
-	psbt_output_add_unknown(output, key, &bev, sizeof(bev));
+	beint64_t bev = cpu_to_be64(serial_id);
+	psbt_output_set_unknown(ctx, output, key, &bev, sizeof(bev));
 }
 
-int psbt_find_serial_input(struct wally_psbt *psbt, u16 serial_id)
+int psbt_find_serial_input(struct wally_psbt *psbt, u64 serial_id)
 {
 	for (size_t i = 0; i < psbt->num_inputs; i++) {
-		u16 in_serial;
+		u64 in_serial;
 		if (!psbt_get_serial_id(&psbt->inputs[i].unknowns, &in_serial))
 			continue;
 		if (in_serial == serial_id)
@@ -422,10 +354,10 @@ int psbt_find_serial_input(struct wally_psbt *psbt, u16 serial_id)
 	return -1;
 }
 
-int psbt_find_serial_output(struct wally_psbt *psbt, u16 serial_id)
+int psbt_find_serial_output(struct wally_psbt *psbt, u64 serial_id)
 {
 	for (size_t i = 0; i < psbt->num_outputs; i++) {
-		u16 out_serial;
+		u64 out_serial;
 		if (!psbt_get_serial_id(&psbt->outputs[i].unknowns, &out_serial))
 			continue;
 		if (out_serial == serial_id)
@@ -434,9 +366,38 @@ int psbt_find_serial_output(struct wally_psbt *psbt, u16 serial_id)
 	return -1;
 }
 
+static u64 get_random_serial(enum tx_role role)
+{
+	return pseudorand_u64() << 1 | role;
+}
+
+u64 psbt_new_input_serial(struct wally_psbt *psbt, enum tx_role role)
+{
+	u64 serial_id;
+
+	while ((serial_id = get_random_serial(role)) &&
+		psbt_find_serial_input(psbt, serial_id) != -1) {
+		/* keep going; */
+	}
+
+	return serial_id;
+}
+
+u64 psbt_new_output_serial(struct wally_psbt *psbt, enum tx_role role)
+{
+	u64 serial_id;
+
+	while ((serial_id = get_random_serial(role)) &&
+		psbt_find_serial_output(psbt, serial_id) != -1) {
+		/* keep going; */
+	}
+
+	return serial_id;
+}
+
 bool psbt_has_required_fields(struct wally_psbt *psbt)
 {
-	u16 serial_id;
+	u64 serial_id;
 	for (size_t i = 0; i < psbt->num_inputs; i++) {
 		struct wally_psbt_input *input = &psbt->inputs[i];
 
@@ -463,4 +424,43 @@ bool psbt_has_required_fields(struct wally_psbt *psbt)
 	}
 
 	return true;
+}
+
+bool psbt_side_finalized(const struct wally_psbt *psbt, enum tx_role role)
+{
+	u64 serial_id;
+	for (size_t i = 0; i < psbt->num_inputs; i++) {
+		if (!psbt_get_serial_id(&psbt->inputs[i].unknowns,
+					&serial_id)) {
+			return false;
+		}
+		if (serial_id % 2 == role) {
+			if (!psbt->inputs[i].final_witness ||
+					psbt->inputs[i].final_witness->num_items == 0)
+				return false;
+		}
+	}
+	return true;
+}
+
+/* Adds serials to inputs + outputs that don't have one yet */
+void psbt_add_serials(struct wally_psbt *psbt, enum tx_role role)
+{
+	u64 serial_id;
+	for (size_t i = 0; i < psbt->num_inputs; i++) {
+		/* Skip ones that already have a serial id */
+		if (psbt_get_serial_id(&psbt->inputs[i].unknowns, &serial_id))
+			continue;
+
+		serial_id = psbt_new_input_serial(psbt, role);
+		psbt_input_set_serial_id(psbt, &psbt->inputs[i], serial_id);
+	}
+	for (size_t i = 0; i < psbt->num_outputs; i++) {
+		/* Skip ones that already have a serial id */
+		if (psbt_get_serial_id(&psbt->outputs[i].unknowns, &serial_id))
+			continue;
+
+		serial_id = psbt_new_output_serial(psbt, role);
+		psbt_output_set_serial_id(psbt, &psbt->outputs[i], serial_id);
+	}
 }

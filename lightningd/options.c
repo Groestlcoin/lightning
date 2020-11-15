@@ -516,8 +516,29 @@ static char *opt_force_featureset(const char *optarg,
 				  struct lightningd *ld)
 {
 	char **parts = tal_strsplit(tmpctx, optarg, "/", STR_EMPTY_OK);
-	if (tal_count(parts) != NUM_FEATURE_PLACE)
-		return "Expected 5 feature sets (init, globalinit, node_announce, channel, bolt11) separated by /";
+	if (tal_count(parts) != NUM_FEATURE_PLACE) {
+		if (!strstarts(optarg, "-") && !strstarts(optarg, "+"))
+			return "Expected 5 feature sets (init, globalinit,"
+			       " node_announce, channel, bolt11) separated"
+			       " by / OR +/-<feature_num>";
+
+		char *endp;
+		long int n = strtol(optarg + 1, &endp, 10);
+		const struct feature_set *f;
+		if (*endp || endp == optarg + 1)
+			return "Invalid feature number";
+
+		f = feature_set_for_feature(NULL, n);
+		if (strstarts(optarg, "-")
+		    && !feature_set_sub(ld->our_features, take(f)))
+			return "Feature unknown";
+
+		if (strstarts(optarg, "+")
+		    && !feature_set_or(ld->our_features, take(f)))
+			return "Feature already flagged-on";
+
+		return NULL;
+	}
 	for (size_t i = 0; parts[i]; i++) {
 		char **bits = tal_strsplit(tmpctx, parts[i], ",", STR_EMPTY_OK);
 		tal_resize(&ld->our_features->bits[i], 0);
@@ -611,10 +632,6 @@ static const struct config testnet_config = {
 	/* We're fairly trusting, under normal circumstances. */
 	.anchor_confirms = 1,
 
-	/* Testnet fees are crazy, allow infinite feerange. */
-	.commitment_fee_min_percent = 0,
-	.commitment_fee_max_percent = 0,
-
 	/* Testnet blockspace is free. */
 	.max_concurrent_htlcs = 483,
 
@@ -658,10 +675,6 @@ static const struct config mainnet_config = {
 
 	/* We're fairly trusting, under normal circumstances. */
 	.anchor_confirms = 3,
-
-	/* Insist between 2 and 20 times the 2-block fee. */
-	.commitment_fee_min_percent = 200,
-	.commitment_fee_max_percent = 2000,
 
 	/* While up to 483 htlcs are possible we do 30 by default (as eclair does) to save blockspace */
 	.max_concurrent_htlcs = 30,
@@ -711,13 +724,6 @@ static const struct config mainnet_config = {
 
 static void check_config(struct lightningd *ld)
 {
-	/* We do this by ensuring it's less than the minimum we would accept. */
-	if (ld->config.commitment_fee_max_percent != 0
-	    && ld->config.commitment_fee_max_percent
-	    < ld->config.commitment_fee_min_percent)
-		fatal("Commitment fee invalid min-max %u-%u",
-		      ld->config.commitment_fee_min_percent,
-		      ld->config.commitment_fee_max_percent);
 	/* BOLT #2:
 	 *
 	 * The receiving node MUST fail the channel if:
@@ -865,12 +871,6 @@ static void register_opts(struct lightningd *ld)
 	opt_register_arg("--funding-confirms", opt_set_u32, opt_show_u32,
 			 &ld->config.anchor_confirms,
 			 "Confirmations required for funding transaction");
-	opt_register_arg("--commit-fee-min=<percent>", opt_set_u32, opt_show_u32,
-			 &ld->config.commitment_fee_min_percent,
-			 "Minimum percentage of fee to accept for commitment");
-	opt_register_arg("--commit-fee-max=<percent>", opt_set_u32, opt_show_u32,
-			 &ld->config.commitment_fee_max_percent,
-			 "Maximum percentage of fee to accept for commitment (0 for unlimited)");
 	opt_register_arg("--cltv-delta", opt_set_u32, opt_show_u32,
 			 &ld->config.cltv_expiry_delta,
 			 "Number of blocks for cltv_expiry_delta");

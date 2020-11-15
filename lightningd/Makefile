@@ -50,13 +50,13 @@ LIGHTNINGD_SRC_NOHDR :=				\
 LIGHTNINGD_HEADERS :=				\
 	$(LIGHTNINGD_SRC:.c=.h)			\
 	lightningd/channel_state.h		\
-	lightningd/gen_channel_state_names.h
+	lightningd/channel_state_names_gen.h
 
 LIGHTNINGD_OBJS := $(LIGHTNINGD_SRC:.c=.o) $(LIGHTNINGD_SRC_NOHDR:.c=.o)
 $(LIGHTNINGD_OBJS): $(LIGHTNINGD_HEADERS) $(LIGHTNINGD_CONTROL_HEADERS)
 
 # Make sure these depend on everything.
-ALL_C_SOURCES += $(LIGHTNINGD_SRC)
+ALL_C_SOURCES += $(LIGHTNINGD_SRC) $(LIGHTNINGD_SRC_NOHDR)
 ALL_C_HEADERS += $(LIGHTNINGD_HEADERS)
 ALL_PROGRAMS += lightningd/lightningd
 
@@ -83,6 +83,7 @@ LIGHTNINGD_COMMON_OBJS :=			\
 	common/features.o			\
 	common/fee_states.o			\
 	common/peer_status_wiregen.o		\
+	common/status_levels.o			\
 	common/status_wiregen.o			\
 	common/gossip_rcvd_filter.o		\
 	common/hash_u5.o			\
@@ -106,6 +107,7 @@ LIGHTNINGD_COMMON_OBJS :=			\
 	common/penalty_base.o			\
 	common/per_peer_state.o			\
 	common/permute_tx.o			\
+	common/psbt_open.o			\
 	common/pseudorand.o			\
 	common/random_select.o			\
 	common/setup.o				\
@@ -120,10 +122,6 @@ LIGHTNINGD_COMMON_OBJS :=			\
 	common/wire_error.o			\
 	common/wireaddr.o			\
 
-ifeq ($(EXPERIMENTAL_FEATURES),1)
-LIGHTNINGD_COMMON_OBJS += common/psbt_open.o
-endif
-
 include wallet/Makefile
 
 # All together in one convenient var
@@ -132,9 +130,9 @@ LIGHTNINGD_HEADERS = $(LIGHTNINGD_HEADERS_NOGEN) $(LIGHTNINGD_HEADERS_GEN) $(WAL
 $(LIGHTNINGD_OBJS): $(LIGHTNINGD_HEADERS) $(WALLET_HDRS)
 
 # Only the plugin component needs to depend on this header.
-lightningd/plugin.o: gen_list_of_builtin_plugins.h
+lightningd/plugin.o: plugins/list_of_builtin_plugins_gen.h
 
-lightningd/gen_channel_state_names.h: lightningd/channel_state.h ccan/ccan/cdump/tools/cdump-enumstr
+lightningd/channel_state_names_gen.h: lightningd/channel_state.h ccan/ccan/cdump/tools/cdump-enumstr
 	ccan/ccan/cdump/tools/cdump-enumstr lightningd/channel_state.h > $@
 
 lightningd/lightningd: $(LIGHTNINGD_OBJS) $(WALLET_OBJS) $(LIGHTNINGD_COMMON_OBJS) $(BITCOIN_OBJS) $(WIRE_OBJS) $(WIRE_ONION_OBJS) $(LIGHTNINGD_CONTROL_OBJS) $(HSMD_CLIENT_OBJS)

@@ -86,22 +86,17 @@ void json_add_member(struct json_stream *js UNNEEDED,
 		     bool quote UNNEEDED,
 		     const char *fmt UNNEEDED, ...)
 { fprintf(stderr, "json_add_member called!\n"); abort(); }
-/* Generated stub for json_array_end */
-void json_array_end(struct json_stream *js UNNEEDED)
-{ fprintf(stderr, "json_array_end called!\n"); abort(); }
-/* Generated stub for json_array_start */
-void json_array_start(struct json_stream *js UNNEEDED, const char *fieldname UNNEEDED)
-{ fprintf(stderr, "json_array_start called!\n"); abort(); }
 /* Generated stub for json_member_direct */
 char *json_member_direct(struct json_stream *js UNNEEDED,
 			 const char *fieldname UNNEEDED, size_t extra UNNEEDED)
 { fprintf(stderr, "json_member_direct called!\n"); abort(); }
-/* Generated stub for json_object_end */
-void json_object_end(struct json_stream *js UNNEEDED)
-{ fprintf(stderr, "json_object_end called!\n"); abort(); }
-/* Generated stub for json_object_start */
-void json_object_start(struct json_stream *ks UNNEEDED, const char *fieldname UNNEEDED)
-{ fprintf(stderr, "json_object_start called!\n"); abort(); }
+/* Generated stub for log_level_name */
+const char *log_level_name(enum log_level level UNNEEDED)
+{ fprintf(stderr, "log_level_name called!\n"); abort(); }
+/* Generated stub for log_level_parse */
+bool log_level_parse(const char *levelstr UNNEEDED, size_t len UNNEEDED,
+		     enum log_level *level UNNEEDED)
+{ fprintf(stderr, "log_level_parse called!\n"); abort(); }
 /* Generated stub for towire_amount_msat */
 void towire_amount_msat(u8 **pptr UNNEEDED, const struct amount_msat msat UNNEEDED)
 { fprintf(stderr, "towire_amount_msat called!\n"); abort(); }
@@ -174,11 +169,11 @@ int main(int argc UNUSED, char *argv[])
 {
 	setup_locale();
 
-	char *fake_argv[] = { argv[0], "--lightning-dir=/tmp/", "-H", "listconfigs", NULL };
+	char *fake_argv[] = { argv[0], "--lightning-dir=/tmp/", "-H", "listconfigs", "-N", "none", NULL };
 
 	response_off = 0;
 	max_read_return = -1;
-	assert(test_main(4, fake_argv) == 0);
+	assert(test_main(6, fake_argv) == 0);
 	assert(!taken_any());
 	take_cleanup();
 	return 0;

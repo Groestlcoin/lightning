@@ -287,6 +287,9 @@ void json_add_node_id(struct json_stream *response UNNEEDED,
 				const char *fieldname UNNEEDED,
 				const struct node_id *id UNNEEDED)
 { fprintf(stderr, "json_add_node_id called!\n"); abort(); }
+/* Generated stub for json_add_null */
+void json_add_null(struct json_stream *stream UNNEEDED, const char *fieldname UNNEEDED)
+{ fprintf(stderr, "json_add_null called!\n"); abort(); }
 /* Generated stub for json_add_num */
 void json_add_num(struct json_stream *result UNNEEDED, const char *fieldname UNNEEDED,
 		  unsigned int value UNNEEDED)
@@ -316,6 +319,11 @@ void json_add_string(struct json_stream *result UNNEEDED, const char *fieldname 
 void json_add_timeabs(struct json_stream *result UNNEEDED, const char *fieldname UNNEEDED,
 		      struct timeabs t UNNEEDED)
 { fprintf(stderr, "json_add_timeabs called!\n"); abort(); }
+/* Generated stub for json_add_timeiso */
+void json_add_timeiso(struct json_stream *result UNNEEDED,
+		      const char *fieldname UNNEEDED,
+		      struct timeabs *time UNNEEDED)
+{ fprintf(stderr, "json_add_timeiso called!\n"); abort(); }
 /* Generated stub for json_add_tx */
 void json_add_tx(struct json_stream *result UNNEEDED,
 		 const char *fieldname UNNEEDED,
@@ -347,6 +355,12 @@ void json_array_start(struct json_stream *js UNNEEDED, const char *fieldname UNN
 const jsmntok_t *json_get_member(const char *buffer UNNEEDED, const jsmntok_t tok[] UNNEEDED,
 				 const char *label UNNEEDED)
 { fprintf(stderr, "json_get_member called!\n"); abort(); }
+/* Generated stub for json_notify_fmt */
+void json_notify_fmt(struct command *cmd UNNEEDED,
+		     enum log_level level UNNEEDED,
+		     const char *fmt UNNEEDED, ...)
+
+{ fprintf(stderr, "json_notify_fmt called!\n"); abort(); }
 /* Generated stub for json_object_end */
 void json_object_end(struct json_stream *js UNNEEDED)
 { fprintf(stderr, "json_object_end called!\n"); abort(); }
@@ -433,8 +447,11 @@ void notify_channel_state_changed(struct lightningd *ld UNNEEDED,
 				  struct node_id *peer_id UNNEEDED,
 				  struct channel_id *cid UNNEEDED,
 				  struct short_channel_id *scid UNNEEDED,
+				  struct timeabs *timestamp UNNEEDED,
 				  enum channel_state old_state UNNEEDED,
-				  enum channel_state new_state UNNEEDED)
+				  enum channel_state new_state UNNEEDED,
+				  enum state_change cause UNNEEDED,
+				  char *message UNNEEDED)
 { fprintf(stderr, "notify_channel_state_changed called!\n"); abort(); }
 /* Generated stub for notify_connect */
 void notify_connect(struct lightningd *ld UNNEEDED, struct node_id *nodeid UNNEEDED,
@@ -576,8 +593,8 @@ void peer_memleak_done(struct command *cmd UNNEEDED, struct subd *leaker UNNEEDE
 /* Generated stub for peer_start_channeld */
 void peer_start_channeld(struct channel *channel UNNEEDED,
 			 struct per_peer_state *pps UNNEEDED,
-			 const u8 *fwd_msg_1 UNNEEDED,
-			 const u8 *fwd_msg_2 UNNEEDED,
+			 const u8 *fwd_msg UNNEEDED,
+			 const struct wally_psbt *psbt UNNEEDED,
 			 bool reconnected UNNEEDED)
 { fprintf(stderr, "peer_start_channeld called!\n"); abort(); }
 /* Generated stub for peer_start_closingd */
@@ -1115,15 +1132,15 @@ static bool channelseq(struct channel *c1, struct channel *c2)
 	CHECK(pubkey_eq(&ci1->remote_per_commit, &ci2->remote_per_commit));
 	CHECK(pubkey_eq(&ci1->old_remote_per_commit, &ci2->old_remote_per_commit));
 	CHECK(ci1->their_config.id != 0 && ci1->their_config.id == ci2->their_config.id);
-	CHECK(fee_states_valid(ci1->fee_states, c1->opener));
-	CHECK(fee_states_valid(ci2->fee_states, c2->opener));
-	for (enum htlc_state i = 0; i < ARRAY_SIZE(ci1->fee_states->feerate);
+	CHECK(fee_states_valid(c1->fee_states, c1->opener));
+	CHECK(fee_states_valid(c2->fee_states, c2->opener));
+	for (enum htlc_state i = 0; i < ARRAY_SIZE(c1->fee_states->feerate);
 	     i++) {
-		if (ci1->fee_states->feerate[i] == NULL) {
-			CHECK(ci2->fee_states->feerate[i] == NULL);
+		if (c1->fee_states->feerate[i] == NULL) {
+			CHECK(c2->fee_states->feerate[i] == NULL);
 		} else {
-			CHECK(*ci1->fee_states->feerate[i]
-			      == *ci2->fee_states->feerate[i]);
+			CHECK(*c1->fee_states->feerate[i]
+			      == *c2->fee_states->feerate[i]);
 		}
 	}
 
@@ -1201,7 +1218,7 @@ static bool test_channel_crud(struct lightningd *ld, const tal_t *ctx)
 	pubkey_from_der(tal_hexdata(w, "02a1633cafcc01ebfb6d78e39f687a1f0995c62fc95f51ead10a02ee0be551b5dc", 66), 33, &pk);
 	node_id_from_pubkey(&id, &pk);
 	feerate = 31337;
-	ci->fee_states = new_fee_states(w, c1.opener, &feerate);
+	c1.fee_states = new_fee_states(w, c1.opener, &feerate);
 	mempat(scriptpubkey, tal_count(scriptpubkey));
 	c1.first_blocknum = 1;
 	parse_wireaddr_internal("localhost:1234", &addr, 0, false, false, false,

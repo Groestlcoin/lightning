@@ -137,7 +137,11 @@ static void peer_closing_complete(struct channel *channel, const u8 *msg)
 
 	/* Channel gets dropped to chain cooperatively. */
 	drop_to_chain(channel->peer->ld, channel, true);
-	channel_set_state(channel, CLOSINGD_SIGEXCHANGE, CLOSINGD_COMPLETE);
+	channel_set_state(channel,
+			  CLOSINGD_SIGEXCHANGE,
+			  CLOSINGD_COMPLETE,
+			  REASON_UNKNOWN,
+			  "Closing complete");
 }
 
 static unsigned closing_msg(struct subd *sd, const u8 *msg, const int *fds UNUSED)
@@ -216,7 +220,7 @@ void peer_start_closingd(struct channel *channel,
 	 *    fee of the final commitment transaction, as calculated in
 	 *    [BOLT #3](03-transactions.md#fee-calculation).
 	 */
-	final_commit_feerate = get_feerate(channel->channel_info.fee_states,
+	final_commit_feerate = get_feerate(channel->fee_states,
 					   channel->opener, LOCAL);
 	feelimit = commit_tx_base_fee(final_commit_feerate, 0,
 				      channel->option_anchor_outputs);
@@ -256,7 +260,9 @@ void peer_start_closingd(struct channel *channel,
 					 &channel->funding),
 			  type_to_string(tmpctx, struct amount_msat,
 					 &channel->our_msat));
-		channel_fail_permanent(channel, "our_msat overflow on closing");
+		channel_fail_permanent(channel,
+				       REASON_LOCAL,
+				       "our_msat overflow on closing");
 		return;
 	}
 
@@ -274,6 +280,7 @@ void peer_start_closingd(struct channel *channel,
 				      num_revocations-1,
 				      &last_remote_per_commit_secret)) {
 		channel_fail_permanent(channel,
+				       REASON_LOCAL,
 				       "Could not get revocation secret %"PRIu64,
 				       num_revocations-1);
 		return;

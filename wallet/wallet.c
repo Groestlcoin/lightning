@@ -414,7 +414,7 @@ static void db_set_utxo(struct db *db, const struct utxo *utxo)
 		assert(!utxo->reserved_til);
 
 	stmt = db_prepare_v2(
-		db, SQL("UPDATE outputs SET status=?, reserved_til=?"
+		db, SQL("UPDATE outputs SET status=?, reserved_til=? "
 			"WHERE prev_out_tx=? AND prev_out_index=?"));
 	db_bind_int(stmt, 0, output_status_in_db(utxo->status));
 	db_bind_int(stmt, 1, utxo->reserved_til);
@@ -936,6 +936,7 @@ static struct channel *wallet_stmt2channel(struct wallet *w, struct db_stmt *stm
 {
 	bool ok = true;
 	struct channel_info channel_info;
+	struct fee_states *fee_states;
 	struct short_channel_id *scid;
 	struct channel_id cid;
 	struct channel *chan;
@@ -954,6 +955,7 @@ static struct channel *wallet_stmt2channel(struct wallet *w, struct db_stmt *stm
 	struct pubkey *future_per_commitment_point;
 	struct amount_sat funding_sat, our_funding_sat;
 	struct amount_msat push_msat, our_msat, msat_to_us_min, msat_to_us_max;
+	struct wally_psbt *psbt;
 
 	peer_dbid = db_column_u64(stmt, 1);
 	peer = find_peer_by_dbid(w->ld, peer_dbid);
@@ -1024,15 +1026,15 @@ static struct channel *wallet_stmt2channel(struct wallet *w, struct db_stmt *stm
 	wallet_channel_config_load(w, db_column_u64(stmt, 5),
 				   &channel_info.their_config);
 
-	channel_info.fee_states
+	fee_states
 		= wallet_channel_fee_states_load(w,
 						 db_column_u64(stmt, 0),
 						 db_column_int(stmt, 7));
-	if (!channel_info.fee_states)
+	if (!fee_states)
 		ok = false;
 
 	if (!ok) {
-		tal_free(channel_info.fee_states);
+		tal_free(fee_states);
 		return NULL;
 	}
 
@@ -1052,8 +1054,11 @@ static struct channel *wallet_stmt2channel(struct wallet *w, struct db_stmt *stm
 	db_column_amount_msat(stmt, 40, &msat_to_us_min);
 	db_column_amount_msat(stmt, 41, &msat_to_us_max);
 
-	/* We want it to take this, rather than copy. */
-	take(channel_info.fee_states);
+	if (!db_column_is_null(stmt, 50)) {
+		psbt = db_column_psbt(tmpctx, stmt, 50);
+	} else
+		psbt = NULL;
+
 	chan = new_channel(peer, db_column_u64(stmt, 0),
 			   &wshachain,
 			   db_column_int(stmt, 6),
@@ -1083,6 +1088,7 @@ static struct channel *wallet_stmt2channel(struct wallet *w, struct db_stmt *stm
 						 db_column_u64(stmt, 0),
 						 db_column_int(stmt, 48)),
 			   &channel_info,
+			   take(fee_states),
 			   remote_shutdown_scriptpubkey,
 			   local_shutdown_scriptpubkey,
 			   final_key_idx,
@@ -1099,7 +1105,10 @@ static struct channel *wallet_stmt2channel(struct wallet *w, struct db_stmt *stm
 			   db_column_int(stmt, 45),
 			   db_column_arr(tmpctx, stmt, 46, u8),
 			   db_column_int(stmt, 47),
-			   db_column_int(stmt, 48));
+			   db_column_int(stmt, 48),
+			   psbt,
+			   db_column_int(stmt, 51),
+			   db_column_int(stmt, 52));
 
 	return chan;
 }
@@ -1176,6 +1185,9 @@ static bool wallet_channels_load_active(struct wallet *w)
 					", option_static_remotekey"
 					", option_anchor_outputs"
 					", shutdown_scriptpubkey_local"
+					", funding_psbt"
+					", closer"
+					", state_change_reason"
 					" FROM channels WHERE state < ?;"));
 	db_bind_int(stmt, 0, CLOSED);
 	db_query_prepared(stmt);
@@ -1442,7 +1454,10 @@ void wallet_channel_save(struct wallet *w, struct channel *chan)
 					"  remote_upfront_shutdown_script=?,"
 					"  option_static_remotekey=?,"
 					"  option_anchor_outputs=?,"
-					"  shutdown_scriptpubkey_local=?"
+					"  shutdown_scriptpubkey_local=?,"
+					"  funding_psbt=?,"
+					"  closer=?,"
+					"  state_change_reason=?"
 					" WHERE id=?"));
 	db_bind_u64(stmt, 0, chan->their_shachain.id);
 	if (chan->scid)
@@ -1485,7 +1500,13 @@ void wallet_channel_save(struct wallet *w, struct channel *chan)
 	db_bind_int(stmt, 30, chan->option_static_remotekey);
 	db_bind_int(stmt, 31, chan->option_anchor_outputs);
 	db_bind_talarr(stmt, 32, chan->shutdown_scriptpubkey[LOCAL]);
-	db_bind_u64(stmt, 33, chan->dbid);
+	if (chan->psbt)
+		db_bind_psbt(stmt, 33, chan->psbt);
+	else
+		db_bind_null(stmt, 33);
+	db_bind_int(stmt, 34, chan->closer);
+	db_bind_int(stmt, 35, chan->state_change_cause);
+	db_bind_u64(stmt, 36, chan->dbid);
 	db_exec_prepared_v2(take(stmt));
 
 	wallet_channel_config_save(w, &chan->channel_info.their_config);
@@ -1522,15 +1543,15 @@ void wallet_channel_save(struct wallet *w, struct channel *chan)
 	db_exec_prepared_v2(take(stmt));
 
 	for (enum htlc_state i = 0;
-	     i < ARRAY_SIZE(chan->channel_info.fee_states->feerate);
+	     i < ARRAY_SIZE(chan->fee_states->feerate);
 	     i++) {
-		if (!chan->channel_info.fee_states->feerate[i])
+		if (!chan->fee_states->feerate[i])
 			continue;
 		stmt = db_prepare_v2(w->db, SQL("INSERT INTO channel_feerates "
 						" VALUES(?, ?, ?)"));
 		db_bind_u64(stmt, 0, chan->dbid);
 		db_bind_int(stmt, 1, i);
-		db_bind_int(stmt, 2, *chan->channel_info.fee_states->feerate[i]);
+		db_bind_int(stmt, 2, *chan->fee_states->feerate[i]);
 		db_exec_prepared_v2(take(stmt));
 	}
 
@@ -1550,6 +1571,68 @@ void wallet_channel_save(struct wallet *w, struct channel *chan)
 	db_bind_u64(stmt, 1, chan->dbid);
 	db_exec_prepared_v2(stmt);
 	tal_free(stmt);
+}
+
+void wallet_state_change_add(struct wallet *w,
+			     const u64 channel_id,
+			     struct timeabs *timestamp,
+			     enum channel_state old_state,
+			     enum channel_state new_state,
+			     enum state_change cause,
+			     char *message)
+{
+	struct db_stmt *stmt;
+	stmt = db_prepare_v2(w->db,
+			     SQL("INSERT INTO channel_state_changes ("
+				 "  channel_id"
+				 ", timestamp"
+				 ", old_state"
+				 ", new_state"
+				 ", cause"
+				 ", message"
+				 ") VALUES (?, ?, ?, ?, ?, ?);"));
+
+	db_bind_u64(stmt, 0, channel_id);
+	db_bind_timeabs(stmt, 1, *timestamp);
+	db_bind_int(stmt, 2, old_state);
+	db_bind_int(stmt, 3, new_state);
+	db_bind_int(stmt, 4, cause);
+	db_bind_text(stmt, 5, message);
+
+	db_exec_prepared_v2(take(stmt));
+}
+
+struct state_change_entry *wallet_state_change_get(struct wallet *w,
+						   const tal_t *ctx,
+						   u64 channel_id)
+{
+	struct db_stmt *stmt;
+	struct state_change_entry tmp;
+	struct state_change_entry *res = tal_arr(ctx,
+						 struct state_change_entry, 0);
+	stmt = db_prepare_v2(
+	    w->db, SQL("SELECT"
+		       " timestamp,"
+		       " old_state,"
+		       " new_state,"
+		       " cause,"
+		       " message "
+		       "FROM channel_state_changes "
+		       "WHERE channel_id = ? "
+		       "ORDER BY timestamp ASC;"));
+	db_bind_int(stmt, 0, channel_id);
+	db_query_prepared(stmt);
+
+	while (db_step(stmt)) {
+		tmp.timestamp = db_column_timeabs(stmt, 0);
+		tmp.old_state = db_column_int(stmt, 1);
+		tmp.new_state = db_column_int(stmt, 2);
+		tmp.cause = db_column_int(stmt, 3);
+		tmp.message = tal_strdup(ctx, (const char *)db_column_text(stmt, 4));
+		tal_arr_expand(&res, tmp);
+	}
+	tal_free(stmt);
+	return res;
 }
 
 static void wallet_peer_save(struct wallet *w, struct peer *peer)
@@ -1651,7 +1734,7 @@ void wallet_channel_close(struct wallet *w, u64 wallet_id)
 
 	/* Set the channel to closed and disassociate with peer */
 	stmt = db_prepare_v2(w->db, SQL("UPDATE channels "
-					"SET state=?, peer_id=?"
+					"SET state=?, peer_id=? "
 					"WHERE channels.id=?"));
 	db_bind_u64(stmt, 0, CLOSED);
 	db_bind_null(stmt, 1);

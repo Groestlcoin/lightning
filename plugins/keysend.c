@@ -113,7 +113,6 @@ static struct command_result *json_keysend(struct command *cmd, const char *buf,
 #if DEVELOPER
 	bool *use_shadow;
 #endif
-	p = payment_new(NULL, cmd, NULL /* No parent */, pay_mods);
 	if (!param(cmd, buf, params,
 		   p_req("destination", param_node_id, &destination),
 		   p_req("msatoshi", param_msat, &msat),
@@ -130,6 +129,7 @@ static struct command_result *json_keysend(struct command *cmd, const char *buf,
 		   NULL))
 		return command_param_failed();
 
+	p = payment_new(cmd, cmd, NULL /* No parent */, pay_mods);
 	p->local_id = &my_id;
 	p->json_buffer = tal_steal(p, buf);
 	p->json_toks = params;
@@ -159,6 +159,8 @@ static struct command_result *json_keysend(struct command *cmd, const char *buf,
 #endif
 	p->label = tal_steal(p, label);
 	payment_start(p);
+	/* We're keeping this around now */
+	tal_steal(cmd->plugin, p);
 	return command_still_pending(cmd);
 }
 
@@ -242,7 +244,7 @@ static struct command_result *htlc_accepted_call(struct command *cmd,
 	max = tal_bytelen(rawpayload);
 	payload = tlv_tlv_payload_new(cmd);
 
-	s = fromwire_varint(&rawpayload, &max);
+	s = fromwire_bigsize(&rawpayload, &max);
 	if (s != max) {
 		return htlc_accepted_continue(cmd, NULL);
 	}

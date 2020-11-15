@@ -25,8 +25,10 @@ const char *dualopend_wire_name(int e)
 	case WIRE_DUAL_OPEN_GOT_OFFER_REPLY: return "WIRE_DUAL_OPEN_GOT_OFFER_REPLY";
 	case WIRE_DUAL_OPEN_COMMIT_RCVD: return "WIRE_DUAL_OPEN_COMMIT_RCVD";
 	case WIRE_DUAL_OPEN_PSBT_CHANGED: return "WIRE_DUAL_OPEN_PSBT_CHANGED";
+	case WIRE_DUAL_OPEN_PSBT_UPDATED: return "WIRE_DUAL_OPEN_PSBT_UPDATED";
 	case WIRE_DUAL_OPEN_FAIL: return "WIRE_DUAL_OPEN_FAIL";
 	case WIRE_DUAL_OPEN_FAILED: return "WIRE_DUAL_OPEN_FAILED";
+	case WIRE_DUAL_OPEN_OPENER_INIT: return "WIRE_DUAL_OPEN_OPENER_INIT";
 	case WIRE_DUAL_OPEN_DEV_MEMLEAK: return "WIRE_DUAL_OPEN_DEV_MEMLEAK";
 	case WIRE_DUAL_OPEN_DEV_MEMLEAK_REPLY: return "WIRE_DUAL_OPEN_DEV_MEMLEAK_REPLY";
 	}
@@ -43,8 +45,10 @@ bool dualopend_wire_is_defined(u16 type)
 	case WIRE_DUAL_OPEN_GOT_OFFER_REPLY:;
 	case WIRE_DUAL_OPEN_COMMIT_RCVD:;
 	case WIRE_DUAL_OPEN_PSBT_CHANGED:;
+	case WIRE_DUAL_OPEN_PSBT_UPDATED:;
 	case WIRE_DUAL_OPEN_FAIL:;
 	case WIRE_DUAL_OPEN_FAILED:;
+	case WIRE_DUAL_OPEN_OPENER_INIT:;
 	case WIRE_DUAL_OPEN_DEV_MEMLEAK:;
 	case WIRE_DUAL_OPEN_DEV_MEMLEAK_REPLY:;
 	      return true;
@@ -57,7 +61,7 @@ bool dualopend_wire_is_defined(u16 type)
 
 
 /* WIRE: DUAL_OPEN_INIT */
-u8 *towire_dual_open_init(const tal_t *ctx, const struct chainparams *chainparams, const struct feature_set *our_feature_set, const u8 *their_init_features, const struct channel_config *our_config, u32 max_to_self_delay, struct amount_msat min_effective_htlc_capacity_msat, const struct per_peer_state *pps, const struct basepoints *our_basepoints, const struct pubkey *our_funding_pubkey, u32 minimum_depth, u32 min_feerate, u32 max_feerate, bool option_anchor_outputs, const u8 *msg)
+u8 *towire_dual_open_init(const tal_t *ctx, const struct chainparams *chainparams, const struct feature_set *our_feature_set, const u8 *their_init_features, const struct channel_config *our_config, u32 max_to_self_delay, struct amount_msat min_effective_htlc_capacity_msat, const struct per_peer_state *pps, const struct basepoints *our_basepoints, const struct pubkey *our_funding_pubkey, u32 minimum_depth, u32 min_feerate, u32 max_feerate, const u8 *msg)
 {
 	u16 their_init_features_len = tal_count(their_init_features);
 	u16 len = tal_count(msg);
@@ -81,14 +85,13 @@ u8 *towire_dual_open_init(const tal_t *ctx, const struct chainparams *chainparam
 	towire_u32(&p, minimum_depth);
 	towire_u32(&p, min_feerate);
 	towire_u32(&p, max_feerate);
-	towire_bool(&p, option_anchor_outputs);
 	/* Optional msg to send. */
 	towire_u16(&p, len);
 	towire_u8_array(&p, msg, len);
 
 	return memcheck(p, tal_count(p));
 }
-bool fromwire_dual_open_init(const tal_t *ctx, const void *p, const struct chainparams **chainparams, struct feature_set **our_feature_set, u8 **their_init_features, struct channel_config *our_config, u32 *max_to_self_delay, struct amount_msat *min_effective_htlc_capacity_msat, struct per_peer_state **pps, struct basepoints *our_basepoints, struct pubkey *our_funding_pubkey, u32 *minimum_depth, u32 *min_feerate, u32 *max_feerate, bool *option_anchor_outputs, u8 **msg)
+bool fromwire_dual_open_init(const tal_t *ctx, const void *p, const struct chainparams **chainparams, struct feature_set **our_feature_set, u8 **their_init_features, struct channel_config *our_config, u32 *max_to_self_delay, struct amount_msat *min_effective_htlc_capacity_msat, struct per_peer_state **pps, struct basepoints *our_basepoints, struct pubkey *our_funding_pubkey, u32 *minimum_depth, u32 *min_feerate, u32 *max_feerate, u8 **msg)
 {
 	u16 their_init_features_len;
 	u16 len;
@@ -117,7 +120,6 @@ bool fromwire_dual_open_init(const tal_t *ctx, const void *p, const struct chain
 	*minimum_depth = fromwire_u32(&cursor, &plen);
  	*min_feerate = fromwire_u32(&cursor, &plen);
  	*max_feerate = fromwire_u32(&cursor, &plen);
- 	*option_anchor_outputs = fromwire_bool(&cursor, &plen);
  	/* Optional msg to send. */
 	len = fromwire_u16(&cursor, &plen);
  	// 2nd case msg
@@ -128,7 +130,7 @@ bool fromwire_dual_open_init(const tal_t *ctx, const void *p, const struct chain
 
 /* WIRE: DUAL_OPEN_GOT_OFFER */
 /* dualopend->master: they offered channel */
-u8 *towire_dual_open_got_offer(const tal_t *ctx, struct amount_sat opener_funding, struct amount_sat dust_limit_satoshis, struct amount_msat max_htlc_value_in_flight_msat, struct amount_msat htlc_minimum_msat, u32 feerate_per_kw_funding, u32 feerate_per_kw, u16 to_self_delay, u16 max_accepted_htlcs, u8 channel_flags, u32 locktime, const u8 *shutdown_scriptpubkey)
+u8 *towire_dual_open_got_offer(const tal_t *ctx, struct amount_sat opener_funding, struct amount_sat dust_limit_satoshis, struct amount_msat max_htlc_value_in_flight_msat, struct amount_msat htlc_minimum_msat, u32 feerate_funding_max, u32 feerate_funding_min, u32 feerate_funding_best, u32 feerate_per_kw, u16 to_self_delay, u16 max_accepted_htlcs, u8 channel_flags, u32 locktime, const u8 *shutdown_scriptpubkey)
 {
 	u16 shutdown_len = tal_count(shutdown_scriptpubkey);
 	u8 *p = tal_arr(ctx, u8, 0);
@@ -138,7 +140,9 @@ u8 *towire_dual_open_got_offer(const tal_t *ctx, struct amount_sat opener_fundin
 	towire_amount_sat(&p, dust_limit_satoshis);
 	towire_amount_msat(&p, max_htlc_value_in_flight_msat);
 	towire_amount_msat(&p, htlc_minimum_msat);
-	towire_u32(&p, feerate_per_kw_funding);
+	towire_u32(&p, feerate_funding_max);
+	towire_u32(&p, feerate_funding_min);
+	towire_u32(&p, feerate_funding_best);
 	towire_u32(&p, feerate_per_kw);
 	towire_u16(&p, to_self_delay);
 	towire_u16(&p, max_accepted_htlcs);
@@ -149,7 +153,7 @@ u8 *towire_dual_open_got_offer(const tal_t *ctx, struct amount_sat opener_fundin
 
 	return memcheck(p, tal_count(p));
 }
-bool fromwire_dual_open_got_offer(const tal_t *ctx, const void *p, struct amount_sat *opener_funding, struct amount_sat *dust_limit_satoshis, struct amount_msat *max_htlc_value_in_flight_msat, struct amount_msat *htlc_minimum_msat, u32 *feerate_per_kw_funding, u32 *feerate_per_kw, u16 *to_self_delay, u16 *max_accepted_htlcs, u8 *channel_flags, u32 *locktime, u8 **shutdown_scriptpubkey)
+bool fromwire_dual_open_got_offer(const tal_t *ctx, const void *p, struct amount_sat *opener_funding, struct amount_sat *dust_limit_satoshis, struct amount_msat *max_htlc_value_in_flight_msat, struct amount_msat *htlc_minimum_msat, u32 *feerate_funding_max, u32 *feerate_funding_min, u32 *feerate_funding_best, u32 *feerate_per_kw, u16 *to_self_delay, u16 *max_accepted_htlcs, u8 *channel_flags, u32 *locktime, u8 **shutdown_scriptpubkey)
 {
 	u16 shutdown_len;
 
@@ -162,7 +166,9 @@ bool fromwire_dual_open_got_offer(const tal_t *ctx, const void *p, struct amount
  	*dust_limit_satoshis = fromwire_amount_sat(&cursor, &plen);
  	*max_htlc_value_in_flight_msat = fromwire_amount_msat(&cursor, &plen);
  	*htlc_minimum_msat = fromwire_amount_msat(&cursor, &plen);
- 	*feerate_per_kw_funding = fromwire_u32(&cursor, &plen);
+ 	*feerate_funding_max = fromwire_u32(&cursor, &plen);
+ 	*feerate_funding_min = fromwire_u32(&cursor, &plen);
+ 	*feerate_funding_best = fromwire_u32(&cursor, &plen);
  	*feerate_per_kw = fromwire_u32(&cursor, &plen);
  	*to_self_delay = fromwire_u16(&cursor, &plen);
  	*max_accepted_htlcs = fromwire_u16(&cursor, &plen);
@@ -177,20 +183,21 @@ bool fromwire_dual_open_got_offer(const tal_t *ctx, const void *p, struct amount
 
 /* WIRE: DUAL_OPEN_GOT_OFFER_REPLY */
 /* master->dualopend: reply back with our first funding info/contribs */
-u8 *towire_dual_open_got_offer_reply(const tal_t *ctx, struct amount_sat accepter_funding, const struct wally_psbt *psbt, const u8 *our_shutdown_scriptpubkey)
+u8 *towire_dual_open_got_offer_reply(const tal_t *ctx, struct amount_sat accepter_funding, u32 feerate_funding, const struct wally_psbt *psbt, const u8 *our_shutdown_scriptpubkey)
 {
 	u16 shutdown_len = tal_count(our_shutdown_scriptpubkey);
 	u8 *p = tal_arr(ctx, u8, 0);
 
 	towire_u16(&p, WIRE_DUAL_OPEN_GOT_OFFER_REPLY);
 	towire_amount_sat(&p, accepter_funding);
+	towire_u32(&p, feerate_funding);
 	towire_wally_psbt(&p, psbt);
 	towire_u16(&p, shutdown_len);
 	towire_u8_array(&p, our_shutdown_scriptpubkey, shutdown_len);
 
 	return memcheck(p, tal_count(p));
 }
-bool fromwire_dual_open_got_offer_reply(const tal_t *ctx, const void *p, struct amount_sat *accepter_funding, struct wally_psbt **psbt, u8 **our_shutdown_scriptpubkey)
+bool fromwire_dual_open_got_offer_reply(const tal_t *ctx, const void *p, struct amount_sat *accepter_funding, u32 *feerate_funding, struct wally_psbt **psbt, u8 **our_shutdown_scriptpubkey)
 {
 	u16 shutdown_len;
 
@@ -200,6 +207,7 @@ bool fromwire_dual_open_got_offer_reply(const tal_t *ctx, const void *p, struct 
 	if (fromwire_u16(&cursor, &plen) != WIRE_DUAL_OPEN_GOT_OFFER_REPLY)
 		return false;
  	*accepter_funding = fromwire_amount_sat(&cursor, &plen);
+ 	*feerate_funding = fromwire_u32(&cursor, &plen);
  	*psbt = fromwire_wally_psbt(ctx, &cursor, &plen);
  	shutdown_len = fromwire_u16(&cursor, &plen);
  	// 2nd case our_shutdown_scriptpubkey
@@ -308,18 +316,18 @@ bool fromwire_dual_open_commit_rcvd(const tal_t *ctx, const void *p, struct chan
 
 /* WIRE: DUAL_OPEN_PSBT_CHANGED */
 /* dualopend->master: peer updated the psbt */
-/* master->dualopend: response from hook when asking for next moves */
-u8 *towire_dual_open_psbt_changed(const tal_t *ctx, const struct channel_id *channel_id, const struct wally_psbt *psbt)
+u8 *towire_dual_open_psbt_changed(const tal_t *ctx, const struct channel_id *channel_id, u64 funding_serial, const struct wally_psbt *psbt)
 {
 	u8 *p = tal_arr(ctx, u8, 0);
 
 	towire_u16(&p, WIRE_DUAL_OPEN_PSBT_CHANGED);
 	towire_channel_id(&p, channel_id);
+	towire_u64(&p, funding_serial);
 	towire_wally_psbt(&p, psbt);
 
 	return memcheck(p, tal_count(p));
 }
-bool fromwire_dual_open_psbt_changed(const tal_t *ctx, const void *p, struct channel_id *channel_id, struct wally_psbt **psbt)
+bool fromwire_dual_open_psbt_changed(const tal_t *ctx, const void *p, struct channel_id *channel_id, u64 *funding_serial, struct wally_psbt **psbt)
 {
 	const u8 *cursor = p;
 	size_t plen = tal_count(p);
@@ -327,6 +335,29 @@ bool fromwire_dual_open_psbt_changed(const tal_t *ctx, const void *p, struct cha
 	if (fromwire_u16(&cursor, &plen) != WIRE_DUAL_OPEN_PSBT_CHANGED)
 		return false;
  	fromwire_channel_id(&cursor, &plen, channel_id);
+ 	*funding_serial = fromwire_u64(&cursor, &plen);
+ 	*psbt = fromwire_wally_psbt(ctx, &cursor, &plen);
+	return cursor != NULL;
+}
+
+/* WIRE: DUAL_OPEN_PSBT_UPDATED */
+/* master->dualopend: we updated the psbt */
+u8 *towire_dual_open_psbt_updated(const tal_t *ctx, const struct wally_psbt *psbt)
+{
+	u8 *p = tal_arr(ctx, u8, 0);
+
+	towire_u16(&p, WIRE_DUAL_OPEN_PSBT_UPDATED);
+	towire_wally_psbt(&p, psbt);
+
+	return memcheck(p, tal_count(p));
+}
+bool fromwire_dual_open_psbt_updated(const tal_t *ctx, const void *p, struct wally_psbt **psbt)
+{
+	const u8 *cursor = p;
+	size_t plen = tal_count(p);
+
+	if (fromwire_u16(&cursor, &plen) != WIRE_DUAL_OPEN_PSBT_UPDATED)
+		return false;
  	*psbt = fromwire_wally_psbt(ctx, &cursor, &plen);
 	return cursor != NULL;
 }
@@ -354,7 +385,7 @@ bool fromwire_dual_open_fail(const tal_t *ctx, const void *p, wirestring **reaso
 }
 
 /* WIRE: DUAL_OPEN_FAILED */
-/* dualopend->master: we failed to negotiation channel */
+/* dualopend->master: we failed to negotiate channel */
 u8 *towire_dual_open_failed(const tal_t *ctx, const wirestring *reason)
 {
 	u8 *p = tal_arr(ctx, u8, 0);
@@ -372,6 +403,45 @@ bool fromwire_dual_open_failed(const tal_t *ctx, const void *p, wirestring **rea
 	if (fromwire_u16(&cursor, &plen) != WIRE_DUAL_OPEN_FAILED)
 		return false;
  	*reason = fromwire_wirestring(ctx, &cursor, &plen);
+	return cursor != NULL;
+}
+
+/* WIRE: DUAL_OPEN_OPENER_INIT */
+/* master->dualopend: hello */
+u8 *towire_dual_open_opener_init(const tal_t *ctx, const struct wally_psbt *psbt, struct amount_sat funding_amount, const u8 *local_shutdown_scriptpubkey, u32 feerate_per_kw, u32 feerate_per_kw_funding, u8 channel_flags)
+{
+	u16 local_shutdown_len = tal_count(local_shutdown_scriptpubkey);
+	u8 *p = tal_arr(ctx, u8, 0);
+
+	towire_u16(&p, WIRE_DUAL_OPEN_OPENER_INIT);
+	towire_wally_psbt(&p, psbt);
+	towire_amount_sat(&p, funding_amount);
+	towire_u16(&p, local_shutdown_len);
+	towire_u8_array(&p, local_shutdown_scriptpubkey, local_shutdown_len);
+	towire_u32(&p, feerate_per_kw);
+	towire_u32(&p, feerate_per_kw_funding);
+	towire_u8(&p, channel_flags);
+
+	return memcheck(p, tal_count(p));
+}
+bool fromwire_dual_open_opener_init(const tal_t *ctx, const void *p, struct wally_psbt **psbt, struct amount_sat *funding_amount, u8 **local_shutdown_scriptpubkey, u32 *feerate_per_kw, u32 *feerate_per_kw_funding, u8 *channel_flags)
+{
+	u16 local_shutdown_len;
+
+	const u8 *cursor = p;
+	size_t plen = tal_count(p);
+
+	if (fromwire_u16(&cursor, &plen) != WIRE_DUAL_OPEN_OPENER_INIT)
+		return false;
+ 	*psbt = fromwire_wally_psbt(ctx, &cursor, &plen);
+ 	*funding_amount = fromwire_amount_sat(&cursor, &plen);
+ 	local_shutdown_len = fromwire_u16(&cursor, &plen);
+ 	// 2nd case local_shutdown_scriptpubkey
+	*local_shutdown_scriptpubkey = local_shutdown_len ? tal_arr(ctx, u8, local_shutdown_len) : NULL;
+	fromwire_u8_array(&cursor, &plen, *local_shutdown_scriptpubkey, local_shutdown_len);
+ 	*feerate_per_kw = fromwire_u32(&cursor, &plen);
+ 	*feerate_per_kw_funding = fromwire_u32(&cursor, &plen);
+ 	*channel_flags = fromwire_u8(&cursor, &plen);
 	return cursor != NULL;
 }
 
@@ -415,4 +485,4 @@ bool fromwire_dual_open_dev_memleak_reply(const void *p, bool *leak)
  	*leak = fromwire_bool(&cursor, &plen);
 	return cursor != NULL;
 }
-// SHA256STAMP:1c4ae8e18ade1c0dcf975d8573e82c491a52fcda35d193b7302abda8d35dee8e
+// SHA256STAMP:f08f0c25f359d5c8f843d78c94eca9b0543b39e62a34983f6572adf92ff02aaa

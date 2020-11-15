@@ -27,12 +27,15 @@ enum dualopend_wire {
         /*                     get some signatures for the funding_tx. */
         WIRE_DUAL_OPEN_COMMIT_RCVD = 7007,
         /*  dualopend->master: peer updated the psbt */
-        /*  master->dualopend: response from hook when asking for next moves */
         WIRE_DUAL_OPEN_PSBT_CHANGED = 7107,
+        /*  master->dualopend: we updated the psbt */
+        WIRE_DUAL_OPEN_PSBT_UPDATED = 7108,
         /*  master->dualopend: fail this channel open */
         WIRE_DUAL_OPEN_FAIL = 7003,
-        /*  dualopend->master: we failed to negotiation channel */
+        /*  dualopend->master: we failed to negotiate channel */
         WIRE_DUAL_OPEN_FAILED = 7004,
+        /*  master->dualopend: hello */
+        WIRE_DUAL_OPEN_OPENER_INIT = 7200,
         /*  master -> dualopend: do you have a memleak? */
         WIRE_DUAL_OPEN_DEV_MEMLEAK = 7033,
         WIRE_DUAL_OPEN_DEV_MEMLEAK_REPLY = 7133,
@@ -51,18 +54,18 @@ bool dualopend_wire_is_defined(u16 type);
 
 
 /* WIRE: DUAL_OPEN_INIT */
-u8 *towire_dual_open_init(const tal_t *ctx, const struct chainparams *chainparams, const struct feature_set *our_feature_set, const u8 *their_init_features, const struct channel_config *our_config, u32 max_to_self_delay, struct amount_msat min_effective_htlc_capacity_msat, const struct per_peer_state *pps, const struct basepoints *our_basepoints, const struct pubkey *our_funding_pubkey, u32 minimum_depth, u32 min_feerate, u32 max_feerate, bool option_anchor_outputs, const u8 *msg);
-bool fromwire_dual_open_init(const tal_t *ctx, const void *p, const struct chainparams **chainparams, struct feature_set **our_feature_set, u8 **their_init_features, struct channel_config *our_config, u32 *max_to_self_delay, struct amount_msat *min_effective_htlc_capacity_msat, struct per_peer_state **pps, struct basepoints *our_basepoints, struct pubkey *our_funding_pubkey, u32 *minimum_depth, u32 *min_feerate, u32 *max_feerate, bool *option_anchor_outputs, u8 **msg);
+u8 *towire_dual_open_init(const tal_t *ctx, const struct chainparams *chainparams, const struct feature_set *our_feature_set, const u8 *their_init_features, const struct channel_config *our_config, u32 max_to_self_delay, struct amount_msat min_effective_htlc_capacity_msat, const struct per_peer_state *pps, const struct basepoints *our_basepoints, const struct pubkey *our_funding_pubkey, u32 minimum_depth, u32 min_feerate, u32 max_feerate, const u8 *msg);
+bool fromwire_dual_open_init(const tal_t *ctx, const void *p, const struct chainparams **chainparams, struct feature_set **our_feature_set, u8 **their_init_features, struct channel_config *our_config, u32 *max_to_self_delay, struct amount_msat *min_effective_htlc_capacity_msat, struct per_peer_state **pps, struct basepoints *our_basepoints, struct pubkey *our_funding_pubkey, u32 *minimum_depth, u32 *min_feerate, u32 *max_feerate, u8 **msg);
 
 /* WIRE: DUAL_OPEN_GOT_OFFER */
 /*  dualopend->master: they offered channel */
-u8 *towire_dual_open_got_offer(const tal_t *ctx, struct amount_sat opener_funding, struct amount_sat dust_limit_satoshis, struct amount_msat max_htlc_value_in_flight_msat, struct amount_msat htlc_minimum_msat, u32 feerate_per_kw_funding, u32 feerate_per_kw, u16 to_self_delay, u16 max_accepted_htlcs, u8 channel_flags, u32 locktime, const u8 *shutdown_scriptpubkey);
-bool fromwire_dual_open_got_offer(const tal_t *ctx, const void *p, struct amount_sat *opener_funding, struct amount_sat *dust_limit_satoshis, struct amount_msat *max_htlc_value_in_flight_msat, struct amount_msat *htlc_minimum_msat, u32 *feerate_per_kw_funding, u32 *feerate_per_kw, u16 *to_self_delay, u16 *max_accepted_htlcs, u8 *channel_flags, u32 *locktime, u8 **shutdown_scriptpubkey);
+u8 *towire_dual_open_got_offer(const tal_t *ctx, struct amount_sat opener_funding, struct amount_sat dust_limit_satoshis, struct amount_msat max_htlc_value_in_flight_msat, struct amount_msat htlc_minimum_msat, u32 feerate_funding_max, u32 feerate_funding_min, u32 feerate_funding_best, u32 feerate_per_kw, u16 to_self_delay, u16 max_accepted_htlcs, u8 channel_flags, u32 locktime, const u8 *shutdown_scriptpubkey);
+bool fromwire_dual_open_got_offer(const tal_t *ctx, const void *p, struct amount_sat *opener_funding, struct amount_sat *dust_limit_satoshis, struct amount_msat *max_htlc_value_in_flight_msat, struct amount_msat *htlc_minimum_msat, u32 *feerate_funding_max, u32 *feerate_funding_min, u32 *feerate_funding_best, u32 *feerate_per_kw, u16 *to_self_delay, u16 *max_accepted_htlcs, u8 *channel_flags, u32 *locktime, u8 **shutdown_scriptpubkey);
 
 /* WIRE: DUAL_OPEN_GOT_OFFER_REPLY */
 /*  master->dualopend: reply back with our first funding info/contribs */
-u8 *towire_dual_open_got_offer_reply(const tal_t *ctx, struct amount_sat accepter_funding, const struct wally_psbt *psbt, const u8 *our_shutdown_scriptpubkey);
-bool fromwire_dual_open_got_offer_reply(const tal_t *ctx, const void *p, struct amount_sat *accepter_funding, struct wally_psbt **psbt, u8 **our_shutdown_scriptpubkey);
+u8 *towire_dual_open_got_offer_reply(const tal_t *ctx, struct amount_sat accepter_funding, u32 feerate_funding, const struct wally_psbt *psbt, const u8 *our_shutdown_scriptpubkey);
+bool fromwire_dual_open_got_offer_reply(const tal_t *ctx, const void *p, struct amount_sat *accepter_funding, u32 *feerate_funding, struct wally_psbt **psbt, u8 **our_shutdown_scriptpubkey);
 
 /* WIRE: DUAL_OPEN_COMMIT_RCVD */
 /*  dualopend->master: ready to commit channel open to database and */
@@ -72,9 +75,13 @@ bool fromwire_dual_open_commit_rcvd(const tal_t *ctx, const void *p, struct chan
 
 /* WIRE: DUAL_OPEN_PSBT_CHANGED */
 /*  dualopend->master: peer updated the psbt */
-/*  master->dualopend: response from hook when asking for next moves */
-u8 *towire_dual_open_psbt_changed(const tal_t *ctx, const struct channel_id *channel_id, const struct wally_psbt *psbt);
-bool fromwire_dual_open_psbt_changed(const tal_t *ctx, const void *p, struct channel_id *channel_id, struct wally_psbt **psbt);
+u8 *towire_dual_open_psbt_changed(const tal_t *ctx, const struct channel_id *channel_id, u64 funding_serial, const struct wally_psbt *psbt);
+bool fromwire_dual_open_psbt_changed(const tal_t *ctx, const void *p, struct channel_id *channel_id, u64 *funding_serial, struct wally_psbt **psbt);
+
+/* WIRE: DUAL_OPEN_PSBT_UPDATED */
+/*  master->dualopend: we updated the psbt */
+u8 *towire_dual_open_psbt_updated(const tal_t *ctx, const struct wally_psbt *psbt);
+bool fromwire_dual_open_psbt_updated(const tal_t *ctx, const void *p, struct wally_psbt **psbt);
 
 /* WIRE: DUAL_OPEN_FAIL */
 /*  master->dualopend: fail this channel open */
@@ -82,9 +89,14 @@ u8 *towire_dual_open_fail(const tal_t *ctx, const wirestring *reason);
 bool fromwire_dual_open_fail(const tal_t *ctx, const void *p, wirestring **reason);
 
 /* WIRE: DUAL_OPEN_FAILED */
-/*  dualopend->master: we failed to negotiation channel */
+/*  dualopend->master: we failed to negotiate channel */
 u8 *towire_dual_open_failed(const tal_t *ctx, const wirestring *reason);
 bool fromwire_dual_open_failed(const tal_t *ctx, const void *p, wirestring **reason);
+
+/* WIRE: DUAL_OPEN_OPENER_INIT */
+/*  master->dualopend: hello */
+u8 *towire_dual_open_opener_init(const tal_t *ctx, const struct wally_psbt *psbt, struct amount_sat funding_amount, const u8 *local_shutdown_scriptpubkey, u32 feerate_per_kw, u32 feerate_per_kw_funding, u8 channel_flags);
+bool fromwire_dual_open_opener_init(const tal_t *ctx, const void *p, struct wally_psbt **psbt, struct amount_sat *funding_amount, u8 **local_shutdown_scriptpubkey, u32 *feerate_per_kw, u32 *feerate_per_kw_funding, u8 *channel_flags);
 
 /* WIRE: DUAL_OPEN_DEV_MEMLEAK */
 /*  master -> dualopend: do you have a memleak? */
@@ -97,4 +109,4 @@ bool fromwire_dual_open_dev_memleak_reply(const void *p, bool *leak);
 
 
 #endif /* LIGHTNING_OPENINGD_DUALOPEND_WIREGEN_H */
-// SHA256STAMP:1c4ae8e18ade1c0dcf975d8573e82c491a52fcda35d193b7302abda8d35dee8e
+// SHA256STAMP:f08f0c25f359d5c8f843d78c94eca9b0543b39e62a34983f6572adf92ff02aaa

@@ -83,7 +83,8 @@ struct bitcoin_tx *pull_bitcoin_tx(const tal_t *ctx,
 /* Helper to create a wally_tx_output: make sure to wally_tx_output_free!
  * Returns NULL if amount is extreme (wally doesn't like).
  */
-struct wally_tx_output *wally_tx_output(const u8 *script,
+struct wally_tx_output *wally_tx_output(const tal_t *ctx,
+					const u8 *script,
 					struct amount_sat amount);
 
 /* Add one output to tx. */
@@ -241,9 +242,11 @@ struct bitcoin_tx *fromwire_bitcoin_tx(const tal_t *ctx,
 				       const u8 **cursor, size_t *max);
 struct bitcoin_tx_output *fromwire_bitcoin_tx_output(const tal_t *ctx,
 						     const u8 **cursor, size_t *max);
+struct wally_tx *fromwire_wally_tx(const tal_t *ctx, const u8 **cursor, size_t *max);
 void towire_bitcoin_txid(u8 **pptr, const struct bitcoin_txid *txid);
 void towire_bitcoin_tx(u8 **pptr, const struct bitcoin_tx *tx);
 void towire_bitcoin_tx_output(u8 **pptr, const struct bitcoin_tx_output *output);
+void towire_wally_tx(u8 **pptr, const struct wally_tx *wtx);
 
 /* Various weights of transaction parts. */
 size_t bitcoin_tx_core_weight(size_t num_inputs, size_t num_outputs);
