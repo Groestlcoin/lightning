@@ -118,7 +118,7 @@ int main(void)
 	PASS_MSAT(&msat, "0.00000001grs", 1000);
 	PASS_MSAT(&msat, "0.00000000001grs", 1);
 	PASS_MSAT(&msat, "1.2grs", 120000000000);
-	PASS_MSAT(&msat, "1.23grs, 123000000000);
+	PASS_MSAT(&msat, "1.23grs", 123000000000);
 	PASS_MSAT(&msat, "1.234grs", 123400000000);
 	PASS_MSAT(&msat, "1.2345grs", 123450000000);
 	PASS_MSAT(&msat, "1.23456grs", 123456000000);
