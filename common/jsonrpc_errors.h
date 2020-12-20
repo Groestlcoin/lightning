@@ -40,6 +40,7 @@ static const errcode_t PAY_INVOICE_EXPIRED = 207;
 static const errcode_t PAY_NO_SUCH_PAYMENT = 208;
 static const errcode_t PAY_UNSPECIFIED_ERROR = 209;
 static const errcode_t PAY_STOPPED_RETRYING = 210;
+static const errcode_t PAY_STATUS_UNEXPECTED = 211;
 
 /* `fundchannel` or `withdraw` errors */
 static const errcode_t FUND_MAX_EXCEEDED = 300;
@@ -51,6 +52,9 @@ static const errcode_t FUNDING_PEER_NOT_CONNECTED = 305;
 static const errcode_t FUNDING_UNKNOWN_PEER = 306;
 static const errcode_t FUNDING_NOTHING_TO_CANCEL = 307;
 static const errcode_t FUNDING_CANCEL_NOT_SAFE = 308;
+static const errcode_t FUNDING_PSBT_INVALID = 309;
+static const errcode_t FUNDING_V2_NOT_SUPPORTED = 310;
+static const errcode_t FUNDING_UNKNOWN_CHANNEL = 311;
 
 /* `connect` errors */
 static const errcode_t CONNECT_NO_KNOWN_ADDRESS = 400;
@@ -59,12 +63,14 @@ static const errcode_t CONNECT_ALL_ADDRESSES_FAILED = 401;
 /* bitcoin-cli plugin errors */
 #define BCLI_ERROR                      400
 
-/* Errors from `invoice` command */
+/* Errors from `invoice` or `delinvoice` commands */
 static const errcode_t INVOICE_LABEL_ALREADY_EXISTS = 900;
 static const errcode_t INVOICE_PREIMAGE_ALREADY_EXISTS = 901;
 static const errcode_t INVOICE_HINTS_GAVE_NO_ROUTES = 902;
 static const errcode_t INVOICE_EXPIRED_DURING_WAIT = 903;
 static const errcode_t INVOICE_WAIT_TIMED_OUT = 904;
+static const errcode_t INVOICE_NOT_FOUND = 905;
+static const errcode_t INVOICE_STATUS_UNEXPECTED = 906;
 
 /* Errors from HSM crypto operations. */
 static const errcode_t HSM_ECDH_FAILED = 800;

@@ -122,6 +122,9 @@ static void parse_include(const char *filename, bool must_exist, bool early,
 			/* Only valid forms are "foo" and "foo=bar" */
 			all_args[i] = tal_fmt(all_args, "--%s", lines[i]);
 		}
+		/* This isn't a leak either */
+		if (all_args[i])
+			tal_set_name(all_args[i], TAL_LABEL(config_notleak, ""));
 	}
 
 	/*
@@ -435,15 +438,15 @@ void initial_config_opts(const tal_t *ctx,
 			       NULL,
 			       "Select the network parameters (groestlcoin, testnet,"
 			       " regtest");
+	opt_register_early_noarg("--mainnet",
+				 opt_restricted_toplevel_noarg, NULL,
+				 "Alias for --network=groestlcoin");
 	opt_register_early_noarg("--testnet",
 				 opt_restricted_toplevel_noarg, NULL,
 				 "Alias for --network=testnet");
 	opt_register_early_noarg("--signet",
 				 opt_restricted_toplevel_noarg, NULL,
 				 "Alias for --network=signet");
-	opt_register_early_noarg("--mainnet",
-				 opt_restricted_toplevel_noarg, NULL,
-				 "Alias for --network=groestlcoin");
 
 	/* They can set this later, it's just less effective. */
 	opt_register_early_arg("--allow-deprecated-apis",

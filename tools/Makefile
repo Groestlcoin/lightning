@@ -2,8 +2,11 @@
 TOOLS := tools/hsmtool tools/check-bolt
 TOOLS_SRC := $(TOOLS:=.c)
 TOOLS_OBJ := $(TOOLS_SRC:.c=.o)
+
+# Make sure these depend on everything.
+ALL_C_SOURCES += $(TOOLS_SRC)
+ALL_C_HEADERS +=
 ALL_PROGRAMS += $(TOOLS)
-ALL_OBJS += $(TOOLS_OBJ)
 
 TOOLS_COMMON_OBJS = common/utils.o
 
@@ -14,7 +17,7 @@ tools/headerversions: FORCE tools/headerversions.o $(CCAN_OBJS)
 
 tools/check-bolt: tools/check-bolt.o $(CCAN_OBJS) $(TOOLS_COMMON_OBJS)
 
-tools/hsmtool: tools/hsmtool.o $(CCAN_OBJS) $(TOOLS_COMMON_OBJS) $(BITCOIN_OBJS) common/amount.o common/bech32.o common/bigsize.o common/derive_basepoints.o common/node_id.o common/type_to_string.o wire/fromwire.o wire/towire.o
+tools/hsmtool: tools/hsmtool.o $(CCAN_OBJS) $(TOOLS_COMMON_OBJS) $(BITCOIN_OBJS) common/amount.o common/bech32.o common/bigsize.o common/derive_basepoints.o common/descriptor_checksum.o common/node_id.o common/type_to_string.o wire/fromwire.o wire/towire.o
 
 tools/lightning-hsmtool: tools/hsmtool
 	cp $< $@
@@ -22,8 +25,7 @@ tools/lightning-hsmtool: tools/hsmtool
 clean: tools-clean
 
 tools-clean:
-	$(RM) tools/check-bolt tools/*.o
 	$(RM) tools/headerversions
-	$(RM) $(TOOLS_OBJ) $(TOOLS) tools/lightning-hsmtool
+	$(RM) tools/headerversions.o
 
 include tools/test/Makefile

@@ -58,7 +58,7 @@ struct command_result *plugin_cmd_all_complete(struct plugins *plugins,
 static struct command_result *
 plugin_dynamic_start(struct command *cmd, const char *plugin_path)
 {
-	struct plugin *p = plugin_register(cmd->ld->plugins, plugin_path, cmd);
+	struct plugin *p = plugin_register(cmd->ld->plugins, plugin_path, cmd, false);
 	const char *err;
 
 	if (!p)
@@ -114,10 +114,6 @@ plugin_dynamic_stop(struct command *cmd, const char *plugin_name)
 				                    plugin_name);
 			plugin_kill(p, "stopped by lightningd via RPC");
 			response = json_stream_success(cmd);
-			if (deprecated_apis)
-				json_add_string(response, "",
-			                    take(tal_fmt(NULL, "Successfully stopped %s.",
-			                                 plugin_name)));
 			json_add_string(response, "result",
 			                take(tal_fmt(NULL, "Successfully stopped %s.",
 			                             plugin_name)));
@@ -145,6 +141,7 @@ plugin_dynamic_rescan_plugins(struct command *cmd)
 	if (res)
 		return res;
 
+	plugins_send_getmanifest(cmd->ld->plugins);
 	return command_still_pending(cmd);
 }
 

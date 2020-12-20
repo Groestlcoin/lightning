@@ -66,7 +66,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
-#include <gen_header_versions.h>
+#include <header_versions_gen.h>
 #include <lightningd/bitcoind.h>
 #include <lightningd/chaintopology.h>
 #include <lightningd/channel_control.h>
@@ -79,7 +79,6 @@
 #include <lightningd/memdump.h>
 #include <lightningd/onchain_control.h>
 #include <lightningd/options.h>
-#include <onchaind/onchain_wire.h>
 #include <signal.h>
 #include <sodium.h>
 #include <sys/resource.h>
@@ -148,8 +147,8 @@ static struct lightningd *new_lightningd(const tal_t *ctx)
 	 *
 	 * You declare them as a `struct list_head` (or use the LIST_HEAD()
 	 * macro which doesn't work on dynamically-allocated objects like `ld`
-	 * here).  The item which will go into the list must declared a
-	 * `struct list_node` for each list it can be in.
+	 * here).  The item which will go into the list must be declared
+	 * a `struct list_node` for each list it can be in.
 	 *
 	 * The most common operations are list_head_init(), list_add(),
 	 * list_del() and list_for_each().
@@ -181,7 +180,7 @@ static struct lightningd *new_lightningd(const tal_t *ctx)
 	 * book to hold all the entries (and trims as necessary), and multiple
 	 * log objects which each can write into it, each with a unique
 	 * prefix. */
-	ld->log_book = new_log_book(ld, 100*1024*1024);
+	ld->log_book = new_log_book(ld, 10*1024*1024);
 	/*~ Note the tal context arg (by convention, the first argument to any
 	 * allocation function): ld->log will be implicitly freed when ld
 	 * is. */
@@ -196,6 +195,7 @@ static struct lightningd *new_lightningd(const tal_t *ctx)
 	list_head_init(&ld->waitsendpay_commands);
 	list_head_init(&ld->sendpay_commands);
 	list_head_init(&ld->close_commands);
+	list_head_init(&ld->open_commands);
 	list_head_init(&ld->ping_commands);
 	list_head_init(&ld->waitblockheight_commands);
 
@@ -203,7 +203,7 @@ static struct lightningd *new_lightningd(const tal_t *ctx)
 	 * elements, which can be accessed with tal_count() (or tal_bytelen()
 	 * for raw bytecount).  It's common for simple arrays to use
 	 * tal_resize() (or tal_arr_expand) to expand, which does not work on
-	 * NULL.  So we start with an zero-length array. */
+	 * NULL.  So we start with a zero-length array. */
 	ld->proposed_wireaddr = tal_arr(ld, struct wireaddr_internal, 0);
 	ld->proposed_listen_announce = tal_arr(ld, enum addr_listen_announce, 0);
 	ld->portnum = DEFAULT_PORT;
@@ -280,6 +280,16 @@ static struct lightningd *new_lightningd(const tal_t *ctx)
 	 * RPC. Can be overridden with `--rpc-file-mode`.
 	 */
 	ld->rpc_filemode = 0600;
+
+	/*~ This is the exit code to use on exit.
+	 * Set to NULL meaning we are not interested in exiting yet.
+	 */
+	ld->exit_code = NULL;
+
+	/*~ We maintain a round-robin list of channels.
+	 * This round-robin list of channels is used to ensure that
+	 * each invoice we generate has a different set of channels.  */
+	ld->rr_counter = 0;
 
 	return ld;
 }
@@ -375,7 +385,7 @@ void test_subdaemons(const struct lightningd *ld)
 
 		/*~ Our logging system: spam goes in at log_debug level, but
 		 * logging is mainly added by developer necessity and removed
-		 * by developer/user complaints .  The only strong convention
+		 * by developer/user complaints.  The only strong convention
 		 * is that log_broken() is used for "should never happen".
 		 *
 		 * Note, however, that logging takes care to preserve the
@@ -469,9 +479,9 @@ static const char *find_my_pkglibexec_path(struct lightningd *ld,
 
 	/*~ The plugin dir is in ../libexec/c-lightning/plugins, which (unlike
 	 * those given on the command line) does not need to exist. */
-	add_plugin_dir(ld->plugins,
-		       path_join(tmpctx, pkglibexecdir, "plugins"),
-		       true);
+	plugins_set_builtin_plugins_dir(ld->plugins,
+					path_join(tmpctx,
+						  pkglibexecdir, "plugins"));
 
 	/*~ Sometimes take() can be more efficient, since the routine can
 	 * manipulate the string in place.  This is the case here. */
@@ -484,10 +494,11 @@ static const char *find_daemon_dir(struct lightningd *ld, const char *argv0)
 	const char *my_path = find_my_directory(ld, argv0);
 	/* If we're running in-tree, all the subdaemons are with lightningd. */
 	if (has_all_subdaemons(my_path)) {
-		/* In this case, look in ../plugins */
-		add_plugin_dir(ld->plugins,
-			       path_join(tmpctx, my_path, "../plugins"),
-			       true);
+		/* In this case, look for built-in plugins in ../plugins */
+		plugins_set_builtin_plugins_dir(ld->plugins,
+						path_join(tmpctx,
+							  my_path,
+							  "../plugins"));
 		return my_path;
 	}
 
@@ -588,7 +599,7 @@ static void init_txfilter(struct wallet *w, struct txfilter *filter)
  *
  * But we define every path relative to our (~/.lightning) data dir, so we
  * make sure we stay there.  The rest of this is taken from ccan/daemonize,
- * which was based on W. Richard Steven's advice in Programming in The Unix
+ * which was based on W. Richard Stevens' advice in Programming in The Unix
  * Environment.
  */
 static void complete_daemonize(struct lightningd *ld)
@@ -727,6 +738,7 @@ static struct feature_set *default_features(const tal_t *ctx)
 		OPTIONAL_FEATURE(OPT_GOSSIP_QUERIES_EX),
 		OPTIONAL_FEATURE(OPT_STATIC_REMOTEKEY),
 #if EXPERIMENTAL_FEATURES
+		OPTIONAL_FEATURE(OPT_ANCHOR_OUTPUTS),
 		OPTIONAL_FEATURE(OPT_ONION_MESSAGES),
 #endif
 	};
@@ -751,6 +763,14 @@ static void hsm_ecdh_failed(enum status_failreason fail,
 	fatal("hsm failure: %s", fmt);
 }
 
+/*~ This signals to the mainloop that some part wants to cleanly exit now.  */
+void lightningd_exit(struct lightningd *ld, int exit_code)
+{
+	ld->exit_code = tal(ld, int);
+	*ld->exit_code = exit_code;
+	io_break(ld);
+}
+
 int main(int argc, char *argv[])
 {
 	struct lightningd *ld;
@@ -762,6 +782,8 @@ int main(int argc, char *argv[])
 	struct htlc_in_map *unconnected_htlcs_in;
 	struct ext_key *bip32_base;
 	struct rlimit nofile = {1024, 1024};
+
+	int exit_code = 0;
 
 	/*~ Make sure that we limit ourselves to something reasonable. Modesty
 	 *  is a virtue. */
@@ -914,9 +936,6 @@ int main(int argc, char *argv[])
 		       min_blockheight, max_blockheight);
 
 	db_begin_transaction(ld->wallet->db);
-	/*~ Tell the wallet to start figuring out what to do for any reserved
-	 * unspent outputs we may have crashed with. */
-	wallet_clean_utxos(ld->wallet, ld->topology->bitcoind);
 
 	/*~ Pull peers, channels and HTLCs from db. Needs to happen after the
 	 *  topology is initialized since some decisions rely on being able to
@@ -1002,10 +1021,18 @@ int main(int argc, char *argv[])
 	assert(io_loop_ret == ld);
 	ld->state = LD_STATE_SHUTDOWN;
 
-	/* Keep this fd around, to write final response at the end. */
-	stop_fd = io_conn_fd(ld->stop_conn);
-	io_close_taken_fd(ld->stop_conn);
-	stop_response = tal_steal(NULL, ld->stop_response);
+	stop_fd = -1;
+	stop_response = NULL;
+
+	/* Were we exited via `lightningd_exit`?  */
+	if (ld->exit_code) {
+		exit_code = *ld->exit_code;
+	} else if (ld->stop_conn) {
+		/* Keep this fd around, to write final response at the end. */
+		stop_fd = io_conn_fd(ld->stop_conn);
+		io_close_taken_fd(ld->stop_conn);
+		stop_response = tal_steal(NULL, ld->stop_response);
+	}
 
 	shutdown_subdaemons(ld);
 
@@ -1017,7 +1044,6 @@ int main(int argc, char *argv[])
 	 * unreserving UTXOs (see #1737) */
 	db_begin_transaction(ld->wallet->db);
 	tal_free(ld->jsonrpc);
-	free_unreleased_txs(ld->wallet);
 	db_commit_transaction(ld->wallet->db);
 
 	/* Clean our our HTLC maps, since they use malloc. */
@@ -1040,11 +1066,13 @@ int main(int argc, char *argv[])
 
 	daemon_shutdown();
 
-	/* Finally, send response to shutdown command */
-	write_all(stop_fd, stop_response, strlen(stop_response));
-	close(stop_fd);
-	tal_free(stop_response);
+	/* Finally, send response to shutdown command if appropriate.  */
+	if (stop_fd >= 0) {
+		write_all(stop_fd, stop_response, strlen(stop_response));
+		close(stop_fd);
+		tal_free(stop_response);
+	}
 
 	/*~ Farewell.  Next stop: hsmd/hsmd.c. */
-	return 0;
+	return exit_code;
 }
