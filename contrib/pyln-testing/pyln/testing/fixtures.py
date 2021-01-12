@@ -1,6 +1,6 @@
 from concurrent import futures
 from pyln.testing.db import SqliteDbProvider, PostgresDbProvider
-from pyln.testing.utils import NodeFactory, BitcoinD, ElementsD, env, DEVELOPER, LightningNode, TEST_DEBUG
+from pyln.testing.utils import NodeFactory, BitcoinD, ElementsD, env, DEVELOPER, LightningNode, TEST_DEBUG, Throttler
 from typing import Dict
 
 import logging
@@ -138,14 +138,6 @@ def bitcoind(directory, teardown_checks):
         raise ValueError("elementsd is too old. At least version 160000 (v0.16.0)"
                          " is needed, current version is {}".format(info['version']))
 
-    # Make sure we have a wallet, starting with 0.21 there is no default wallet
-    # anymore.
-    # FIXME: if we update the testsuite to use the upcoming 0.21 release we
-    # could switch to descriptor wallets and speed bitcoind operations
-    # consequently.
-    if not bitcoind.rpc.listwallets():
-        bitcoind.rpc.createwallet("lightningd-tests")
-
     info = bitcoind.rpc.getblockchaininfo()
     # Make sure we have some spendable funds
     if info['blocks'] < 101:
@@ -206,7 +198,12 @@ def teardown_checks(request):
 
 
 @pytest.fixture
-def node_factory(request, directory, test_name, bitcoind, executor, db_provider, teardown_checks, node_cls):
+def throttler():
+    yield Throttler()
+
+
+@pytest.fixture
+def node_factory(request, directory, test_name, bitcoind, executor, db_provider, teardown_checks, node_cls, throttler):
     nf = NodeFactory(
         request,
         test_name,
@@ -214,7 +211,8 @@ def node_factory(request, directory, test_name, bitcoind, executor, db_provider,
         executor,
         directory=directory,
         db_provider=db_provider,
-        node_cls=node_cls
+        node_cls=node_cls,
+        throttler=throttler,
     )
 
     yield nf

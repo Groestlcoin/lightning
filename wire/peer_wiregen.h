@@ -170,7 +170,7 @@ bool fromwire_init_tlvs(const u8 **cursor, size_t *max,
  * ensures that the resulting stream is valid according to
  * `init_tlvs_is_valid`.
  */
-void towire_init_tlvs(u8 **pptr, const void *record);
+void towire_init_tlvs(u8 **pptr, const struct tlv_init_tlvs *record);
 
 /**
  * Check that the TLV stream is valid.
@@ -207,7 +207,7 @@ bool fromwire_n1(const u8 **cursor, size_t *max,
  * ensures that the resulting stream is valid according to
  * `n1_is_valid`.
  */
-void towire_n1(u8 **pptr, const void *record);
+void towire_n1(u8 **pptr, const struct tlv_n1 *record);
 
 /**
  * Check that the TLV stream is valid.
@@ -223,7 +223,7 @@ void towire_n1(u8 **pptr, const void *record);
 bool n1_is_valid(const struct tlv_n1 *record,
 			  size_t *err_index);
 
-#define TLVS_N1_ARRAY_SIZE 4
+#define TLVS_ARRAY_SIZE_n1 4
 extern const struct tlv_record_type tlvs_n1[];
 
 
@@ -257,7 +257,7 @@ bool fromwire_n2(const u8 **cursor, size_t *max,
  * ensures that the resulting stream is valid according to
  * `n2_is_valid`.
  */
-void towire_n2(u8 **pptr, const void *record);
+void towire_n2(u8 **pptr, const struct tlv_n2 *record);
 
 /**
  * Check that the TLV stream is valid.
@@ -273,7 +273,7 @@ void towire_n2(u8 **pptr, const void *record);
 bool n2_is_valid(const struct tlv_n2 *record,
 			  size_t *err_index);
 
-#define TLVS_N2_ARRAY_SIZE 2
+#define TLVS_ARRAY_SIZE_n2 2
 extern const struct tlv_record_type tlvs_n2[];
 
 
@@ -305,7 +305,7 @@ bool fromwire_open_channel_tlvs(const u8 **cursor, size_t *max,
  * ensures that the resulting stream is valid according to
  * `open_channel_tlvs_is_valid`.
  */
-void towire_open_channel_tlvs(u8 **pptr, const void *record);
+void towire_open_channel_tlvs(u8 **pptr, const struct tlv_open_channel_tlvs *record);
 
 /**
  * Check that the TLV stream is valid.
@@ -342,7 +342,7 @@ bool fromwire_accept_channel_tlvs(const u8 **cursor, size_t *max,
  * ensures that the resulting stream is valid according to
  * `accept_channel_tlvs_is_valid`.
  */
-void towire_accept_channel_tlvs(u8 **pptr, const void *record);
+void towire_accept_channel_tlvs(u8 **pptr, const struct tlv_accept_channel_tlvs *record);
 
 /**
  * Check that the TLV stream is valid.
@@ -379,7 +379,7 @@ bool fromwire_query_short_channel_ids_tlvs(const u8 **cursor, size_t *max,
  * ensures that the resulting stream is valid according to
  * `query_short_channel_ids_tlvs_is_valid`.
  */
-void towire_query_short_channel_ids_tlvs(u8 **pptr, const void *record);
+void towire_query_short_channel_ids_tlvs(u8 **pptr, const struct tlv_query_short_channel_ids_tlvs *record);
 
 /**
  * Check that the TLV stream is valid.
@@ -416,7 +416,7 @@ bool fromwire_query_channel_range_tlvs(const u8 **cursor, size_t *max,
  * ensures that the resulting stream is valid according to
  * `query_channel_range_tlvs_is_valid`.
  */
-void towire_query_channel_range_tlvs(u8 **pptr, const void *record);
+void towire_query_channel_range_tlvs(u8 **pptr, const struct tlv_query_channel_range_tlvs *record);
 
 /**
  * Check that the TLV stream is valid.
@@ -453,7 +453,7 @@ bool fromwire_reply_channel_range_tlvs(const u8 **cursor, size_t *max,
  * ensures that the resulting stream is valid according to
  * `reply_channel_range_tlvs_is_valid`.
  */
-void towire_reply_channel_range_tlvs(u8 **pptr, const void *record);
+void towire_reply_channel_range_tlvs(u8 **pptr, const struct tlv_reply_channel_range_tlvs *record);
 
 /**
  * Check that the TLV stream is valid.
@@ -595,4 +595,4 @@ bool fromwire_channel_update_option_channel_htlc_max(const void *p, secp256k1_ec
 
 
 #endif /* LIGHTNING_WIRE_PEER_WIREGEN_H */
-// SHA256STAMP:cb418f8296955fdcd26b9f06259a0c120007b543bc167f486989ac289a48c4af
+// SHA256STAMP:7cb56bd1ecb24076a620bf103cd28fc31cd45a31e2d6e59a1fd1f2a742d520fd

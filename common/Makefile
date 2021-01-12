@@ -6,9 +6,12 @@ COMMON_SRC_NOGEN :=				\
 	common/bech32.c				\
 	common/bech32_util.c			\
 	common/bigsize.c			\
+	common/billboard.c			\
 	common/bip32.c				\
 	common/blinding.c			\
 	common/bolt11.c				\
+	common/bolt11_json.c			\
+	common/bolt12.c				\
 	common/channel_config.c			\
 	common/channel_id.c			\
 	common/coin_mvt.c			\
@@ -31,6 +34,7 @@ COMMON_SRC_NOGEN :=				\
 	common/gossip_store.c			\
 	common/hash_u5.c			\
 	common/hmac.c				\
+	common/hsm_encryption.c			\
 	common/htlc_state.c			\
 	common/htlc_trim.c			\
 	common/htlc_tx.c			\
@@ -82,9 +86,15 @@ COMMON_SRC_NOGEN :=				\
 
 ifeq ($(EXPERIMENTAL_FEATURES),1)
 COMMON_SRC_NOGEN += common/psbt_internal.c
+COMMON_SRC_NOGEN += common/blindedpath.c
 endif
 
 COMMON_SRC_GEN := common/status_wiregen.c common/peer_status_wiregen.c
+
+ifeq ($(EXPERIMENTAL_FEATURES),1)
+COMMON_SRC_NOGEN += common/bolt12.c
+COMMON_SRC_NOGEN += common/bolt12_merkle.c
+endif
 
 COMMON_HEADERS_NOGEN := $(COMMON_SRC_NOGEN:.c=.h)	\
 	common/closing_fee.h				\
@@ -92,6 +102,7 @@ COMMON_HEADERS_NOGEN := $(COMMON_SRC_NOGEN:.c=.h)	\
 	common/errcode.h				\
 	common/gossip_constants.h			\
 	common/htlc.h					\
+	common/iso4217.h				\
 	common/json_command.h				\
 	common/jsonrpc_errors.h				\
 	common/overflows.h				\

@@ -186,13 +186,17 @@ command_success(struct command *cmd, const struct json_out *result);
 struct command_result *WARN_UNUSED_RESULT
 command_success_str(struct command *cmd, const char *str);
 
-/* Synchronous helper to send command and extract single field from
+/* End a hook normally (with "result": "continue") */
+struct command_result *WARN_UNUSED_RESULT
+command_hook_success(struct command *cmd);
+
+/* Synchronous helper to send command and extract fields from
  * response; can only be used in init callback. */
-const char *rpc_delve(const tal_t *ctx,
-		      struct plugin *plugin,
-		      const char *method,
-		      const struct json_out *params TAKES,
-		      const char *guide);
+void rpc_scan(struct plugin *plugin,
+	      const char *method,
+	      const struct json_out *params TAKES,
+	      const char *guide,
+	      ...);
 
 /* Send an async rpc request to lightningd. */
 struct command_result *

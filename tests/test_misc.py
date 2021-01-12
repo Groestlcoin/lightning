@@ -216,7 +216,11 @@ def test_lightningd_still_loading(node_factory, bitcoind, executor):
     # Can't fund a new channel.
     l1.rpc.connect(l3.info['id'], 'localhost', l3.port)
     with pytest.raises(RpcError, match=r'304'):
-        l1.rpc.fundchannel_start(l3.info['id'], '10000sat')
+        if l1.config('experimental-dual-fund'):
+            psbt = l1.rpc.fundpsbt('10000sat', '253perkw', 250)['psbt']
+            l1.rpc.openchannel_init(l3.info['id'], '10000sat', psbt)
+        else:
+            l1.rpc.fundchannel_start(l3.info['id'], '10000sat')
 
     # Attempting to fund an extremely large transaction should fail
     # with a 'unsynced' error
@@ -712,13 +716,10 @@ def test_io_logging(node_factory, executor):
     # Fundchannel manually so we get channeld pid.
     l1.fundwallet(10**6 + 1000000)
     l1.rpc.fundchannel(l2.info['id'], 10**6)['tx']
-    pid1 = l1.subd_pid('channeld')
 
     l1.daemon.wait_for_log('sendrawtx exit 0')
     l1.bitcoin.generate_block(1)
     l1.daemon.wait_for_log(' to CHANNELD_NORMAL')
-
-    pid2 = l2.subd_pid('channeld')
     l2.daemon.wait_for_log(' to CHANNELD_NORMAL')
 
     fut = executor.submit(l1.pay, l2, 200000000)
@@ -730,6 +731,7 @@ def test_io_logging(node_factory, executor):
     fut.result(10)
 
     # Send it sigusr1: should turn off logging.
+    pid1 = l1.subd_pid('channeld')
     subprocess.run(['kill', '-USR1', pid1])
 
     l1.pay(l2, 200000000)
@@ -745,6 +747,7 @@ def test_io_logging(node_factory, executor):
                    for l in peerlog)
 
     # Turn on in l2 channel logging.
+    pid2 = l2.subd_pid('channeld')
     subprocess.run(['kill', '-USR1', pid2])
     l1.pay(l2, 200000000)
 
@@ -1161,8 +1164,10 @@ def test_funding_reorg_private(node_factory, bitcoind):
 
     l1.rpc.fundchannel(l2.info['id'], "all", announce=False)
     bitcoind.generate_block(1)                      # height 106
+
+    daemon = 'DUALOPEND' if l1.config('experimental-dual-fund') else 'CHANNELD'
     wait_for(lambda: only_one(l1.rpc.listpeers()['peers'][0]['channels'])['status']
-             == ['CHANNELD_AWAITING_LOCKIN:Funding needs 1 more confirmations for lockin.'])
+             == ['{}_AWAITING_LOCKIN:Funding needs 1 more confirmations for lockin.'.format(daemon)])
     bitcoind.generate_block(1)                      # height 107
     l1.wait_channel_active('106x1x0')
     l1.stop()
@@ -1552,6 +1557,16 @@ def test_logging(node_factory):
     def check_new_log():
         log2 = open(logpath).readlines()
         return len(log2) > 0 and log2[0].endswith("Started log due to SIGHUP\n")
+    wait_for(check_new_log)
+
+    # Issue #4240
+    # Repeated SIGHUP should just re-open the log file
+    # and not terminate the daemon.
+    logpath_moved_2 = os.path.join(l1.daemon.lightning_dir, TEST_NETWORK, 'logfile_moved_2')
+    shutil.move(logpath, logpath_moved_2)
+    l1.daemon.proc.send_signal(signal.SIGHUP)
+    wait_for(lambda: os.path.exists(logpath_moved_2))
+    wait_for(lambda: os.path.exists(logpath))
     wait_for(check_new_log)
 
 
@@ -2338,15 +2353,18 @@ def test_sendonionmessage_reply(node_factory):
     # First hop can't be blinded!
     assert p1 == l2.info['id']
 
+    # Also tests oversize payload which won't fit in 1366-byte onion.
     l1.rpc.call('sendonionmessage',
                 {'hops':
                  [{'id': l2.info['id']},
-                  {'id': l3.info['id']}],
+                  {'id': l3.info['id'],
+                   'invoice': '77' * 15000}],
                  'reply_path':
                  {'blinding': blinding,
                   'path': [{'id': p1, 'enctlv': p1enc}, {'id': p2}]}})
 
     assert l3.daemon.wait_for_log('Got onionmsg reply_blinding reply_path')
+    assert l3.daemon.wait_for_log("Got onion_message invoice '{}'".format('77' * 15000))
     assert l3.daemon.wait_for_log('Sent reply via')
     assert l1.daemon.wait_for_log('Got onionmsg')
 
@@ -2400,3 +2418,24 @@ def test_listtransactions(node_factory):
     # The txid of the transaction funding the channel is present, and
     # represented as little endian (like bitcoind and explorers).
     assert wallettxid in txids
+
+
+def test_listfunds(node_factory):
+    """Test listfunds command."""
+    l1, l2 = node_factory.get_nodes(2, opts=[{}, {}])
+
+    open_txid = l1.openchannel(l2, 10**5)["wallettxid"]
+
+    # unspent outputs
+    utxos = l1.rpc.listfunds()["outputs"]
+
+    # only 1 unspent output should be available
+    assert len(utxos) == 1
+
+    # both unspent and spent outputs
+    all_outputs = l1.rpc.listfunds(spent=True)["outputs"]
+    txids = [output['txid'] for output in all_outputs]
+
+    # 1 spent output (channel opening) and 1 unspent output
+    assert len(all_outputs) == 2
+    assert open_txid in txids

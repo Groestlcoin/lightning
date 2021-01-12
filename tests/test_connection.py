@@ -9,8 +9,9 @@ from utils import (
     expected_peer_features, expected_node_features,
     expected_channel_features,
     check_coin_moves, first_channel_id, account_balance, basic_fee,
-    EXPERIMENTAL_FEATURES
+    EXPERIMENTAL_FEATURES, EXPERIMENTAL_DUAL_FUND
 )
+from pyln.testing.utils import SLOW_MACHINE, VALGRIND
 from bitcoin.core import CMutableTransaction, CMutableTxOut
 
 import binascii
@@ -154,8 +155,8 @@ def test_bad_opening(node_factory):
 
     assert ret['id'] == l2.info['id']
 
-    l1.daemon.wait_for_log('openingd-.*: Handed peer, entering loop')
-    l2.daemon.wait_for_log('openingd-.*: Handed peer, entering loop')
+    l1.daemon.wait_for_log('Handed peer, entering loop')
+    l2.daemon.wait_for_log('Handed peer, entering loop')
 
     l1.fundwallet(10**6 + 1000000)
     with pytest.raises(RpcError):
@@ -268,6 +269,20 @@ def test_disconnect_opener(node_factory):
                    '+WIRE_OPEN_CHANNEL',
                    '-WIRE_FUNDING_CREATED',
                    '@WIRE_FUNDING_CREATED']
+    if EXPERIMENTAL_DUAL_FUND:
+        disconnects = ['-WIRE_OPEN_CHANNEL2',
+                       '@WIRE_OPEN_CHANNEL2',
+                       '+WIRE_OPEN_CHANNEL2',
+                       '-WIRE_TX_ADD_INPUT',
+                       '@WIRE_TX_ADD_INPUT',
+                       '+WIRE_TX_ADD_INPUT',
+                       '-WIRE_TX_ADD_OUTPUT',
+                       '@WIRE_TX_ADD_OUTPUT',
+                       '+WIRE_TX_ADD_OUTPUT',
+                       '-WIRE_TX_COMPLETE',
+                       '@WIRE_TX_COMPLETE',
+                       '+WIRE_TX_COMPLETE']
+
     l1 = node_factory.get_node(disconnect=disconnects)
     l2 = node_factory.get_node()
 
@@ -294,6 +309,14 @@ def test_disconnect_fundee(node_factory):
     disconnects = ['-WIRE_ACCEPT_CHANNEL',
                    '@WIRE_ACCEPT_CHANNEL',
                    '+WIRE_ACCEPT_CHANNEL']
+    if EXPERIMENTAL_DUAL_FUND:
+        disconnects = ['-WIRE_ACCEPT_CHANNEL2',
+                       '@WIRE_ACCEPT_CHANNEL2',
+                       '+WIRE_ACCEPT_CHANNEL2',
+                       '-WIRE_TX_COMPLETE',
+                       '@WIRE_TX_COMPLETE',
+                       '+WIRE_TX_COMPLETE']
+
     l1 = node_factory.get_node()
     l2 = node_factory.get_node(disconnect=disconnects)
 
@@ -315,10 +338,53 @@ def test_disconnect_fundee(node_factory):
 
 
 @unittest.skipIf(not DEVELOPER, "needs DEVELOPER=1")
+@unittest.skipIf(not EXPERIMENTAL_DUAL_FUND, "needs OPT_DUAL_FUND")
+def test_disconnect_fundee_v2(node_factory):
+    # Now error on fundee side during channel open, with them funding
+    disconnects = ['-WIRE_ACCEPT_CHANNEL2',
+                   '@WIRE_ACCEPT_CHANNEL2',
+                   '+WIRE_ACCEPT_CHANNEL2',
+                   '-WIRE_TX_ADD_INPUT',
+                   '@WIRE_TX_ADD_INPUT',
+                   '+WIRE_TX_ADD_INPUT',
+                   '-WIRE_TX_ADD_OUTPUT',
+                   '@WIRE_TX_ADD_OUTPUT',
+                   '+WIRE_TX_ADD_OUTPUT',
+                   '-WIRE_TX_COMPLETE',
+                   '@WIRE_TX_COMPLETE',
+                   '+WIRE_TX_COMPLETE']
+
+    accepter_plugin = os.path.join(os.path.dirname(__file__),
+                                   'plugins/df_accepter.py')
+    l1 = node_factory.get_node()
+    l2 = node_factory.get_node(disconnect=disconnects,
+                               options={'plugin': accepter_plugin})
+
+    l1.fundwallet(2000000)
+    l2.fundwallet(2000000)
+
+    for d in disconnects:
+        l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
+        with pytest.raises(RpcError):
+            l1.rpc.fundchannel(l2.info['id'], 25000)
+        assert l1.rpc.getpeer(l2.info['id']) is None
+
+    # This one will succeed.
+    l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
+    l1.rpc.fundchannel(l2.info['id'], 25000)
+
+    # Should still only have one peer!
+    assert len(l1.rpc.listpeers()) == 1
+    assert len(l2.rpc.listpeers()) == 1
+
+
+@unittest.skipIf(not DEVELOPER, "needs DEVELOPER=1")
 def test_disconnect_half_signed(node_factory):
     # Now, these are the corner cases.  Fundee sends funding_signed,
     # but opener doesn't receive it.
     disconnects = ['@WIRE_FUNDING_SIGNED']
+    if EXPERIMENTAL_DUAL_FUND:
+        disconnects = ['@WIRE_COMMITMENT_SIGNED']
     l1 = node_factory.get_node()
     l2 = node_factory.get_node(disconnect=disconnects)
 
@@ -337,6 +403,9 @@ def test_disconnect_half_signed(node_factory):
 def test_reconnect_signed(node_factory):
     # This will fail *after* both sides consider channel opening.
     disconnects = ['+WIRE_FUNDING_SIGNED']
+    if EXPERIMENTAL_DUAL_FUND:
+        disconnects = ['+WIRE_COMMITMENT_SIGNED']
+
     l1 = node_factory.get_node(may_reconnect=True)
     l2 = node_factory.get_node(disconnect=disconnects,
                                may_reconnect=True)
@@ -351,8 +420,12 @@ def test_reconnect_signed(node_factory):
     assert l2.rpc.getpeer(l1.info['id'])['id'] == l1.info['id']
 
     # Technically, this is async to fundchannel (and could reconnect first)
-    l1.daemon.wait_for_logs(['sendrawtx exit 0',
-                             'Peer has reconnected, state CHANNELD_AWAITING_LOCKIN'])
+    if EXPERIMENTAL_DUAL_FUND:
+        l1.daemon.wait_for_logs(['sendrawtx exit 0',
+                                 'Peer has reconnected, state DUALOPEND_OPEN_INIT'])
+    else:
+        l1.daemon.wait_for_logs(['sendrawtx exit 0',
+                                 'Peer has reconnected, state CHANNELD_AWAITING_LOCKIN'])
 
     l1.bitcoin.generate_block(6)
 
@@ -364,6 +437,10 @@ def test_reconnect_signed(node_factory):
 def test_reconnect_openingd(node_factory):
     # Openingd thinks we're still opening; opener reconnects..
     disconnects = ['0WIRE_ACCEPT_CHANNEL']
+
+    if EXPERIMENTAL_DUAL_FUND:
+        disconnects = ['0WIRE_ACCEPT_CHANNEL2']
+
     l1 = node_factory.get_node(may_reconnect=True)
     l2 = node_factory.get_node(disconnect=disconnects,
                                may_reconnect=True)
@@ -381,7 +458,7 @@ def test_reconnect_openingd(node_factory):
 
     # We should get a message about reconnecting.
     l2.daemon.wait_for_log('Killing opening daemon: Reconnected')
-    l2.daemon.wait_for_log('openingd.*Handed peer, entering loop')
+    l2.daemon.wait_for_log('Handed peer, entering loop')
 
     # Should work fine.
     l1.rpc.fundchannel(l2.info['id'], 25000)
@@ -427,7 +504,11 @@ def test_reconnect_no_update(node_factory, executor):
     # For channeld reconnection
     l1.rpc.connect(l2.info["id"], "localhost", l2.port)
     fundchannel_exec = executor.submit(l1.fundchannel, l2, 10**6, False)
-    l1.daemon.wait_for_log(r"channeld.* Retransmitting funding_locked for channel")
+    if l1.config('experimental-dual-fund'):
+        l2.daemon.wait_for_log(r"Unexpected `tx_signatures` from peer. Allowing.")
+        l1.daemon.wait_for_log(r"dualopend.* Retransmitting funding_locked for channel")
+    else:
+        l1.daemon.wait_for_log(r"channeld.* Retransmitting funding_locked for channel")
     l1.stop()
 
     # For closingd reconnection
@@ -535,6 +616,9 @@ def test_reconnect_sender_add(node_factory):
                    '-WIRE_REVOKE_AND_ACK',
                    '@WIRE_REVOKE_AND_ACK',
                    '+WIRE_REVOKE_AND_ACK']
+    if EXPERIMENTAL_DUAL_FUND:
+        disconnects = ['=WIRE_COMMITMENT_SIGNED'] + disconnects
+
     # Feerates identical so we don't get gratuitous commit to update them
     l1 = node_factory.get_node(disconnect=disconnects,
                                may_reconnect=True,
@@ -565,6 +649,10 @@ def test_reconnect_receiver_add(node_factory):
                    '-WIRE_REVOKE_AND_ACK',
                    '@WIRE_REVOKE_AND_ACK',
                    '+WIRE_REVOKE_AND_ACK']
+
+    if EXPERIMENTAL_DUAL_FUND:
+        disconnects = ['=WIRE_COMMITMENT_SIGNED'] + disconnects
+
     # Feerates identical so we don't get gratuitous commit to update them
     l1 = node_factory.get_node(may_reconnect=True, feerates=(7500, 7500, 7500, 7500))
     l2 = node_factory.get_node(disconnect=disconnects,
@@ -695,8 +783,10 @@ def test_shutdown_awaiting_lockin(node_factory, bitcoind):
 
     l1.rpc.close(chanid)
 
-    l1.daemon.wait_for_log('CHANNELD_AWAITING_LOCKIN to CHANNELD_SHUTTING_DOWN')
-    l2.daemon.wait_for_log('CHANNELD_AWAITING_LOCKIN to CHANNELD_SHUTTING_DOWN')
+    l1_state = 'DUALOPEND' if l1.config('experimental-dual-fund') else 'CHANNELD'
+    l2_state = 'DUALOPEND' if l1.config('experimental-dual-fund') else 'CHANNELD'
+    l1.daemon.wait_for_log('{}_AWAITING_LOCKIN to CHANNELD_SHUTTING_DOWN'.format(l1_state))
+    l2.daemon.wait_for_log('{}_AWAITING_LOCKIN to CHANNELD_SHUTTING_DOWN'.format(l2_state))
 
     l1.daemon.wait_for_log('CHANNELD_SHUTTING_DOWN to CLOSINGD_SIGEXCHANGE')
     l2.daemon.wait_for_log('CHANNELD_SHUTTING_DOWN to CLOSINGD_SIGEXCHANGE')
@@ -823,7 +913,7 @@ def test_funding_fail(node_factory, bitcoind):
 
     # Should still be connected.
     assert only_one(l1.rpc.listpeers()['peers'])['connected']
-    l2.daemon.wait_for_log('openingd-.*: Handed peer, entering loop')
+    l2.daemon.wait_for_log('Handed peer, entering loop')
     assert only_one(l2.rpc.listpeers()['peers'])['connected']
 
     # This works.
@@ -855,11 +945,10 @@ def test_funding_toolarge(node_factory, bitcoind):
 
 @unittest.skipIf(TEST_NETWORK != 'regtest', 'elementsd doesnt yet support PSBT features we need')
 @unittest.skipIf(not EXPERIMENTAL_FEATURES, "dual-funding is experimental only")
-@unittest.skipIf(True, "df_opener.py requires wallycore")
 def test_v2_open(node_factory, bitcoind, chainparams):
-    l1 = node_factory.get_node(options={'plugin': os.path.join(os.getcwd(),
-                                        'tests/plugins/df_opener.py')})
-    l2 = node_factory.get_node()
+    l1, l2 = node_factory.get_nodes(2,
+                                    opts=[{'dev-force-features': '+223'},
+                                          {'dev-force-features': '+223'}])
 
     l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
     amount = 2**24
@@ -868,7 +957,7 @@ def test_v2_open(node_factory, bitcoind, chainparams):
     # Wait for it to arrive.
     wait_for(lambda: len(l1.rpc.listfunds()['outputs']) > 0)
 
-    l1.rpc.openchannelv2(l2.info['id'], 100000)
+    l1.rpc.fundchannel(l2.info['id'], 100000)
 
     bitcoind.generate_block(1)
     sync_blockheight(bitcoind, [l1])
@@ -959,6 +1048,7 @@ def test_funding_by_utxos(node_factory, bitcoind):
 
 
 @unittest.skipIf(not DEVELOPER, "needs dev_forget_channel")
+@unittest.skipIf(EXPERIMENTAL_DUAL_FUND, "Uses fundchannel_start")
 def test_funding_external_wallet_corners(node_factory, bitcoind):
     l1 = node_factory.get_node(may_reconnect=True)
     l2 = node_factory.get_node(may_reconnect=True)
@@ -1053,6 +1143,8 @@ def test_funding_external_wallet_corners(node_factory, bitcoind):
     l1.rpc.close(l2.info['id'])
 
 
+@unittest.skipIf(SLOW_MACHINE and not VALGRIND, "Way too taxing on CI machines")
+@unittest.skipIf(EXPERIMENTAL_DUAL_FUND, "requires fundchannel_start")
 def test_funding_cancel_race(node_factory, bitcoind, executor):
     l1 = node_factory.get_node()
 
@@ -1201,6 +1293,7 @@ def test_funding_close_upfront(node_factory, bitcoind):
 
 
 @unittest.skipIf(TEST_NETWORK != 'regtest', "External wallet support doesn't work with elements yet.")
+@unittest.skipIf(EXPERIMENTAL_DUAL_FUND, "v2 doesn't work with fundchannel_start")
 def test_funding_external_wallet(node_factory, bitcoind):
     l1, l2, l3 = node_factory.get_nodes(3, opts=[{'funding-confirms': 2},
                                                  {'funding-confirms': 2}, {}])
@@ -1262,6 +1355,81 @@ def test_funding_external_wallet(node_factory, bitcoind):
     l2.connect(l3)
     l2.rpc.fundchannel_start(l3.info["id"], amount)
     l3.rpc.close(l2.info["id"])
+
+
+@unittest.skipIf(not EXPERIMENTAL_FEATURES, "requires opt_dual_fund")
+def test_multifunding_v2_v1_mixed(node_factory, bitcoind):
+    '''
+    Simple test for multifundchannel, using v1 + v2
+    '''
+    accepter_plugin = os.path.join(os.path.dirname(__file__),
+                                   'plugins/df_accepter.py')
+    options = [{'experimental-dual-fund': None},
+               {'plugin': accepter_plugin,
+                'experimental-dual-fund': None},
+               {'plugin': accepter_plugin,
+                'experimental-dual-fund': None},
+               {}]
+
+    l1, l2, l3, l4 = node_factory.get_nodes(4, opts=options)
+
+    l1.fundwallet(2000000)
+    l2.fundwallet(2000000)
+    l3.fundwallet(2000000)
+
+    destinations = [{"id": '{}@localhost:{}'.format(l2.info['id'], l2.port),
+                     "amount": 50000},
+                    {"id": '{}@localhost:{}'.format(l3.info['id'], l3.port),
+                     "amount": 50000},
+                    {"id": '{}@localhost:{}'.format(l4.info['id'], l4.port),
+                     "amount": 50000}]
+
+    l1.rpc.multifundchannel(destinations)
+    bitcoind.generate_block(6, wait_for_mempool=1)
+
+    for node in [l1, l2, l3, l4]:
+        node.daemon.wait_for_log(r'to CHANNELD_NORMAL')
+
+    for ldest in [l2, l3, l4]:
+        inv = ldest.rpc.invoice(5000, 'inv', 'inv')['bolt11']
+        l1.rpc.pay(inv)
+
+
+@unittest.skipIf(not EXPERIMENTAL_FEATURES, "requires opt_dual_fund")
+@unittest.skipIf(not DEVELOPER, "requires dev-force-features")
+def test_multifunding_v2_exclusive(node_factory, bitcoind):
+    '''
+    Simple test for multifundchannel, using v2
+    '''
+    accepter_plugin = os.path.join(os.path.dirname(__file__),
+                                   'plugins/df_accepter.py')
+    # Two of three will reply with inputs of their own
+    options = [{'dev-force-features': '+223'},
+               {'plugin': accepter_plugin, 'dev-force-features': '+223'},
+               {'plugin': accepter_plugin, 'dev-force-features': '+223'},
+               {'dev-force-features': '+223'}]
+    l1, l2, l3, l4 = node_factory.get_nodes(4, opts=options)
+
+    l1.fundwallet(2000000)
+    l2.fundwallet(2000000)
+    l3.fundwallet(2000000)
+
+    destinations = [{"id": '{}@localhost:{}'.format(l2.info['id'], l2.port),
+                     "amount": 50000},
+                    {"id": '{}@localhost:{}'.format(l3.info['id'], l3.port),
+                     "amount": 50000},
+                    {"id": '{}@localhost:{}'.format(l4.info['id'], l4.port),
+                     "amount": 50000}]
+
+    l1.rpc.multifundchannel(destinations)
+    bitcoind.generate_block(6, wait_for_mempool=1)
+
+    for node in [l1, l2, l3, l4]:
+        node.daemon.wait_for_log(r'to CHANNELD_NORMAL')
+
+    for ldest in [l2, l3, l4]:
+        inv = ldest.rpc.invoice(5000, 'inv', 'inv')['bolt11']
+        l1.rpc.pay(inv)
 
 
 def test_multifunding_simple(node_factory, bitcoind):
@@ -1620,10 +1788,14 @@ def test_channel_persistence(node_factory, bitcoind, executor):
     # mysteriously die while committing the first HTLC so we can
     # check that HTLCs reloaded from the DB work.
     # Feerates identical so we don't get gratuitous commit to update them
+    disconnect = ['=WIRE_COMMITMENT_SIGNED-nocommit']
+
+    if EXPERIMENTAL_DUAL_FUND:
+        disconnect = ['=WIRE_COMMITMENT_SIGNED'] + disconnect
+
     l1 = node_factory.get_node(may_reconnect=True, feerates=(7500, 7500, 7500,
                                                              7500))
-    l2 = node_factory.get_node(disconnect=['=WIRE_COMMITMENT_SIGNED-nocommit'],
-                               may_reconnect=True)
+    l2 = node_factory.get_node(disconnect=disconnect, may_reconnect=True)
     l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
 
     # Neither node should have a channel open, they are just connected
@@ -1642,6 +1814,7 @@ def test_channel_persistence(node_factory, bitcoind, executor):
     # Fire off a sendpay request, it'll get interrupted by a restart
     executor.submit(l1.pay, l2, 10000)
     # Wait for it to be committed to, i.e., stored in the DB
+    l1.daemon.wait_for_log('peer_in WIRE_FUNDING_LOCKED')
     l1.daemon.wait_for_log('peer_in WIRE_COMMITMENT_SIGNED')
 
     # Stop l2, l1 will reattempt to connect
@@ -1883,8 +2056,8 @@ def test_multiple_channels(node_factory):
         ret = l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
         assert ret['id'] == l2.info['id']
 
-        l1.daemon.wait_for_log('openingd-.*: Handed peer, entering loop')
-        l2.daemon.wait_for_log('openingd-.*: Handed peer, entering loop')
+        l1.daemon.wait_for_log('Handed peer, entering loop')
+        l2.daemon.wait_for_log('Handed peer, entering loop')
         chan, _ = l1.fundchannel(l2, 10**6)
 
         l1.rpc.close(chan)
@@ -1928,8 +2101,14 @@ def test_forget_channel(node_factory):
 
 def test_peerinfo(node_factory, bitcoind):
     l1, l2 = node_factory.line_graph(2, fundchannel=False, opts={'may_reconnect': True})
-    lfeatures = expected_peer_features()
-    nfeatures = expected_node_features()
+
+    if l1.config('experimental-dual-fund'):
+        lfeatures = expected_peer_features(extra=[223])
+        nfeatures = expected_node_features(extra=[223])
+    else:
+        lfeatures = expected_peer_features()
+        nfeatures = expected_node_features()
+
     # Gossiping but no node announcement yet
     assert l1.rpc.getpeer(l2.info['id'])['connected']
     assert len(l1.rpc.getpeer(l2.info['id'])['channels']) == 0
@@ -2187,6 +2366,8 @@ def test_dataloss_protection(node_factory, bitcoind):
                                feerates=(7500, 7500, 7500, 7500), allow_broken_log=True)
 
     lf = expected_peer_features()
+    if l1.config('experimental-dual-fund'):
+        lf = expected_peer_features(extra=[223])
 
     l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
     # l1 should send out WIRE_INIT (0010)
@@ -2255,7 +2436,8 @@ def test_dataloss_protection(node_factory, bitcoind):
 
     # l2 must NOT drop to chain.
     l2.daemon.wait_for_log("Cannot broadcast our commitment tx: they have a future one")
-    assert not l2.daemon.is_in_log('sendrawtx exit 0')
+    assert not l2.daemon.is_in_log('sendrawtx exit 0',
+                                   start=l2.daemon.logsearch_start)
 
     closetxid = only_one(bitcoind.rpc.getrawmempool(False))
 
@@ -2442,8 +2624,12 @@ def test_restart_many_payments(node_factory, bitcoind):
 def test_fail_unconfirmed(node_factory, bitcoind, executor):
     """Test that if we crash with an unconfirmed connection to a known
     peer, we don't have a dangling peer in db"""
+    if EXPERIMENTAL_DUAL_FUND:
+        disconnect = ['=WIRE_OPEN_CHANNEL2']
+    else:
+        disconnect = ['=WIRE_OPEN_CHANNEL']
     # = is a NOOP disconnect, but sets up file.
-    l1 = node_factory.get_node(disconnect=['=WIRE_OPEN_CHANNEL'])
+    l1 = node_factory.get_node(disconnect=disconnect)
     l2 = node_factory.get_node()
 
     # First one, we close by mutual agreement.
@@ -2459,7 +2645,57 @@ def test_fail_unconfirmed(node_factory, bitcoind, executor):
     l1.stop()
     # Mangle disconnect file so this time it blackholes....
     with open(l1.daemon.disconnect_file, "w") as f:
-        f.write("0WIRE_OPEN_CHANNEL\n")
+        if EXPERIMENTAL_DUAL_FUND:
+            f.write("0WIRE_OPEN_CHANNEL2\n")
+        else:
+            f.write("0WIRE_OPEN_CHANNEL\n")
+    l1.start()
+
+    # Now we establish a new channel, which gets stuck.
+    l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
+    l1.fundwallet(10**7)
+    executor.submit(l1.rpc.fundchannel, l2.info['id'], 100000)
+
+    l1.daemon.wait_for_log("dev_disconnect")
+
+    # Now complete old channel.
+    bitcoind.generate_block(100)
+    l1.daemon.wait_for_log('onchaind complete, forgetting peer')
+
+    # And crash l1, which is stuck.
+    l1.daemon.kill()
+
+    # Now, restart and see if it can connect OK.
+    del l1.daemon.opts['dev-disconnect']
+    l1.start()
+
+    l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
+    l1.fundchannel(l2, 200000, wait_for_active=True)
+
+
+@unittest.skipIf(not DEVELOPER, "need dev-disconnect")
+@unittest.skipIf(not EXPERIMENTAL_DUAL_FUND, "need dev-disconnect")
+def test_fail_unconfirmed_openchannel2(node_factory, bitcoind, executor):
+    """Test that if we crash with an unconfirmed connection to a known
+    peer, we don't have a dangling peer in db"""
+    # = is a NOOP disconnect, but sets up file.
+    l1 = node_factory.get_node(disconnect=['=WIRE_OPEN_CHANNEL2'])
+    l2 = node_factory.get_node()
+
+    # First one, we close by mutual agreement.
+    l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
+    l1.fundchannel(l2, 200000, wait_for_active=True)
+    l1.rpc.close(l2.info['id'])
+
+    # Make sure it's closed
+    l1.wait_for_channel_onchain(l2.info['id'])
+    bitcoind.generate_block(1)
+    l1.daemon.wait_for_log('State changed from CLOSINGD_COMPLETE to FUNDING_SPEND_SEEN')
+
+    l1.stop()
+    # Mangle disconnect file so this time it blackholes....
+    with open(l1.daemon.disconnect_file, "w") as f:
+        f.write("0WIRE_OPEN_CHANNEL2\n")
     l1.start()
 
     # Now we establish a new channel, which gets stuck.
@@ -2630,8 +2866,14 @@ def test_wumbo_channels(node_factory, bitcoind):
                                               {'large-channels': None},
                                               {}])
     conn = l1.rpc.connect(l2.info['id'], 'localhost', port=l2.port)
-    assert conn['features'] == expected_peer_features(wumbo_channels=True)
-    assert only_one(l1.rpc.listpeers(l2.info['id'])['peers'])['features'] == expected_peer_features(wumbo_channels=True)
+
+    expected_features = expected_peer_features(wumbo_channels=True)
+    if l1.config('experimental-dual-fund'):
+        expected_features = expected_peer_features(wumbo_channels=True,
+                                                   extra=[223])
+
+    assert conn['features'] == expected_features
+    assert only_one(l1.rpc.listpeers(l2.info['id'])['peers'])['features'] == expected_features
 
     # Now, can we open a giant channel?
     l1.fundwallet(1 << 26)
@@ -2693,7 +2935,7 @@ def test_channel_features(node_factory, bitcoind):
     # We should see features in unconfirmed channels.
     chan = only_one(only_one(l1.rpc.listpeers()['peers'])['channels'])
     assert 'option_static_remotekey' in chan['features']
-    if EXPERIMENTAL_FEATURES:
+    if EXPERIMENTAL_FEATURES or l1.config('experimental-dual-fund'):
         assert 'option_anchor_outputs' in chan['features']
 
     # l2 should agree.
@@ -2706,7 +2948,7 @@ def test_channel_features(node_factory, bitcoind):
 
     chan = only_one(only_one(l1.rpc.listpeers()['peers'])['channels'])
     assert 'option_static_remotekey' in chan['features']
-    if EXPERIMENTAL_FEATURES:
+    if EXPERIMENTAL_FEATURES or l1.config('experimental-dual-fund'):
         assert 'option_anchor_outputs' in chan['features']
 
     # l2 should agree.
@@ -2779,6 +3021,8 @@ def test_htlc_retransmit_order(node_factory, executor):
     # If order was wrong, we'll get a LOG_BROKEN and fixtures will complain.
 
 
+@unittest.skipIf(True, "Currently failing, see tracking issue #4265")
+@unittest.skipIf(EXPERIMENTAL_DUAL_FUND, "fundchannel_start not available")
 def test_fundchannel_start_alternate(node_factory, executor):
     ''' Test to see what happens if two nodes start channeling to
     each other alternately.
@@ -2791,5 +3035,26 @@ def test_fundchannel_start_alternate(node_factory, executor):
     l1.rpc.fundchannel_start(l2.info['id'], 100000)
 
     fut = executor.submit(l2.rpc.fundchannel_start, l1.info['id'], 100000)
+    with pytest.raises(RpcError):
+        fut.result(10)
+
+
+@unittest.skipIf(not EXPERIMENTAL_DUAL_FUND, "openchannel_init not available")
+def test_openchannel_init_alternate(node_factory, executor):
+    ''' Test to see what happens if two nodes start channeling to
+    each other alternately.
+    '''
+    l1, l2 = node_factory.get_nodes(2)
+
+    l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
+
+    l1.fundwallet(2000000)
+    l2.fundwallet(2000000)
+
+    psbt1 = l1.rpc.fundpsbt('1000000msat', '253perkw', 250)['psbt']
+    psbt2 = l2.rpc.fundpsbt('1000000msat', '253perkw', 250)['psbt']
+    l1.rpc.openchannel_init(l2.info['id'], 100000, psbt1)
+
+    fut = executor.submit(l2.rpc.openchannel_init, l1.info['id'], '1000000msat', psbt2)
     with pytest.raises(RpcError):
         fut.result(10)

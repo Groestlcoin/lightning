@@ -361,7 +361,7 @@ def test_gossip_weirdalias(node_factory, bitcoind):
                                .format(normal_name))
 
     l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
-    l2.daemon.wait_for_log('openingd-chan#1: Handed peer, entering loop')
+    l2.daemon.wait_for_log('Handed peer, entering loop')
     l2.fundchannel(l1, 10**6)
     bitcoind.generate_block(6)
 
@@ -509,6 +509,11 @@ def test_routing_gossip(node_factory, bitcoind):
         src, dst = nodes[i], nodes[i + 1]
         src.rpc.connect(dst.info['id'], 'localhost', dst.port)
         src.openchannel(dst, 25000)
+
+    # Avoid "bad gossip" caused by future announcements (a node below
+    # confirmation height receiving and ignoring the announcement,
+    # thus marking followup messages as bad).
+    sync_blockheight(bitcoind, nodes)
 
     # Allow announce messages.
     bitcoind.generate_block(5)
@@ -1028,6 +1033,8 @@ def test_node_reannounce(node_factory, bitcoind):
     assert only_one(l2.rpc.listnodes(l1.info['id'])['nodes'])['alias'].startswith('JUNIORBEAM')
 
     lfeatures = expected_node_features()
+    if l1.config('experimental-dual-fund'):
+        lfeatures = expected_node_features(extra=[223])
 
     # Make sure it gets features correct.
     assert only_one(l2.rpc.listnodes(l1.info['id'])['nodes'])['features'] == lfeatures

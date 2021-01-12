@@ -3,7 +3,7 @@ ifeq ($(HAVE_SQLITE3),1)
 DEVTOOLS += devtools/checkchannels
 endif
 ifeq ($(EXPERIMENTAL_FEATURES),1)
-DEVTOOLS += devtools/blindedpath
+DEVTOOLS += devtools/blindedpath devtools/bolt12-cli
 endif
 
 DEVTOOLS_TOOL_SRC := $(DEVTOOLS:=.c) devtools/print_wire.c devtools/clean_topo.c
@@ -38,14 +38,18 @@ DEVTOOLS_COMMON_OBJS :=				\
 	common/json.o				\
 	common/json_helpers.o			\
 	common/json_stream.o			\
+	common/setup.o				\
 	common/type_to_string.o			\
 	common/utils.o				\
 	common/version.o			\
 	common/wireaddr.o			\
 	wire/onion$(EXP)_wiregen.o		\
-	wire/peer$(EXP)_wiregen.o
+	wire/peer$(EXP)_wiregen.o		\
+	wire/tlvstream.o
 
 devtools/bolt11-cli: $(DEVTOOLS_COMMON_OBJS) $(JSMN_OBJS) $(CCAN_OBJS) $(BITCOIN_OBJS) wire/fromwire.o wire/towire.o devtools/bolt11-cli.o
+
+devtools/bolt12-cli: $(DEVTOOLS_COMMON_OBJS) $(CCAN_OBJS) $(BITCOIN_OBJS) wire/bolt12_exp_wiregen.o wire/fromwire.o wire/towire.o common/bolt12.o common/bolt12_merkle.o devtools/bolt12-cli.o common/setup.o common/iso4217.o
 
 devtools/decodemsg: $(DEVTOOLS_COMMON_OBJS) $(JSMN_OBJS) $(CCAN_OBJS) $(BITCOIN_OBJS) $(WIRE_PRINT_OBJS) wire/fromwire.o wire/towire.o devtools/print_wire.o devtools/decodemsg.o
 

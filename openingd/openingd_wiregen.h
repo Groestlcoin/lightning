@@ -121,4 +121,4 @@ bool fromwire_openingd_dev_memleak_reply(const void *p, bool *leak);
 
 
 #endif /* LIGHTNING_OPENINGD_OPENINGD_WIREGEN_H */
-// SHA256STAMP:99ae0c1ae30e7a4f4d6a890665a6dafbb3f3900ab9f2a99a01a734fa968b2edf
+// SHA256STAMP:4690dd9aa4d8d79f999f90336a18d7682bf7910227f3191af4f2efaaa3ec4f0a

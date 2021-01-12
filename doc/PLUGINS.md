@@ -96,7 +96,7 @@ example:
     { "name": "openchannel", "before": ["another_plugin"] },
     { "name": "htlc_accepted" }
   ],
-  "features": {
+  "featurebits": {
     "node": "D0000000",
     "channel": "D0000000",
     "init": "0E000000",
@@ -157,6 +157,10 @@ There are currently four supported option 'types':
   - int: parsed as a signed integer (64-bit)
   - flag: no-arg flag option. Is boolean under the hood. Defaults to false.
 
+In addition, string and int types can specify `"multi": true` to indicate
+they can be specified multiple times.  These will always be represented in
+`init` as a (possibly empty) JSON array.
+
 Nota bene: if a `flag` type option is not set, it will not appear
 in the options set that is passed to the plugin.
 
@@ -187,6 +191,13 @@ Here's an example option set, as sent in response to `getmanifest`
       "type": "int",
       "default": 6666,
       "description": "Port to use to connect to 3rd-party service"
+    },
+    {
+      "name": "number",
+      "type": "int",
+      "default": 0,
+      "description": "Another number to add",
+	  "multi": true
     }
   ],
 ```
@@ -201,7 +212,8 @@ simple JSON object containing the options:
 ```json
 {
   "options": {
-    "greeting": "World"
+    "greeting": "World",
+	"number": [0]
   },
   "configuration": {
     "lightning-dir": "/home/user/.lightning/testnet",
@@ -896,6 +908,14 @@ Any response other than `{"result": "continue"}` will cause lightningd
 to error without
 committing to the database!
 This is the expected way to halt and catch fire.
+
+`db_write` is a parallel-chained hook, i.e., multiple plugins can
+register it, and all of them will be invoked simultaneously without
+regard for order of registration.
+The hook is considered handled if all registered plugins return
+`{"result": "continue"}`.
+If any plugin returns anything else, `lightningd` will error without
+committing to the database.
 
 ### `invoice_payment`
 

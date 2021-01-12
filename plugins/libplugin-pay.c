@@ -13,14 +13,26 @@
 #include <errno.h>
 #include <plugins/libplugin-pay.h>
 
-static struct gossmap *gossmap;
+static struct gossmap *global_gossmap;
 
-/* BOLT #11:
- * * `c` (24): `data_length` variable.
- *    `min_final_cltv_expiry` to use for the last HTLC in the route.
- *    Default is 18 if not specified.
- */
-#define DEFAULT_FINAL_CLTV_DELTA 18
+static void init_gossmap(struct plugin *plugin)
+{
+	global_gossmap
+		= notleak_with_children(gossmap_load(NULL,
+						     GOSSIP_STORE_FILENAME));
+	if (!global_gossmap)
+		plugin_err(plugin, "Could not load gossmap %s: %s",
+			   GOSSIP_STORE_FILENAME, strerror(errno));
+}
+
+struct gossmap *get_gossmap(struct plugin *plugin)
+{
+	if (!global_gossmap)
+		init_gossmap(plugin);
+	else
+		gossmap_refresh(global_gossmap);
+	return global_gossmap;
+}
 
 struct payment *payment_new(tal_t *ctx, struct command *cmd,
 			    struct payment *parent,
@@ -29,15 +41,6 @@ struct payment *payment_new(tal_t *ctx, struct command *cmd,
 	struct payment *p = tal(ctx, struct payment);
 
 	static u64 next_id = 0;
-
-	/* Now we're actually creating a payment, load gossip store */
-	if (!gossmap) {
-		gossmap = notleak_with_children(gossmap_load(NULL,
-							     GOSSIP_STORE_FILENAME));
-		if (!gossmap)
-			plugin_err(cmd->plugin, "Could not load gossmap %s: %s",
-				   GOSSIP_STORE_FILENAME, strerror(errno));
-	}
 
 	p->children = tal_arr(p, struct payment *, 0);
 	p->parent = parent;
@@ -54,7 +57,7 @@ struct payment *payment_new(tal_t *ctx, struct command *cmd,
 	p->route = NULL;
 	p->temp_exclusion = NULL;
 	p->failroute_retry = false;
-	p->bolt11 = NULL;
+	p->invstring = NULL;
 	p->routetxt = NULL;
 	p->max_htlcs = UINT32_MAX;
 
@@ -74,9 +77,12 @@ struct payment *payment_new(tal_t *ctx, struct command *cmd,
 		p->constraints = *parent->start_constraints;
 		p->deadline = parent->deadline;
 
-		p->invoice = parent->invoice;
+		p->min_final_cltv_expiry = parent->min_final_cltv_expiry;
+		p->routes = parent->routes;
+		p->features = parent->features;
 		p->id = parent->id;
 		p->local_id = parent->local_id;
+		p->local_offer_id = parent->local_offer_id;
 	} else {
 		assert(cmd != NULL);
 		p->partid = 0;
@@ -87,6 +93,7 @@ struct payment *payment_new(tal_t *ctx, struct command *cmd,
 		p->id = next_id++;
 		/* Caller must set this.  */
 		p->local_id = NULL;
+		p->local_offer_id = NULL;
 	}
 
 	/* Initialize all modifier data so we can point to the fields when
@@ -264,10 +271,7 @@ void payment_start_at_blockheight(struct payment *p, u32 blockheight)
 	 * before we actually call `getroute` */
 	p->getroute->destination = p->destination;
 	p->getroute->max_hops = ROUTING_MAX_HOPS;
-	if (root->invoice != NULL && root->invoice->min_final_cltv_expiry != 0)
-		p->getroute->cltv = root->invoice->min_final_cltv_expiry;
-	else
-		p->getroute->cltv = DEFAULT_FINAL_CLTV_DELTA;
+	p->getroute->cltv = root->min_final_cltv_expiry;
 	p->getroute->amount = p->amount;
 
 	p->start_constraints = tal_dup(p, struct payment_constraints, &p->constraints);
@@ -601,7 +605,7 @@ static const struct channel_hint *find_hint(const struct channel_hint *hints,
 }
 
 /* FIXME: This is slow! */
-static bool dst_is_excluded(const struct gossmap *gossmmap,
+static bool dst_is_excluded(const struct gossmap *gossmap,
 			    const struct gossmap_chan *c,
 			    int dir,
 			    const struct node_id *nodes)
@@ -687,6 +691,7 @@ static struct route_hop *route_hops_from_route(const tal_t *ctx,
 {
 	struct route_hop *hops = tal_arr(ctx, struct route_hop, tal_count(r));
 	struct amount_msat amt;
+	struct gossmap *gossmap = get_gossmap(p->plugin);
 	u32 delay;
 
 	for (size_t i = 0; i < tal_count(hops); i++) {
@@ -729,14 +734,14 @@ static struct command_result *payment_getroute(struct payment *p)
 	const struct gossmap_node *dst, *src;
 	struct route **r;
 	struct amount_msat fee;
+	struct gossmap *gossmap;
 	bool (*can_carry)(const struct gossmap *,
 			  const struct gossmap_chan *,
 			  int,
 			  struct amount_msat,
 			  struct payment *);
 
-	/* Make sure we're up-to-date with any new entries */
-	gossmap_refresh(gossmap);
+	gossmap = get_gossmap(p->plugin);
 
 	dst = gossmap_find_node(gossmap, p->getroute->destination);
 	if (!dst) {
@@ -1440,11 +1445,15 @@ static struct command_result *payment_createonion_success(struct command *cmd,
 	if (p->label)
 		json_add_string(req->js, "label", p->label);
 
-	if (p->bolt11)
-		json_add_string(req->js, "bolt11", p->bolt11);
+	if (p->invstring)
+		/* FIXME: rename parameter to invstring */
+		json_add_string(req->js, "bolt11", p->invstring);
 
 	if (p->destination)
 		json_add_node_id(req->js, "destination", p->destination);
+
+	if (p->local_offer_id)
+		json_add_sha256(req->js, "localofferid", p->local_offer_id);
 
 	send_outreq(p->plugin, req);
 	return command_still_pending(cmd);
@@ -1802,8 +1811,8 @@ static void payment_finished(struct payment *p)
 			json_add_string(ret, "failcodename",
 					failure->failcodename);
 
-			if (p->bolt11)
-				json_add_string(ret, "bolt11", p->bolt11);
+			if (p->invstring)
+				json_add_invstring(ret, p->invstring);
 
 			json_add_hex_talarr(ret, "raw_message",
 					    result.failure->raw_message);
@@ -2419,13 +2428,13 @@ static struct command_result *routehint_getroute_result(struct command *cmd,
 	if (d->destination_reachable) {
 		tal_arr_expand(&d->routehints, NULL);
 		/* The above could trigger a realloc.
-		 * However, p->invoice->routes and d->routehints are
+		 * However, p->routes and d->routehints are
 		 * actually the same array, so we need to update the
-		 * p->invoice->routes pointer, since the realloc
+		 * p->routes pointer, since the realloc
 		 * might have changed pointer addresses, in order to
 		 * ensure that the pointers are not stale.
 		 */
-		p->invoice->routes = d->routehints;
+		p->routes = d->routehints;
 
 		/* FIXME: ***DO*** we need to add this extra routehint?
 		 * Once we run out of routehints the default system will
@@ -2474,7 +2483,7 @@ static void routehint_step_cb(struct routehints_data *d, struct payment *p)
 	const struct payment *root = payment_root(p);
 
 	if (p->step == PAYMENT_STEP_INITIALIZED) {
-		if (root->invoice == NULL || root->invoice->routes == NULL)
+		if (root->routes == NULL)
 			return payment_continue(p);
 
 		/* We filter out non-functional routehints once at the
@@ -2482,18 +2491,18 @@ static void routehint_step_cb(struct routehints_data *d, struct payment *p)
 		 * exluded ones on the fly. */
 		if (p->parent == NULL) {
 			d->routehints = filter_routehints(d, p->local_id,
-							  p->invoice->routes);
+							  p->routes);
 			/* filter_routehints modifies the array, but
 			 * this could trigger a resize and the resize
 			 * could trigger a realloc.
 			 * Keep the invoice pointer up-to-date.
 			 * FIXME: We should really consider that if we are
-			 * mutating p->invoices->routes, maybe we should
-			 * drop d->routehints and just use p->invoice->routes
+			 * mutating p->routes, maybe we should
+			 * drop d->routehints and just use p->routes
 			 * directly.
 			 * It is probably not a good idea to *copy* the
 			 * routehints: other paymods are interested in
-			 * p->invoice->routes, and if the routehints system
+			 * p->routes, and if the routehints system
 			 * itself adds or removes routehints from its
 			 * copy, the *actual* number of routehints that we
 			 * end up using is the one that the routehints paymod
@@ -2501,9 +2510,9 @@ static void routehint_step_cb(struct routehints_data *d, struct payment *p)
 			 * set of routehints that is the important one.
 			 * So rather than copying the array of routehints
 			 * in paymod, paymod should use (and mutate) the
-			 * p->invoice->routes array, and
+			 * p->routes array, and
 			 */
-			p->invoice->routes = d->routehints;
+			p->routes = d->routehints;
 
 			paymod_log(p, LOG_DBG,
 				   "After filtering routehints we're left with "
@@ -2994,27 +3003,44 @@ static struct command_result *waitblockheight_rpc_cb(struct command *cmd,
 						     const jsmntok_t *toks,
 						     struct payment *p)
 {
-	const jsmntok_t *blockheighttok =
-		json_get_member(buffer, toks, "blockheight");
+	const jsmntok_t *blockheighttok, *codetok;
+
 	u32 blockheight;
+	int code;
 	struct payment *subpayment;
 
-	if (!blockheighttok
-	 || !json_to_number(buffer, blockheighttok, &blockheight))
-		plugin_err(p->plugin,
-			   "Unexpected result from waitblockheight: %.*s",
-			   json_tok_full_len(toks),
-			   json_tok_full(buffer, toks));
+	blockheighttok = json_get_member(buffer, toks, "blockheight");
 
-	subpayment = payment_new(p, NULL, p, p->modifiers);
-	payment_start_at_blockheight(subpayment, blockheight);
-	payment_set_step(p, PAYMENT_STEP_RETRY);
-	subpayment->why =
-		tal_fmt(subpayment, "Retrying after waiting for blockchain sync.");
-	paymod_log(p, LOG_DBG,
-		   "Retrying after waitblockheight, new partid %"PRIu32,
-		   subpayment->partid);
-	payment_continue(p);
+	if (!blockheighttok ||
+	    !json_to_number(buffer, blockheighttok, &blockheight)) {
+		codetok = json_get_member(buffer, toks, "code");
+		json_to_int(buffer, codetok, &code);
+		if (code == WAIT_TIMEOUT) {
+			payment_fail(
+			    p,
+			    "Timed out while attempting to sync to blockheight "
+			    "returned by destination. Please finish syncing "
+			    "with the blockchain and try again.");
+
+		} else {
+			plugin_err(
+			    p->plugin,
+			    "Unexpected result from waitblockheight: %.*s",
+			    json_tok_full_len(toks),
+			    json_tok_full(buffer, toks));
+		}
+	} else {
+		subpayment = payment_new(p, NULL, p, p->modifiers);
+		payment_start_at_blockheight(subpayment, blockheight);
+		payment_set_step(p, PAYMENT_STEP_RETRY);
+		subpayment->why = tal_fmt(
+		    subpayment, "Retrying after waiting for blockchain sync.");
+		paymod_log(
+		    p, LOG_DBG,
+		    "Retrying after waitblockheight, new partid %" PRIu32,
+		    subpayment->partid);
+		payment_continue(p);
+	}
 	return command_still_pending(cmd);
 }
 
@@ -3031,10 +3057,12 @@ static void waitblockheight_cb(void *d, struct payment *p)
 	if (p->result == NULL)
 		return payment_continue(p);
 
-	if (time_after(now, p->deadline))
-		return payment_continue(p);
-
+	/* Check if we'd be waiting more than 0 seconds. If we have
+	 * less than a second then waitblockheight would return
+	 * immediately resulting in a loop. */
 	remaining = time_between(p->deadline, now);
+	if (time_to_sec(remaining) < 1)
+		return payment_continue(p);
 
 	/* *Was* it a blockheight disagreement that caused the failure?  */
 	if (!failure_is_blockheight_disagreement(p, &blockheight))
@@ -3167,10 +3195,7 @@ static void payment_lower_max_htlcs(struct payment *p, u32 limit,
 
 static bool payment_supports_mpp(struct payment *p)
 {
-	if (p->invoice == NULL || p->invoice->features == NULL)
-		return false;
-
-	return feature_offered(p->invoice->features, OPT_BASIC_MPP);
+	return feature_offered(p->features, OPT_BASIC_MPP);
 }
 
 /* Return fuzzed amount ~= target, but never exceeding max */
@@ -3265,7 +3290,7 @@ static void presplit_cb(struct presplit_mod_data *d, struct payment *p)
 			/* Annotate the subpayments with the bolt11 string,
 			 * they'll be used when aggregating the payments
 			 * again. */
-			c->bolt11 = tal_strdup(c, p->bolt11);
+			c->invstring = tal_strdup(c, p->invstring);
 
 			/* Get ~ target, but don't exceed amt */
 			c->amount = fuzzed_near(target, amt);
@@ -3524,8 +3549,8 @@ payee_incoming_limit_count(struct command *cmd,
 	num_channels = channelstok->size;
 
 	/* If num_channels is 0, check if there is an invoice.  */
-	if (num_channels == 0 && p->invoice)
-		num_channels = tal_count(p->invoice->routes);
+	if (num_channels == 0)
+		num_channels = tal_count(p->routes);
 
 	/* If we got a decent number of channels, limit!  */
 	if (num_channels != 0) {
