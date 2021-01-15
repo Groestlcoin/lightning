@@ -9,10 +9,8 @@
 #include <ccan/tal/str/str.h>
 #include <common/amount.h>
 #include <common/bolt11.h>
-#if EXPERIMENTAL_FEATURES
 #include <common/bolt12.h>
 #include <common/bolt12_merkle.h>
-#endif
 #include <common/errcode.h>
 #include <common/features.h>
 #include <common/gossip_constants.h>
@@ -31,6 +29,7 @@
 /* Public key of this node. */
 static struct node_id my_id;
 static unsigned int maxdelay_default;
+static bool exp_offers;
 static bool disablempp = false;
 
 static LIST_HEAD(pay_status);
@@ -1804,10 +1803,8 @@ static struct command_result *listsendpays_done(struct command *cmd,
 		u32 created_at;
 
 		invstrtok = json_get_member(buf, t, "bolt11");
-#if EXPERIMENTAL_FEATURES
 		if (!invstrtok)
 			invstrtok = json_get_member(buf, t, "bolt12");
-#endif
 		hashtok = json_get_member(buf, t, "payment_hash");
 		createdtok = json_get_member(buf, t, "created_at");
 		assert(hashtok != NULL);
@@ -1902,16 +1899,19 @@ static struct command_result *json_listpays(struct command *cmd,
 	return send_outreq(cmd->plugin, req);
 }
 
-static void init(struct plugin *p,
-		  const char *buf UNUSED, const jsmntok_t *config UNUSED)
+static const char *init(struct plugin *p,
+			const char *buf UNUSED, const jsmntok_t *config UNUSED)
 {
 	rpc_scan(p, "getinfo", take(json_out_obj(NULL, NULL, NULL)),
 		 "{id:%}", JSON_SCAN(json_to_node_id, &my_id));
 
 	rpc_scan(p, "listconfigs",
-		 take(json_out_obj(NULL, "config", "max-locktime-blocks")),
-		 "{max-locktime-blocks:%}",
-		 JSON_SCAN(json_to_number, &maxdelay_default));
+		 take(json_out_obj(NULL, NULL, NULL)),
+		 "{max-locktime-blocks:%,experimental-offers:%}",
+		 JSON_SCAN(json_to_number, &maxdelay_default),
+		 JSON_SCAN(json_to_bool, &exp_offers));
+
+	return NULL;
 }
 
 struct payment_modifier *paymod_mods[] = {
@@ -1962,10 +1962,8 @@ static struct command_result *json_paymod(struct command *cmd,
 	struct shadow_route_data *shadow_route;
 	struct amount_msat *invmsat;
 	u64 invexpiry;
-#if EXPERIMENTAL_FEATURES
 	struct sha256 *local_offer_id;
 	const struct tlv_invoice *b12;
-#endif
 #if DEVELOPER
 	bool *use_shadow;
 #endif
@@ -1986,9 +1984,7 @@ static struct command_result *json_paymod(struct command *cmd,
 		   p_opt_def("maxdelay", param_number, &maxdelay,
 			     maxdelay_default),
 		   p_opt_def("exemptfee", param_msat, &exemptfee, AMOUNT_MSAT(5000)),
-#if EXPERIMENTAL_FEATURES
 		   p_opt("localofferid", param_sha256, &local_offer_id),
-#endif
 #if DEVELOPER
 		   p_opt_def("use_shadow", param_bool, &use_shadow, true),
 #endif
@@ -2020,10 +2016,13 @@ static struct command_result *json_paymod(struct command *cmd,
 			return command_fail(cmd, JSONRPC2_INVALID_PARAMS,
 					    "Invalid bolt11:"
 					    " sets feature var_onion with no secret");
-#if EXPERIMENTAL_FEATURES
 	} else if ((b12 = invoice_decode(cmd, b11str, strlen(b11str),
 					 plugin_feature_set(cmd->plugin),
 					 chainparams, &fail)) != NULL) {
+		if (!exp_offers)
+			return command_fail(cmd, JSONRPC2_INVALID_PARAMS,
+					    "experimental-offers disabled");
+
 		p->features = tal_steal(p, b12->features);
 
 		if (!b12->node_id)
@@ -2080,7 +2079,6 @@ static struct command_result *json_paymod(struct command *cmd,
 		else
 			invexpiry = *b12->timestamp + BOLT12_DEFAULT_REL_EXPIRY;
 		p->local_offer_id = tal_steal(p, local_offer_id);
-#endif /* EXPERIMENTAL_FEATURES */
 	} else
 		return command_fail(cmd, JSONRPC2_INVALID_PARAMS,
 				    "Invalid bolt11: %s", fail);

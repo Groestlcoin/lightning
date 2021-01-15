@@ -386,9 +386,7 @@ def test_pay_plugin(node_factory):
 
     # Make sure usage messages are present.
     msg = 'pay bolt11 [msatoshi] [label] [riskfactor] [maxfeepercent] '\
-          '[retry_for] [maxdelay] [exemptfee]'
-    if EXPERIMENTAL_FEATURES:
-        msg += ' [localofferid]'
+          '[retry_for] [maxdelay] [exemptfee] [localofferid]'
     if DEVELOPER:
         msg += ' [use_shadow]'
     assert only_one(l1.rpc.help('pay')['help'])['command'] == msg
@@ -2321,3 +2319,31 @@ def test_pyln_request_notify(node_factory):
     notifications = []
     l1.rpc.countdown(10)
     assert notifications == []
+
+
+def test_self_disable(node_factory):
+    """Test that plugin can disable itself without penalty.
+    """
+    # This disables in response to getmanifest.
+    p1 = os.path.join(
+        os.path.dirname(__file__), 'plugins/test_selfdisable_after_getmanifest'
+    )
+    # This disables in response to init.
+    p2 = os.path.join(os.getcwd(), "tests/plugins/test_libplugin")
+    l1 = node_factory.get_node(options={'important-plugin': [p1, p2], 'selfdisable': None})
+
+    # Could happen before it gets set up.
+    l1.daemon.logsearch_start = 0
+    l1.daemon.wait_for_logs(['test_selfdisable_after_getmanifest: disabled itself: "Self-disable test after getmanifest"',
+                             'test_libplugin: disabled itself at init: Disabled via selfdisable option'])
+
+    assert p1 not in [p['name'] for p in l1.rpc.plugin_list()['plugins']]
+    assert p2 not in [p['name'] for p in l1.rpc.plugin_list()['plugins']]
+
+    # Also works with dynamic load attempts
+    with pytest.raises(RpcError, match="Self-disable test after getmanifest"):
+        l1.rpc.plugin_start(p1)
+
+    # Also works with dynamic load attempts
+    with pytest.raises(RpcError, match="Disabled via selfdisable option"):
+        l1.rpc.plugin_start(p2, selfdisable=True)

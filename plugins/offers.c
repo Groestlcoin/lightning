@@ -665,11 +665,12 @@ static struct command_result *json_decode(struct command *cmd,
 	return command_finished(cmd, response);
 }
 
-static void init(struct plugin *p,
-		 const char *buf UNUSED,
-		 const jsmntok_t *config UNUSED)
+static const char *init(struct plugin *p,
+			const char *buf UNUSED,
+			const jsmntok_t *config UNUSED)
 {
 	struct pubkey k;
+	bool exp_offers;
 
 	rpc_scan(p, "getinfo",
 		 take(json_out_obj(NULL, NULL, NULL)),
@@ -679,8 +680,14 @@ static void init(struct plugin *p,
 		abort();
 
 	rpc_scan(p, "listconfigs",
-		 take(json_out_obj(NULL, "config", "cltv-final")),
-		 "{cltv-final:%}", JSON_SCAN(json_to_number, &cltv_final));
+		 take(json_out_obj(NULL, NULL, NULL)),
+		 "{cltv-final:%,experimental-offers:%}",
+		 JSON_SCAN(json_to_number, &cltv_final),
+		 JSON_SCAN(json_to_bool, &exp_offers));
+
+	if (!exp_offers)
+		return "offers not enabled in config";
+	return NULL;
 }
 
 static const struct plugin_command commands[] = {

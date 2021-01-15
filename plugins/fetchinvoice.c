@@ -602,6 +602,11 @@ static struct command_result *send_message(struct command *cmd,
 		}
 	}
 
+	/* FIXME: Maybe we should allow this? */
+	if (tal_bytelen(backwards) == 0)
+		return command_fail(cmd, PAY_ROUTE_NOT_FOUND,
+				    "Refusing to talk to ourselves");
+
 	/* Ok, now make reply for onion_message */
 	path = make_blindedpath(tmpctx, backwards, &blinding,
 				&sent->reply_blinding);
@@ -1346,12 +1351,23 @@ static const struct plugin_command commands[] = {
 	},
 };
 
-static void init(struct plugin *p, const char *buf UNUSED,
-		 const jsmntok_t *config UNUSED)
+static const char *init(struct plugin *p, const char *buf UNUSED,
+			const jsmntok_t *config UNUSED)
 {
+	bool exp_offers;
+
 	rpc_scan(p, "getinfo",
 		 take(json_out_obj(NULL, NULL, NULL)),
 		 "{id:%}", JSON_SCAN(json_to_node_id, &local_id));
+
+	rpc_scan(p, "listconfigs",
+		 take(json_out_obj(NULL, "config", "experimental-offers")),
+		 "{experimental-offers:%}",
+		 JSON_SCAN(json_to_bool, &exp_offers));
+
+	if (!exp_offers)
+		return "offers not enabled in config";
+	return NULL;
 }
 
 static const struct plugin_hook hooks[] = {
