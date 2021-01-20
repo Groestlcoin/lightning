@@ -326,7 +326,7 @@ struct command_result *json_offer(struct command *cmd,
 	 * - otherwise:
 	 *   - the bitcoin chain is implied as the first and only entry.
 	 */
-	if (!streq(chainparams->network_name, "bitcoin")) {
+	if (!streq(chainparams->network_name, "groestlcoin")) {
 		offer->chains = tal_arr(offer, struct bitcoin_blkid, 1);
 		offer->chains[0] = chainparams->genesis_blockhash;
 	}
@@ -402,7 +402,7 @@ struct command_result *json_offerout(struct command *cmd,
 	 * - otherwise:
 	 *   - the bitcoin chain is implied as the first and only entry.
 	 */
-	if (!streq(chainparams->network_name, "bitcoin")) {
+	if (!streq(chainparams->network_name, "groestlcoin")) {
 		offer->chains = tal_arr(offer, struct bitcoin_blkid, 1);
 		offer->chains[0] = chainparams->genesis_blockhash;
 	}
@@ -425,4 +425,3 @@ struct command_result *json_offerout(struct command *cmd,
 
 	return send_outreq(cmd->plugin, req);
 }
-

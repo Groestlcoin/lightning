@@ -391,7 +391,7 @@ static void json_add_fallbacks(struct json_stream *js,
 	if (tal_count(chains) != 0)
 		chain = chainparams_by_chainhash(&chains[0]);
 	else
-		chain = chainparams_for_network("bitcoin");
+		chain = chainparams_for_network("groestlcoin");
 
 	json_array_start(js, "fallbacks");
 	for (size_t i = 0; i < tal_count(fallbacks); i++) {

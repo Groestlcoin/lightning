@@ -38,7 +38,7 @@ bool bolt12_chains_match(const struct bitcoin_blkid *chains,
 	num_chains = tal_count(chains);
 	if (num_chains == 0) {
 		num_chains = 1;
-		chains = &chainparams_for_network("bitcoin")->genesis_blockhash;
+		chains = &chainparams_for_network("groestlcoin")->genesis_blockhash;
 	}
 
 	for (size_t i = 0; i < num_chains; i++) {

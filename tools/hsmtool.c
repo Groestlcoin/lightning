@@ -483,7 +483,7 @@ static int generate_hsm(const char *hsm_secret_path)
 
 	read_mnemonic(mnemonic);
 	printf("Warning: remember that different passphrases yield different "
-	       "bitcoin wallets.\n");
+	       "groestlcoin wallets.\n");
 	printf("If left empty, no password is used (echo is disabled).\n");
 	printf("Enter your passphrase: \n");
 	fflush(stdout);
@@ -662,9 +662,9 @@ int main(int argc, char *argv[])
 
 		if (net && streq(net, "testnet"))
 			is_testnet = true;
-		else if (net && !streq(net, "bitcoin"))
+		else if (net && !streq(net, "groestlcoin"))
 			errx(ERROR_USAGE, "Network '%s' not supported."
-					  " Supported networks: bitcoin (default),"
+					  " Supported networks: groestlcoin (default),"
 					  " testnet", net);
 		else
 			is_testnet = false;

@@ -733,7 +733,7 @@ static struct command_result *listoffers_done(struct command *cmd,
 	 *   - if the chain for the invoice is not solely bitcoin:
 	 *     - MUST specify `chains` the offer is valid for.
 	 */
-	if (!streq(chainparams->network_name, "bitcoin")) {
+	if (!streq(chainparams->network_name, "groestlcoin")) {
 		ir->inv->chains = tal_arr(ir->inv, struct bitcoin_blkid, 1);
 		ir->inv->chains[0] = chainparams->genesis_blockhash;
 	}
@@ -864,4 +864,3 @@ struct command_result *handle_invoice_request(struct command *cmd,
 	json_add_sha256(req->js, "offer_id", ir->invreq->offer_id);
 	return send_outreq(cmd->plugin, req);
 }
-

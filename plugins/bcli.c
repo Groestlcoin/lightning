@@ -34,7 +34,7 @@ enum bitcoind_prio {
 #define BITCOIND_NUM_PRIO (BITCOIND_HIGH_PRIO+1)
 
 struct bitcoind {
-	/* eg. "bitcoin-cli" */
+	/* eg. "groestlcoin-cli" */
 	char *cli;
 
 	/* -datadir arg for bitcoin-cli. */
