@@ -2,8 +2,7 @@ FROM ubuntu:18.04
 MAINTAINER Christian Decker <decker.christian@gmail.com>
 
 ENV DEBIAN_FRONTEND noninteractive
-ENV BITCOIN_VERSION 0.20.1
-ENV ELEMENTS_VERSION 0.18.1.8
+ENV GROESTLCOIN_VERSION 2.20.1
 
 RUN useradd -ms /bin/bash tester
 RUN mkdir /build /lightning-rfc && chown tester -R /build /lightning-rfc
@@ -63,16 +62,11 @@ RUN echo "tester ALL=(root) NOPASSWD:ALL" > /etc/sudoers.d/tester && \
     chmod 0440 /etc/sudoers.d/tester
 
 RUN cd /tmp/ && \
-	wget https://storage.googleapis.com/c-lightning-tests/bitcoin-$BITCOIN_VERSION-x86_64-linux-gnu.tar.bz2 && \
-	wget -q https://storage.googleapis.com/c-lightning-tests/elements-$ELEMENTS_VERSION-x86_64-linux-gnu.tar.bz2 && \
-	tar -xjf bitcoin-$BITCOIN_VERSION-x86_64-linux-gnu.tar.bz2 && \
-	tar -xjf elements-$ELEMENTS_VERSION-x86_64-linux-gnu.tar.bz2 && \
-	mv bitcoin-$BITCOIN_VERSION/bin/* /usr/local/bin && \
-	mv elements-$ELEMENTS_VERSION/bin/* /usr/local/bin && \
+  wget https://github.com/Groestlcoin/groestlcoin/releases/download/v2.19.1/groestlcoin-$GROESTLCOIN_VERSION-x86_64-linux-gnu.tar.gz && \
+	tar -xjf groestlcoin-$GROESTLCOIN_VERSION-x86_64-linux-gnu.tar.gz && \
+	mv groestlcoin-$GROESTLCOIN_VERSION/bin/* /usr/local/bin && \
 	rm -rf \
-	  bitcoin-$BITCOIN_VERSION-x86_64-linux-gnu.tar.gz \
-          bitcoin-$BITCOIN_VERSION \
-          elements-$ELEMENTS_VERSION-x86_64-linux-gnu.tar.bz2 \
-          elements-$ELEMENTS_VERSION
+	  groestlcoin-$GROESTLCOIN_VERSION-x86_64-linux-gnu.tar.gz \
+          groestlcoin-$GROESTLCOIN_VERSION
 
 USER tester
