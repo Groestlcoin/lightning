@@ -1,12 +1,13 @@
 from bitcoin.core import COIN  # type: ignore
 from bitcoin.rpc import RawProxy as BitcoinProxy  # type: ignore
 from bitcoin.rpc import JSONRPCError
+from contextlib import contextmanager
+from pathlib import Path
 from pyln.client import RpcError
 from pyln.testing.btcproxy import BitcoinRpcProxy
 from collections import OrderedDict
 from decimal import Decimal
 from ephemeral_port_reserve import reserve  # type: ignore
-from filelock import FileLock  # type: ignore
 from pyln.client import LightningRpc
 from pyln.client import Millisatoshi
 
@@ -83,13 +84,14 @@ TIMEOUT = int(env("TIMEOUT", 180 if SLOW_MACHINE else 60))
 def wait_for(success, timeout=TIMEOUT):
     start_time = time.time()
     interval = 0.25
-    while not success() and time.time() < start_time + timeout:
-        time.sleep(interval)
+    while not success():
+        time_left = start_time + timeout - time.time()
+        if time_left <= 0:
+            raise ValueError("Timeout while waiting for {}", success)
+        time.sleep(min(interval, time_left))
         interval *= 2
         if interval > 5:
             interval = 5
-    if time.time() > start_time + timeout:
-        raise ValueError("Error waiting for {}", success)
 
 
 def write_config(filename, opts, regtest_opts=None, section_name='regtest'):
@@ -591,10 +593,37 @@ class LightningD(TailableProc):
         return self.proc.returncode
 
 
+class PrettyPrintingLightningRpc(LightningRpc):
+    """A version of the LightningRpc that pretty-prints calls and results.
+
+    Useful when debugging based on logs, and less painful to the
+    eyes. It has some overhead since we re-serialize the request and
+    result to json in order to pretty print it.
+
+    """
+
+    def call(self, method, payload=None):
+        id = self.next_id
+        self.logger.debug(json.dumps({
+            "id": id,
+            "method": method,
+            "params": payload
+        }, indent=2))
+        res = LightningRpc.call(self, method, payload)
+        self.logger.debug(json.dumps({
+            "id": id,
+            "result": res
+        }, indent=2))
+        return res
+
+
 class LightningNode(object):
     def __init__(self, node_id, lightning_dir, bitcoind, executor, valgrind, may_fail=False,
-                 may_reconnect=False, allow_broken_log=False,
-                 allow_bad_gossip=False, db=None, port=None, disconnect=None, random_hsm=None, options=None,
+                 may_reconnect=False,
+                 allow_broken_log=False,
+                 allow_warning=False,
+                 allow_bad_gossip=False,
+                 db=None, port=None, disconnect=None, random_hsm=None, options=None,
                  **kwargs):
         self.bitcoin = bitcoind
         self.executor = executor
@@ -602,13 +631,14 @@ class LightningNode(object):
         self.may_reconnect = may_reconnect
         self.allow_broken_log = allow_broken_log
         self.allow_bad_gossip = allow_bad_gossip
+        self.allow_warning = allow_warning
         self.db = db
 
         # Assume successful exit
         self.rc = 0
 
         socket_path = os.path.join(lightning_dir, TEST_NETWORK, "lightning-rpc").format(node_id)
-        self.rpc = LightningRpc(socket_path, self.executor)
+        self.rpc = PrettyPrintingLightningRpc(socket_path, self.executor)
 
         self.daemon = LightningD(
             lightning_dir, bitcoindproxy=bitcoind.get_proxy(),
@@ -917,11 +947,14 @@ class LightningNode(object):
             raise ValueError("Error waiting for a route to destination {}".format(destination))
 
     # This helper waits for all HTLCs to settle
-    def wait_for_htlcs(self):
+    # `scids` can be a list of strings. If unset wait on all channels.
+    def wait_for_htlcs(self, scids=None):
         peers = self.rpc.listpeers()['peers']
         for p, peer in enumerate(peers):
             if 'channels' in peer:
                 for c, channel in enumerate(peer['channels']):
+                    if scids is not None and channel['short_channel_id'] not in scids:
+                        continue
                     if 'htlcs' in channel:
                         wait_for(lambda: len(self.rpc.listpeers()['peers'][p]['channels'][c]['htlcs']) == 0)
 
@@ -1064,6 +1097,43 @@ class LightningNode(object):
             return None
 
 
+@contextmanager
+def flock(directory: Path):
+    """A fair filelock, based on atomic fs operations.
+    """
+    if not isinstance(directory, Path):
+        directory = Path(directory)
+    d = directory / Path(".locks")
+    os.makedirs(str(d), exist_ok=True)
+    fname = None
+
+    while True:
+        # Try until we find a filename that doesn't exist yet.
+        try:
+            fname = d / Path("lock-{}".format(time.time()))
+            fd = os.open(str(fname), flags=os.O_CREAT | os.O_EXCL)
+            os.close(fd)
+            break
+        except FileExistsError:
+            time.sleep(0.1)
+
+    # So now we have a position in the lock, let's check if we are the
+    # next one to go:
+    while True:
+        files = sorted([f.resolve() for f in d.iterdir() if f.is_file()])
+        # We're queued, so it should at least have us.
+        assert len(files) >= 1
+        if files[0] == fname:
+            break
+        time.sleep(0.1)
+
+    # We can continue
+    yield fname
+
+    # Remove our file, so the next one can go ahead.
+    fname.unlink()
+
+
 class Throttler(object):
     """Throttles the creation of system-processes to avoid overload.
 
@@ -1082,26 +1152,24 @@ class Throttler(object):
     tests, which could cause more timeouts.
 
     """
-    def __init__(self, target: float = 75):
+    def __init__(self, directory: str, target: float = 90):
         """If specified we try to stick to a load of target (in percent).
         """
         self.target = target
-        self.lock = FileLock("/tmp/ltest.lock")
         self.current_load = self.target  # Start slow
         psutil.cpu_percent()  # Prime the internal load metric
+        self.directory = directory
 
     def wait(self):
         start_time = time.time()
-        with self.lock.acquire(poll_intervall=0.250):
+        with flock(self.directory):
             # We just got the lock, assume someone else just released it
             self.current_load = 100
             while self.load() >= self.target:
                 time.sleep(1)
 
-            delay = time.time() - start_time
-            with open("/tmp/ltest-throttler.csv", "a") as f:
-                f.write("{}, {}, {}, {}\n".format(time.time(), self.load(), self.target, delay))
             self.current_load = 100  # Back off slightly to avoid triggering right away
+        print("Throttler delayed startup for {} seconds".format(time.time() - start_time))
 
     def load(self):
         """An exponential moving average of the load
@@ -1143,6 +1211,7 @@ class NodeFactory(object):
             'disconnect',
             'may_fail',
             'allow_broken_log',
+            'allow_warning',
             'may_reconnect',
             'random_hsm',
             'feerates',

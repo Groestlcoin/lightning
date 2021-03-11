@@ -22,6 +22,7 @@ const char *peer_wire_name(int e)
 	switch ((enum peer_wire)e) {
 	case WIRE_INIT: return "WIRE_INIT";
 	case WIRE_ERROR: return "WIRE_ERROR";
+	case WIRE_WARNING: return "WIRE_WARNING";
 	case WIRE_PING: return "WIRE_PING";
 	case WIRE_PONG: return "WIRE_PONG";
 	case WIRE_OPEN_CHANNEL: return "WIRE_OPEN_CHANNEL";
@@ -60,6 +61,7 @@ bool peer_wire_is_defined(u16 type)
 	switch ((enum peer_wire)type) {
 	case WIRE_INIT:;
 	case WIRE_ERROR:;
+	case WIRE_WARNING:;
 	case WIRE_PING:;
 	case WIRE_PONG:;
 	case WIRE_OPEN_CHANNEL:;
@@ -815,6 +817,36 @@ bool fromwire_error(const tal_t *ctx, const void *p, struct channel_id *channel_
 	size_t plen = tal_count(p);
 
 	if (fromwire_u16(&cursor, &plen) != WIRE_ERROR)
+		return false;
+ 	fromwire_channel_id(&cursor, &plen, channel_id);
+ 	len = fromwire_u16(&cursor, &plen);
+ 	// 2nd case data
+	*data = len ? tal_arr(ctx, u8, len) : NULL;
+	fromwire_u8_array(&cursor, &plen, *data, len);
+	return cursor != NULL;
+}
+
+/* WIRE: WARNING */
+u8 *towire_warning(const tal_t *ctx, const struct channel_id *channel_id, const u8 *data)
+{
+	u16 len = tal_count(data);
+	u8 *p = tal_arr(ctx, u8, 0);
+
+	towire_u16(&p, WIRE_WARNING);
+	towire_channel_id(&p, channel_id);
+	towire_u16(&p, len);
+	towire_u8_array(&p, data, len);
+
+	return memcheck(p, tal_count(p));
+}
+bool fromwire_warning(const tal_t *ctx, const void *p, struct channel_id *channel_id, u8 **data)
+{
+	u16 len;
+
+	const u8 *cursor = p;
+	size_t plen = tal_count(p);
+
+	if (fromwire_u16(&cursor, &plen) != WIRE_WARNING)
 		return false;
  	fromwire_channel_id(&cursor, &plen, channel_id);
  	len = fromwire_u16(&cursor, &plen);
@@ -1585,7 +1617,7 @@ bool fromwire_query_channel_range(const void *p, struct bitcoin_blkid *chain_has
 }
 
 /* WIRE: REPLY_CHANNEL_RANGE */
-u8 *towire_reply_channel_range(const tal_t *ctx, const struct bitcoin_blkid *chain_hash, u32 first_blocknum, u32 number_of_blocks, u8 full_information, const u8 *encoded_short_ids, const struct tlv_reply_channel_range_tlvs *tlvs)
+u8 *towire_reply_channel_range(const tal_t *ctx, const struct bitcoin_blkid *chain_hash, u32 first_blocknum, u32 number_of_blocks, u8 sync_complete, const u8 *encoded_short_ids, const struct tlv_reply_channel_range_tlvs *tlvs)
 {
 	u16 len = tal_count(encoded_short_ids);
 	u8 *p = tal_arr(ctx, u8, 0);
@@ -1594,14 +1626,14 @@ u8 *towire_reply_channel_range(const tal_t *ctx, const struct bitcoin_blkid *cha
 	towire_bitcoin_blkid(&p, chain_hash);
 	towire_u32(&p, first_blocknum);
 	towire_u32(&p, number_of_blocks);
-	towire_u8(&p, full_information);
+	towire_u8(&p, sync_complete);
 	towire_u16(&p, len);
 	towire_u8_array(&p, encoded_short_ids, len);
 	towire_reply_channel_range_tlvs(&p, tlvs);
 
 	return memcheck(p, tal_count(p));
 }
-bool fromwire_reply_channel_range(const tal_t *ctx, const void *p, struct bitcoin_blkid *chain_hash, u32 *first_blocknum, u32 *number_of_blocks, u8 *full_information, u8 **encoded_short_ids, struct tlv_reply_channel_range_tlvs *tlvs)
+bool fromwire_reply_channel_range(const tal_t *ctx, const void *p, struct bitcoin_blkid *chain_hash, u32 *first_blocknum, u32 *number_of_blocks, u8 *sync_complete, u8 **encoded_short_ids, struct tlv_reply_channel_range_tlvs *tlvs)
 {
 	u16 len;
 
@@ -1613,7 +1645,7 @@ bool fromwire_reply_channel_range(const tal_t *ctx, const void *p, struct bitcoi
  	fromwire_bitcoin_blkid(&cursor, &plen, chain_hash);
  	*first_blocknum = fromwire_u32(&cursor, &plen);
  	*number_of_blocks = fromwire_u32(&cursor, &plen);
- 	*full_information = fromwire_u8(&cursor, &plen);
+ 	*sync_complete = fromwire_u8(&cursor, &plen);
  	len = fromwire_u16(&cursor, &plen);
  	// 2nd case encoded_short_ids
 	*encoded_short_ids = len ? tal_arr(ctx, u8, len) : NULL;
@@ -1717,4 +1749,4 @@ bool fromwire_channel_update_option_channel_htlc_max(const void *p, secp256k1_ec
  	*htlc_maximum_msat = fromwire_amount_msat(&cursor, &plen);
 	return cursor != NULL;
 }
-// SHA256STAMP:9f70670271b0856273026df920106d9c2ef2b60a1fa7c9c687e83a38d7d85a00
+// SHA256STAMP:1b0c5319cd9ab8c0281132a4c64ca51ecd9ee0158c7f645e102f401ac64ca439

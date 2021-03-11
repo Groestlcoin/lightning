@@ -176,7 +176,6 @@ wallet_commit_channel(struct lightningd *ld,
 			      push,
 			      local_funding,
 			      false, /* !remote_funding_locked */
-			      false, /* !remote_tx_sigs */
 			      NULL, /* no scid yet */
 			      cid,
 			      /* The three arguments below are msatoshi_to_us,
@@ -210,7 +209,6 @@ wallet_commit_channel(struct lightningd *ld,
 			      remote_upfront_shutdown_script,
 			      option_static_remotekey,
 			      option_anchor_outputs,
-			      NULL,
 			      NUM_SIDES, /* closer not yet known */
 			      uc->fc ? REASON_USER : REASON_REMOTE);
 
@@ -707,7 +705,7 @@ openchannel_hook_deserialize(struct openchannel_hook_payload *payload,
 		if (t_errmsg)
 			payload->errmsg = json_strdup(payload, buffer, t_errmsg);
 		log_debug(openingd->ld->log,
-			  "openchannel_hook rejects and says '%s'",
+			  "openchannel hook rejects and says '%s'",
 			  payload->errmsg);
 		if (t_closeto)
 			fatal("Plugin rejected openchannel but also set close_to");
@@ -724,7 +722,7 @@ openchannel_hook_deserialize(struct openchannel_hook_payload *payload,
 		/* First plugin can set close_to. Log others. */
 		if (payload->our_upfront_shutdown_script != NULL) {
 			log_broken(openingd->ld->log,
-				   "openchannel_hook close_to address was"
+				   "openchannel hook close_to address was"
 				   " already set by other plugin. Ignoring!");
 			return true;
 		}
@@ -894,7 +892,7 @@ void peer_start_openingd(struct peer *peer,
 
 	uc->open_daemon = new_channel_subd(peer->ld,
 					"lightning_openingd",
-					uc, UNCOMMITTED, &peer->id, uc->log,
+					uc, &peer->id, uc->log,
 					true, openingd_wire_name,
 					openingd_msg,
 					opend_channel_errmsg,

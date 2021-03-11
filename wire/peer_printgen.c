@@ -20,6 +20,10 @@ void printpeer_wire_message(const u8 *msg)
 			printf("WIRE_ERROR:\n");
 			printwire_error("error", msg);
 			return;
+		case WIRE_WARNING:
+			printf("WIRE_WARNING:\n");
+			printwire_warning("warning", msg);
+			return;
 		case WIRE_PING:
 			printf("WIRE_PING:\n");
 			printwire_ping("ping", msg);
@@ -513,6 +517,41 @@ void printwire_error(const char *fieldname, const u8 *cursor)
 
 	size_t plen = tal_count(cursor);
 	if (fromwire_u16(&cursor, &plen) != WIRE_ERROR) {
+		printf("WRONG TYPE?!\n");
+		return;
+	}
+
+	printf("channel_id=");
+	struct channel_id channel_id;
+	fromwire_channel_id(&cursor, &plen, &channel_id);
+
+	printwire_channel_id(tal_fmt(NULL, "%s.channel_id", fieldname), &channel_id);
+	if (!cursor) {
+		printf("**TRUNCATED**\n");
+		return;
+	}
+ 	u16 len = fromwire_u16(&cursor, &plen);
+	if (!cursor) {
+		printf("**TRUNCATED**\n");
+		return;
+	}
+ 	printf("data=");
+	printwire_u8_array(tal_fmt(NULL, "%s.data", fieldname), &cursor, &plen, len);
+
+	if (!cursor) {
+		printf("**TRUNCATED**\n");
+		return;
+	}
+
+
+	if (plen != 0)
+		printf("EXTRA: %s\n", tal_hexstr(NULL, cursor, plen));
+}
+void printwire_warning(const char *fieldname, const u8 *cursor)
+{
+
+	size_t plen = tal_count(cursor);
+	if (fromwire_u16(&cursor, &plen) != WIRE_WARNING) {
 		printf("WRONG TYPE?!\n");
 		return;
 	}
@@ -1966,10 +2005,10 @@ void printwire_reply_channel_range(const char *fieldname, const u8 *cursor)
 		printf("**TRUNCATED**\n");
 		return;
 	}
- 	printf("full_information=");
-	u8 full_information = fromwire_u8(&cursor, &plen);
+ 	printf("sync_complete=");
+	u8 sync_complete = fromwire_u8(&cursor, &plen);
 
-	printwire_u8(tal_fmt(NULL, "%s.full_information", fieldname), &full_information);
+	printwire_u8(tal_fmt(NULL, "%s.sync_complete", fieldname), &sync_complete);
 	if (!cursor) {
 		printf("**TRUNCATED**\n");
 		return;
@@ -2091,4 +2130,4 @@ void printpeer_wire_tlv_message(const char *tlv_name, const u8 *msg) {
 		printwire_tlvs(tlv_name, &msg, &plen, print_tlvs_onion_message_tlvs, ARRAY_SIZE(print_tlvs_onion_message_tlvs));
 	}
 }
-// SHA256STAMP:9f70670271b0856273026df920106d9c2ef2b60a1fa7c9c687e83a38d7d85a00
+// SHA256STAMP:1b0c5319cd9ab8c0281132a4c64ca51ecd9ee0158c7f645e102f401ac64ca439

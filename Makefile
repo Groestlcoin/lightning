@@ -24,7 +24,7 @@ CCANDIR := ccan
 
 # Where we keep the BOLT RFCs
 BOLTDIR := ../lightning-rfc/
-BOLTVERSION := 7e8c478aef0d23a445845b7d297b0e804583697c
+BOLTVERSION := edd45ecf22095ce97c1b5e9136a7d79351bd68cb
 
 -include config.vars
 
@@ -76,9 +76,8 @@ ifeq ($(COMPAT),1)
 COMPAT_CFLAGS=-DCOMPAT_V052=1 -DCOMPAT_V060=1 -DCOMPAT_V061=1 -DCOMPAT_V062=1 -DCOMPAT_V070=1 -DCOMPAT_V072=1 -DCOMPAT_V073=1 -DCOMPAT_V080=1 -DCOMPAT_V081=1 -DCOMPAT_V082=1 -DCOMPAT_V090=1
 endif
 
-# Timeout shortly before the 600 second travis silence timeout
 # (method=thread to support xdist)
-PYTEST_OPTS := -v --timeout=550 --timeout_method=thread -p no:logging $(PYTEST_OPTS)
+PYTEST_OPTS := -v -p no:logging $(PYTEST_OPTS)
 PYTHONPATH=$(shell pwd)/contrib/pyln-client:$(shell pwd)/contrib/pyln-testing:$(shell pwd)/contrib/pyln-proto/
 
 # This is where we add new features as bitcoin adds them.
@@ -485,6 +484,18 @@ check-amount-access:
 check-source: check-makefile check-source-bolt check-whitespace check-markdown check-spelling check-python check-includes check-cppcheck check-shellcheck check-setup_locale check-tmpctx check-discouraged-functions check-amount-access
 
 full-check: check check-source
+
+# Simple target to be used on CI systems to check that all the derived
+# files were checked in and updated. It depends on the generated
+# targets, and checks if any of the tracked files changed. If they did
+# then one of the gen-targets caused this change, meaning either the
+# gen-target is not reproducible or the files were forgotten.
+#
+# Do not run on your development tree since it will complain if you
+# have a dirty tree.
+check-gen-updated: $(ALL_GEN_HEADERS) $(ALL_GEN_SOURCES) wallet/statements_gettextgen.po $(MANPAGES)
+	@echo "Checking for generated files being changed by make"
+	git diff --exit-code HEAD $?
 
 coverage/coverage.info: check pytest
 	mkdir coverage || true

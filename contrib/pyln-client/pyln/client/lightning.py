@@ -483,6 +483,15 @@ class LightningRpc(UnixDomainSocketRpc):
         if patch_json:
             monkey_patch_json(patch=True)
 
+    def addgossip(self, message):
+        """
+        Inject this (hex-encoded) gossip message.
+        """
+        payload = {
+            "message": message,
+        }
+        return self.call("addgossip", payload)
+
     def autocleaninvoice(self, cycle_seconds=None, expired_by=None):
         """
         Sets up automatic cleaning of expired invoices. {cycle_seconds} sets
@@ -906,12 +915,18 @@ class LightningRpc(UnixDomainSocketRpc):
         }
         return self.call("listconfigs", payload)
 
-    def listforwards(self):
-        """List all forwarded payments and their information.
+    def listforwards(self, status=None, in_channel=None, out_channel=None):
+        """List all forwarded payments and their information matching
+        forward {status}, {in_channel} and {out_channel}.
         """
-        return self.call("listforwards")
+        payload = {
+            "status": status,
+            "in_channel": in_channel,
+            "out_channel": out_channel,
+        }
+        return self.call("listforwards", payload)
 
-    def listfunds(self, spent=False):
+    def listfunds(self, spent=None):
         """
         Show funds available for opening channels
         or both unspent and spent funds if {spent} is True.
@@ -1075,6 +1090,15 @@ class LightningRpc(UnixDomainSocketRpc):
             "psbt": psbt,
         }
         return self.call("openchannel_update", payload)
+
+    def openchannel_bump(self, channel_id, amount, initialpsbt):
+        """ Initiate an RBF for an in-progress open """
+        payload = {
+            "channel_id": channel_id,
+            "amount": amount,
+            "initialpsbt": initialpsbt,
+        }
+        return self.call("openchannel_bump", payload)
 
     def paystatus(self, bolt11=None):
         """Detail status of attempts to pay {bolt11} or any."""
@@ -1309,7 +1333,7 @@ class LightningRpc(UnixDomainSocketRpc):
         }
         return self.call("unreserveinputs", payload)
 
-    def fundpsbt(self, satoshi, feerate, startweight, minconf=None, reserve=True, locktime=None, min_witness_weight=None):
+    def fundpsbt(self, satoshi, feerate, startweight, minconf=None, reserve=True, locktime=None, min_witness_weight=None, excess_as_change=False):
         """
         Create a PSBT with inputs sufficient to give an output of satoshi.
         """
@@ -1321,10 +1345,11 @@ class LightningRpc(UnixDomainSocketRpc):
             "reserve": reserve,
             "locktime": locktime,
             "min_witness_weight": min_witness_weight,
+            "excess_as_change": excess_as_change,
         }
         return self.call("fundpsbt", payload)
 
-    def utxopsbt(self, satoshi, feerate, startweight, utxos, reserve=True, reservedok=False, locktime=None, min_witness_weight=None):
+    def utxopsbt(self, satoshi, feerate, startweight, utxos, reserve=True, reservedok=False, locktime=None, min_witness_weight=None, excess_as_change=False):
         """
         Create a PSBT with given inputs, to give an output of satoshi.
         """
@@ -1337,6 +1362,7 @@ class LightningRpc(UnixDomainSocketRpc):
             "reservedok": reservedok,
             "locktime": locktime,
             "min_witness_weight": min_witness_weight,
+            "excess_as_change": excess_as_change,
         }
         return self.call("utxopsbt", payload)
 

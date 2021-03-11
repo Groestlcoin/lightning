@@ -29,6 +29,7 @@ c-lightning Documentation
    :maxdepth: 1
    :caption: Manpages
 
+   lightning-addgossip <lightning-addgossip.7.md>
    lightning-autocleaninvoice <lightning-autocleaninvoice.7.md>
    lightning-check <lightning-check.7.md>
    lightning-checkmessage <lightning-checkmessage.7.md>
@@ -43,6 +44,7 @@ c-lightning Documentation
    lightning-delinvoice <lightning-delinvoice.7.md>
    lightning-delpay <lightning-delpay.7.md>
    lightning-dev-sendcustommsg <lightning-dev-sendcustommsg.7.md>
+   lightning-disableoffer <lightning-disableoffer.7.md>
    lightning-disconnect <lightning-disconnect.7.md>
    lightning-feerates <lightning-feerates.7.md>
    lightning-fetchinvoice <lightning-fetchinvoice.7.md>
@@ -65,6 +67,7 @@ c-lightning Documentation
    lightning-listfunds <lightning-listfunds.7.md>
    lightning-listinvoices <lightning-listinvoices.7.md>
    lightning-listnodes <lightning-listnodes.7.md>
+   lightning-listoffers <lightning-listoffers.7.md>
    lightning-listpays <lightning-listpays.7.md>
    lightning-listpeers <lightning-listpeers.7.md>
    lightning-listsendpays <lightning-listsendpays.7.md>

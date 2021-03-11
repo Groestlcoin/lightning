@@ -426,8 +426,9 @@ def test_gossip_persistence(node_factory, bitcoind):
     # Now spend the funding tx, generate a block and see others deleting the
     # channel from their network view
     l1.rpc.dev_fail(l2.info['id'])
-    time.sleep(1)
-    bitcoind.generate_block(1)
+
+    # We need to wait for the unilateral close to hit the mempool
+    bitcoind.generate_block(1, wait_for_mempool=1)
 
     wait_for(lambda: active(l1) == [scid23, scid23])
     wait_for(lambda: active(l2) == [scid23, scid23])
@@ -505,10 +506,12 @@ def test_gossip_no_empty_announcements(node_factory, bitcoind):
 def test_routing_gossip(node_factory, bitcoind):
     nodes = node_factory.get_nodes(5)
 
+    sync_blockheight(bitcoind, nodes)
     for i in range(len(nodes) - 1):
         src, dst = nodes[i], nodes[i + 1]
         src.rpc.connect(dst.info['id'], 'localhost', dst.port)
-        src.openchannel(dst, 25000)
+        src.openchannel(dst, 25000, confirm=False, wait_for_announce=False)
+        sync_blockheight(bitcoind, nodes)
 
     # Avoid "bad gossip" caused by future announcements (a node below
     # confirmation height receiving and ignoring the announcement,
@@ -516,7 +519,7 @@ def test_routing_gossip(node_factory, bitcoind):
     sync_blockheight(bitcoind, nodes)
 
     # Allow announce messages.
-    bitcoind.generate_block(5)
+    bitcoind.generate_block(6)
 
     # Deep check that all channels are in there
     comb = []
@@ -1796,3 +1799,47 @@ def test_routetool(node_factory):
                     l1.info['id'],
                     l2.info['id']],
                    check=True, timeout=TIMEOUT)
+
+
+def test_addgossip(node_factory):
+    l1, l2 = node_factory.line_graph(2, fundchannel=True, wait_for_announce=True,
+                                     opts={'log-level': 'io'})
+
+    # We should get two node_announcements, one channel_announcement, and two
+    # channel_update.
+    l3 = node_factory.get_node()
+
+    # 0x0100 = channel_announcement
+    # 0x0102 = channel_update
+    # 0x0101 = node_announcement
+    ann = l1.daemon.is_in_log(r"\[OUT\] 0100.*")
+    if ann is None:
+        ann = l2.daemon.is_in_log(r"\[OUT\] 0100.*")
+
+    upd1 = l1.daemon.is_in_log(r"\[OUT\] 0102.*")
+    upd2 = l2.daemon.is_in_log(r"\[OUT\] 0102.*")
+
+    nann1 = l1.daemon.is_in_log(r"\[OUT\] 0101.*")
+    nann2 = l2.daemon.is_in_log(r"\[OUT\] 0101.*")
+
+    # Feed them to l3 (Each one starts with TIMESTAMP chanid-xxx: [OUT] ...)
+    l3.rpc.addgossip(ann.split()[3])
+
+    l3.rpc.addgossip(upd1.split()[3])
+    l3.rpc.addgossip(upd2.split()[3])
+    l3.rpc.addgossip(nann1.split()[3])
+    l3.rpc.addgossip(nann2.split()[3])
+
+    # In this case, it can actually have to wait, since it does scid lookup.
+    wait_for(lambda: len(l3.rpc.listchannels()['channels']) == 2)
+    wait_for(lambda: len(l3.rpc.listnodes()['nodes']) == 2)
+
+    # Now corrupt an update
+    badupdate = upd1.split()[3]
+    if badupdate.endswith('f'):
+        badupdate = badupdate[:-1] + 'e'
+    else:
+        badupdate = badupdate[:-1] + 'f'
+
+    with pytest.raises(RpcError, match='Bad signature'):
+        l3.rpc.addgossip(badupdate)

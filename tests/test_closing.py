@@ -2,9 +2,11 @@ from fixtures import *  # noqa: F401,F403
 from flaky import flaky
 from pyln.client import RpcError
 from shutil import copyfile
+from pyln.testing.utils import SLOW_MACHINE
 from utils import (
     only_one, sync_blockheight, wait_for, DEVELOPER, TIMEOUT,
     account_balance, first_channel_id, basic_fee, TEST_NETWORK,
+    EXPERIMENTAL_FEATURES,
 )
 
 import os
@@ -304,18 +306,15 @@ def test_closing_negotiation_reconnect(node_factory, bitcoind):
     assert bitcoind.rpc.getmempoolinfo()['size'] == 0
 
     l1.rpc.close(l2.info['id'])
+    l1.daemon.wait_for_log(r'State changed from CHANNELD_NORMAL to CHANNELD_SHUTTING_DOWN')
+    l2.daemon.wait_for_log(r'State changed from CHANNELD_NORMAL to CHANNELD_SHUTTING_DOWN')
 
-    l1.daemon.wait_for_log(' to CHANNELD_SHUTTING_DOWN')
-    l2.daemon.wait_for_log(' to CHANNELD_SHUTTING_DOWN')
-
-    l1.daemon.wait_for_log(' to CLOSINGD_SIGEXCHANGE')
-    l2.daemon.wait_for_log(' to CLOSINGD_SIGEXCHANGE')
-
-    # And should put closing into mempool (happens async, so
-    # CLOSINGD_COMPLETE may come first).
-    l1.daemon.wait_for_logs(['sendrawtx exit 0', ' to CLOSINGD_COMPLETE'])
-    l2.daemon.wait_for_logs(['sendrawtx exit 0', ' to CLOSINGD_COMPLETE'])
-    assert bitcoind.rpc.getmempoolinfo()['size'] == 1
+    # Now verify that the closing tx is in the mempool.
+    bitcoind.generate_block(6, wait_for_mempool=1)
+    sync_blockheight(bitcoind, [l1, l2])
+    for n in [l1, l2]:
+        # Ensure we actually got a mutual close.
+        n.daemon.wait_for_log(r'Resolved FUNDING_TRANSACTION/FUNDING_OUTPUT by MUTUAL_CLOSE')
 
 
 @unittest.skipIf(not DEVELOPER, "needs DEVELOPER=1")
@@ -415,10 +414,14 @@ def closing_negotiation_step(node_factory, bitcoind, chainparams, opts):
 
     def get_fee_from_status(node, peer_id, i):
         nonlocal fees_from_status
-        status = only_one(only_one(node.rpc.listpeers(peer_id)['peers'][0]['channels'])['status'])
+        peer = only_one(node.rpc.listpeers(peer_id)['peers'])
+        channel = only_one(peer['channels'])
+        status = channel['status'][0]
+
         m = status_agreed_regex.search(status)
         if not m:
             return False
+
         fees_from_status[i] = int(m.group(1))
         return True
 
@@ -984,12 +987,12 @@ def test_penalty_htlc_tx_timeout(node_factory, bitcoind, chainparams):
     l2.daemon.wait_for_log('Propose handling OUR_HTLC_SUCCESS_TX/DELAYED_OUTPUT_TO_US by OUR_DELAYED_RETURN_TO_WALLET .* after 5 blocks')
 
     # after 5 blocks, l2 reclaims both their DELAYED_OUTPUT_TO_US and their delayed output
-    bitcoind.generate_block(5)
+    bitcoind.generate_block(5, wait_for_mempool=0)
     sync_blockheight(bitcoind, [l2])
     l2.daemon.wait_for_logs(['Broadcasting OUR_DELAYED_RETURN_TO_WALLET .* to resolve OUR_HTLC_SUCCESS_TX/DELAYED_OUTPUT_TO_US',
                              'Broadcasting OUR_DELAYED_RETURN_TO_WALLET .* to resolve OUR_UNILATERAL/DELAYED_OUTPUT_TO_US'])
 
-    bitcoind.generate_block(10)
+    bitcoind.generate_block(10, wait_for_mempool=2)
     l2.wait_for_onchaind_broadcast('OUR_HTLC_TIMEOUT_TX',
                                    'OUR_UNILATERAL/OUR_HTLC')
 
@@ -1013,7 +1016,7 @@ def test_penalty_htlc_tx_timeout(node_factory, bitcoind, chainparams):
                              'by THEIR_DELAYED_CHEAT',
                              'Resolved THEIR_REVOKED_UNILATERAL/THEIR_HTLC by THEIR_HTLC_TIMEOUT_TO_THEM',
                              'Propose handling THEIR_HTLC_TIMEOUT_TO_THEM/DELAYED_CHEAT_OUTPUT_TO_THEM by OUR_PENALTY_TX'])
-    bitcoind.generate_block(1)
+    bitcoind.generate_block(1, wait_for_mempool=2)  # OUR_PENALTY_TX + OUR_HTLC_TIMEOUT_TO_US
     l3.daemon.wait_for_log('Resolved THEIR_HTLC_TIMEOUT_TO_THEM/DELAYED_CHEAT_OUTPUT_TO_THEM '
                            'by our proposal OUR_PENALTY_TX')
     l2.daemon.wait_for_log('Unknown spend of OUR_HTLC_TIMEOUT_TX/DELAYED_OUTPUT_TO_US')
@@ -1516,7 +1519,7 @@ def test_onchain_timeout(node_factory, bitcoind, executor):
 
     # It should fail.
     with pytest.raises(RpcError, match=r'WIRE_PERMANENT_CHANNEL_FAILURE: timed out'):
-        payfuture.result(5)
+        payfuture.result(TIMEOUT)
 
     # 2 later, l1 spends HTLC (5 blocks total).
     bitcoind.generate_block(2)
@@ -1783,7 +1786,11 @@ def test_listfunds_after_their_unilateral(node_factory, bitcoind):
 Make sure we show the address.
     """
     coin_mvt_plugin = os.path.join(os.getcwd(), 'tests/plugins/coin_movements.py')
-    l1, l2 = node_factory.line_graph(2, opts={'plugin': coin_mvt_plugin})
+    # FIXME: We can get warnings from unilteral changes, since we treat
+    # such errors a soft because LND.
+    l1, l2 = node_factory.line_graph(2, opts=[{'plugin': coin_mvt_plugin,
+                                               "allow_warning": True},
+                                              {'plugin': coin_mvt_plugin}])
     channel_id = first_channel_id(l1, l2)
 
     # listfunds will show 1 output change, and channels.
@@ -1812,9 +1819,15 @@ def test_onchain_feechange(node_factory, bitcoind, executor):
     # We need 2 to drop to chain, because then 1's HTLC timeout tx
     # is generated on-the-fly, and is thus feerate sensitive.
     disconnects = ['-WIRE_UPDATE_FAIL_HTLC', 'permfail']
-    l1, l2 = node_factory.line_graph(2, opts=[{'may_reconnect': True},
-                                              {'may_reconnect': True,
-                                               'disconnect': disconnects}])
+    l1, l2 = node_factory.line_graph(2, opts=[
+        {
+            'may_reconnect': True,
+            'allow_warning': True,
+        }, {
+            'may_reconnect': True,
+            'disconnect': disconnects,
+        }
+    ])
 
     rhash = l2.rpc.invoice(10**8, 'onchain_timeout', 'desc')['payment_hash']
     # We underpay, so it fails.
@@ -2522,7 +2535,10 @@ def test_shutdown(node_factory):
 @flaky
 @unittest.skipIf(not DEVELOPER, "needs to set upfront_shutdown_script")
 def test_option_upfront_shutdown_script(node_factory, bitcoind, executor):
-    l1 = node_factory.get_node(start=False)
+    # There's a workaround in channeld, that it treats incoming errors
+    # before both sides are locked in as warnings; this happens in
+    # this test, so l1 reports the error as a warning!
+    l1 = node_factory.get_node(start=False, allow_warning=True)
     # Insist on upfront script we're not going to match.
     l1.daemon.env["DEV_OPENINGD_UPFRONT_SHUTDOWN_SCRIPT"] = "76a91404b61f7dc1ea0dc99424464cc4064dc564d91e8988ac"
     l1.start()
@@ -2580,3 +2596,102 @@ def test_option_upfront_shutdown_script(node_factory, bitcoind, executor):
     l1.rpc.fundchannel(l2.info['id'], 1000000)
     l1.rpc.close(l2.info['id'])
     wait_for(lambda: sorted([c['state'] for c in only_one(l1.rpc.listpeers()['peers'])['channels']]) == ['CLOSINGD_COMPLETE', 'ONCHAIN', 'ONCHAIN'])
+
+
+@unittest.skipIf(not DEVELOPER, "needs to set upfront_shutdown_script")
+def test_invalid_upfront_shutdown_script(node_factory, bitcoind, executor):
+    l1, l2 = node_factory.line_graph(2, fundchannel=False)
+
+    l1 = node_factory.get_node(start=False, allow_warning=True)
+    # Insist on upfront script we're not going to match.
+    l1.daemon.env["DEV_OPENINGD_UPFRONT_SHUTDOWN_SCRIPT"] = "76a91404b61f7dc1ea0dc99424464cc4064dc564d91e8988ac00"
+    l1.start()
+
+    l2 = node_factory.get_node()
+    l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
+    with pytest.raises(RpcError, match=r'Unacceptable upfront_shutdown_script'):
+        l1.fundchannel(l2, 1000000, False)
+
+
+@unittest.skipIf(not DEVELOPER, "needs to set upfront_shutdown_script")
+@pytest.mark.slow_test
+def test_segwit_shutdown_script(node_factory, bitcoind, executor):
+    """
+Try a range of future segwit versions as shutdown scripts.  We create many nodes, so this is quite slow under valgrind
+"""
+    l1 = node_factory.get_node(allow_warning=True)
+
+    # BOLT-4e329271a358ee52bf43ddbd96776943c5d74508 #2:
+    # 5. if (and only if) `option_shutdown_anysegwit` is negotiated:
+    #    * `OP_1` through `OP_16` inclusive, followed by a single push of 2 to 40 bytes
+    #    (witness program versions 1 through 16)
+    edge_valid = ['51020000', '5128' + '00' * 0x28,
+                  '60020000', '6028' + '00' * 0x28]
+    other_valid = ['52020000', '5228' + '00' * 0x28,
+                   '53020000', '5328' + '00' * 0x28,
+                   '54020000', '5428' + '00' * 0x28,
+                   '55020000', '5528' + '00' * 0x28,
+                   '56020000', '5628' + '00' * 0x28,
+                   '57020000', '5728' + '00' * 0x28,
+                   '58020000', '5828' + '00' * 0x28,
+                   '59020000', '5928' + '00' * 0x28,
+                   '5A020000', '5A28' + '00' * 0x28,
+                   '5B020000', '5B28' + '00' * 0x28,
+                   '5C020000', '5C28' + '00' * 0x28,
+                   '5D020000', '5D28' + '00' * 0x28,
+                   '5E020000', '5E28' + '00' * 0x28,
+                   '5F020000', '5F28' + '00' * 0x28]
+
+    invalid = ['50020000',  # Not OP_1-OP_16
+               '61020000',  # Not OP_1-OP_16
+               '5102000000',  # Extra bytes
+               '510100',  # Too short
+               '5129' + '00' * 0x29]  # Too long
+
+    # Don't stress CI; just test edge cases
+    if SLOW_MACHINE:
+        valid = edge_valid
+    else:
+        valid = edge_valid + other_valid
+
+    if EXPERIMENTAL_FEATURES:
+        xsuccess = valid
+        xfail = invalid
+    else:
+        xsuccess = []
+        xfail = valid + invalid
+
+    # More efficient to create them all up-front.
+    nodes = node_factory.get_nodes(len(xfail) + len(xsuccess))
+
+    # Give it one UTXO to spend for each node.
+    addresses = {}
+    for n in nodes:
+        addresses[l1.rpc.newaddr()['bech32']] = (10**6 + 100000) / 10**8
+    bitcoind.rpc.sendmany("", addresses)
+    bitcoind.generate_block(1)
+    wait_for(lambda: len(l1.rpc.listfunds()['outputs']) == len(addresses))
+
+    # FIXME: Since we don't support other non-v0 encodings, we need a protocol
+    # test for this (we're actually testing our upfront check, not the real
+    # shutdown one!),
+    for script in xsuccess:
+        # Insist on upfront script we're not going to match.
+        l1.stop()
+        l1.daemon.env["DEV_OPENINGD_UPFRONT_SHUTDOWN_SCRIPT"] = script
+        l1.start()
+
+        l2 = nodes.pop()
+        l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
+        l1.rpc.fundchannel(l2.info['id'], 10**6)
+
+    for script in xfail:
+        # Insist on upfront script we're not going to match.
+        l1.stop()
+        l1.daemon.env["DEV_OPENINGD_UPFRONT_SHUTDOWN_SCRIPT"] = script
+        l1.start()
+
+        l2 = nodes.pop()
+        l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
+        with pytest.raises(RpcError, match=r'Unacceptable upfront_shutdown_script'):
+            l1.rpc.fundchannel(l2.info['id'], 10**6)

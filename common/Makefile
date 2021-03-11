@@ -32,6 +32,7 @@ COMMON_SRC_NOGEN :=				\
 	common/ecdh_hsmd.c			\
 	common/features.c			\
 	common/fee_states.c			\
+	common/fp16.c				\
 	common/gossip_rcvd_filter.c		\
 	common/gossip_store.c			\
 	common/hash_u5.c			\
@@ -44,6 +45,7 @@ COMMON_SRC_NOGEN :=				\
 	common/initial_channel.c		\
 	common/initial_commit_tx.c		\
 	common/io_lock.c			\
+	common/iso4217.c			\
 	common/json.c				\
 	common/json_helpers.c			\
 	common/json_stream.c			\
@@ -70,6 +72,7 @@ COMMON_SRC_NOGEN :=				\
 	common/read_peer_msg.c			\
 	common/route.c				\
 	common/setup.c				\
+	common/shutdown_scriptpubkey.c		\
 	common/socket_close.c			\
 	common/sphinx.c				\
 	common/status.c				\
@@ -98,7 +101,6 @@ COMMON_HEADERS_NOGEN := $(COMMON_SRC_NOGEN:.c=.h)	\
 	common/errcode.h				\
 	common/gossip_constants.h			\
 	common/htlc.h					\
-	common/iso4217.h				\
 	common/json_command.h				\
 	common/jsonrpc_errors.h				\
 	common/overflows.h				\

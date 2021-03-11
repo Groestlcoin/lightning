@@ -488,12 +488,18 @@ def test_reconnect_gossiping(node_factory):
     l2.daemon.wait_for_log('processing now old peer gone')
 
 
+@flaky
 @unittest.skipIf(not DEVELOPER, "needs dev-disconnect")
-def test_reconnect_no_update(node_factory, executor):
-    """
+def test_reconnect_no_update(node_factory, executor, bitcoind):
+    """Test that funding_locked is retransmitted on reconnect if new channel
+
     This tests if the `funding_locked` is sent if we receive a
-    `channel_reestablish` message with `next_commitment_number` == 1 and
-    our `next_commitment_number` == 1.
+    `channel_reestablish` message with `next_commitment_number` == 1
+    and our `next_commitment_number` == 1.
+
+    This test makes extensive use of disconnects followed by automatic
+    reconnects. See comments for details.
+
     """
     disconnects = ["@WIRE_FUNDING_LOCKED", "@WIRE_SHUTDOWN"]
     # Allow bad gossip because it might receive WIRE_CHANNEL_UPDATE before
@@ -503,18 +509,26 @@ def test_reconnect_no_update(node_factory, executor):
 
     # For channeld reconnection
     l1.rpc.connect(l2.info["id"], "localhost", l2.port)
+
+    # LightningNode.fundchannel will fund the channel and generate a
+    # block. The block triggers the funding_locked message, which
+    # causes a disconnect. The retransmission is then caused by the
+    # automatic retry.
     fundchannel_exec = executor.submit(l1.fundchannel, l2, 10**6, False)
     if l1.config('experimental-dual-fund'):
         l2.daemon.wait_for_log(r"Unexpected `tx_signatures` from peer. Allowing.")
         l1.daemon.wait_for_log(r"dualopend.* Retransmitting funding_locked for channel")
     else:
         l1.daemon.wait_for_log(r"channeld.* Retransmitting funding_locked for channel")
+    sync_blockheight(bitcoind, [l1, l2])
+    fundchannel_exec.result()
     l1.stop()
 
     # For closingd reconnection
-    scid, _ = fundchannel_exec.result()
     l1.daemon.start()
-    executor.submit(l1.rpc.close, scid, 0)
+    # Close will trigger the @WIRE_SHUTDOWN and we then wait for the
+    # automatic reconnection to trigger the retransmission.
+    l1.rpc.close(l2.info['id'], 0)
     l2.daemon.wait_for_log(r"closingd.* Retransmitting funding_locked for channel")
     l1.daemon.wait_for_log(r"CLOSINGD_COMPLETE")
 
@@ -945,6 +959,7 @@ def test_funding_toolarge(node_factory, bitcoind):
 
 @unittest.skipIf(TEST_NETWORK != 'regtest', 'elementsd doesnt yet support PSBT features we need')
 @unittest.skipIf(not EXPERIMENTAL_FEATURES, "dual-funding is experimental only")
+@unittest.skipIf(not DEVELOPER, "Requires --dev-force-features")
 def test_v2_open(node_factory, bitcoind, chainparams):
     l1, l2 = node_factory.get_nodes(2,
                                     opts=[{'dev-force-features': '+223'},
@@ -957,11 +972,17 @@ def test_v2_open(node_factory, bitcoind, chainparams):
     # Wait for it to arrive.
     wait_for(lambda: len(l1.rpc.listfunds()['outputs']) > 0)
 
-    l1.rpc.fundchannel(l2.info['id'], 100000)
+    l1.rpc.fundchannel(l2.info['id'], 'all')
 
     bitcoind.generate_block(1)
     sync_blockheight(bitcoind, [l1])
     l1.daemon.wait_for_log(' to CHANNELD_NORMAL')
+
+    # Send a payment over the channel
+    p = l2.rpc.invoice(100000, 'testpayment', 'desc')
+    l1.rpc.pay(p['bolt11'])
+    result = l1.rpc.waitsendpay(p['payment_hash'])
+    assert(result['status'] == 'complete')
 
 
 def test_funding_push(node_factory, bitcoind, chainparams):
@@ -1118,6 +1139,10 @@ def test_funding_external_wallet_corners(node_factory, bitcoind):
     # Check that can still cancel when peer is disconnected
     l1.rpc.disconnect(l2.info['id'], force=True)
     wait_for(lambda: not only_one(l1.rpc.listpeers()['peers'])['connected'])
+
+    wait_for(lambda: only_one(only_one(l2.rpc.listpeers()['peers'])['channels'])['state']
+             == 'CHANNELD_AWAITING_LOCKIN')
+
     assert l1.rpc.fundchannel_cancel(l2.info['id'])['cancelled']
     assert len(l1.rpc.listpeers()['peers']) == 0
 
@@ -1153,11 +1178,8 @@ def test_funding_cancel_race(node_factory, bitcoind, executor):
     else:
         num = 100
 
-    nodes = node_factory.get_nodes(num)
-
-    # Speed up cleanup by not cleaning our test nodes: on my laptop, this goes
-    # from 214 to 15 seconds
-    node_factory.nodes = [l1]
+    # Allow the other nodes to log unexpected WIRE_FUNDING_CREATED messages
+    nodes = node_factory.get_nodes(num, opts={'allow_broken_log': True})
 
     num_complete = 0
     num_cancel = 0
@@ -1213,6 +1235,9 @@ def test_funding_cancel_race(node_factory, bitcoind, executor):
         assert num_cancel > 0
         assert num_complete > 0
 
+    # Speed up shutdown by stopping them all concurrently
+    executor.map(lambda n: n.stop(), node_factory.nodes)
+
 
 @unittest.skipIf(TEST_NETWORK != 'regtest', "External wallet support doesn't work with elements yet.")
 def test_funding_close_upfront(node_factory, bitcoind):
@@ -1251,39 +1276,46 @@ def test_funding_close_upfront(node_factory, bitcoind):
             channel = node.rpc.listpeers()['peers'][0]['channels'][-1]
             assert amount * 1000 == channel['msatoshi_total']
 
+    def _close(src, dst, addr=None):
+        """Close the channel from src to dst, with the specified address.
+
+        Returns the address of the outputs in the close tx. Raises an
+        error if some expectations are not met.
+
+        """
+        r = l1.rpc.close(l2.info['id'], destination=addr)
+        assert r['type'] == 'mutual'
+        tx = bitcoind.rpc.decoderawtransaction(r['tx'])
+
+        addrs = [vout['scriptPubKey']['addresses'][0] for vout in tx['vout']]
+        bitcoind.generate_block(1, wait_for_mempool=[r['txid']])
+        sync_blockheight(bitcoind, [l1, l2])
+        return addrs
+
     # check that normal peer close works
     _fundchannel(l1, l2, amt_normal, None)
-    assert l1.rpc.close(l2.info['id'])['type'] == 'mutual'
+    _close(l1, l2)
 
     # check that you can provide a closing address upfront
     addr = l1.rpc.newaddr()['bech32']
     _fundchannel(l1, l2, amt_normal, addr)
     # confirm that it appears in listpeers
     assert addr == only_one(l1.rpc.listpeers()['peers'])['channels'][1]['close_to_addr']
-    resp = l1.rpc.close(l2.info['id'])
-    assert resp['type'] == 'mutual'
-    assert only_one(only_one(bitcoind.rpc.decoderawtransaction(resp['tx'])['vout'])['scriptPubKey']['addresses']) == addr
+    assert _close(l1, l2) == [addr]
 
     # check that passing in the same addr to close works
     addr = bitcoind.rpc.getnewaddress()
     _fundchannel(l1, l2, amt_normal, addr)
     assert addr == only_one(l1.rpc.listpeers()['peers'])['channels'][2]['close_to_addr']
-    resp = l1.rpc.close(l2.info['id'], destination=addr)
-    assert resp['type'] == 'mutual'
-    assert only_one(only_one(bitcoind.rpc.decoderawtransaction(resp['tx'])['vout'])['scriptPubKey']['addresses']) == addr
+    assert _close(l1, l2, addr) == [addr]
 
     # check that remote peer closing works as expected (and that remote's close_to works)
     _fundchannel(l1, l2, amt_addr, addr)
     # send some money to remote so that they have a closeout
     l1.rpc.pay(l2.rpc.invoice((amt_addr // 2) * 1000, 'test_remote_close_to', 'desc')['bolt11'])
     assert only_one(l2.rpc.listpeers()['peers'])['channels'][-1]['close_to_addr'] == remote_valid_addr
-
-    resp = l2.rpc.close(l1.info['id'])
-    assert resp['type'] == 'mutual'
-    vouts = bitcoind.rpc.decoderawtransaction(resp['tx'])['vout']
-    assert len(vouts) == 2
-    for vout in vouts:
-        assert only_one(vout['scriptPubKey']['addresses']) in [addr, remote_valid_addr]
+    # The tx outputs must be one of the two permutations
+    assert _close(l2, l1) in ([addr, remote_valid_addr], [remote_valid_addr, addr])
 
     # check that passing in a different addr to close causes an RPC error
     addr2 = l1.rpc.newaddr()['bech32']
@@ -1427,8 +1459,14 @@ def test_multifunding_v2_exclusive(node_factory, bitcoind):
     for node in [l1, l2, l3, l4]:
         node.daemon.wait_for_log(r'to CHANNELD_NORMAL')
 
+    # For dual-funded channels, pay from accepter to initiator
+    for ldest in [l2, l3]:
+        inv = l1.rpc.invoice(5000, 'inv' + ldest.info['id'], 'inv')['bolt11']
+        ldest.rpc.pay(inv)
+
+    # Then pay other direction
     for ldest in [l2, l3, l4]:
-        inv = ldest.rpc.invoice(5000, 'inv', 'inv')['bolt11']
+        inv = ldest.rpc.invoice(10000, 'inv', 'inv')['bolt11']
         l1.rpc.pay(inv)
 
 
@@ -1575,7 +1613,8 @@ def test_multifunding_feerates(node_factory, bitcoind):
     Test feerate parameters for multifundchannel
     '''
     funding_tx_feerate = '10000perkw'
-    commitment_tx_feerate = '2000perkw'
+    commitment_tx_feerate_int = 2000
+    commitment_tx_feerate = str(commitment_tx_feerate_int) + 'perkw'
 
     l1, l2, l3 = node_factory.get_nodes(3, opts={'log-level': 'debug'})
 
@@ -1594,6 +1633,11 @@ def test_multifunding_feerates(node_factory, bitcoind):
 
     expected_fee = int(funding_tx_feerate[:-5]) * weight // 1000
     assert expected_fee == entry['fees']['base'] * 10 ** 8
+
+    assert only_one(only_one(l1.rpc.listpeers(l2.info['id'])['peers'])['channels'])['feerate']['perkw'] == commitment_tx_feerate_int
+    assert only_one(only_one(l1.rpc.listpeers(l2.info['id'])['peers'])['channels'])['feerate']['perkb'] == commitment_tx_feerate_int * 4
+
+    txfee = only_one(only_one(l1.rpc.listpeers(l2.info['id'])['peers'])['channels'])['last_tx_fee']
 
     # We get the expected close txid, force close the channel, then fish
     # the details about the transaction out of the mempoool entry
@@ -1621,6 +1665,7 @@ def test_multifunding_feerates(node_factory, bitcoind):
         expected_fee += 330
 
     assert expected_fee == entry['fees']['base'] * 10 ** 8
+    assert Millisatoshi(str(expected_fee) + 'sat') == Millisatoshi(txfee)
 
 
 def test_multifunding_param_failures(node_factory):
@@ -1940,8 +1985,10 @@ def test_update_fee(node_factory, bitcoind):
 
 @unittest.skipIf(not DEVELOPER, "needs DEVELOPER=1")
 def test_fee_limits(node_factory, bitcoind):
-    l1, l2, l3, l4 = node_factory.get_nodes(4, opts=[{'dev-max-fee-multiplier': 5, 'may_reconnect': True},
-                                                     {'dev-max-fee-multiplier': 5, 'may_reconnect': True},
+    l1, l2, l3, l4 = node_factory.get_nodes(4, opts=[{'dev-max-fee-multiplier': 5, 'may_reconnect': True,
+                                                      'allow_warning': True},
+                                                     {'dev-max-fee-multiplier': 5, 'may_reconnect': True,
+                                                      'allow_warning': True},
                                                      {'ignore-fee-limits': True, 'may_reconnect': True},
                                                      {}])
 
@@ -1955,7 +2002,19 @@ def test_fee_limits(node_factory, bitcoind):
     l1.set_feerates((15, 15, 15, 15), False)
     l1.start()
 
-    l1.daemon.wait_for_log('Peer transient failure in CHANNELD_NORMAL: channeld: .*: update_fee 253 outside range 1875-75000')
+    l1.daemon.wait_for_log('Peer transient failure in CHANNELD_NORMAL: channeld WARNING: .*: update_fee 253 outside range 1875-75000')
+
+    # Closes, but does not error.  Make sure it's noted in their status though.
+    assert 'update_fee 253 outside range 1875-75000' in only_one(only_one(l1.rpc.listpeers(l2.info['id'])['peers'])['channels'])['status'][0]
+    assert 'update_fee 253 outside range 1875-75000' in only_one(only_one(l2.rpc.listpeers(l1.info['id'])['peers'])['channels'])['status'][0]
+
+    # Make l2 accept those fees, and it should recover.
+    l2.stop()
+    l2.set_feerates((15, 15, 15, 15), False)
+    l2.start()
+
+    l1.rpc.close(l2.info['id'])
+
     # Make sure the resolution of this one doesn't interfere with the next!
     # Note: may succeed, may fail with insufficient fee, depending on how
     # groestlcoind feels!
@@ -1995,6 +2054,57 @@ def test_fee_limits(node_factory, bitcoind):
 
     # This should wait for close to complete
     l1.rpc.close(chan)
+
+
+@unittest.skipIf(not DEVELOPER, "needs dev-no-fake-fees")
+def test_update_fee_dynamic(node_factory, bitcoind):
+    # l1 has no fee estimates to start.
+    l1 = node_factory.get_node(options={'log-level': 'io',
+                                        'dev-no-fake-fees': True}, start=False)
+    l1.daemon.rpcproxy.mock_rpc('estimatesmartfee', {
+        'error': {"errors": ["Insufficient data or no feerate found"], "blocks": 0}
+    })
+    l1.start()
+    l2 = node_factory.get_node()
+
+    l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
+    # Fails due to lack of fee estimate.
+    with pytest.raises(RpcError, match='Cannot estimate fees'):
+        l1.fundchannel(l2, 10**6)
+
+    # Explicit feerate works.
+    l1.fundchannel(l2, 10**6, feerate='10000perkw')
+
+    l1.set_feerates((15000, 11000, 7500, 3750))
+
+    # It will send UPDATE_FEE when it tries to send HTLC.
+    inv = l2.rpc.invoice(5000, 'test_update_fee_dynamic', 'test_update_fee_dynamic')['bolt11']
+    l1.rpc.pay(inv)
+
+    l2.daemon.wait_for_log('peer_in.*UPDATE_FEE')
+
+    # Now we take it away again!
+    l1.daemon.rpcproxy.mock_rpc('estimatesmartfee', {
+        'error': {"errors": ["Insufficient data or no feerate found"], "blocks": 0}
+    })
+    # Make sure that registers!  (DEVELOPER means polling every second)
+    time.sleep(2)
+
+    inv = l2.rpc.invoice(5000, 'test_update_fee_dynamic2', 'test_update_fee_dynamic2')['bolt11']
+    l1.rpc.pay(inv)
+
+    # Won't update fee.
+    assert not l2.daemon.is_in_log('peer_in.*UPDATE_FEE',
+                                   start=l2.daemon.logsearch_start)
+
+    # Bring it back.
+    l1.set_feerates((14000, 10000, 7000, 3000))
+
+    # It will send UPDATE_FEE when it tries to send HTLC.
+    inv = l2.rpc.invoice(5000, 'test_update_fee_dynamic3', 'test_update_fee_dynamic')['bolt11']
+    l1.rpc.pay(inv)
+
+    l2.daemon.wait_for_log('peer_in.*UPDATE_FEE')
 
 
 @unittest.skipIf(not DEVELOPER, "needs DEVELOPER=1")
@@ -2061,6 +2171,12 @@ def test_multiple_channels(node_factory):
         chan, _ = l1.fundchannel(l2, 10**6)
 
         l1.rpc.close(chan)
+
+        # If we don't wait for l2 to make the transition we can end up
+        # attempting to re-estabilishing the channel
+        l2.daemon.wait_for_log(
+            r'State changed from CLOSINGD_SIGEXCHANGE to CLOSINGD_COMPLETE'
+        )
 
     channels = only_one(l1.rpc.listpeers()['peers'])['channels']
     assert len(channels) == 3
@@ -2235,7 +2351,7 @@ def test_fundee_forget_funding_tx_unconfirmed(node_factory, bitcoind):
 
 @unittest.skipIf(not DEVELOPER, "needs dev_fail")
 def test_no_fee_estimate(node_factory, bitcoind, executor):
-    l1 = node_factory.get_node(start=False)
+    l1 = node_factory.get_node(start=False, options={'dev-no-fake-fees': True})
 
     # Fail any fee estimation requests until we allow them further down
     l1.daemon.rpcproxy.mock_rpc('estimatesmartfee', {
@@ -2258,12 +2374,20 @@ def test_no_fee_estimate(node_factory, bitcoind, executor):
     # Can't use feerate names, either.
     with pytest.raises(RpcError, match=r'Cannot estimate fees'):
         l1.rpc.withdraw(l2.rpc.newaddr()['bech32'], 'all', 'urgent')
+
+    with pytest.raises(RpcError, match=r'Cannot estimate fees'):
         l1.rpc.withdraw(l2.rpc.newaddr()['bech32'], 'all', 'normal')
+
+    with pytest.raises(RpcError, match=r'Cannot estimate fees'):
         l1.rpc.withdraw(l2.rpc.newaddr()['bech32'], 'all', 'slow')
 
     with pytest.raises(RpcError, match=r'Cannot estimate fees'):
         l1.rpc.fundchannel(l2.info['id'], 10**6, 'urgent')
+
+    with pytest.raises(RpcError, match=r'Cannot estimate fees'):
         l1.rpc.fundchannel(l2.info['id'], 10**6, 'normal')
+
+    with pytest.raises(RpcError, match=r'Cannot estimate fees'):
         l1.rpc.fundchannel(l2.info['id'], 10**6, 'slow')
 
     # Can with manual feerate.
@@ -2290,6 +2414,7 @@ def test_no_fee_estimate(node_factory, bitcoind, executor):
     l1.rpc.close(l2.info['id'])
     wait_for(lambda: len(bitcoind.rpc.getrawmempool()) > 0)
     bitcoind.generate_block(100)
+    sync_blockheight(bitcoind, [l1, l2])
 
     # Can do unilateral close.
     l2.rpc.connect(l1.info['id'], 'localhost', l1.port)
@@ -2301,12 +2426,14 @@ def test_no_fee_estimate(node_factory, bitcoind, executor):
     bitcoind.generate_block(5)
     wait_for(lambda: len(bitcoind.rpc.getrawmempool()) > 0)
     bitcoind.generate_block(100)
+    sync_blockheight(bitcoind, [l1, l2])
 
     # Start estimatesmartfee.
     l1.set_feerates((15000, 11000, 7500, 3750), True)
 
     # Can now fund a channel (as a test, use slow feerate).
     l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
+    sync_blockheight(bitcoind, [l1])
     l1.rpc.fundchannel(l2.info['id'], 10**6, 'slow')
 
     # Can withdraw (use urgent feerate). `minconf` may be needed depending on

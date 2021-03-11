@@ -777,7 +777,7 @@ no plugin is registered on the hook.
 ### `peer_connected`
 
 This hook is called whenever a peer has connected and successfully completed
-the cryptographic handshake. The parameters have the following structure if there is a channel with the peer:
+the cryptographic handshake. The parameters have the following structure:
 
 ```json
 {
@@ -789,7 +789,7 @@ the cryptographic handshake. The parameters have the following structure if ther
 }
 ```
 
-The hook is sparse on purpose, since the plugin can use the JSON-RPC
+The hook is sparse on information, since the plugin can use the JSON-RPC
 `listpeers` command to get additional details should they be required. The
 `addr` field shows the address that we are connected to ourselves, not the
 gossiped list of known addresses. In particular this means that the port for
@@ -801,6 +801,9 @@ the string `disconnect` or `continue`.  If `disconnect` and
 there's a member `error_message`, that member is sent to the peer
 before disconnection.
 
+Note that `peer_connected` is a chained hook. The first plugin that decides to
+`disconnect` with or without an `error_message` will lead to the subsequent
+plugins not being called anymore.
 
 ### `commitment_revocation`
 
@@ -936,7 +939,7 @@ This hook is called whenever a valid payment for an unpaid invoice has arrived.
 }
 ```
 
-The hook is sparse on purpose, since the plugin can use the JSON-RPC
+The hook is deliberately sparse, since the plugin can use the JSON-RPC
 `listinvoices` command to get additional details about this invoice.
 It can return a `failure_message` field as defined for final
 nodes in [BOLT 4][bolt4-failure-messages], a `result` field with the string
@@ -987,7 +990,12 @@ e.g.
 }
 ```
 
-Note that `close_to` must be a valid address for the current chain; an invalid address will cause the node to exit with an error.
+Note that `close_to` must be a valid address for the current chain,
+an invalid address will cause the node to exit with an error.
+
+Note that `openchannel` is a chained hook. Therefore `close_to` will only be
+evaluated for the first plugin that sets it. If more than one plugin tries to
+set a `close_to` address an error will be logged.
 
 
 ### `htlc_accepted`
@@ -1190,6 +1198,9 @@ Return a custom error to the request sender:
 }
 ```
 
+Note: The `rpc_command` hook is chainable. If two or more plugins try to
+replace/result/error the same `method`, only the first plugin in the chain
+will be respected. Others will be ignored and a warning will be logged.
 
 ### `custommsg`
 
@@ -1204,7 +1215,7 @@ The payload for a call follows this format:
 ```json
 {
 	"peer_id": "02df5ffe895c778e10f7742a6c5b8a0cefbe9465df58b92fadeb883752c8107c8f",
-	"message": "1337ffffffff"
+	"payload": "1337ffffffff"
 }
 ```
 
@@ -1218,11 +1229,8 @@ ignored by nodes (see ["it's ok to be odd" in the specification][oddok] for
 details). The plugin must implement the parsing of the message, including the
 type prefix, since c-lightning does not know how to parse the message.
 
-The result for this hook is currently being discarded. For future uses of the
-result we suggest just returning `{'result': 'continue'}`.
-This will ensure backward
-compatibility should the semantics be changed in future.
-
+Because this is a chained hook, the daemon expects the result to be
+`{'result': 'continue'}`. It will fail if something else is returned.
 
 ### `onion_message` and `onion_message_blinded`
 

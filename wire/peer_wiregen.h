@@ -19,6 +19,7 @@
 enum peer_wire {
         WIRE_INIT = 16,
         WIRE_ERROR = 17,
+        WIRE_WARNING = 1,
         WIRE_PING = 18,
         WIRE_PONG = 19,
         WIRE_OPEN_CHANNEL = 32,
@@ -531,6 +532,10 @@ bool fromwire_init(const tal_t *ctx, const void *p, u8 **globalfeatures, u8 **fe
 u8 *towire_error(const tal_t *ctx, const struct channel_id *channel_id, const u8 *data);
 bool fromwire_error(const tal_t *ctx, const void *p, struct channel_id *channel_id, u8 **data);
 
+/* WIRE: WARNING */
+u8 *towire_warning(const tal_t *ctx, const struct channel_id *channel_id, const u8 *data);
+bool fromwire_warning(const tal_t *ctx, const void *p, struct channel_id *channel_id, u8 **data);
+
 /* WIRE: PING */
 u8 *towire_ping(const tal_t *ctx, u16 num_pong_bytes, const u8 *ignored);
 bool fromwire_ping(const tal_t *ctx, const void *p, u16 *num_pong_bytes, u8 **ignored);
@@ -628,8 +633,8 @@ u8 *towire_query_channel_range(const tal_t *ctx, const struct bitcoin_blkid *cha
 bool fromwire_query_channel_range(const void *p, struct bitcoin_blkid *chain_hash, u32 *first_blocknum, u32 *number_of_blocks, struct tlv_query_channel_range_tlvs *tlvs);
 
 /* WIRE: REPLY_CHANNEL_RANGE */
-u8 *towire_reply_channel_range(const tal_t *ctx, const struct bitcoin_blkid *chain_hash, u32 first_blocknum, u32 number_of_blocks, u8 full_information, const u8 *encoded_short_ids, const struct tlv_reply_channel_range_tlvs *tlvs);
-bool fromwire_reply_channel_range(const tal_t *ctx, const void *p, struct bitcoin_blkid *chain_hash, u32 *first_blocknum, u32 *number_of_blocks, u8 *full_information, u8 **encoded_short_ids, struct tlv_reply_channel_range_tlvs *tlvs);
+u8 *towire_reply_channel_range(const tal_t *ctx, const struct bitcoin_blkid *chain_hash, u32 first_blocknum, u32 number_of_blocks, u8 sync_complete, const u8 *encoded_short_ids, const struct tlv_reply_channel_range_tlvs *tlvs);
+bool fromwire_reply_channel_range(const tal_t *ctx, const void *p, struct bitcoin_blkid *chain_hash, u32 *first_blocknum, u32 *number_of_blocks, u8 *sync_complete, u8 **encoded_short_ids, struct tlv_reply_channel_range_tlvs *tlvs);
 
 /* WIRE: GOSSIP_TIMESTAMP_FILTER */
 u8 *towire_gossip_timestamp_filter(const tal_t *ctx, const struct bitcoin_blkid *chain_hash, u32 first_timestamp, u32 timestamp_range);
@@ -645,4 +650,4 @@ bool fromwire_channel_update_option_channel_htlc_max(const void *p, secp256k1_ec
 
 
 #endif /* LIGHTNING_WIRE_PEER_WIREGEN_H */
-// SHA256STAMP:9f70670271b0856273026df920106d9c2ef2b60a1fa7c9c687e83a38d7d85a00
+// SHA256STAMP:1b0c5319cd9ab8c0281132a4c64ca51ecd9ee0158c7f645e102f401ac64ca439

@@ -56,6 +56,13 @@ void broadcast_tx(struct chain_topology *topo UNNEEDED,
 /* Generated stub for channel_change_state_reason_str */
 const char *channel_change_state_reason_str(enum state_change reason UNNEEDED)
 { fprintf(stderr, "channel_change_state_reason_str called!\n"); abort(); }
+/* Generated stub for channel_cleanup_commands */
+void channel_cleanup_commands(struct channel *channel UNNEEDED, const char *why UNNEEDED)
+{ fprintf(stderr, "channel_cleanup_commands called!\n"); abort(); }
+/* Generated stub for channel_close_conn */
+void channel_close_conn(struct channel *channel UNNEEDED,
+			const char *why UNNEEDED)
+{ fprintf(stderr, "channel_close_conn called!\n"); abort(); }
 /* Generated stub for channel_fail_forget */
 void channel_fail_forget(struct channel *channel UNNEEDED, const char *fmt UNNEEDED, ...)
 { fprintf(stderr, "channel_fail_forget called!\n"); abort(); }
@@ -82,6 +89,9 @@ struct htlc_out *channel_has_htlc_out(struct channel *channel UNNEEDED)
 /* Generated stub for channel_internal_error */
 void channel_internal_error(struct channel *channel UNNEEDED, const char *fmt UNNEEDED, ...)
 { fprintf(stderr, "channel_internal_error called!\n"); abort(); }
+/* Generated stub for channel_last_funding_feerate */
+u32 channel_last_funding_feerate(const struct channel *channel UNNEEDED)
+{ fprintf(stderr, "channel_last_funding_feerate called!\n"); abort(); }
 /* Generated stub for channel_set_billboard */
 void channel_set_billboard(struct channel *channel UNNEEDED, bool perm UNNEEDED,
 			   const char *str TAKES UNNEEDED)
@@ -267,6 +277,12 @@ void json_add_amount_sat_compat(struct json_stream *result UNNEEDED,
 				const char *msatfieldname)
 
 { fprintf(stderr, "json_add_amount_sat_compat called!\n"); abort(); }
+/* Generated stub for json_add_amount_sat_only */
+void json_add_amount_sat_only(struct json_stream *result UNNEEDED,
+			 const char *msatfieldname UNNEEDED,
+			 struct amount_sat sat)
+
+{ fprintf(stderr, "json_add_amount_sat_only called!\n"); abort(); }
 /* Generated stub for json_add_bolt11 */
 void json_add_bolt11(struct json_stream *response UNNEEDED,
 		     const struct bolt11 *b11 UNNEEDED)
@@ -314,6 +330,10 @@ void json_add_txid(struct json_stream *result UNNEEDED, const char *fieldname UN
 void json_add_uncommitted_channel(struct json_stream *response UNNEEDED,
 				  const struct uncommitted_channel *uc UNNEEDED)
 { fprintf(stderr, "json_add_uncommitted_channel called!\n"); abort(); }
+/* Generated stub for json_add_unsaved_channel */
+void json_add_unsaved_channel(struct json_stream *response UNNEEDED,
+			      const struct channel *channel UNNEEDED)
+{ fprintf(stderr, "json_add_unsaved_channel called!\n"); abort(); }
 /* Generated stub for json_array_end */
 void json_array_end(struct json_stream *js UNNEEDED)
 { fprintf(stderr, "json_array_end called!\n"); abort(); }
@@ -549,6 +569,9 @@ void peer_start_openingd(struct peer *peer UNNEEDED,
 			 struct per_peer_state *pps UNNEEDED,
 			 const u8 *msg UNNEEDED)
 { fprintf(stderr, "peer_start_openingd called!\n"); abort(); }
+/* Generated stub for peer_unsaved_channel */
+struct channel *peer_unsaved_channel(struct peer *peer UNNEEDED)
+{ fprintf(stderr, "peer_unsaved_channel called!\n"); abort(); }
 /* Generated stub for per_peer_state_set_fds */
 void per_peer_state_set_fds(struct per_peer_state *pps UNNEEDED,
 			    int peer_fd UNNEEDED, int gossip_fd UNNEEDED, int gossip_store_fd UNNEEDED)
@@ -615,6 +638,11 @@ void towire_node_id(u8 **pptr UNNEEDED, const struct node_id *id UNNEEDED)
 /* Generated stub for towire_onchaind_dev_memleak */
 u8 *towire_onchaind_dev_memleak(const tal_t *ctx UNNEEDED)
 { fprintf(stderr, "towire_onchaind_dev_memleak called!\n"); abort(); }
+/* Generated stub for towire_warningfmt */
+u8 *towire_warningfmt(const tal_t *ctx UNNEEDED,
+		      const struct channel_id *channel UNNEEDED,
+		      const char *fmt UNNEEDED, ...)
+{ fprintf(stderr, "towire_warningfmt called!\n"); abort(); }
 /* Generated stub for version */
 const char *version(void)
 { fprintf(stderr, "version called!\n"); abort(); }

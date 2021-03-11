@@ -129,9 +129,6 @@ void json_add_payment_fields(struct json_stream *response,
 	if (amount_msat_greater(t->msatoshi, AMOUNT_MSAT(0)))
 		json_add_amount_msat_compat(response, t->msatoshi, "msatoshi",
 					    "amount_msat");
-	else if (deprecated_apis)
-		json_add_null(response, "amount_msat");
-
 
 	json_add_amount_msat_compat(response, t->msatoshi_sent,
 				    "msatoshi_sent", "amount_sent_msat");
@@ -492,12 +489,6 @@ remote_routing_failure(const tal_t *ctx,
 		} else
 			erring_node = &route_nodes[origin_index];
 	}
-
-	/* Tell gossipd; it will try to extract channel_update */
-	/* FIXME: sendonion caller should do this, and inform gossipd of any
-	 * permanent errors. */
-	subd_send_msg(ld->gossip,
-		      take(towire_gossipd_payment_failure(NULL, failuremsg)));
 
 	routing_failure->erring_index = (unsigned int) (origin_index + 1);
 	routing_failure->failcode = failcode;

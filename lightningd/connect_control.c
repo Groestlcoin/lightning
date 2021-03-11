@@ -19,6 +19,7 @@
 #include <hsmd/capabilities.h>
 #include <lightningd/channel.h>
 #include <lightningd/connect_control.h>
+#include <lightningd/dual_open_control.h>
 #include <lightningd/hsm_control.h>
 #include <lightningd/json.h>
 #include <lightningd/jsonrpc.h>
@@ -136,6 +137,9 @@ static struct command_result *json_connect(struct command *cmd,
 	peer = peer_by_id(cmd->ld, &id);
 	if (peer) {
 		struct channel *channel = peer_active_channel(peer);
+
+		if (!channel)
+			channel = peer_unsaved_channel(peer);
 
 		if (peer->uncommitted_channel
 		    || (channel && channel->connected)) {
@@ -279,8 +283,18 @@ static void peer_please_disconnect(struct lightningd *ld, const u8 *msg)
 	c = active_channel_by_id(ld, &id, &uc);
 	if (uc)
 		kill_uncommitted_channel(uc, "Reconnected");
-	else if (c)
+	else if (c) {
+		channel_cleanup_commands(c, "Reconnected");
 		channel_fail_reconnect(c, "Reconnected");
+	}
+#if EXPERIMENTAL_FEATURES
+	else {
+		/* v2 has unsaved channels, not uncommitted_chans */
+		c = unsaved_channel_by_id(ld, &id);
+		if (c)
+			channel_close_conn(c, "Reconnected");
+	}
+#endif /* EXPERIMENTAL_FEATURES */
 }
 
 static unsigned connectd_msg(struct subd *connectd, const u8 *msg, const int *fds)
