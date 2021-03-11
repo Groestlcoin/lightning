@@ -96,7 +96,7 @@ example:
     { "name": "openchannel", "before": ["another_plugin"] },
     { "name": "htlc_accepted" }
   ],
-  "features": {
+  "featurebits": {
     "node": "D0000000",
     "channel": "D0000000",
     "init": "0E000000",
@@ -128,6 +128,10 @@ The `dynamic` indicates if the plugin can be managed after `lightningd`
 has been started. Critical plugins that should not be stopped should set it
 to false.
 
+If a `disable` member exists, the plugin will be disabled and the contents
+of this member is the reason why.  This allows plugins to disable themselves
+if they are not supported in this configuration.
+
 The `featurebits` object allows the plugin to register featurebits that should be
 announced in a number of places in [the protocol][bolt9]. They can be used to signal
 support for custom protocol extensions to direct peers, remote nodes and in
@@ -156,6 +160,10 @@ There are currently four supported option 'types':
   - bool: a boolean
   - int: parsed as a signed integer (64-bit)
   - flag: no-arg flag option. Is boolean under the hood. Defaults to false.
+
+In addition, string and int types can specify `"multi": true` to indicate
+they can be specified multiple times.  These will always be represented in
+`init` as a (possibly empty) JSON array.
 
 Nota bene: if a `flag` type option is not set, it will not appear
 in the options set that is passed to the plugin.
@@ -187,6 +195,13 @@ Here's an example option set, as sent in response to `getmanifest`
       "type": "int",
       "default": 6666,
       "description": "Port to use to connect to 3rd-party service"
+    },
+    {
+      "name": "number",
+      "type": "int",
+      "default": 0,
+      "description": "Another number to add",
+	  "multi": true
     }
   ],
 ```
@@ -201,7 +216,8 @@ simple JSON object containing the options:
 ```json
 {
   "options": {
-    "greeting": "World"
+    "greeting": "World",
+	"number": [0]
   },
   "configuration": {
     "lightning-dir": "/home/user/.lightning/testnet",
@@ -225,10 +241,11 @@ simple JSON object containing the options:
 }
 ```
 
-The plugin must respond to `init` calls, however the response can be
-arbitrary and will currently be discarded by `lightningd`. JSON-RPC
-commands were chosen over notifications in order not to force plugins
-to implement notifications which are not that well supported.
+The plugin must respond to `init` calls.  The response should be a
+valid JSON-RPC response to the `init`, but this is not currently
+enforced.  If the response is an object containing `result` which
+contains `disable` then the plugin will be disabled and the contents
+of this member is the reason why.
 
 The `startup` field allows a plugin to detect if it was started at
 `lightningd` startup (true), or at runtime (false).
@@ -897,6 +914,14 @@ to error without
 committing to the database!
 This is the expected way to halt and catch fire.
 
+`db_write` is a parallel-chained hook, i.e., multiple plugins can
+register it, and all of them will be invoked simultaneously without
+regard for order of registration.
+The hook is considered handled if all registered plugins return
+`{"result": "continue"}`.
+If any plugin returns anything else, `lightningd` will error without
+committing to the database.
+
 ### `invoice_payment`
 
 This hook is called whenever a valid payment for an unpaid invoice has arrived.
@@ -1199,6 +1224,43 @@ This will ensure backward
 compatibility should the semantics be changed in future.
 
 
+### `onion_message` and `onion_message_blinded`
+
+**(WARNING: experimental-offers only)**
+
+These two hooks are almost identical, in that they are called when an
+onion message is received.  The former is only used for unblinded
+messages (where the source knows that it is sending to this node), and
+the latter for blinded messages (where the source doesn't know that
+this node is the destination).  The latter hook will have a
+"blinding_in" field, the former never will.
+
+These hooks are separate, because blinded messages must ensure the
+sender used the correct "blinding_in", otherwise it should ignore the
+message: this avoids the source trying to probe for responses without
+using the designated delivery path.
+
+The payload for a call follows this format:
+
+```json
+{
+    "onion_message": {
+        "blinding_in": "02df5ffe895c778e10f7742a6c5b8a0cefbe9465df58b92fadeb883752c8107c8f",
+		"reply_path": [ {"id": "02df5ffe895c778e10f7742a6c5b8a0cefbe9465df58b92fadeb883752c8107c8f",
+                         "enctlv": "0a020d0d",
+                         "blinding": "02df5ffe895c778e10f7742a6c5b8a0cefbe9465df58b92fadeb883752c8107c8f"} ],
+        "invoice_request": "0a020d0d",
+		"invoice": "0a020d0d",
+		"invoice_error": "0a020d0d",
+		"unknown_fields": [ {"number": 12345, "value": "0a020d0d"} ]
+	}
+}
+```
+
+All fields shown here are optional.
+
+We suggest just returning `{'result': 'continue'}`; any other result
+will cause the message not to be handed to any other hooks.
 
 ## Bitcoin backend
 

@@ -306,7 +306,7 @@ Clone lightning:
 ```
 git clone https://github.com/ElementsProject/lightning.git
 cd lightning
-git submodule update --init
+git submodule update --init --recursive
 ```
 Build and install:
 ```

@@ -232,7 +232,10 @@ struct payment {
 	void **modifier_data;
 	int current_modifier;
 
-	struct bolt11 *invoice;
+	/* Information from the invoice. */
+	u32 min_final_cltv_expiry;
+	struct route_info **routes;
+	const u8 *features;
 
 	/* tal_arr of channel_hints we incrementally learn while performing
 	 * payment attempts. */
@@ -251,9 +254,13 @@ struct payment {
 	 * true. Set only on the root payment. */
 	bool abort;
 
-	/* Serialized bolt11 string, kept attachd to the root so we can filter
+	/* Serialized bolt11/12 string, kept attachd to the root so we can filter
 	 * by the invoice. */
-	const char *bolt11;
+	const char *invstring;
+
+	/* If this is paying a local offer, this is the one (sendpay ensures we
+	 * don't pay twice for single-use offers) */
+	struct sha256 *local_offer_id;
 
 	/* Textual explanation of why this payment was attempted. */
 	const char *why;
@@ -431,5 +438,8 @@ void payment_fail(struct payment *p, const char *fmt, ...) PRINTF_FMT(2,3);
 
 struct payment *payment_root(struct payment *p);
 struct payment_tree_result payment_collect_result(struct payment *p);
+
+/* For special effects, like inspecting your own routes. */
+struct gossmap *get_gossmap(struct plugin *plugin);
 
 #endif /* LIGHTNING_PLUGINS_LIBPLUGIN_PAY_H */
