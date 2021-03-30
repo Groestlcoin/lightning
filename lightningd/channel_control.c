@@ -22,6 +22,7 @@
 #include <lightningd/channel_control.h>
 #include <lightningd/closing_control.h>
 #include <lightningd/coin_mvts.h>
+#include <lightningd/dual_open_control.h>
 #include <lightningd/hsm_control.h>
 #include <lightningd/jsonrpc.h>
 #include <lightningd/lightningd.h>
@@ -31,10 +32,6 @@
 #include <lightningd/subd.h>
 #include <wire/common_wiregen.h>
 #include <wire/wire_sync.h>
-
-#if EXPERIMENTAL_FEATURES
- #include <lightningd/dual_open_control.h>
-#endif
 
 static void update_feerates(struct lightningd *ld, struct channel *channel)
 {
@@ -227,11 +224,13 @@ static void peer_got_shutdown(struct channel *channel, const u8 *msg)
 {
 	u8 *scriptpubkey;
 	struct lightningd *ld = channel->peer->ld;
+	struct bitcoin_outpoint *wrong_funding;
 	bool anysegwit = feature_negotiated(ld->our_features,
 					    channel->peer->their_features,
 					    OPT_SHUTDOWN_ANYSEGWIT);
 
-	if (!fromwire_channeld_got_shutdown(channel, msg, &scriptpubkey)) {
+	if (!fromwire_channeld_got_shutdown(channel, msg, &scriptpubkey,
+					    &wrong_funding)) {
 		channel_internal_error(channel, "bad channel_got_shutdown %s",
 				       tal_hex(msg, msg));
 		return;
@@ -256,6 +255,14 @@ static void peer_got_shutdown(struct channel *channel, const u8 *msg)
 				  CHANNELD_SHUTTING_DOWN,
 				  REASON_REMOTE,
 				  "Peer closes channel");
+
+	/* If we set it, that's what we want.  Otherwise use their preference.
+	 * We can't have both, since only opener can set this! */
+	if (!channel->shutdown_wrong_funding)
+		channel->shutdown_wrong_funding = wrong_funding;
+
+	/* We now watch the "wrong" funding, in case we spend it. */
+	channel_watch_wrong_funding(ld, channel);
 
 	/* TODO(cdecker) Selectively save updated fields to DB */
 	wallet_channel_save(ld->wallet, channel);
@@ -638,11 +645,9 @@ bool channel_tell_depth(struct lightningd *ld,
 			return true;
 		}
 
-#if EXPERIMENTAL_FEATURES
 		dualopen_tell_depth(channel->owner, channel,
 				    txid, depth);
 		return true;
-#endif /* EXPERIMENTAL_FEATURES */
 	} else if (channel->state != CHANNELD_AWAITING_LOCKIN
 	    && channel->state != CHANNELD_NORMAL) {
 		/* If not awaiting lockin/announce, it doesn't

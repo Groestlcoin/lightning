@@ -813,16 +813,33 @@ class LightningRpc(UnixDomainSocketRpc):
         }
         return self.call("fundchannel_cancel", payload)
 
-    def fundchannel_complete(self, node_id, funding_txid, funding_txout):
-        """
-        Complete channel establishment with {id}, using {funding_txid} at {funding_txout}.
-        """
+    def _deprecated_fundchannel_complete(self, node_id, funding_txid, funding_txout):
+        warnings.warn("fundchannel_complete: funding_txid & funding_txout replaced by psbt: expect removal"
+                      " in Mid-2021",
+                      DeprecationWarning)
+
         payload = {
             "id": node_id,
             "txid": funding_txid,
             "txout": funding_txout,
         }
         return self.call("fundchannel_complete", payload)
+
+    def fundchannel_complete(self, node_id, *args, **kwargs):
+        """
+        Complete channel establishment with {id}, using {psbt}.
+        """
+        if 'txid' in kwargs or len(args) == 2:
+            return self._deprecated_fundchannel_complete(node_id, *args, **kwargs)
+
+        def _fundchannel_complete(node_id, psbt):
+            payload = {
+                "id": node_id,
+                "psbt": psbt,
+            }
+            return self.call("fundchannel_complete", payload)
+
+        return _fundchannel_complete(node_id, *args, **kwargs)
 
     def getinfo(self):
         """
@@ -1099,6 +1116,13 @@ class LightningRpc(UnixDomainSocketRpc):
             "initialpsbt": initialpsbt,
         }
         return self.call("openchannel_bump", payload)
+
+    def openchannel_abort(self, channel_id):
+        """ Abort a channel open """
+        payload = {
+            "channel_id": channel_id,
+        }
+        return self.call("openchannel_abort", payload)
 
     def paystatus(self, bolt11=None):
         """Detail status of attempts to pay {bolt11} or any."""

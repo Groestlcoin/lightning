@@ -87,7 +87,8 @@ static void peer_update_features(struct peer *peer,
 
 struct peer *new_peer(struct lightningd *ld, u64 dbid,
 		      const struct node_id *id,
-		      const struct wireaddr_internal *addr)
+		      const struct wireaddr_internal *addr,
+		      bool connected_incoming)
 {
 	/* We are owned by our channels, and freed manually by destroy_channel */
 	struct peer *peer = tal(NULL, struct peer);
@@ -97,6 +98,7 @@ struct peer *new_peer(struct lightningd *ld, u64 dbid,
 	peer->id = *id;
 	peer->uncommitted_channel = NULL;
 	peer->addr = *addr;
+	peer->connected_incoming = connected_incoming;
 	peer->their_features = NULL;
 	list_head_init(&peer->channels);
 	peer->direction = node_id_idx(&peer->ld->id, &peer->id);
@@ -981,6 +983,7 @@ struct peer_connected_hook_payload {
 	struct lightningd *ld;
 	struct channel *channel;
 	struct wireaddr_internal addr;
+	bool incoming;
 	struct peer *peer;
 	struct per_peer_state *pps;
 	u8 *error;
@@ -993,6 +996,7 @@ peer_connected_serialize(struct peer_connected_hook_payload *payload,
 	const struct peer *p = payload->peer;
 	json_object_start(stream, "peer");
 	json_add_node_id(stream, "id", &p->id);
+	json_add_string(stream, "direction", payload->incoming ? "in" : "out");
 	json_add_string(
 	    stream, "addr",
 	    type_to_string(stream, struct wireaddr_internal, &payload->addr));
@@ -1058,38 +1062,36 @@ static void peer_connected_hook_final(struct peer_connected_hook_payload *payloa
 		}
 		case DUALOPEND_OPEN_INIT:
 		case DUALOPEND_AWAITING_LOCKIN:
-#if EXPERIMENTAL_FEATURES
 			assert(!channel->owner);
 			channel->peer->addr = addr;
+			channel->peer->connected_incoming = payload->incoming;
 			peer_restart_dualopend(peer, payload->pps, channel, NULL);
 			return;
-#else
-			abort();
-#endif /* EXPERIMENTAL_FEATURES */
 		case CHANNELD_AWAITING_LOCKIN:
 		case CHANNELD_NORMAL:
 		case CHANNELD_SHUTTING_DOWN:
 			assert(!channel->owner);
 			channel->peer->addr = addr;
+			channel->peer->connected_incoming = payload->incoming;
 			peer_start_channeld(channel, payload->pps, NULL, true);
 			return;
 
 		case CLOSINGD_SIGEXCHANGE:
 			assert(!channel->owner);
 			channel->peer->addr = addr;
+			channel->peer->connected_incoming = payload->incoming;
 			peer_start_closingd(channel, payload->pps, true, NULL);
 			return;
 		}
 		abort();
 	}
 
-	notify_connect(ld, &peer->id, &addr);
+	notify_connect(ld, &peer->id, payload->incoming, &addr);
 
 	/* No err, all good. */
 	error = NULL;
 
 send_error:
-#if EXPERIMENTAL_FEATURES
 	if (feature_negotiated(ld->our_features,
 			       peer->their_features,
 			       OPT_DUAL_FUND)) {
@@ -1100,11 +1102,11 @@ send_error:
 			assert(channel->state == DUALOPEND_OPEN_INIT
 			       || channel->state == DUALOPEND_AWAITING_LOCKIN);
 			channel->peer->addr = addr;
+			channel->peer->connected_incoming = payload->incoming;
 			peer_restart_dualopend(peer, payload->pps, channel, error);
 		} else
 			peer_start_dualopend(peer, payload->pps, error);
 	} else
-#endif /* EXPERIMENTAL_FEATURES */
 		peer_start_openingd(peer, payload->pps, error);
 }
 
@@ -1173,9 +1175,10 @@ void peer_connected(struct lightningd *ld, const u8 *msg,
 	hook_payload->ld = ld;
 	hook_payload->error = NULL;
 	if (!fromwire_connectd_peer_connected(hook_payload, msg,
-					     &id, &hook_payload->addr,
-					     &hook_payload->pps,
-					     &their_features))
+					      &id, &hook_payload->addr,
+					      &hook_payload->incoming,
+					      &hook_payload->pps,
+					      &their_features))
 		fatal("Connectd gave bad CONNECT_PEER_CONNECTED message %s",
 		      tal_hex(msg, msg));
 
@@ -1186,7 +1189,8 @@ void peer_connected(struct lightningd *ld, const u8 *msg,
 	 * subdaemon.  Otherwise, we'll hand to openingd to wait there. */
 	peer = peer_by_id(ld, &id);
 	if (!peer)
-		peer = new_peer(ld, 0, &id, &hook_payload->addr);
+		peer = new_peer(ld, 0, &id, &hook_payload->addr,
+				hook_payload->incoming);
 
 	tal_steal(peer, hook_payload);
 	hook_payload->peer = peer;
@@ -1194,7 +1198,7 @@ void peer_connected(struct lightningd *ld, const u8 *msg,
 	peer_update_features(peer, their_features);
 
 	/* Complete any outstanding connect commands. */
-	connect_succeeded(ld, peer);
+	connect_succeeded(ld, peer, hook_payload->incoming, &hook_payload->addr);
 
 	/* Can't be opening, since we wouldn't have sent peer_disconnected. */
 	assert(!peer->uncommitted_channel);
@@ -1353,6 +1357,18 @@ static enum watch_result funding_spent(struct channel *channel,
 	return onchaind_funding_spent(channel, tx, block->height, false);
 }
 
+void channel_watch_wrong_funding(struct lightningd *ld, struct channel *channel)
+{
+	/* Watch the "wrong" funding too, in case we spend it. */
+	if (channel->shutdown_wrong_funding) {
+		/* FIXME: Remove arg from cb? */
+		watch_txo(channel, ld->topology, channel,
+			  &channel->shutdown_wrong_funding->txid,
+			  channel->shutdown_wrong_funding->n,
+			  funding_spent);
+	}
+}
+
 void channel_watch_funding(struct lightningd *ld, struct channel *channel)
 {
 	/* FIXME: Remove arg from cb? */
@@ -1361,6 +1377,7 @@ void channel_watch_funding(struct lightningd *ld, struct channel *channel)
 	watch_txo(channel, ld->topology, channel,
 		  &channel->funding_txid, channel->funding_outnum,
 		  funding_spent);
+	channel_watch_wrong_funding(ld, channel);
 }
 
 static void json_add_peer(struct lightningd *ld,
@@ -1402,11 +1419,9 @@ static void json_add_peer(struct lightningd *ld,
 	json_add_uncommitted_channel(response, p->uncommitted_channel);
 
 	list_for_each(&p->channels, channel, list) {
-#if EXPERIMENTAL_FEATURES
 		if (channel_unsaved(channel))
 			json_add_unsaved_channel(response, channel);
 		else
-#endif /* EXPERIMENTAL_FEATURES */
 			json_add_channel(ld, response, NULL, channel);
 	}
 	json_array_end(response);
@@ -1492,6 +1507,19 @@ command_find_channel(struct command *cmd,
 	}
 }
 
+static struct command_result *param_outpoint(struct command *cmd,
+					     const char *name,
+					     const char *buffer,
+					     const jsmntok_t *tok,
+					     struct bitcoin_outpoint **outp)
+{
+	*outp = tal(cmd, struct bitcoin_outpoint);
+	if (json_to_outpoint(buffer, tok, *outp))
+		return NULL;
+	return command_fail_badparam(cmd, name, buffer, tok,
+				     "should be a txid:outnum");
+}
+
 static struct command_result *json_close(struct command *cmd,
 					 const char *buffer,
 					 const jsmntok_t *obj UNNEEDED,
@@ -1502,8 +1530,9 @@ static struct command_result *json_close(struct command *cmd,
 	struct channel *channel COMPILER_WANTS_INIT("gcc 7.3.0 fails, 8.3 OK");
 	unsigned int *timeout;
 	const u8 *close_to_script = NULL;
-	bool close_script_set;
+	bool close_script_set, wrong_funding_changed;
 	const char *fee_negotiation_step_str;
+	struct bitcoin_outpoint *wrong_funding;
 	char* end;
 
 	if (!param(cmd, buffer, params,
@@ -1513,6 +1542,7 @@ static struct command_result *json_close(struct command *cmd,
 		   p_opt("destination", param_bitcoin_address, &close_to_script),
 		   p_opt("fee_negotiation_step", param_string,
 			 &fee_negotiation_step_str),
+		   p_opt("wrong_funding", param_outpoint, &wrong_funding),
 		   NULL))
 		return command_param_failed();
 
@@ -1534,12 +1564,10 @@ static struct command_result *json_close(struct command *cmd,
 
 			return command_success(cmd, json_stream_success(cmd));
 		}
-#if EXPERIMENTAL_FEATURES
 		if ((channel = peer_unsaved_channel(peer))) {
 			channel_close_conn(channel, "close command called");
 			return command_success(cmd, json_stream_success(cmd));
 		}
-#endif /* EXPERIMENTAL_FEATURES */
 		return command_fail(cmd, LIGHTNINGD,
 				    "Peer has no active channel");
 	}
@@ -1618,6 +1646,34 @@ static struct command_result *json_close(struct command *cmd,
 			    fee_negotiation_step_str);
 	}
 
+	if (wrong_funding) {
+		if (!feature_negotiated(cmd->ld->our_features,
+					channel->peer->their_features,
+					OPT_SHUTDOWN_WRONG_FUNDING)) {
+			return command_fail(cmd, JSONRPC2_INVALID_PARAMS,
+					    "wrong_funding feature not negotiated"
+					    " (we said %s, they said %s: try experimental-shutdown-wrong-funding?)",
+					    feature_offered(cmd->ld->our_features
+							    ->bits[INIT_FEATURE],
+							    OPT_SHUTDOWN_WRONG_FUNDING)
+					    ? "yes" : "no",
+					    feature_offered(channel->peer->their_features,
+							    OPT_SHUTDOWN_WRONG_FUNDING)
+					    ? "yes" : "no");
+		}
+
+		wrong_funding_changed = true;
+		channel->shutdown_wrong_funding
+			= tal_steal(channel, wrong_funding);
+	} else {
+		if (channel->shutdown_wrong_funding) {
+			channel->shutdown_wrong_funding
+				= tal_free(channel->shutdown_wrong_funding);
+			wrong_funding_changed = true;
+		} else
+			wrong_funding_changed = false;
+	}
+
 	/* Normal case.
 	 * We allow states shutting down and sigexchange; a previous
 	 * close command may have timed out, and this current command
@@ -1647,7 +1703,8 @@ static struct command_result *json_close(struct command *cmd,
 				} else
 					msg = towire_channeld_send_shutdown(
 						NULL,
-						channel->shutdown_scriptpubkey[LOCAL]);
+						channel->shutdown_scriptpubkey[LOCAL],
+						channel->shutdown_wrong_funding);
 				subd_send_msg(channel->owner, take(msg));
 			}
 
@@ -1662,8 +1719,9 @@ static struct command_result *json_close(struct command *cmd,
 	/* Register this command for later handling. */
 	register_close_command(cmd->ld, cmd, channel, *timeout);
 
-	/* If we set `channel->shutdown_scriptpubkey[LOCAL]`, save it. */
-	if (close_script_set)
+	/* If we set `channel->shutdown_scriptpubkey[LOCAL]` or
+	 * changed shutdown_wrong_funding, save it. */
+	if (close_script_set || wrong_funding_changed)
 		wallet_channel_save(cmd->ld->wallet, channel);
 
 	/* Wait until close drops down to chain. */
@@ -1697,11 +1755,16 @@ static void activate_peer(struct peer *peer, u32 delay)
 						      "Will attempt reconnect "
 						      "in %u seconds",
 						      delay));
-			delay_then_reconnect(channel, delay, &peer->addr);
+			delay_then_reconnect(channel, delay,
+					     peer->connected_incoming
+					     ? NULL
+					     : &peer->addr);
 		} else {
 			msg = towire_connectd_connect_to_peer(NULL,
-								&peer->id, 0,
-								&peer->addr);
+							      &peer->id, 0,
+							      peer->connected_incoming
+							      ? NULL
+							      : &peer->addr);
 			subd_send_msg(ld->connectd, take(msg));
 			channel_set_billboard(channel, false,
 					      "Attempting to reconnect");
@@ -1805,13 +1868,11 @@ static struct command_result *json_disconnect(struct command *cmd,
 		return command_fail(cmd, LIGHTNINGD, "Peer is in state %s",
 				    channel_state_name(channel));
 	}
-#if EXPERIMENTAL_FEATURES
 	channel = peer_unsaved_channel(peer);
 	if (channel) {
 		channel_close_conn(channel, "disconnect command");
 		return command_success(cmd, json_stream_success(cmd));
 	}
-#endif /* EXPERIMENTAL_FEATURES */
 	if (!peer->uncommitted_channel) {
 		return command_fail(cmd, LIGHTNINGD, "Peer not connected");
 	}

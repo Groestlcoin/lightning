@@ -5,6 +5,7 @@
 #include <common/closing_fee.h>
 #include <common/fee_states.h>
 #include <common/json_command.h>
+#include <common/json_helpers.h>
 #include <common/jsonrpc_errors.h>
 #include <common/utils.h>
 #include <common/wire_error.h>
@@ -173,11 +174,12 @@ new_inflight(struct channel *channel,
 	funding->our_funds = our_funds;
 
 	inflight->funding = funding;
-	inflight->channel = channel,
-	inflight->remote_tx_sigs = false,
+	inflight->channel = channel;
+	inflight->remote_tx_sigs = false;
 	inflight->funding_psbt = tal_steal(inflight, psbt);
 	inflight->last_tx = tal_steal(inflight, last_tx);
 	inflight->last_sig = last_sig;
+	inflight->tx_broadcast = false;
 
 	list_add_tail(&channel->inflights, &inflight->list);
 	tal_add_destructor(inflight, destroy_inflight);
@@ -194,6 +196,7 @@ struct open_attempt *new_channel_open_attempt(struct channel *channel)
 	oa->role = channel->opener == LOCAL ? TX_INITIATOR : TX_ACCEPTER;
 	oa->our_upfront_shutdown_script = NULL;
 	oa->cmd = NULL;
+	oa->aborted = false;
 
 	return oa;
 }
@@ -238,6 +241,7 @@ struct channel *new_unsaved_channel(struct peer *peer,
 	channel->closing_fee_negotiation_step = 50;
 	channel->closing_fee_negotiation_step_unit
 		= CLOSING_FEE_NEGOTIATION_STEP_UNIT_PERCENTAGE;
+	channel->shutdown_wrong_funding = NULL;
 
 	/* Channel is connected! */
 	channel->connected = true;
@@ -330,7 +334,9 @@ struct channel *new_channel(struct peer *peer, u64 dbid,
 			    bool option_static_remotekey,
 			    bool option_anchor_outputs,
 			    enum side closer,
-			    enum state_change reason)
+			    enum state_change reason,
+			    /* NULL or stolen */
+			    const struct bitcoin_outpoint *shutdown_wrong_funding)
 {
 	struct channel *channel = tal(peer->ld, struct channel);
 
@@ -392,6 +398,8 @@ struct channel *new_channel(struct peer *peer, u64 dbid,
 	channel->closing_fee_negotiation_step = 50;
 	channel->closing_fee_negotiation_step_unit
 		= CLOSING_FEE_NEGOTIATION_STEP_UNIT_PERCENTAGE;
+	channel->shutdown_wrong_funding
+		= tal_steal(channel, shutdown_wrong_funding);
 	if (local_shutdown_scriptpubkey)
 		channel->shutdown_scriptpubkey[LOCAL]
 			= tal_steal(channel, local_shutdown_scriptpubkey);
@@ -742,9 +750,22 @@ void channel_cleanup_commands(struct channel *channel, const char *why)
 {
 	if (channel->open_attempt) {
 		struct open_attempt *oa = channel->open_attempt;
-		if (oa->cmd)
-			was_pending(command_fail(oa->cmd, LIGHTNINGD,
-						 "%s", why));
+		if (oa->cmd) {
+			/* If we requested this be aborted, it's a success */
+			if (oa->aborted) {
+				struct json_stream *response;
+				response = json_stream_success(oa->cmd);
+				json_add_channel_id(response,
+						    "channel_id",
+						    &channel->cid);
+				json_add_bool(response, "channel_canceled",
+					      list_empty(&channel->inflights));
+				json_add_string(response, "reason", why);
+				was_pending(command_success(oa->cmd, response));
+			} else
+				was_pending(command_fail(oa->cmd, LIGHTNINGD,
+							 "%s", why));
+		}
 		notify_channel_open_failed(channel->peer->ld, &channel->cid);
 		channel->open_attempt = tal_free(channel->open_attempt);
 	}
@@ -821,8 +842,11 @@ static void err_and_reconnect(struct channel *channel,
 
 	channel_set_owner(channel, NULL);
 
+	/* Their address only useful if we connected to them */
 	delay_then_reconnect(channel, seconds_before_reconnect,
-			     &channel->peer->addr);
+			     channel->peer->connected_incoming
+			     ? NULL
+			     : &channel->peer->addr);
 }
 
 void channel_fail_reconnect_later(struct channel *channel, const char *fmt, ...)
