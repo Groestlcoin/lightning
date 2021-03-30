@@ -1987,7 +1987,7 @@ json_openchannel_bump(struct command *cmd,
 
 	if (!topology_synced(cmd->ld->topology)) {
 		return command_fail(cmd, FUNDING_STILL_SYNCING_BITCOIN,
-				    "Still syncing with bitcoin network");
+				    "Still syncing with groestlcoin network");
 	}
 
 	/* Are we in a state where we can attempt an RBF? */
@@ -2300,7 +2300,7 @@ static struct command_result *json_openchannel_init(struct command *cmd,
 
 	if (!topology_synced(cmd->ld->topology)) {
 		return command_fail(cmd, FUNDING_STILL_SYNCING_BITCOIN,
-				    "Still syncing with bitcoin network");
+				    "Still syncing with groestlcoin network");
 	}
 
 	peer = peer_by_id(cmd->ld, id);
