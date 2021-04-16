@@ -1107,8 +1107,8 @@ wallet_commit_channel(struct lightningd *ld,
 		      struct amount_sat total_funding,
 		      struct amount_sat our_funding,
 		      struct channel_info *channel_info,
-		      u32 commitment_feerate,
 		      u32 funding_feerate,
+		      u32 commitment_feerate,
 		      const u8 *our_upfront_shutdown_script,
 		      const u8 *remote_upfront_shutdown_script,
 		      struct wally_psbt *psbt STEALS)
@@ -1229,7 +1229,7 @@ static void handle_peer_wants_to_close(struct subd *dualopend,
 	 * 1. `OP_DUP` `OP_HASH160` `20` 20-bytes `OP_EQUALVERIFY` `OP_CHECKSIG`
 	 *   (pay to pubkey hash), OR
 	 * 2. `OP_HASH160` `20` 20-bytes `OP_EQUAL` (pay to script hash), OR
-	 * 3. `OP_0` `20` 20-bytes (version 0 pay to witness pubkey), OR
+	 * 3. `OP_0` `20` 20-bytes (version 0 pay to witness pubkey hash), OR
 	 * 4. `OP_0` `32` 32-bytes (version 0 pay to witness script hash)
 	 *
 	 * A receiving node:
@@ -1456,15 +1456,21 @@ static void handle_peer_tx_sigs_sent(struct subd *dualopend,
 		 *   transaction `feerate`
 		 */
 		if (!feerate_satisfied(inflight->funding_psbt,
-				       inflight->funding->feerate))
-			channel_fail_permanent(channel,
-					       REASON_PROTOCOL,
-					       "Agreed feerate %dperkw not"
-					       " met with witnesses %s",
+				       inflight->funding->feerate)) {
+			char *errmsg = tal_fmt(tmpctx,
+					       "Witnesses lower effective"
+					       " feerate below agreed upon rate"
+					       " of %dperkw. Failing channel."
+					       " Offending PSBT: %s",
 					       inflight->funding->feerate,
 					       type_to_string(tmpctx,
-							      struct wally_psbt,
-							      inflight->funding_psbt));
+						      struct wally_psbt,
+						      inflight->funding_psbt));
+
+			/* Notify the peer we're failing */
+			subd_send_msg(dualopend,
+				      take(towire_dualopend_fail(NULL, errmsg)));
+		}
 	}
 }
 
@@ -1778,15 +1784,21 @@ static void handle_peer_tx_sigs_msg(struct subd *dualopend,
 		 *   transaction `feerate`
 		 */
 		if (!feerate_satisfied(inflight->funding_psbt,
-				       inflight->funding->feerate))
-			channel_fail_permanent(channel,
-					       REASON_PROTOCOL,
-					       "Agreed feerate %dperkw not"
-					       " met with witnesses %s",
+				       inflight->funding->feerate)) {
+			char *errmsg = tal_fmt(tmpctx,
+					       "Witnesses lower effective"
+					       " feerate below agreed upon rate"
+					       " of %dperkw. Failing channel."
+					       " Offending PSBT: %s",
 					       inflight->funding->feerate,
 					       type_to_string(tmpctx,
-							      struct wally_psbt,
-							      inflight->funding_psbt));
+						      struct wally_psbt,
+						      inflight->funding_psbt));
+
+			/* Notify the peer we're failing */
+			subd_send_msg(dualopend,
+				      take(towire_dualopend_fail(NULL, errmsg)));
+		}
 	}
 
 	/* Send notification with peer's signed PSBT */

@@ -24,7 +24,9 @@ CCANDIR := ccan
 
 # Where we keep the BOLT RFCs
 BOLTDIR := ../lightning-rfc/
-BOLTVERSION := edd45ecf22095ce97c1b5e9136a7d79351bd68cb
+DEFAULT_BOLTVERSION := b201efe0546120c14bf154ce5f4e18da7243fe7a
+# Can be overridden on cmdline.
+BOLTVERSION := $(DEFAULT_BOLTVERSION)
 
 -include config.vars
 
@@ -78,7 +80,7 @@ endif
 
 # (method=thread to support xdist)
 PYTEST_OPTS := -v -p no:logging $(PYTEST_OPTS)
-PYTHONPATH=$(shell pwd)/contrib/pyln-client:$(shell pwd)/contrib/pyln-testing:$(shell pwd)/contrib/pyln-proto/
+PYTHONPATH=$(shell pwd)/contrib/pyln-client:$(shell pwd)/contrib/pyln-testing:$(shell pwd)/contrib/pyln-proto/:$(shell pwd)/external/lnprototest:$(shell pwd)/contrib/pyln-spec/bolt1:$(shell pwd)/contrib/pyln-spec/bolt2:$(shell pwd)/contrib/pyln-spec/bolt4:$(shell pwd)/contrib/pyln-spec/bolt7
 
 # This is where we add new features as bitcoin adds them.
 FEATURES :=
@@ -372,7 +374,14 @@ endif
 
 check-units:
 
-check: check-units installcheck pytest
+check: check-units installcheck check-protos pytest
+
+check-protos: $(ALL_PROGRAMS)
+ifeq ($(PYTEST),)
+	@echo "py.test is required to run the protocol tests, please install using 'pip3 install -r requirements.txt', and rerun 'configure'."; false
+else
+	@(cd external/lnprototest && PYTHONPATH=$(PYTHONPATH) LIGHTNING_SRC=../.. $(PYTEST) --runner lnprototest.clightning.Runner $(PYTEST_OPTS))
+endif
 
 pytest: $(ALL_PROGRAMS)
 ifeq ($(PYTEST),)
@@ -401,11 +410,12 @@ SRC_TO_CHECK := $(filter-out $(ALL_TEST_PROGRAMS:=.c), $(ALL_NONGEN_SOURCES))
 check-src-includes: $(SRC_TO_CHECK:%=check-src-include-order/%)
 check-hdr-includes: $(ALL_NONGEN_HEADERS:%=check-hdr-include-order/%)
 
-# Experimental quotes quote the exact version.
-ifeq ($(EXPERIMENTAL_FEATURES),1)
-CHECK_BOLT_PREFIX=--prefix="BOLT-$(BOLTVERSION)"
-else
+# If you want to check a specific variant of quotes use:
+#   make check-source-bolt BOLTVERSION=xxx
+ifeq ($(BOLTVERSION),$(DEFAULT_BOLTVERSION))
 CHECK_BOLT_PREFIX=
+else
+CHECK_BOLT_PREFIX=--prefix="BOLT-$(BOLTVERSION)"
 endif
 
 # Any mention of BOLT# must be followed by an exact quote, modulo whitespace.

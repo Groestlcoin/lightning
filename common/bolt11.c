@@ -594,7 +594,7 @@ struct bolt11 *bolt11_decode_nosig(const tal_t *ctx, const char *str,
 	 *
 	 * The human-readable part of a Lightning invoice consists of two sections:
 	 * 1. `prefix`: `ln` + BIP-0173 currency prefix (e.g. `lngrs` for Groestlcoin mainnet,
-	 *    `lntgrs` for Groestlcoin testnet, and `lngrsrt` for Groestlcoin regtest)
+	 *    `lntgrs` for Groestlcoin testnet, `lntbs` for Groestlcoin signet, and `lngrsrt` for groestlcoin regtest)
 	 * 1. `amount`: optional number in that currency, followed by an optional
 	 *    `multiplier` letter. The unit encoded here is the 'social' convention of a payment unit -- in the case of Groestlcoin the unit is 'groestlcoin' NOT satoshis.
 	*/
