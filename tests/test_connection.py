@@ -4,14 +4,14 @@ from fixtures import TEST_NETWORK
 from flaky import flaky  # noqa: F401
 from pyln.client import RpcError, Millisatoshi
 from utils import (
-    DEVELOPER, only_one, wait_for, sync_blockheight, TIMEOUT,
+    only_one, wait_for, sync_blockheight, TIMEOUT,
     expected_peer_features, expected_node_features,
     expected_channel_features,
     check_coin_moves, first_channel_id, account_balance, basic_fee,
     scriptpubkey_addr,
-    EXPERIMENTAL_FEATURES, EXPERIMENTAL_DUAL_FUND
+    EXPERIMENTAL_FEATURES
 )
-from pyln.testing.utils import SLOW_MACHINE, VALGRIND
+from pyln.testing.utils import SLOW_MACHINE, VALGRIND, EXPERIMENTAL_DUAL_FUND
 
 import os
 import pytest
@@ -150,6 +150,8 @@ def test_balance(node_factory):
     assert p2['msatoshi_total'] == 10**6 * 1000
 
 
+@pytest.mark.openchannel('v1')
+@pytest.mark.openchannel('v2')
 def test_bad_opening(node_factory):
     # l1 asks for a too-long locktime
     l1 = node_factory.get_node(options={'watchtime-blocks': 100})
@@ -168,9 +170,11 @@ def test_bad_opening(node_factory):
     l2.daemon.wait_for_log('to_self_delay 100 larger than 99')
 
 
-@unittest.skipIf(not DEVELOPER, "gossip without DEVELOPER=1 is slow")
+@pytest.mark.developer("gossip without DEVELOPER=1 is slow")
 @unittest.skipIf(TEST_NETWORK != 'regtest', "Fee computation and limits are network specific")
 @pytest.mark.slow_test
+@pytest.mark.openchannel('v1')
+@pytest.mark.openchannel('v2')
 def test_opening_tiny_channel(node_factory):
     # Test custom min-capacity-sat parameters
     #
@@ -193,7 +197,7 @@ def test_opening_tiny_channel(node_factory):
     reserves = 2 * dustlimit
     min_commit_tx_fees = basic_fee(7500)
     overhead = reserves + min_commit_tx_fees
-    if EXPERIMENTAL_FEATURES:
+    if EXPERIMENTAL_FEATURES or EXPERIMENTAL_DUAL_FUND:
         # Gotta fund those anchors too!
         overhead += 660
 
@@ -201,31 +205,36 @@ def test_opening_tiny_channel(node_factory):
     l3_min_capacity = 10000           # the current default
     l4_min_capacity = 20000           # a server with more than default minimum
 
-    l1, l2, l3, l4 = node_factory.get_nodes(4, opts=[{'min-capacity-sat': 0},
-                                                     {'min-capacity-sat': l2_min_capacity},
-                                                     {'min-capacity-sat': l3_min_capacity},
-                                                     {'min-capacity-sat': l4_min_capacity}])
+    opts = [{'min-capacity-sat': 0},
+            {'min-capacity-sat': l2_min_capacity},
+            {'min-capacity-sat': l3_min_capacity},
+            {'min-capacity-sat': l4_min_capacity}]
+    l1, l2, l3, l4 = node_factory.get_nodes(4, opts=opts)
     l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
     l1.rpc.connect(l3.info['id'], 'localhost', l3.port)
     l1.rpc.connect(l4.info['id'], 'localhost', l4.port)
 
-    with pytest.raises(RpcError, match=r'They sent error.*channel capacity is .*, which is below .*msat'):
+    with pytest.raises(RpcError, match=r'They sent [error|warning].*channel capacity is .*, which is below .*msat'):
         l1.fundchannel(l2, l2_min_capacity + overhead - 1)
+    l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
     l1.fundchannel(l2, l2_min_capacity + overhead)
 
-    with pytest.raises(RpcError, match=r'They sent error.*channel capacity is .*, which is below .*msat'):
+    with pytest.raises(RpcError, match=r'They sent [error|warning].*channel capacity is .*, which is below .*msat'):
         l1.fundchannel(l3, l3_min_capacity + overhead - 1)
+    l1.rpc.connect(l3.info['id'], 'localhost', l3.port)
     l1.fundchannel(l3, l3_min_capacity + overhead)
 
-    with pytest.raises(RpcError, match=r'They sent error.*channel capacity is .*, which is below .*msat'):
+    with pytest.raises(RpcError, match=r'They sent [error|warning].*channel capacity is .*, which is below .*msat'):
         l1.fundchannel(l4, l4_min_capacity + overhead - 1)
+    l1.rpc.connect(l4.info['id'], 'localhost', l4.port)
     l1.fundchannel(l4, l4_min_capacity + overhead)
 
     # Note that this check applies locally too, so you can't open it if
     # you would reject it.
     l3.rpc.connect(l2.info['id'], 'localhost', l2.port)
-    with pytest.raises(RpcError, match=r"'message': 'channel capacity.* is .*, which is below .*msat"):
+    with pytest.raises(RpcError, match=r"channel capacity is .*, which is below .*msat"):
         l3.fundchannel(l2, l3_min_capacity + overhead - 1)
+    l3.rpc.connect(l2.info['id'], 'localhost', l2.port)
     l3.fundchannel(l2, l3_min_capacity + overhead)
 
 
@@ -238,7 +247,9 @@ def test_second_channel(node_factory):
     l1.fundchannel(l3, 10**6)
 
 
-@unittest.skipIf(not DEVELOPER, "needs DEVELOPER=1")
+@pytest.mark.developer
+@pytest.mark.openchannel('v1')
+@pytest.mark.openchannel('v2')
 def test_disconnect(node_factory):
     # These should all make us fail
     disconnects = ['-WIRE_INIT',
@@ -264,7 +275,9 @@ def test_disconnect(node_factory):
     assert len(l2.rpc.listpeers()) == 1
 
 
-@unittest.skipIf(not DEVELOPER, "needs DEVELOPER=1")
+@pytest.mark.developer
+@pytest.mark.openchannel('v1')
+@pytest.mark.openchannel('v2')
 def test_disconnect_opener(node_factory):
     # Now error on opener side during channel open.
     disconnects = ['-WIRE_OPEN_CHANNEL',
@@ -287,7 +300,7 @@ def test_disconnect_opener(node_factory):
                        '+WIRE_TX_COMPLETE']
 
     l1 = node_factory.get_node(disconnect=disconnects)
-    l2 = node_factory.get_node()
+    l2 = node_factory.get_node(may_reconnect=EXPERIMENTAL_DUAL_FUND)
 
     l1.fundwallet(2000000)
 
@@ -306,7 +319,9 @@ def test_disconnect_opener(node_factory):
     assert len(l2.rpc.listpeers()) == 1
 
 
-@unittest.skipIf(not DEVELOPER, "needs DEVELOPER=1")
+@pytest.mark.developer
+@pytest.mark.openchannel('v1')
+@pytest.mark.openchannel('v2')
 def test_disconnect_fundee(node_factory):
     # Now error on fundee side during channel open.
     disconnects = ['-WIRE_ACCEPT_CHANNEL',
@@ -341,7 +356,8 @@ def test_disconnect_fundee(node_factory):
 
 
 @unittest.skipIf(TEST_NETWORK != 'regtest', 'elementsd doesnt yet support PSBT features we need')
-@unittest.skipIf(not DEVELOPER, "needs DEVELOPER=1")
+@pytest.mark.developer
+@pytest.mark.openchannel('v2')
 def test_disconnect_fundee_v2(node_factory):
     # Now error on fundee side during channel open, with them funding
     disconnects = ['-WIRE_ACCEPT_CHANNEL2',
@@ -357,12 +373,11 @@ def test_disconnect_fundee_v2(node_factory):
                    '@WIRE_TX_COMPLETE',
                    '+WIRE_TX_COMPLETE']
 
-    accepter_plugin = os.path.join(os.path.dirname(__file__),
-                                   'plugins/df_accepter.py')
-    l1 = node_factory.get_node(options={'experimental-dual-fund': None})
+    l1 = node_factory.get_node()
     l2 = node_factory.get_node(disconnect=disconnects,
-                               options={'plugin': accepter_plugin,
-                                        'experimental-dual-fund': None})
+                               options={'funder-policy': 'match',
+                                        'funder-policy-mod': 100,
+                                        'funder-fuzz-percent': 0})
 
     l1.fundwallet(2000000)
     l2.fundwallet(2000000)
@@ -382,7 +397,9 @@ def test_disconnect_fundee_v2(node_factory):
     assert len(l2.rpc.listpeers()) == 1
 
 
-@unittest.skipIf(not DEVELOPER, "needs DEVELOPER=1")
+@pytest.mark.developer
+@pytest.mark.openchannel('v1')
+@pytest.mark.openchannel('v2')
 def test_disconnect_half_signed(node_factory):
     # Now, these are the corner cases.  Fundee sends funding_signed,
     # but opener doesn't receive it.
@@ -403,7 +420,9 @@ def test_disconnect_half_signed(node_factory):
     assert l2.rpc.getpeer(l1.info['id'])['id'] == l1.info['id']
 
 
-@unittest.skipIf(not DEVELOPER, "needs DEVELOPER=1")
+@pytest.mark.developer
+@pytest.mark.openchannel('v1')
+@pytest.mark.openchannel('v2')
 def test_reconnect_signed(node_factory):
     # This will fail *after* both sides consider channel opening.
     disconnects = ['+WIRE_FUNDING_SIGNED']
@@ -437,7 +456,9 @@ def test_reconnect_signed(node_factory):
     l2.daemon.wait_for_log(' to CHANNELD_NORMAL')
 
 
-@unittest.skipIf(not DEVELOPER, "needs DEVELOPER=1")
+@pytest.mark.developer
+@pytest.mark.openchannel('v1')
+@pytest.mark.openchannel('v2')
 def test_reconnect_openingd(node_factory):
     # Openingd thinks we're still opening; opener reconnects..
     disconnects = ['0WIRE_ACCEPT_CHANNEL']
@@ -474,7 +495,7 @@ def test_reconnect_openingd(node_factory):
     l2.daemon.wait_for_log(r'channeld-chan#[0-9]: pid [0-9]+, msgfd [0-9]+')
 
 
-@unittest.skipIf(not DEVELOPER, "needs DEVELOPER=1")
+@pytest.mark.developer
 def test_reconnect_gossiping(node_factory):
     # connectd thinks we're still gossiping; peer reconnects.
     disconnects = ['0WIRE_PING']
@@ -493,7 +514,9 @@ def test_reconnect_gossiping(node_factory):
 
 
 @flaky
-@unittest.skipIf(not DEVELOPER, "needs dev-disconnect")
+@pytest.mark.developer("needs dev-disconnect")
+@pytest.mark.openchannel('v1')
+@pytest.mark.openchannel('v2')
 def test_reconnect_no_update(node_factory, executor, bitcoind):
     """Test that funding_locked is retransmitted on reconnect if new channel
 
@@ -507,7 +530,7 @@ def test_reconnect_no_update(node_factory, executor, bitcoind):
     """
     disconnects = ["@WIRE_FUNDING_LOCKED", "@WIRE_SHUTDOWN"]
     # Allow bad gossip because it might receive WIRE_CHANNEL_UPDATE before
-    # announcement before of the disconnection
+    # announcement of the disconnection
     l1 = node_factory.get_node(may_reconnect=True, allow_bad_gossip=True)
     l2 = node_factory.get_node(disconnect=disconnects, may_reconnect=True)
 
@@ -520,7 +543,7 @@ def test_reconnect_no_update(node_factory, executor, bitcoind):
     # automatic retry.
     fundchannel_exec = executor.submit(l1.fundchannel, l2, 10**6, False)
     if l1.config('experimental-dual-fund'):
-        l2.daemon.wait_for_log(r"Unexpected `tx_signatures` from peer. Allowing.")
+        l2.daemon.wait_for_log(r"Peer has reconnected, state CHANNELD_NORMAL")
         l1.daemon.wait_for_log(r"dualopend.* Retransmitting funding_locked for channel")
     else:
         l1.daemon.wait_for_log(r"channeld.* Retransmitting funding_locked for channel")
@@ -578,7 +601,9 @@ def test_connect_stresstest(node_factory, executor):
     assert successes > failures
 
 
-@unittest.skipIf(not DEVELOPER, "needs DEVELOPER=1")
+@pytest.mark.developer
+@pytest.mark.openchannel('v1')
+@pytest.mark.openchannel('v2')
 def test_reconnect_normal(node_factory):
     # Should reconnect fine even if locked message gets lost.
     disconnects = ['-WIRE_FUNDING_LOCKED',
@@ -592,7 +617,9 @@ def test_reconnect_normal(node_factory):
     l1.fundchannel(l2, 10**6)
 
 
-@unittest.skipIf(not DEVELOPER, "needs DEVELOPER=1")
+@pytest.mark.developer
+@pytest.mark.openchannel('v1')
+@pytest.mark.openchannel('v2')
 def test_reconnect_sender_add1(node_factory):
     # Fail after add is OK, will cause payment failure though.
     disconnects = ['-WIRE_UPDATE_ADD_HTLC-nocommit',
@@ -615,8 +642,8 @@ def test_reconnect_sender_add1(node_factory):
     route = [{'msatoshi': amt, 'id': l2.info['id'], 'delay': 5, 'channel': '1x1x1'}]
 
     for i in range(0, len(disconnects)):
-        l1.rpc.sendpay(route, rhash)
         with pytest.raises(RpcError):
+            l1.rpc.sendpay(route, rhash)
             l1.rpc.waitsendpay(rhash)
 
         # Wait for reconnection.
@@ -626,7 +653,9 @@ def test_reconnect_sender_add1(node_factory):
     l1.rpc.sendpay(route, rhash)
 
 
-@unittest.skipIf(not DEVELOPER, "needs DEVELOPER=1")
+@pytest.mark.developer
+@pytest.mark.openchannel('v1')
+@pytest.mark.openchannel('v2')
 def test_reconnect_sender_add(node_factory):
     disconnects = ['-WIRE_COMMITMENT_SIGNED',
                    '@WIRE_COMMITMENT_SIGNED',
@@ -659,7 +688,9 @@ def test_reconnect_sender_add(node_factory):
         l1.daemon.wait_for_log('Already have funding locked in')
 
 
-@unittest.skipIf(not DEVELOPER, "needs DEVELOPER=1")
+@pytest.mark.developer
+@pytest.mark.openchannel('v1')
+@pytest.mark.openchannel('v2')
 def test_reconnect_receiver_add(node_factory):
     disconnects = ['-WIRE_COMMITMENT_SIGNED',
                    '@WIRE_COMMITMENT_SIGNED',
@@ -690,7 +721,7 @@ def test_reconnect_receiver_add(node_factory):
     assert only_one(l2.rpc.listinvoices('testpayment2')['invoices'])['status'] == 'paid'
 
 
-@unittest.skipIf(not DEVELOPER, "needs DEVELOPER=1")
+@pytest.mark.developer
 def test_reconnect_receiver_fulfill(node_factory):
     # Ordering matters: after +WIRE_UPDATE_FULFILL_HTLC, channeld
     # will continue and try to send WIRE_COMMITMENT_SIGNED: if
@@ -723,7 +754,9 @@ def test_reconnect_receiver_fulfill(node_factory):
 
 
 @flaky
-@unittest.skipIf(not DEVELOPER, "needs DEVELOPER=1")
+@pytest.mark.developer
+@pytest.mark.openchannel('v1')
+@pytest.mark.openchannel('v2')
 def test_shutdown_reconnect(node_factory):
     disconnects = ['-WIRE_SHUTDOWN',
                    '@WIRE_SHUTDOWN',
@@ -755,7 +788,7 @@ def test_shutdown_reconnect(node_factory):
 
 
 @flaky
-@unittest.skipIf(not DEVELOPER, "needs DEVELOPER=1")
+@pytest.mark.developer
 def test_reconnect_remote_sends_no_sigs(node_factory):
     """We re-announce, even when remote node doesn't send its announcement_signatures on reconnect.
     """
@@ -787,6 +820,8 @@ def test_reconnect_remote_sends_no_sigs(node_factory):
     assert(''.join(l1.daemon.logs).count(r'peer_out WIRE_ANNOUNCEMENT_SIGNATURES') == 1)
 
 
+@pytest.mark.openchannel('v1')
+@pytest.mark.openchannel('v2')
 def test_shutdown_awaiting_lockin(node_factory, bitcoind):
     l1 = node_factory.get_node()
     l2 = node_factory.get_node(options={'funding-confirms': 3})
@@ -833,6 +868,8 @@ def test_shutdown_awaiting_lockin(node_factory, bitcoind):
     wait_for(lambda: l2.rpc.listpeers()['peers'] == [])
 
 
+@pytest.mark.openchannel('v1')
+@pytest.mark.openchannel('v2')
 def test_funding_change(node_factory, bitcoind):
     """Add some funds, fund a channel, and make sure we remember the change
     """
@@ -855,6 +892,8 @@ def test_funding_change(node_factory, bitcoind):
     assert outputs[2] == 10000000
 
 
+@pytest.mark.openchannel('v1')
+@pytest.mark.openchannel('v2')
 def test_funding_all(node_factory, bitcoind):
     """Add some funds, fund a channel using all funds, make sure no funds remain
     """
@@ -873,6 +912,8 @@ def test_funding_all(node_factory, bitcoind):
     assert len(outputs) == 0
 
 
+@pytest.mark.openchannel('v1')
+@pytest.mark.openchannel('v2')
 def test_funding_all_too_much(node_factory):
     """Add more than max possible funds, fund a channel using all funds we can.
     """
@@ -896,6 +937,8 @@ def test_funding_all_too_much(node_factory):
     assert only_one(l1.rpc.listfunds()['channels'])['channel_total_sat'] == 2**24 - 1
 
 
+@pytest.mark.openchannel('v1')
+@pytest.mark.openchannel('v2')
 def test_funding_fail(node_factory, bitcoind):
     """Add some funds, fund a channel without enough funds"""
     # Previous runs with same groestlcoind can leave funds!
@@ -917,8 +960,13 @@ def test_funding_fail(node_factory, bitcoind):
     with pytest.raises(RpcError, match=r'to_self_delay \d+ larger than \d+'):
         l1.rpc.fundchannel(l2.info['id'], int(funds / 10))
 
-    assert only_one(l1.rpc.listpeers()['peers'])['connected']
-    assert only_one(l2.rpc.listpeers()['peers'])['connected']
+    # dual-funded channels disconnect on failure
+    if not l1.config('experimental-dual-fund'):
+        assert only_one(l1.rpc.listpeers()['peers'])['connected']
+        assert only_one(l2.rpc.listpeers()['peers'])['connected']
+    else:
+        assert len(l1.rpc.listpeers()['peers']) == 0
+        assert len(l2.rpc.listpeers()['peers']) == 0
 
     # Restart l2 without ridiculous locktime.
     del l2.daemon.opts['watchtime-blocks']
@@ -929,7 +977,7 @@ def test_funding_fail(node_factory, bitcoind):
     with pytest.raises(RpcError, match=r'not afford'):
         l1.rpc.fundchannel(l2.info['id'], funds)
 
-    # Should still be connected.
+    # Should still be connected (we didn't contact the peer)
     assert only_one(l1.rpc.listpeers()['peers'])['connected']
     l2.daemon.wait_for_log('Handed peer, entering loop')
     assert only_one(l2.rpc.listpeers()['peers'])['connected']
@@ -938,6 +986,8 @@ def test_funding_fail(node_factory, bitcoind):
     l1.rpc.fundchannel(l2.info['id'], int(funds / 10))
 
 
+@pytest.mark.openchannel('v1')
+@pytest.mark.openchannel('v2')
 def test_funding_toolarge(node_factory, bitcoind):
     """Try to create a giant channel"""
     l1 = node_factory.get_node()
@@ -962,10 +1012,9 @@ def test_funding_toolarge(node_factory, bitcoind):
 
 
 @unittest.skipIf(TEST_NETWORK != 'regtest', 'elementsd doesnt yet support PSBT features we need')
+@pytest.mark.openchannel('v2')
 def test_v2_open(node_factory, bitcoind, chainparams):
-    l1, l2 = node_factory.get_nodes(2,
-                                    opts=[{'experimental-dual-fund': None},
-                                          {'experimental-dual-fund': None}])
+    l1, l2 = node_factory.get_nodes(2)
 
     l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
     amount = 2**24
@@ -987,6 +1036,7 @@ def test_v2_open(node_factory, bitcoind, chainparams):
     assert(result['status'] == 'complete')
 
 
+@pytest.mark.openchannel('v1')
 def test_funding_push(node_factory, bitcoind, chainparams):
     """ Try to push peer some sats """
     # We track balances, to verify that accounting is ok.
@@ -1031,6 +1081,9 @@ def test_funding_push(node_factory, bitcoind, chainparams):
     assert account_balance(l1, chanid) == (amount - push_sat) * 1000
 
 
+@pytest.mark.openchannel('v1')
+@pytest.mark.openchannel('v2')
+@pytest.mark.developer
 def test_funding_by_utxos(node_factory, bitcoind):
     """Fund a channel with specific utxos"""
     l1, l2, l3 = node_factory.line_graph(3, fundchannel=False)
@@ -1070,8 +1123,8 @@ def test_funding_by_utxos(node_factory, bitcoind):
         l1.rpc.fundchannel(l3.info["id"], int(0.01 * 10**8), utxos=utxos)
 
 
-@unittest.skipIf(not DEVELOPER, "needs dev_forget_channel")
-@unittest.skipIf(EXPERIMENTAL_DUAL_FUND, "Uses fundchannel_start")
+@pytest.mark.developer("needs dev_forget_channel")
+@pytest.mark.openchannel('v1')
 def test_funding_external_wallet_corners(node_factory, bitcoind):
     l1 = node_factory.get_node(may_reconnect=True)
     l2 = node_factory.get_node(may_reconnect=True)
@@ -1187,7 +1240,7 @@ def test_funding_external_wallet_corners(node_factory, bitcoind):
 
 
 @unittest.skipIf(SLOW_MACHINE and not VALGRIND, "Way too taxing on CI machines")
-@unittest.skipIf(EXPERIMENTAL_DUAL_FUND, "requires fundchannel_start")
+@pytest.mark.openchannel('v1')
 def test_funding_cancel_race(node_factory, bitcoind, executor):
     l1 = node_factory.get_node()
 
@@ -1267,6 +1320,8 @@ def test_funding_cancel_race(node_factory, bitcoind, executor):
     executor.map(lambda n: n.stop(), node_factory.nodes)
 
 
+@pytest.mark.openchannel('v1')
+@pytest.mark.openchannel('v2')
 @unittest.skipIf(TEST_NETWORK != 'regtest', "External wallet support doesn't work with elements yet.")
 def test_funding_close_upfront(node_factory, bitcoind):
     opts = {'plugin': os.path.join(os.getcwd(), 'tests/plugins/openchannel_hook_accepter.py')}
@@ -1353,7 +1408,7 @@ def test_funding_close_upfront(node_factory, bitcoind):
 
 
 @unittest.skipIf(TEST_NETWORK != 'regtest', "External wallet support doesn't work with elements yet.")
-@unittest.skipIf(EXPERIMENTAL_DUAL_FUND, "v2 doesn't work with fundchannel_start")
+@pytest.mark.openchannel('v1')
 def test_funding_external_wallet(node_factory, bitcoind):
     l1, l2, l3 = node_factory.get_nodes(3, opts=[{'funding-confirms': 2},
                                                  {'funding-confirms': 2}, {}])
@@ -1409,16 +1464,19 @@ def test_funding_external_wallet(node_factory, bitcoind):
 
 
 @unittest.skipIf(TEST_NETWORK != 'regtest', 'elementsd doesnt yet support PSBT features we need')
-def test_multifunding_v2_v1_mixed(node_factory, bitcoind):
+@pytest.mark.openchannel('v1')  # We manually turn on dual-funding for select nodes
+def test_multifunding_v1_v2_mixed(node_factory, bitcoind):
     '''
     Simple test for multifundchannel, using v1 + v2
     '''
-    accepter_plugin = os.path.join(os.path.dirname(__file__),
-                                   'plugins/df_accepter.py')
     options = [{'experimental-dual-fund': None},
-               {'plugin': accepter_plugin,
+               {'funder-policy': 'match',
+                'funder-policy-mod': 100,
+                'funder-fuzz-percent': 0,
                 'experimental-dual-fund': None},
-               {'plugin': accepter_plugin,
+               {'funder-policy': 'match',
+                'funder-policy-mod': 100,
+                'funder-fuzz-percent': 0,
                 'experimental-dual-fund': None},
                {}]
 
@@ -1447,17 +1505,20 @@ def test_multifunding_v2_v1_mixed(node_factory, bitcoind):
 
 
 @unittest.skipIf(TEST_NETWORK != 'regtest', 'elementsd doesnt yet support PSBT features we need')
+@pytest.mark.openchannel('v2')
 def test_multifunding_v2_exclusive(node_factory, bitcoind):
     '''
     Simple test for multifundchannel, using v2
     '''
-    accepter_plugin = os.path.join(os.path.dirname(__file__),
-                                   'plugins/df_accepter.py')
     # Two of three will reply with inputs of their own
-    options = [{'experimental-dual-fund': None},
-               {'plugin': accepter_plugin, 'experimental-dual-fund': None},
-               {'plugin': accepter_plugin, 'experimental-dual-fund': None},
-               {'experimental-dual-fund': None}]
+    options = [{},
+               {'funder-policy': 'match',
+                'funder-policy-mod': 100,
+                'funder-fuzz-percent': 0},
+               {'funder-policy': 'match',
+                'funder-policy-mod': 100,
+                'funder-fuzz-percent': 0},
+               {}]
     l1, l2, l3, l4 = node_factory.get_nodes(4, opts=options)
 
     l1.fundwallet(2000000)
@@ -1488,6 +1549,8 @@ def test_multifunding_v2_exclusive(node_factory, bitcoind):
         l1.rpc.pay(inv)
 
 
+@pytest.mark.openchannel('v1')
+@pytest.mark.openchannel('v2')
 def test_multifunding_simple(node_factory, bitcoind):
     '''
     Simple test for multifundchannel.
@@ -1514,6 +1577,8 @@ def test_multifunding_simple(node_factory, bitcoind):
         l1.rpc.pay(inv)
 
 
+@pytest.mark.openchannel('v1')
+@pytest.mark.openchannel('v2')
 def test_multifunding_one(node_factory, bitcoind):
     '''
     Test that multifunding can still fund to one destination.
@@ -1545,7 +1610,8 @@ def test_multifunding_one(node_factory, bitcoind):
         l1.rpc.pay(inv)
 
 
-@unittest.skipIf(not DEVELOPER, "disconnect=... needs DEVELOPER=1")
+@pytest.mark.developer("needs dev-disconnect")
+@pytest.mark.openchannel('v1')
 def test_multifunding_disconnect(node_factory):
     '''
     Test disconnection during multifundchannel
@@ -1597,6 +1663,8 @@ def test_multifunding_disconnect(node_factory):
     l1.rpc.multifundchannel(destinations)
 
 
+@pytest.mark.openchannel('v1')
+@pytest.mark.openchannel('v2')
 def test_multifunding_wumbo(node_factory):
     '''
     Test wumbo channel imposition in multifundchannel.
@@ -1625,7 +1693,8 @@ def test_multifunding_wumbo(node_factory):
 
 
 @unittest.skipIf(TEST_NETWORK == 'liquid-regtest', "Fees on elements are different")
-@unittest.skipIf(not DEVELOPER, "uses dev-fail")
+@pytest.mark.developer("uses dev-fail")
+@pytest.mark.openchannel('v1')  # v2 the weight calculation is off by 3
 def test_multifunding_feerates(node_factory, bitcoind):
     '''
     Test feerate parameters for multifundchannel
@@ -1666,7 +1735,7 @@ def test_multifunding_feerates(node_factory, bitcoind):
 
     # Because of how the anchor outputs protocol is designed,
     # we *always* pay for 2 anchor outs and their weight
-    if EXPERIMENTAL_FEATURES:  # opt_anchor_outputs
+    if EXPERIMENTAL_FEATURES or EXPERIMENTAL_DUAL_FUND:  # opt_anchor_outputs
         weight = 1124
     else:
         # the commitment transactions' feerate is calculated off
@@ -1679,7 +1748,7 @@ def test_multifunding_feerates(node_factory, bitcoind):
     # tx, but we subtract out the extra anchor output amount
     # from the to_us output, so it ends up inflating
     # our fee by that much.
-    if EXPERIMENTAL_FEATURES:  # opt_anchor_outputs
+    if EXPERIMENTAL_FEATURES or EXPERIMENTAL_DUAL_FUND:  # opt_anchor_outputs
         expected_fee += 330
 
     assert expected_fee == entry['fees']['base'] * 10 ** 8
@@ -1729,7 +1798,8 @@ def test_multifunding_param_failures(node_factory):
         l1.rpc.multifundchannel(destinations)
 
 
-@unittest.skipIf(not DEVELOPER, "disconnect=... needs DEVELOPER=1")
+@pytest.mark.openchannel('v1')
+@pytest.mark.developer("disconnect=... needs DEVELOPER=1")
 def test_multifunding_best_effort(node_factory, bitcoind):
     '''
     Check that best_effort flag works.
@@ -1801,6 +1871,8 @@ def test_multifunding_best_effort(node_factory, bitcoind):
     l1.rpc.multifundchannel(destinations, minchannels=1)
 
 
+@pytest.mark.openchannel('v1')
+@pytest.mark.openchannel('v2')
 def test_lockin_between_restart(node_factory, bitcoind):
     l1 = node_factory.get_node(may_reconnect=True)
     l2 = node_factory.get_node(options={'funding-confirms': 3},
@@ -1824,6 +1896,8 @@ def test_lockin_between_restart(node_factory, bitcoind):
     l2.daemon.wait_for_log(' to CHANNELD_NORMAL')
 
 
+@pytest.mark.openchannel('v1')
+@pytest.mark.openchannel('v2')
 def test_funding_while_offline(node_factory, bitcoind):
     l1 = node_factory.get_node()
     addr = l1.rpc.newaddr()['bech32']
@@ -1845,7 +1919,9 @@ def test_funding_while_offline(node_factory, bitcoind):
     assert len(l1.rpc.listfunds()['outputs']) == 1
 
 
-@unittest.skipIf(not DEVELOPER, "needs DEVELOPER=1")
+@pytest.mark.developer
+@pytest.mark.openchannel('v1')
+@pytest.mark.openchannel('v2')
 def test_channel_persistence(node_factory, bitcoind, executor):
     # Start two nodes and open a channel (to remember). l2 will
     # mysteriously die while committing the first HTLC so we can
@@ -1922,7 +1998,9 @@ def test_channel_persistence(node_factory, bitcoind, executor):
     l1.daemon.wait_for_log(' to ONCHAIN')
 
 
-@unittest.skipIf(not DEVELOPER, "gossip without DEVELOPER=1 is slow")
+@pytest.mark.developer("gossip without DEVELOPER=1 is slow")
+@pytest.mark.openchannel('v1')
+@pytest.mark.openchannel('v2')
 def test_private_channel(node_factory):
     l1, l2 = node_factory.line_graph(2, announce_channels=False, wait_for_announce=False)
     l3, l4 = node_factory.line_graph(2, announce_channels=True, wait_for_announce=True)
@@ -1943,7 +2021,7 @@ def test_private_channel(node_factory):
     assert not only_one(only_one(l4.rpc.listpeers(l3.info['id'])['peers'])['channels'])['private']
 
 
-@unittest.skipIf(not DEVELOPER, "Too slow without --dev-fast-gossip")
+@pytest.mark.developer("gossip without DEVELOPER=1 is slow")
 def test_channel_reenable(node_factory):
     l1, l2 = node_factory.line_graph(2, opts={'may_reconnect': True}, fundchannel=True, wait_for_announce=True)
 
@@ -1963,7 +2041,7 @@ def test_channel_reenable(node_factory):
     wait_for(lambda: [c['active'] for c in l2.rpc.listchannels()['channels']] == [True, True])
 
 
-@unittest.skipIf(not DEVELOPER, "needs DEVELOPER=1")
+@pytest.mark.developer
 def test_update_fee(node_factory, bitcoind):
     l1, l2 = node_factory.line_graph(2, fundchannel=True)
     chanid = l1.get_channel_scid(l2)
@@ -1979,7 +2057,7 @@ def test_update_fee(node_factory, bitcoind):
     # Make payments.
     l1.pay(l2, 200000000)
     # First payment causes fee update.
-    l2.daemon.wait_for_log('peer updated fee to 14000')
+    l2.daemon.wait_for_log('peer updated fee to 11000')
     l2.pay(l1, 100000000)
 
     # Now shutdown cleanly.
@@ -2001,7 +2079,7 @@ def test_update_fee(node_factory, bitcoind):
     l2.daemon.wait_for_log('onchaind complete, forgetting peer')
 
 
-@unittest.skipIf(not DEVELOPER, "needs DEVELOPER=1")
+@pytest.mark.developer
 def test_fee_limits(node_factory, bitcoind):
     l1, l2, l3, l4 = node_factory.get_nodes(4, opts=[{'dev-max-fee-multiplier': 5, 'may_reconnect': True,
                                                       'allow_warning': True},
@@ -2059,7 +2137,7 @@ def test_fee_limits(node_factory, bitcoind):
 
     # Try stupid high fees
     l1.stop()
-    l1.set_feerates((15000 * 10, 11000, 7500, 3750), False)
+    l1.set_feerates((15000, 11000 * 10, 7500, 3750), False)
     l1.start()
 
     l3.daemon.wait_for_log('peer_in WIRE_UPDATE_FEE')
@@ -2074,7 +2152,7 @@ def test_fee_limits(node_factory, bitcoind):
     l1.rpc.close(chan)
 
 
-@unittest.skipIf(not DEVELOPER, "needs dev-no-fake-fees")
+@pytest.mark.developer("needs dev-no-fake-fees")
 def test_update_fee_dynamic(node_factory, bitcoind):
     # l1 has no fee estimates to start.
     l1 = node_factory.get_node(options={'log-level': 'io',
@@ -2125,7 +2203,7 @@ def test_update_fee_dynamic(node_factory, bitcoind):
     l2.daemon.wait_for_log('peer_in.*UPDATE_FEE')
 
 
-@unittest.skipIf(not DEVELOPER, "needs DEVELOPER=1")
+@pytest.mark.developer
 def test_update_fee_reconnect(node_factory, bitcoind):
     # Disconnect after commitsig for fee update.
     disconnects = ['+WIRE_COMMITMENT_SIGNED*3']
@@ -2174,7 +2252,7 @@ def test_update_fee_reconnect(node_factory, bitcoind):
     l2.daemon.wait_for_log('onchaind complete, forgetting peer')
 
 
-@unittest.skipIf(not DEVELOPER, "Too slow without --dev-groestlcoind-poll")
+@pytest.mark.developer("Too slow without --dev-groestlcoind-poll")
 def test_multiple_channels(node_factory):
     l1 = node_factory.get_node()
     l2 = node_factory.get_node()
@@ -2204,7 +2282,9 @@ def test_multiple_channels(node_factory):
     assert channels[-1]['state'] == 'CLOSINGD_COMPLETE'
 
 
-@unittest.skipIf(not DEVELOPER, "needs DEVELOPER=1")
+@pytest.mark.developer
+@pytest.mark.openchannel('v1')
+@pytest.mark.openchannel('v2')
 def test_forget_channel(node_factory):
     l1 = node_factory.get_node()
     l2 = node_factory.get_node()
@@ -2233,12 +2313,14 @@ def test_forget_channel(node_factory):
     assert l2.db_query("SELECT count(*) as c FROM channels;")[0]['c'] == 1
 
 
+@pytest.mark.openchannel('v1')
+@pytest.mark.openchannel('v2')
 def test_peerinfo(node_factory, bitcoind):
     l1, l2 = node_factory.line_graph(2, fundchannel=False, opts={'may_reconnect': True})
 
     if l1.config('experimental-dual-fund'):
-        lfeatures = expected_peer_features(extra=[223])
-        nfeatures = expected_node_features(extra=[223])
+        lfeatures = expected_peer_features(extra=[21, 29])
+        nfeatures = expected_node_features(extra=[21, 29])
     else:
         lfeatures = expected_peer_features()
         nfeatures = expected_node_features()
@@ -2324,7 +2406,9 @@ def test_disconnectpeer(node_factory, bitcoind):
         l1.rpc.disconnect(l3.info['id'])
 
 
-@unittest.skipIf(not DEVELOPER, "needs --dev-max-funding-unconfirmed-blocks")
+@pytest.mark.developer("needs --dev-max-funding-unconfirmed-blocks")
+@pytest.mark.openchannel('v1')
+@pytest.mark.openchannel('v2')
 def test_fundee_forget_funding_tx_unconfirmed(node_factory, bitcoind):
     """Test that fundee will forget the channel if
     the funding tx has been unconfirmed for too long.
@@ -2367,7 +2451,7 @@ def test_fundee_forget_funding_tx_unconfirmed(node_factory, bitcoind):
     assert len(l2.rpc.listpeers(l1.info['id'])['peers']) == 0
 
 
-@unittest.skipIf(not DEVELOPER, "needs dev_fail")
+@pytest.mark.developer("needs dev_fail")
 def test_no_fee_estimate(node_factory, bitcoind, executor):
     l1 = node_factory.get_node(start=False, options={'dev-no-fake-fees': True})
 
@@ -2459,7 +2543,7 @@ def test_no_fee_estimate(node_factory, bitcoind, executor):
     l1.rpc.withdraw(l2.rpc.newaddr()['bech32'], 'all', 'urgent', minconf=0)
 
 
-@unittest.skipIf(not DEVELOPER, "needs --dev-disconnect")
+@pytest.mark.developer("needs --dev-disconnect")
 def test_opener_feerate_reconnect(node_factory, bitcoind):
     # l1 updates fees, then reconnect so l2 retransmits commitment_signed.
     disconnects = ['-WIRE_COMMITMENT_SIGNED*3']
@@ -2503,7 +2587,9 @@ def test_opener_simple_reconnect(node_factory, bitcoind):
 
 
 @unittest.skipIf(os.getenv('TEST_DB_PROVIDER', 'sqlite3') != 'sqlite3', "sqlite3-specific DB rollback")
-@unittest.skipIf(not DEVELOPER, "needs LIGHTNINGD_DEV_LOG_IO")
+@pytest.mark.developer("needs LIGHTNINGD_DEV_LOG_IO")
+@pytest.mark.openchannel('v1')
+@pytest.mark.openchannel('v2')
 def test_dataloss_protection(node_factory, bitcoind):
     l1 = node_factory.get_node(may_reconnect=True, options={'log-level': 'io'},
                                feerates=(7500, 7500, 7500, 7500))
@@ -2511,9 +2597,6 @@ def test_dataloss_protection(node_factory, bitcoind):
                                feerates=(7500, 7500, 7500, 7500), allow_broken_log=True)
 
     lf = expected_peer_features()
-    if l1.config('experimental-dual-fund'):
-        lf = expected_peer_features(extra=[223])
-
     l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
     # l1 should send out WIRE_INIT (0010)
     l1.daemon.wait_for_log(r"\[OUT\] 0010.*"
@@ -2602,7 +2685,7 @@ def test_dataloss_protection(node_factory, bitcoind):
     assert (closetxid, "confirmed") in set([(o['txid'], o['status']) for o in l2.rpc.listfunds()['outputs']])
 
 
-@unittest.skipIf(not DEVELOPER, "needs dev_disconnect")
+@pytest.mark.developer("needs dev_disconnect")
 def test_restart_multi_htlc_rexmit(node_factory, bitcoind, executor):
     # l1 disables commit timer once we send first htlc, dies on commit
     disconnects = ['=WIRE_UPDATE_ADD_HTLC-nocommit',
@@ -2629,7 +2712,7 @@ def test_restart_multi_htlc_rexmit(node_factory, bitcoind, executor):
     wait_for(lambda: [p['status'] for p in l1.rpc.listsendpays()['payments']] == ['complete', 'complete'])
 
 
-@unittest.skipIf(not DEVELOPER, "needs dev-disconnect")
+@pytest.mark.developer("needs dev_disconnect")
 def test_fulfill_incoming_first(node_factory, bitcoind):
     """Test that we handle the case where we completely resolve incoming htlc
     before fulfilled outgoing htlc"""
@@ -2672,7 +2755,7 @@ def test_fulfill_incoming_first(node_factory, bitcoind):
     l3.daemon.wait_for_log('onchaind complete, forgetting peer')
 
 
-@unittest.skipIf(not DEVELOPER, "gossip without DEVELOPER=1 is slow")
+@pytest.mark.developer("gossip without DEVELOPER=1 is slow")
 @pytest.mark.slow_test
 def test_restart_many_payments(node_factory, bitcoind):
     l1 = node_factory.get_node(may_reconnect=True)
@@ -2765,7 +2848,9 @@ def test_restart_many_payments(node_factory, bitcoind):
         wait_for(lambda: 'pending' not in [p['status'] for p in n.rpc.listsendpays()['payments']])
 
 
-@unittest.skipIf(not DEVELOPER, "need dev-disconnect")
+@pytest.mark.developer("need dev-disconnect")
+@pytest.mark.openchannel('v1')
+@pytest.mark.openchannel('v2')
 def test_fail_unconfirmed(node_factory, bitcoind, executor):
     """Test that if we crash with an unconfirmed connection to a known
     peer, we don't have a dangling peer in db"""
@@ -2818,15 +2903,15 @@ def test_fail_unconfirmed(node_factory, bitcoind, executor):
     l1.fundchannel(l2, 200000, wait_for_active=True)
 
 
-@unittest.skipIf(not DEVELOPER, "need dev-disconnect")
+@pytest.mark.developer("need dev-disconnect")
 @unittest.skipIf(TEST_NETWORK != 'regtest', 'elementsd doesnt yet support PSBT features we need')
+@pytest.mark.openchannel('v2')
 def test_fail_unconfirmed_openchannel2(node_factory, bitcoind, executor):
     """Test that if we crash with an unconfirmed connection to a known
     peer, we don't have a dangling peer in db"""
     # = is a NOOP disconnect, but sets up file.
-    l1 = node_factory.get_node(disconnect=['=WIRE_OPEN_CHANNEL2'],
-                               options={'experimental-dual-fund': None})
-    l2 = node_factory.get_node(options={'experimental-dual-fund': None})
+    l1 = node_factory.get_node(disconnect=['=WIRE_OPEN_CHANNEL2'])
+    l2 = node_factory.get_node()
 
     # First one, we close by mutual agreement.
     l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
@@ -2866,6 +2951,8 @@ def test_fail_unconfirmed_openchannel2(node_factory, bitcoind, executor):
     l1.fundchannel(l2, 200000, wait_for_active=True)
 
 
+@pytest.mark.openchannel('v1')
+@pytest.mark.openchannel('v2')
 def test_change_chaining(node_factory, bitcoind):
     """Test change chaining of unconfirmed fundings
 
@@ -2903,7 +2990,7 @@ def test_feerate_spam(node_factory, chainparams):
     l1.pay(l2, 10**9 - slack)
 
     # It will send this once (may have happened before line_graph's wait)
-    wait_for(lambda: l1.daemon.is_in_log('Setting REMOTE feerate to 15000'))
+    wait_for(lambda: l1.daemon.is_in_log('Setting REMOTE feerate to 11000'))
     wait_for(lambda: l1.daemon.is_in_log('peer_out WIRE_UPDATE_FEE'))
 
     # Now change feerates to something l1 can't afford.
@@ -2919,7 +3006,7 @@ def test_feerate_spam(node_factory, chainparams):
         l1.daemon.wait_for_log('peer_out WIRE_UPDATE_FEE', timeout=5)
 
 
-@unittest.skipIf(not DEVELOPER, "need dev-feerate")
+@pytest.mark.developer("need dev-feerate")
 def test_feerate_stress(node_factory, executor):
     # Third node makes HTLC traffic less predictable.
     l1, l2, l3 = node_factory.line_graph(3, opts={'commit-time': 100,
@@ -2970,7 +3057,7 @@ def test_feerate_stress(node_factory, executor):
     assert not l2.daemon.is_in_log('Bad.*signature')
 
 
-@unittest.skipIf(not DEVELOPER, "need dev_disconnect")
+@pytest.mark.developer("need dev_disconnect")
 @pytest.mark.slow_test
 def test_pay_disconnect_stress(node_factory, executor):
     """Expose race in htlc restoration in channeld: 50% chance of failure"""
@@ -3006,6 +3093,8 @@ def test_pay_disconnect_stress(node_factory, executor):
         fut.result()
 
 
+@pytest.mark.openchannel('v1')
+@pytest.mark.openchannel('v2')
 def test_wumbo_channels(node_factory, bitcoind):
     l1, l2, l3 = node_factory.get_nodes(3,
                                         opts=[{'large-channels': None},
@@ -3016,7 +3105,7 @@ def test_wumbo_channels(node_factory, bitcoind):
     expected_features = expected_peer_features(wumbo_channels=True)
     if l1.config('experimental-dual-fund'):
         expected_features = expected_peer_features(wumbo_channels=True,
-                                                   extra=[223])
+                                                   extra=[21, 29])
 
     assert conn['features'] == expected_features
     assert only_one(l1.rpc.listpeers(l2.info['id'])['peers'])['features'] == expected_features
@@ -3069,6 +3158,8 @@ def test_wumbo_channels(node_factory, bitcoind):
     assert Millisatoshi(amount) > Millisatoshi(str((1 << 24) - 1) + "sat")
 
 
+@pytest.mark.openchannel('v1')
+@pytest.mark.openchannel('v2')
 def test_channel_features(node_factory, bitcoind):
     l1, l2 = node_factory.line_graph(2, fundchannel=False)
 
@@ -3101,7 +3192,7 @@ def test_channel_features(node_factory, bitcoind):
     assert only_one(only_one(l2.rpc.listpeers()['peers'])['channels'])['features'] == chan['features']
 
 
-@unittest.skipIf(not DEVELOPER, "need dev-force-features")
+@pytest.mark.developer("need dev-force-features")
 def test_nonstatic_channel(node_factory, bitcoind):
     """Smoke test for a channel without option_static_remotekey"""
     l1, l2 = node_factory.line_graph(2,
@@ -3115,7 +3206,8 @@ def test_nonstatic_channel(node_factory, bitcoind):
     l1.rpc.close(l2.info['id'])
 
 
-@unittest.skipIf(not DEVELOPER, "needs --dev-timeout-secs")
+@pytest.mark.developer("need --dev-timeout-secs")
+@pytest.mark.openchannel('v1')
 def test_connection_timeout(node_factory):
     # l1 hears nothing back after sending INIT, should time out.
     l1, l2 = node_factory.get_nodes(2,
@@ -3132,7 +3224,7 @@ def test_connection_timeout(node_factory):
     l1.daemon.wait_for_log('conn timed out')
 
 
-@unittest.skipIf(not DEVELOPER, "needs --dev-disconnect")
+@pytest.mark.developer("needs --dev-disconnect")
 def test_htlc_retransmit_order(node_factory, executor):
     NUM_HTLCS = 10
     l1, l2 = node_factory.line_graph(2,
@@ -3168,7 +3260,7 @@ def test_htlc_retransmit_order(node_factory, executor):
 
 
 @unittest.skipIf(True, "Currently failing, see tracking issue #4265")
-@unittest.skipIf(EXPERIMENTAL_DUAL_FUND, "fundchannel_start not available")
+@pytest.mark.openchannel('v1')
 def test_fundchannel_start_alternate(node_factory, executor):
     ''' Test to see what happens if two nodes start channeling to
     each other alternately.
@@ -3185,7 +3277,7 @@ def test_fundchannel_start_alternate(node_factory, executor):
         fut.result(10)
 
 
-@unittest.skipIf(not EXPERIMENTAL_DUAL_FUND, "openchannel_init not available")
+@pytest.mark.openchannel('v2')
 def test_openchannel_init_alternate(node_factory, executor):
     ''' Test to see what happens if two nodes start channeling to
     each other alternately.
