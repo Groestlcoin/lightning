@@ -4,7 +4,7 @@ lightning-sendpsbt -- Command to finalize, extract and send a partially signed b
 SYNOPSIS
 --------
 
-**sendpsbt** *psbt*
+**sendpsbt** *psbt* [*reserve*]
 
 DESCRIPTION
 -----------
@@ -12,6 +12,7 @@ DESCRIPTION
 The **sendpsbt** is a low-level RPC command which sends a fully-signed PSBT.
 
 - *psbt*: A string that represents psbt value.
+- *reserve*: an optional number of blocks to increase reservation of any of our inputs by; default is 72.
 
 EXAMPLE JSON REQUEST
 --------------------
@@ -29,10 +30,11 @@ EXAMPLE JSON REQUEST
 RETURN VALUE
 ------------
 
-On success, the tx and txid of the transaction are returned.
-
-- *txid*: A string that represents the hash of transaction.
-- *tx*: A string that represents the hexadecimal dump of the transaction.
+[comment]: # (GENERATE-FROM-SCHEMA-START)
+On success, an object is returned, containing:
+- **tx** (hex): The raw transaction which was sent
+- **txid** (txid): The txid of the **tx**
+[comment]: # (GENERATE-FROM-SCHEMA-END)
 
 On failure, one of the following error codes may be returned:
 
@@ -62,3 +64,4 @@ RESOURCES
 ---------
 
 Main web site: <https://github.com/ElementsProject/lightning>
+[comment]: # ( SHA256STAMP:5f289ef109eba26ca686ca0ebde3fed38cd52240ad3ee30e373719872927cfe6)

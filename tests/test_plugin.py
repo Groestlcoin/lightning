@@ -720,9 +720,9 @@ def test_channel_state_changed_bilateral(node_factory, bitcoind):
     # check channel 'opener' and 'closer' within this testcase ...
     assert(l1.rpc.listpeers()['peers'][0]['channels'][0]['opener'] == 'local')
     assert(l2.rpc.listpeers()['peers'][0]['channels'][0]['opener'] == 'remote')
-    # the 'closer' should be null initially
-    assert(l2.rpc.listpeers()['peers'][0]['channels'][0]['closer'] is None)
-    assert(l2.rpc.listpeers()['peers'][0]['channels'][0]['closer'] is None)
+    # the 'closer' should be missing initially
+    assert 'closer' not in l1.rpc.listpeers()['peers'][0]['channels'][0]
+    assert 'closer' not in l2.rpc.listpeers()['peers'][0]['channels'][0]
 
     event1 = wait_for_event(l1)
     event2 = wait_for_event(l2)
@@ -1059,6 +1059,13 @@ def test_htlc_accepted_hook_direct_restart(node_factory, executor):
     f1 = executor.submit(l1.rpc.pay, i1)
 
     l2.daemon.wait_for_log(r'Holding onto an incoming htlc for 10 seconds')
+
+    # Check that the status mentions the HTLC being held
+    l2.rpc.listpeers()
+    peers = l2.rpc.listpeers()['peers']
+    htlc_status = peers[0]['channels'][0]['htlcs'][0].get('status', None)
+    assert htlc_status == "Waiting for the htlc_accepted hook of plugin hold_htlcs.py"
+
     needle = l2.daemon.logsearch_start
     l2.restart()
 
@@ -1378,6 +1385,9 @@ def test_rpc_command_hook(node_factory):
     assert decoded["description"] == "rpc_command_1 modified this description"
     l1.daemon.wait_for_log("rpc_command hook 'invoice' already modified, ignoring.")
 
+    # Disable schema checking here!
+    schemas = l1.rpc.jsonschemas
+    l1.rpc.jsonschemas = {}
     # rpc_command_1 plugin sends a custom response to "listfunds"
     funds = l1.rpc.listfunds()
     assert funds[0] == "Custom rpc_command_1 result"
@@ -1397,6 +1407,8 @@ def test_rpc_command_hook(node_factory):
         l1.rpc.plugin_stop('rpc_command_1.py')
         l1.rpc.plugin_stop('rpc_command_2.py')
 
+    l1.rpc.jsonschemas = schemas
+
 
 def test_libplugin(node_factory):
     """Sanity checks for plugins made with libplugin"""
@@ -1412,15 +1424,15 @@ def test_libplugin(node_factory):
     l1.rpc.check("helloworld")
 
     # Test commands
-    assert l1.rpc.call("helloworld") == "hello world"
-    assert l1.rpc.call("helloworld", {"name": "test"}) == "hello test"
+    assert l1.rpc.call("helloworld") == {"hello": "world"}
+    assert l1.rpc.call("helloworld", {"name": "test"}) == {"hello": "test"}
     l1.stop()
     l1.daemon.opts["plugin"] = plugin
     l1.daemon.opts["name"] = "test_opt"
     l1.start()
-    assert l1.rpc.call("helloworld") == "hello test_opt"
+    assert l1.rpc.call("helloworld") == {"hello": "test_opt"}
     # But param takes over!
-    assert l1.rpc.call("helloworld", {"name": "test"}) == "hello test"
+    assert l1.rpc.call("helloworld", {"name": "test"}) == {"hello": "test"}
 
     # Test hooks and notifications
     l2 = node_factory.get_node()
@@ -1460,7 +1472,7 @@ def test_libplugin_deprecated(node_factory):
                                         'name-deprecated': 'test_opt depr',
                                         'allow-deprecated-apis': True})
 
-    assert l1.rpc.call("helloworld") == "hello test_opt depr"
+    assert l1.rpc.call("helloworld") == {"hello": "test_opt depr"}
     l1.rpc.help('testrpc-deprecated')
     assert l1.rpc.call("testrpc-deprecated") == l1.rpc.getinfo()
 

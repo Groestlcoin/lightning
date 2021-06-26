@@ -6,7 +6,7 @@ from pyln.testing.utils import SLOW_MACHINE
 from utils import (
     only_one, sync_blockheight, wait_for, TIMEOUT,
     account_balance, first_channel_id, basic_fee, TEST_NETWORK,
-    EXPERIMENTAL_FEATURES, scriptpubkey_addr
+    scriptpubkey_addr
 )
 
 import os
@@ -2626,7 +2626,7 @@ Try a range of future segwit versions as shutdown scripts.  We create many nodes
 """
     l1 = node_factory.get_node(allow_warning=True)
 
-    # BOLT-4e329271a358ee52bf43ddbd96776943c5d74508 #2:
+    # BOLT #2:
     # 5. if (and only if) `option_shutdown_anysegwit` is negotiated:
     #    * `OP_1` through `OP_16` inclusive, followed by a single push of 2 to 40 bytes
     #    (witness program versions 1 through 16)
@@ -2659,15 +2659,8 @@ Try a range of future segwit versions as shutdown scripts.  We create many nodes
     else:
         valid = edge_valid + other_valid
 
-    if EXPERIMENTAL_FEATURES:
-        xsuccess = valid
-        xfail = invalid
-    else:
-        xsuccess = []
-        xfail = valid + invalid
-
     # More efficient to create them all up-front.
-    nodes = node_factory.get_nodes(len(xfail) + len(xsuccess))
+    nodes = node_factory.get_nodes(len(valid) + len(invalid))
 
     # Give it one UTXO to spend for each node.
     addresses = {}
@@ -2680,7 +2673,7 @@ Try a range of future segwit versions as shutdown scripts.  We create many nodes
     # FIXME: Since we don't support other non-v0 encodings, we need a protocol
     # test for this (we're actually testing our upfront check, not the real
     # shutdown one!),
-    for script in xsuccess:
+    for script in valid:
         # Insist on upfront script we're not going to match.
         l1.stop()
         l1.daemon.env["DEV_OPENINGD_UPFRONT_SHUTDOWN_SCRIPT"] = script
@@ -2690,7 +2683,7 @@ Try a range of future segwit versions as shutdown scripts.  We create many nodes
         l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
         l1.rpc.fundchannel(l2.info['id'], 10**6)
 
-    for script in xfail:
+    for script in invalid:
         # Insist on upfront script we're not going to match.
         l1.stop()
         l1.daemon.env["DEV_OPENINGD_UPFRONT_SHUTDOWN_SCRIPT"] = script
@@ -2747,3 +2740,163 @@ def test_shutdown_alternate_txid(node_factory, bitcoind):
 
     wait_for(lambda: l2.rpc.listpeers()['peers'] == [])
     wait_for(lambda: l1.rpc.listpeers()['peers'] == [])
+
+
+@pytest.mark.developer("needs dev_disconnect")
+def test_htlc_rexmit_while_closing(node_factory, executor):
+    """Retranmitting an HTLC revocation while shutting down should work"""
+    # l1 disconnects after sending second COMMITMENT_SIGNED.
+    # Then it stops receiving after sending WIRE_SHUTDOWN (which is before it
+    # reads the revoke_and_ack).
+    disconnects = ['+WIRE_COMMITMENT_SIGNED*2',
+                   'xWIRE_SHUTDOWN']
+
+    l1, l2 = node_factory.line_graph(2, opts=[{'may_reconnect': True,
+                                               'dev-no-reconnect': None,
+                                               'disconnect': disconnects},
+                                              {'may_reconnect': True,
+                                               'dev-no-reconnect': None}])
+
+    # Start payment, will disconnect
+    l1.pay(l2, 200000)
+    wait_for(lambda: only_one(l1.rpc.listpeers()['peers'])['connected'] is False)
+
+    # Tell it to close (will block)
+    fut = executor.submit(l1.rpc.close, l2.info['id'])
+
+    # Original problem was with multiple disconnects, but to simplify we make
+    # l2 send shutdown too.
+    fut2 = executor.submit(l2.rpc.close, l1.info['id'])
+
+    # Reconnect, shutdown will continue disconnect again
+    l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
+
+    # Now l2 should be in CLOSINGD_SIGEXCHANGE, l1 still waiting on
+    # WIRE_REVOKE_AND_ACK.
+    wait_for(lambda: only_one(only_one(l2.rpc.listpeers()['peers'])['channels'])['state'] == 'CLOSINGD_SIGEXCHANGE')
+    assert only_one(only_one(l1.rpc.listpeers()['peers'])['channels'])['state'] == 'CHANNELD_SHUTTING_DOWN'
+
+    # They don't realize they're not talking, so disconnect and reconnect.
+    l1.rpc.disconnect(l2.info['id'], force=True)
+
+    # Now it hangs, since l1 is expecting rexmit of revoke-and-ack.
+    l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
+
+    fut.result(TIMEOUT)
+    fut2.result(TIMEOUT)
+
+
+@pytest.mark.openchannel('v1')
+@pytest.mark.developer("needs dev_disconnect")
+def test_you_forgot_closed_channel(node_factory, executor):
+    """Ideally you'd keep talking to us about closed channels: simple"""
+    disconnects = ['@WIRE_CLOSING_SIGNED']
+
+    l1, l2 = node_factory.line_graph(2, opts=[{'may_reconnect': True,
+                                               'dev-no-reconnect': None},
+                                              {'may_reconnect': True,
+                                               'dev-no-reconnect': None,
+                                               'disconnect': disconnects}])
+
+    l1.pay(l2, 200000)
+
+    fut = executor.submit(l1.rpc.close, l2.info['id'])
+
+    # l2 considers the closing done, l1 does not
+    wait_for(lambda: only_one(only_one(l2.rpc.listpeers()['peers'])['channels'])['state'] == 'CLOSINGD_COMPLETE')
+    assert only_one(only_one(l1.rpc.listpeers()['peers'])['channels'])['state'] == 'CLOSINGD_SIGEXCHANGE'
+
+    # l1 reconnects, it should succeed.
+    l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
+    fut.result(TIMEOUT)
+
+
+@pytest.mark.developer("needs dev_disconnect")
+def test_you_forgot_closed_channel_onchain(node_factory, bitcoind, executor):
+    """Ideally you'd keep talking to us about closed channels: even if close is mined"""
+    disconnects = ['@WIRE_CLOSING_SIGNED']
+
+    l1, l2 = node_factory.line_graph(2, opts=[{'may_reconnect': True,
+                                               'dev-no-reconnect': None},
+                                              {'may_reconnect': True,
+                                               'dev-no-reconnect': None,
+                                               'disconnect': disconnects}])
+
+    l1.pay(l2, 200000)
+
+    fut = executor.submit(l1.rpc.close, l2.info['id'])
+
+    # l2 considers the closing done, l1 does not
+    wait_for(lambda: only_one(only_one(l2.rpc.listpeers()['peers'])['channels'])['state'] == 'CLOSINGD_COMPLETE')
+    assert only_one(only_one(l1.rpc.listpeers()['peers'])['channels'])['state'] == 'CLOSINGD_SIGEXCHANGE'
+
+    # l1 does not see any new blocks.
+    def no_new_blocks(req):
+        return {"result": {"blockhash": None, "block": None}}
+
+    l1.daemon.rpcproxy.mock_rpc('getrawblockbyheight', no_new_blocks)
+
+    # Close transaction mined
+    bitcoind.generate_block(1, wait_for_mempool=1)
+
+    wait_for(lambda: only_one(only_one(l2.rpc.listpeers()['peers'])['channels'])['state'] == 'ONCHAIN')
+
+    # l1 reconnects, it should succeed.
+    l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
+    fut.result(TIMEOUT)
+
+
+@unittest.skipIf(TEST_NETWORK == 'liquid-regtest', "Uses regtest addresses")
+@pytest.mark.developer("too slow without fast polling for blocks")
+def test_segwit_anyshutdown(node_factory, bitcoind, executor):
+    """Try a range of future segwit versions for shutdown"""
+    l1, l2 = node_factory.line_graph(2, fundchannel=False)
+
+    l1.fundwallet(10**7)
+
+    # Based on BIP-320, but all changed to regtest.
+    addrs = ("BCRT1QW508D6QEJXTDG4Y5R3ZARVARY0C5XW7KYGT080",
+             "bcrt1qrp33g0q5c5txsp9arysrx4k6zdkfs4nce4xj0gdcccefvpysxf3qzf4jry",
+             "bcrt1pw508d6qejxtdg4y5r3zarvary0c5xw7kw508d6qejxtdg4y5r3zarvary0c5xw7k0ylj56",
+             "BCRT1SW50QT2UWHA",
+             "bcrt1zw508d6qejxtdg4y5r3zarvaryv2wuatf",
+             "bcrt1qqqqqp399et2xygdj5xreqhjjvcmzhxw4aywxecjdzew6hylgvseswlauz7",
+             "bcrt1pqqqqp399et2xygdj5xreqhjjvcmzhxw4aywxecjdzew6hylgvsesyga46z",
+             "bcrt1p0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vqc8gma6")
+
+    for addr in addrs:
+        l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
+        l1.rpc.fundchannel(l2.info['id'], 10**6)
+        # If we don't actually make a payment, two of the above cases fail
+        # because the resulting tx is too small!  Balance channel so close
+        # has two outputs.
+        bitcoind.generate_block(1, wait_for_mempool=1)
+        wait_for(lambda: any([c['state'] == 'CHANNELD_NORMAL' for c in only_one(l1.rpc.listpeers()['peers'])['channels']]))
+        l1.pay(l2, 10**9 // 2)
+        l1.rpc.close(l2.info['id'], destination=addr)
+        bitcoind.generate_block(1, wait_for_mempool=1)
+        wait_for(lambda: all([c['state'] == 'ONCHAIN' for c in only_one(l1.rpc.listpeers()['peers'])['channels']]))
+
+
+@pytest.mark.developer("needs to manipulate features")
+@unittest.skipIf(TEST_NETWORK == 'liquid-regtest', "Uses regtest addresses")
+def test_anysegwit_close_needs_feature(node_factory, bitcoind):
+    """Rather than have peer reject our shutdown, we should refuse to shutdown toa v1+ address if they don't support it"""
+    # L2 says "no option_shutdown_anysegwit"
+    l1, l2 = node_factory.line_graph(2, opts=[{'may_reconnect': True},
+                                              {'may_reconnect': True,
+                                               'dev-force-features': -27}])
+
+    with pytest.raises(RpcError, match=r'Peer does not allow v1\+ shutdown addresses'):
+        l1.rpc.close(l2.info['id'], destination='bcrt1pw508d6qejxtdg4y5r3zarvary0c5xw7kw508d6qejxtdg4y5r3zarvary0c5xw7k0ylj56')
+
+    # From TFM: "Tell your friends to upgrade!"
+    l2.stop()
+    del l2.daemon.opts['dev-force-features']
+    l2.start()
+
+    # Now it will work!
+    l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
+    l1.rpc.close(l2.info['id'], destination='bcrt1pw508d6qejxtdg4y5r3zarvary0c5xw7kw508d6qejxtdg4y5r3zarvary0c5xw7k0ylj56')
+    wait_for(lambda: only_one(only_one(l1.rpc.listpeers()['peers'])['channels'])['state'] == 'CLOSINGD_COMPLETE')
+    bitcoind.generate_block(1, wait_for_mempool=1)

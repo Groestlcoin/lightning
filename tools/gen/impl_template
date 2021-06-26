@@ -244,7 +244,7 @@ static void fromwire_${msg.struct_name()}(const u8 **cursor, size_t *plen, void 
         fieldname = 'r->{}->{}'.format(msg.name, f.name)
         ctx = 'r->{}'.format(msg.name)
 %>\
-	${fromwire_subtype_field(fieldname, f, ctx, msg.singleton())}\
+	${fromwire_subtype_field(fieldname, f, ctx, msg.singleton() and not f.type_obj.is_varsize())}\
 	% endfor
 }
     % endfor
@@ -270,7 +270,7 @@ bool fromwire_${tlv.name}(const u8 **cursor, size_t *max, struct ${tlv.struct_na
 
 bool ${tlv.name}_is_valid(const struct ${tlv.struct_name()} *record, size_t *err_index)
 {
-	return tlv_fields_valid(record->fields, err_index);
+	return tlv_fields_valid(record->fields, NULL, err_index);
 }
 
 % endfor ##  END TLV's

@@ -233,6 +233,9 @@ static struct lightningd *new_lightningd(const tal_t *ctx)
 	 * so set it to NULL explicitly now. */
 	ld->wallet = NULL;
 
+	/*~ Behavioral options */
+	ld->accept_extra_tlv_types = tal_arr(ld, u64, 0);
+
 	/*~ In the next step we will initialize the plugins. This will
 	 *  also populate the JSON-RPC with passthrough methods, hence
 	 *  lightningd needs to have something to put those in. This
@@ -802,10 +805,10 @@ static struct feature_set *default_features(const tal_t *ctx)
 		OPTIONAL_FEATURE(OPT_BASIC_MPP),
 		OPTIONAL_FEATURE(OPT_GOSSIP_QUERIES_EX),
 		OPTIONAL_FEATURE(OPT_STATIC_REMOTEKEY),
+		OPTIONAL_FEATURE(OPT_SHUTDOWN_ANYSEGWIT),
 #if EXPERIMENTAL_FEATURES
 		OPTIONAL_FEATURE(OPT_ANCHOR_OUTPUTS),
 		OPTIONAL_FEATURE(OPT_ONION_MESSAGES),
-		OPTIONAL_FEATURE(OPT_SHUTDOWN_ANYSEGWIT),
 #endif
 	};
 

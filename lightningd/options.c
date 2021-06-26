@@ -131,6 +131,30 @@ static char *opt_set_mode(const char *arg, mode_t *m)
 	return NULL;
 }
 
+#if EXPERIMENTAL_FEATURES
+static char *opt_set_accept_extra_tlv_types(const char *arg,
+					     struct lightningd *ld)
+{
+	char *endp, **elements = tal_strsplit(NULL, arg, ",", STR_NO_EMPTY);;
+	unsigned long long l;
+	u64 u;
+	for (int i = 0; elements[i] != NULL; i++) {
+		/* This is how the manpage says to do it.  Yech. */
+		errno = 0;
+		l = strtoull(elements[i], &endp, 0);
+		if (*endp || !arg[0])
+			return tal_fmt(NULL, "'%s' is not a number", arg);
+		u = l;
+		if (errno || u != l)
+			return tal_fmt(NULL, "'%s' is out of range", arg);
+		tal_arr_expand(&ld->accept_extra_tlv_types, u);
+	}
+
+	tal_free(elements);
+	return NULL;
+}
+#endif
+
 static char *opt_add_addr_withtype(const char *arg,
 				   struct lightningd *ld,
 				   enum addr_listen_announce ala,
@@ -145,7 +169,7 @@ static char *opt_add_addr_withtype(const char *arg,
 	if (!parse_wireaddr_internal(arg, &wi,
 				     ld->portnum,
 				     wildcard_ok, !ld->use_proxy_always, false,
-				     &err_msg)) {
+				     deprecated_apis, &err_msg)) {
 		return tal_fmt(NULL, "Unable to parse address '%s': %s", arg, err_msg);
 	}
 	tal_arr_expand(&ld->proposed_wireaddr, wi);
@@ -202,7 +226,8 @@ static char *opt_add_addr(const char *arg, struct lightningd *ld)
 	struct wireaddr_internal addr;
 
 	/* handle in case you used the addr option with an .onion */
-	if (parse_wireaddr_internal(arg, &addr, 0, true, false, true, NULL)) {
+	if (parse_wireaddr_internal(arg, &addr, 0, true, false, true,
+				    deprecated_apis, NULL)) {
 		if (addr.itype == ADDR_INTERNAL_WIREADDR && (
 			addr.u.wireaddr.type == ADDR_TYPE_TOR_V2 ||
 			addr.u.wireaddr.type == ADDR_TYPE_TOR_V3)) {
@@ -249,7 +274,8 @@ static char *opt_add_bind_addr(const char *arg, struct lightningd *ld)
 	struct wireaddr_internal addr;
 
 	/* handle in case you used the bind option with an .onion */
-	if (parse_wireaddr_internal(arg, &addr, 0, true, false, true, NULL)) {
+	if (parse_wireaddr_internal(arg, &addr, 0, true, false, true,
+				    deprecated_apis, NULL)) {
 		if (addr.itype == ADDR_INTERNAL_WIREADDR && (
 			addr.u.wireaddr.type == ADDR_TYPE_TOR_V2 ||
 			addr.u.wireaddr.type == ADDR_TYPE_TOR_V3)) {
@@ -388,16 +414,8 @@ static char *opt_important_plugin(const char *arg, struct lightningd *ld)
  */
 static char *opt_set_hsm_password(struct lightningd *ld)
 {
-	struct termios current_term, temp_term;
 	char *passwd, *passwd_confirmation, *err;
 
-	/* Get the password from stdin, but don't echo it. */
-	if (tcgetattr(fileno(stdin), &current_term) != 0)
-		return "Could not get current terminal options.";
-	temp_term = current_term;
-	temp_term.c_lflag &= ~ECHO;
-	if (tcsetattr(fileno(stdin), TCSAFLUSH, &temp_term) != 0)
-		return "Could not disable password echoing.";
 	printf("The hsm_secret is encrypted with a password. In order to "
 	       "decrypt it and start the node you must provide the password.\n");
 	printf("Enter hsm_secret password:\n");
@@ -953,7 +971,7 @@ static void register_opts(struct lightningd *ld)
 			 "Set an IP address (v4 or v6) to listen on, but not announce");
 	opt_register_arg("--announce-addr", opt_add_announce_addr, NULL,
 			 ld,
-			 "Set an IP address (v4 or v6) or .onion v2/v3 to announce, but not listen on");
+			 "Set an IP address (v4 or v6) or .onion v3 to announce, but not listen on");
 
 	opt_register_noarg("--offline", opt_set_offline, ld,
 			   "Start in offline-mode (do not automatically reconnect and do not accept incoming connections)");
@@ -967,11 +985,18 @@ static void register_opts(struct lightningd *ld)
 			 &ld->tor_service_password,
 			 "Set a Tor hidden service password");
 
+#if EXPERIMENTAL_FEATURES
+	opt_register_arg("--experimental-accept-extra-tlv-types",
+			 opt_set_accept_extra_tlv_types, NULL, ld,
+			 "Comma separated list of extra TLV types to accept.");
+#endif
+
 	opt_register_noarg("--disable-dns", opt_set_invbool, &ld->config.use_dns,
 			   "Disable DNS lookups of peers");
 
-	opt_register_noarg("--enable-autotor-v2-mode", opt_set_invbool, &ld->config.use_v3_autotor,
-			   "Try to get a v2 onion address from the Tor service call, default is v3");
+	if (deprecated_apis)
+		opt_register_noarg("--enable-autotor-v2-mode", opt_set_invbool, &ld->config.use_v3_autotor,
+				   opt_hidden);
 
 	opt_register_noarg("--encrypted-hsm", opt_set_hsm_password, ld,
 	                   "Set the password to encrypt hsm_secret with. If no password is passed through command line, "
@@ -1274,6 +1299,13 @@ static void add_config(struct lightningd *ld,
 	const char *answer = NULL;
 	char buf[OPT_SHOW_LEN + sizeof("...")];
 
+#if DEVELOPER
+	if (strstarts(name0, "dev-")) {
+		/* Ignore dev settings */
+		return;
+	}
+#endif
+
 	if (opt->type & OPT_NOARG) {
 		if (opt->desc == opt_hidden) {
 			/* Ignore hidden options (deprecated) */
@@ -1287,18 +1319,16 @@ static void add_config(struct lightningd *ld,
 			/* These are not important */
 		} else if (opt->cb == (void *)opt_set_bool) {
 			const bool *b = opt->u.carg;
-			answer = tal_fmt(name0, "%s", *b ? "true" : "false");
+			json_add_bool(response, name0, *b);
 		} else if (opt->cb == (void *)opt_set_invbool) {
 			const bool *b = opt->u.carg;
-			answer = tal_fmt(name0, "%s", !*b ? "true" : "false");
+			json_add_bool(response, name0, !*b);
 		} else if (opt->cb == (void *)opt_set_offline) {
-			answer = tal_fmt(name0, "%s",
-					 (!ld->reconnect && !ld->listen)
-					 ? "true" : "false");
+			json_add_bool(response, name0,
+				      !ld->reconnect && !ld->listen);
 		} else if (opt->cb == (void *)opt_start_daemon) {
-			answer = tal_fmt(name0, "%s",
-					 ld->daemon_parent_fd == -1
-					 ? "false" : "true");
+			json_add_bool(response, name0,
+				      ld->daemon_parent_fd != -1);
 		} else if (opt->cb == (void *)opt_set_hsm_password) {
 			json_add_bool(response, "encrypted-hsm", ld->encrypted_hsm);
 		} else if (opt->cb == (void *)opt_set_wumbo) {
@@ -1405,10 +1435,10 @@ static void add_config(struct lightningd *ld,
 			   || opt->cb_arg == (void *)plugin_opt_flag_set) {
 			/* FIXME: We actually treat it as if they specified
 			 * --plugin for each one, so ignore these */
-#if DEVELOPER
-		} else if (strstarts(name, "dev-")) {
-			/* Ignore dev settings */
+#if EXPERIMENTAL_FEATURES
+		} else if (opt->cb_arg == (void *)opt_set_accept_extra_tlv_types) {
 #endif
+                        /* TODO Actually print the option */
 		} else {
 			/* Insert more decodes here! */
 			abort();

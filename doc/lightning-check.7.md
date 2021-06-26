@@ -23,8 +23,10 @@ find a route even if checking the parameters succeeds.
 RETURN VALUE
 ------------
 
-On success, the *command\_to\_check* is returned. On failure, the
-relevant RPC error is returned.
+[comment]: # (GENERATE-FROM-SCHEMA-START)
+On success, an object is returned, containing:
+- **command_to_check** (string): the *command_to_check* argument
+[comment]: # (GENERATE-FROM-SCHEMA-END)
 
 AUTHOR
 ------
@@ -37,3 +39,4 @@ RESOURCES
 
 Main web site: <https://github.com/ElementsProject/lightning>
 
+[comment]: # ( SHA256STAMP:3dd679aceebf5dca6daabc1b28a0f95c413daa9a689bf55270b38b57f0b17957)

@@ -132,9 +132,6 @@ struct channel {
 	struct amount_msat msat_to_us_min;
 	struct amount_msat msat_to_us_max;
 
-	/* Timer we use in case they don't add an HTLC in a timely manner. */
-	struct oneshot *htlc_timeout;
-
 	/* Last tx they gave us. */
 	struct bitcoin_tx *last_tx;
 	enum wallet_tx_type last_tx_type;
@@ -191,8 +188,8 @@ struct channel {
 	/* If they used option_upfront_shutdown_script. */
 	const u8 *remote_upfront_shutdown_script;
 
-	/* Was this negotiated with `option_static_remotekey? */
-	bool option_static_remotekey;
+	/* At what commit numbers does `option_static_remotekey` apply? */
+	u64 static_remotekey_start[NUM_SIDES];
 
 	/* Was this negotiated with `option_anchor_outputs? */
 	bool option_anchor_outputs;
@@ -270,7 +267,8 @@ struct channel *new_channel(struct peer *peer, u64 dbid,
 			    u32 feerate_ppm,
 			    /* NULL or stolen */
 			    const u8 *remote_upfront_shutdown_script STEALS,
-			    bool option_static_remotekey,
+			    u64 local_static_remotekey_start,
+			    u64 remote_static_remotekey_start,
 			    bool option_anchor_outputs,
 			    enum side closer,
 			    enum state_change reason,
@@ -365,6 +363,10 @@ struct channel *any_channel_by_scid(struct lightningd *ld,
 struct channel *channel_by_cid(struct lightningd *ld,
 			       const struct channel_id *cid);
 
+/* Find this channel within peer */
+struct channel *find_channel_by_id(const struct peer *peer,
+				   const struct channel_id *cid);
+
 void channel_set_last_tx(struct channel *channel,
 			 struct bitcoin_tx *tx,
 			 const struct bitcoin_signature *sig,
@@ -403,6 +405,15 @@ static inline bool channel_active(const struct channel *channel)
 		&& channel->state != CLOSINGD_COMPLETE
 		&& !channel_unsaved(channel)
 		&& !channel_on_chain(channel);
+}
+
+static inline bool channel_closed(const struct channel *channel)
+{
+	return channel->state == CLOSINGD_COMPLETE
+		|| channel->state == AWAITING_UNILATERAL
+		|| channel->state == FUNDING_SPEND_SEEN
+		|| channel->state == ONCHAIN
+		|| channel->state == CLOSED;
 }
 
 void get_channel_basepoints(struct lightningd *ld,

@@ -348,6 +348,7 @@ class UnixDomainSocketRpc(object):
                     "enable": True
                 },
             })
+            # FIXME: Notification schema support?
             _, buf = self._readobj(sock, buf)
 
         request = {
@@ -1245,22 +1246,24 @@ class LightningRpc(UnixDomainSocketRpc):
         }
         return self.call("txsend", payload)
 
-    def reserveinputs(self, psbt, exclusive=True):
+    def reserveinputs(self, psbt, exclusive=True, reserve=None):
         """
         Reserve any inputs in this psbt.
         """
         payload = {
             "psbt": psbt,
             "exclusive": exclusive,
+            "reserve": reserve,
         }
         return self.call("reserveinputs", payload)
 
-    def unreserveinputs(self, psbt):
+    def unreserveinputs(self, psbt, reserve=None):
         """
         Unreserve (or reduce reservation) on any UTXOs in this psbt were previously reserved.
         """
         payload = {
             "psbt": psbt,
+            "reserve": reserve,
         }
         return self.call("unreserveinputs", payload)
 
@@ -1307,12 +1310,13 @@ class LightningRpc(UnixDomainSocketRpc):
         }
         return self.call("signpsbt", payload)
 
-    def sendpsbt(self, psbt):
+    def sendpsbt(self, psbt, reserve=None):
         """
         Finalize extract and broadcast a PSBT
         """
         payload = {
             "psbt": psbt,
+            "reserve": reserve,
         }
         return self.call("sendpsbt", payload)
 
@@ -1348,3 +1352,26 @@ class LightningRpc(UnixDomainSocketRpc):
         }
         payload.update({k: v for k, v in kwargs.items()})
         return self.call("getsharedsecret", payload)
+
+    def keysend(self, destination, msatoshi, label=None, maxfeepercent=None,
+                retry_for=None, maxdelay=None, exemptfee=None,
+                extratlvs=None):
+        """
+        """
+
+        if extratlvs is not None and not isinstance(extratlvs, dict):
+            raise ValueError(
+                "extratlvs is not a dictionary with integer keys and hexadecimal values"
+            )
+
+        payload = {
+            "destination": destination,
+            "msatoshi": msatoshi,
+            "label": label,
+            "maxfeepercent": maxfeepercent,
+            "retry_for": retry_for,
+            "maxdelay": maxdelay,
+            "exemptfee": exemptfee,
+            "extratlvs": extratlvs,
+        }
+        return self.call("keysend", payload)

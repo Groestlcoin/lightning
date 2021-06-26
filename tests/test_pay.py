@@ -4,7 +4,7 @@ from fixtures import TEST_NETWORK
 from flaky import flaky  # noqa: F401
 from pyln.client import RpcError, Millisatoshi
 from pyln.proto.onion import TlvPayload
-from pyln.testing.utils import EXPERIMENTAL_DUAL_FUND
+from pyln.testing.utils import EXPERIMENTAL_DUAL_FUND, FUNDAMOUNT
 from utils import (
     DEVELOPER, wait_for, only_one, sync_blockheight, TIMEOUT,
     EXPERIMENTAL_FEATURES, env, VALGRIND
@@ -2612,7 +2612,8 @@ def test_partial_payment_htlc_loss(node_factory, bitcoind):
 def test_createonion_limits(node_factory):
     l1, = node_factory.get_nodes(1)
     hops = [{
-        "pubkey": "02eec7245d6b7d2ccb30380bfbe2a3648cd7a942653f5aa340edcea1f283686619",
+        # privkey: 41bfd2660762506c9933ade59f1debf7e6495b10c14a92dbcd2d623da2507d3d
+        "pubkey": "0266e4598d1d3c415f572a8488830b60f7e744ed9235eb0b1ba93283b315c03518",
         "payload": "00" * 228
     }, {
         "pubkey": "0324653eac434488002cc06bbfb7f10fe18991e35f9fe4302dbea6d2353dc0ab1c",
@@ -2635,6 +2636,20 @@ def test_createonion_limits(node_factory):
     with pytest.raises(RpcError, match=r'Payloads exceed maximum onion packet size.'):
         hops[0]['payload'] += '01'
         l1.rpc.createonion(hops=hops, assocdata="BB" * 32)
+
+    # But with a larger onion, it will work!
+    oniontool = os.path.join(os.path.dirname(__file__), "..", "devtools", "onion")
+    onion = l1.rpc.createonion(hops=hops, assocdata="BB" * 32, onion_size=1301)['onion']
+
+    # Oniontool wants a filename :(
+    onionfile = os.path.join(l1.daemon.lightning_dir, 'onion')
+    with open(onionfile, "w") as f:
+        f.write(onion)
+
+    subprocess.check_output(
+        [oniontool, '--assoc-data', "BB" * 32,
+         'decode', onionfile, "41bfd2660762506c9933ade59f1debf7e6495b10c14a92dbcd2d623da2507d3d"]
+    )
 
 
 @pytest.mark.developer("needs use_shadow")
@@ -2682,6 +2697,9 @@ def test_blockheight_disagreement(node_factory, bitcoind, executor):
 
     # Make sure l1 sends out the HTLC.
     l1.daemon.wait_for_logs([r'NEW:: HTLC LOCAL'])
+
+    height = bitcoind.rpc.getblockchaininfo()['blocks']
+    l1.daemon.wait_for_log('Remote node appears to be on a longer chain.*catch up to block {}'.format(height))
 
     # Unblock l1 from new blocks.
     l1.daemon.rpcproxy.mock_rpc('getblockhash', None)
@@ -2860,6 +2878,37 @@ def test_keysend(node_factory):
     # support it. It MUST fail.
     with pytest.raises(RpcError, match=r"Recipient [0-9a-f]{66} reported an invalid payload"):
         l3.rpc.keysend(l4.info['id'], amt)
+
+
+@unittest.skipIf(not EXPERIMENTAL_FEATURES, "Requires extratlvs option")
+def test_keysend_extra_tlvs(node_factory):
+    """Use the extratlvs option to deliver a message with sphinx' TLV type.
+    """
+    amt = 10000
+    l1, l2 = node_factory.line_graph(
+        2,
+        wait_for_announce=True,
+        opts=[
+            {},
+            {
+                'experimental-accept-extra-tlv-types': '133773310',
+                "plugin": os.path.join(os.path.dirname(__file__), "plugins/sphinx-receiver.py"),
+            },
+        ]
+    )
+
+    # Send an indirect one from l1 to l3
+    l1.rpc.keysend(l2.info['id'], amt, extratlvs={133773310: 'FEEDC0DE'})
+    invs = l2.rpc.listinvoices()['invoices']
+    assert(len(invs) == 1)
+    assert(l2.daemon.is_in_log(r'plugin-sphinx-receiver.py.*extratlvs.*133773310.*feedc0de'))
+
+    inv = invs[0]
+    print(inv)
+    assert(inv['msatoshi_received'] >= amt)
+
+    # Now try again with the TLV type in extra_tlvs as string:
+    l1.rpc.keysend(l2.info['id'], amt, extratlvs={133773310: 'FEEDC0DE'})
 
 
 def test_invalid_onion_channel_update(node_factory):
@@ -3276,6 +3325,20 @@ def test_listpays_ongoing_attempt(node_factory, bitcoind, executor):
     l1.rpc.listpays()
 
 
+def test_listsendpays_and_listpays_order(node_factory):
+    """listsendpays should be in increasing id order, listpays in created_at"""
+    l1, l2 = node_factory.line_graph(2)
+    for i in range(5):
+        inv = l2.rpc.invoice(1000 - i, "test {}".format(i), "test")['bolt11']
+        l1.rpc.pay(inv)
+
+    ids = [p['id'] for p in l1.rpc.listsendpays()['payments']]
+    assert ids == sorted(ids)
+
+    created_at = [p['created_at'] for p in l1.rpc.listpays()['pays']]
+    assert created_at == sorted(created_at)
+
+
 @pytest.mark.developer("needs use_shadow")
 def test_mpp_waitblockheight_routehint_conflict(node_factory, bitcoind, executor):
     '''
@@ -3328,6 +3391,7 @@ def test_mpp_waitblockheight_routehint_conflict(node_factory, bitcoind, executor
 @pytest.mark.slow_test
 @pytest.mark.openchannel('v1')
 @pytest.mark.openchannel('v2')
+@unittest.skipIf(True, "Temporarily disabled while flake diagnosed: blame Rusty!")
 def test_mpp_interference_2(node_factory, bitcoind, executor):
     '''
     We create a "public network" that looks like so.
@@ -4032,3 +4096,38 @@ def test_unreachable_routehint(node_factory, bitcoind):
     # both directly, and via the routehints we should now just have a
     # single attempt.
     assert(len(excinfo.value.error['attempts']) == 1)
+
+
+def test_routehint_tous(node_factory, bitcoind):
+    """
+Test bug where trying to pay an invoice from an *offline* node which
+gives a routehint straight to us causes an issue
+"""
+
+    # Existence of l1 makes l3 use l2 for routehint (otherwise it sees deadend)
+    l1, l2 = node_factory.line_graph(2, wait_for_announce=True)
+    l3 = node_factory.get_node()
+    l3.rpc.connect(l2.info['id'], 'localhost', l2.port)
+    scid23, _ = l2.fundchannel(l3, 1000000, announce_channel=False)
+    # Make sure l3 sees l1->l2 channel.
+    wait_for(lambda: l3.rpc.listnodes(l1.info['id'])['nodes'] != [])
+
+    inv = l3.rpc.invoice(10, "test", "test")['bolt11']
+    decoded = l3.rpc.decodepay(inv)
+    assert(only_one(only_one(decoded['routes']))['short_channel_id'] == scid23)
+
+    l3.stop()
+    with pytest.raises(RpcError, match=r'Destination .* is not reachable directly and all routehints were unusable'):
+        l2.rpc.pay(inv)
+
+
+def test_pay_low_max_htlcs(node_factory):
+    """Test we can pay if *any* HTLC slots are available"""
+
+    l1, l2, l3 = node_factory.line_graph(3,
+                                         opts={'max-concurrent-htlcs': 1},
+                                         wait_for_announce=True)
+    l1.rpc.pay(l3.rpc.invoice(FUNDAMOUNT * 50, "test", "test")['bolt11'])
+    l1.daemon.wait_for_log(
+        r'Number of pre-split HTLCs \([0-9]+\) exceeds our HTLC budget \([0-9]+\), skipping pre-splitter'
+    )

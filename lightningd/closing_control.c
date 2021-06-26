@@ -97,15 +97,27 @@ static void peer_received_closing_signature(struct channel *channel,
 	struct bitcoin_tx *tx;
 	struct bitcoin_txid tx_id;
 	struct lightningd *ld = channel->peer->ld;
+	u8 *funding_wscript;
 
 	if (!fromwire_closingd_received_signature(msg, msg, &sig, &tx)) {
-		channel_internal_error(channel, "Bad closing_received_signature %s",
+		channel_internal_error(channel,
+				       "Bad closing_received_signature %s",
 				       tal_hex(msg, msg));
 		return;
 	}
 	tx->chainparams = chainparams;
 
-	/* FIXME: Make sure signature is correct! */
+	funding_wscript = bitcoin_redeem_2of2(tmpctx,
+				       	      &channel->local_funding_pubkey,
+				       	      &channel->channel_info.remote_fundingkey);
+	if (!check_tx_sig(tx, 0, NULL, funding_wscript,
+			  &channel->channel_info.remote_fundingkey, &sig)) {
+		channel_internal_error(channel,
+				       "Bad closing_received_signature %s",
+				       tal_hex(msg, msg));
+		return;
+	}
+
 	if (closing_fee_is_acceptable(ld, channel, tx)) {
 		channel_set_last_tx(channel, tx, &sig, TX_CHANNEL_CLOSE);
 		wallet_channel_save(ld->wallet, channel);
@@ -133,7 +145,7 @@ static void peer_closing_complete(struct channel *channel, const u8 *msg)
 	channel_set_billboard(channel, false, NULL);
 
 	/* Retransmission only, ignore closing. */
-	if (channel->state == CLOSINGD_COMPLETE)
+	if (channel_closed(channel))
 		return;
 
 	/* Channel gets dropped to chain cooperatively. */
@@ -181,17 +193,13 @@ static unsigned closing_msg(struct subd *sd, const u8 *msg, const int *fds UNUSE
 }
 
 void peer_start_closingd(struct channel *channel,
-			 struct per_peer_state *pps,
-			 bool reconnected,
-			 const u8 *channel_reestablish)
+			 struct per_peer_state *pps)
 {
 	u8 *initmsg;
 	u32 feerate;
 	struct amount_sat minfee, startfee, feelimit;
-	u64 num_revocations;
 	struct amount_msat their_msat;
 	int hsmfd;
-	struct secret last_remote_per_commit_secret;
 	struct lightningd *ld = channel->peer->ld;
 	u32 final_commit_feerate;
 
@@ -258,9 +266,6 @@ void peer_start_closingd(struct channel *channel,
 	if (amount_sat_greater(minfee, feelimit))
 		minfee = feelimit;
 
-	num_revocations
-		= revocations_received(&channel->their_shachain.chain);
-
 	/* BOLT #3:
 	 *
 	 * Each node offering a signature:
@@ -280,25 +285,6 @@ void peer_start_closingd(struct channel *channel,
 		return;
 	}
 
-	/* BOLT #2:
-	 *     - if `next_revocation_number` equals 0:
-	 *       - MUST set `your_last_per_commitment_secret` to all zeroes
-	 *     - otherwise:
-	 *       - MUST set `your_last_per_commitment_secret` to the last
-	 *         `per_commitment_secret` it received
-	 */
-	if (num_revocations == 0)
-		memset(&last_remote_per_commit_secret, 0,
-		       sizeof(last_remote_per_commit_secret));
-	else if (!shachain_get_secret(&channel->their_shachain.chain,
-				      num_revocations-1,
-				      &last_remote_per_commit_secret)) {
-		channel_fail_permanent(channel,
-				       REASON_LOCAL,
-				       "Could not get revocation secret %"PRIu64,
-				       num_revocations-1);
-		return;
-	}
 	initmsg = towire_closingd_init(tmpctx,
 				       chainparams,
 				       pps,
@@ -317,12 +303,6 @@ void peer_start_closingd(struct channel *channel,
 				       channel->shutdown_scriptpubkey[REMOTE],
 				       channel->closing_fee_negotiation_step,
 				       channel->closing_fee_negotiation_step_unit,
-				       reconnected,
-				       channel->next_index[LOCAL],
-				       channel->next_index[REMOTE],
-				       num_revocations,
-				       channel_reestablish,
-				       &last_remote_per_commit_secret,
 				       IFDEV(ld->dev_fast_gossip, false),
 				       channel->shutdown_wrong_funding);
 

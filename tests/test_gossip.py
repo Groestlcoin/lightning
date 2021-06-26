@@ -111,7 +111,6 @@ def test_announce_address(node_factory, bitcoind):
     # We do not allow announcement of duplicates.
     opts = {'announce-addr':
             ['4acth47i6kxnvkewtm6q7ib2s3ufpo5sqbsnzjpbi7utijcltosqemad.onion',
-             'silkroad6ownowfk.onion',
              '1.2.3.4:1234',
              '::'],
             'log-level': 'io',
@@ -127,19 +126,19 @@ def test_announce_address(node_factory, bitcoind):
 
     # We should see it send node announce with all addresses (257 = 0x0101)
     # local ephemeral port is masked out.
-    l1.daemon.wait_for_log(r"\[OUT\] 0101.*54"
+    l1.daemon.wait_for_log(r"\[OUT\] 0101.*47"
                            "010102030404d2"
                            "017f000001...."
                            "02000000000000000000000000000000002607"
-                           "039216a8b803f3acd758aa2607"
                            "04e00533f3e8f2aedaa8969b3d0fa03a96e857bbb28064dca5e147e934244b9ba50230032607")
 
 
 @pytest.mark.developer("needs DEVELOPER=1")
-def test_gossip_timestamp_filter(node_factory, bitcoind):
+def test_gossip_timestamp_filter(node_factory, bitcoind, chainparams):
     # Updates get backdated 5 seconds with --dev-fast-gossip.
     backdate = 5
     l1, l2, l3, l4 = node_factory.line_graph(4, fundchannel=False)
+    genesis_blockhash = chainparams['chain_hash']
 
     before_anything = int(time.time())
 
@@ -162,7 +161,7 @@ def test_gossip_timestamp_filter(node_factory, bitcoind):
     wait_for(lambda: ['alias' in node for node in l4.rpc.listnodes()['nodes']] == [True, True, True])
 
     msgs = l4.query_gossip('gossip_timestamp_filter',
-                           '06226e46111a0b59caaf126043eb5bbf28c34f3a5e332a1fc7b2b73cf188910f',
+                           genesis_blockhash,
                            '0', '0xFFFFFFFF',
                            filters=['0109'])
 
@@ -175,14 +174,14 @@ def test_gossip_timestamp_filter(node_factory, bitcoind):
 
     # Now timestamp which doesn't overlap (gives nothing).
     msgs = l4.query_gossip('gossip_timestamp_filter',
-                           '06226e46111a0b59caaf126043eb5bbf28c34f3a5e332a1fc7b2b73cf188910f',
+                           genesis_blockhash,
                            '0', before_anything - backdate,
                            filters=['0109'])
     assert msgs == []
 
     # Now choose range which will only give first update.
     msgs = l4.query_gossip('gossip_timestamp_filter',
-                           '06226e46111a0b59caaf126043eb5bbf28c34f3a5e332a1fc7b2b73cf188910f',
+                           genesis_blockhash,
                            before_anything - backdate,
                            after_12 - before_anything + 1,
                            filters=['0109'])
@@ -196,7 +195,7 @@ def test_gossip_timestamp_filter(node_factory, bitcoind):
 
     # Now choose range which will only give second update.
     msgs = l4.query_gossip('gossip_timestamp_filter',
-                           '06226e46111a0b59caaf126043eb5bbf28c34f3a5e332a1fc7b2b73cf188910f',
+                           genesis_blockhash,
                            after_12 - backdate,
                            after_23 - after_12 + 1,
                            filters=['0109'])
@@ -218,7 +217,6 @@ def test_connect_by_gossip(node_factory, bitcoind):
                                         opts=[{'announce-addr':
                                                ['127.0.0.1:2',
                                                 '[::]:2',
-                                                '3fyb44wdhnd2ghhl.onion',
                                                 'vww6ybal4bd7szmgncyruucpgfkqahzddi37ktceo3ah7ngmcopnpyyd.onion'],
                                                'dev-allow-localhost': None},
                                               {},
@@ -904,12 +902,15 @@ def test_query_short_channel_id(node_factory, bitcoind, chainparams):
 
 
 def test_gossip_addresses(node_factory, bitcoind):
-    l1 = node_factory.get_node(options={'announce-addr': [
-        '[::]:3',
-        '127.0.0.1:2',
-        'vww6ybal4bd7szmgncyruucpgfkqahzddi37ktceo3ah7ngmcopnpyyd.onion',
-        '3fyb44wdhnd2ghhl.onion:1234'
-    ]})
+    l1 = node_factory.get_node(options={
+        'announce-addr': [
+            '[::]:3',
+            '127.0.0.1:2',
+            'vww6ybal4bd7szmgncyruucpgfkqahzddi37ktceo3ah7ngmcopnpyyd.onion',
+            '3fyb44wdhnd2ghhl.onion:1234'
+        ],
+        'allow-deprecated-apis': True,
+    })
     l2 = node_factory.get_node()
     l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
 
@@ -1029,11 +1030,12 @@ def test_gossip_store_load_amount_truncated(node_factory):
 @pytest.mark.developer("Needs fast gossip propagation")
 @pytest.mark.openchannel('v1')
 @pytest.mark.openchannel('v2')
-def test_node_reannounce(node_factory, bitcoind):
+def test_node_reannounce(node_factory, bitcoind, chainparams):
     "Test that we reannounce a node when parameters change"
     l1, l2 = node_factory.line_graph(2, opts={'may_reconnect': True,
                                               'log-level': 'io'})
     bitcoind.generate_block(5)
+    genesis_blockhash = chainparams['chain_hash']
 
     # Wait for node_announcement for l1.
     l2.daemon.wait_for_log(r'\[IN\] 0101.*{}'.format(l1.info['id']))
@@ -1059,7 +1061,7 @@ def test_node_reannounce(node_factory, bitcoind):
 
     # Get node_announcements.
     msgs = l1.query_gossip('gossip_timestamp_filter',
-                           '06226e46111a0b59caaf126043eb5bbf28c34f3a5e332a1fc7b2b73cf188910f',
+                           genesis_blockhash,
                            '0', '0xFFFFFFFF',
                            # Filter out gossip_timestamp_filter,
                            # channel_announcement and channel_updates.
@@ -1073,7 +1075,7 @@ def test_node_reannounce(node_factory, bitcoind):
     l1.restart()
 
     msgs2 = l1.query_gossip('gossip_timestamp_filter',
-                            '06226e46111a0b59caaf126043eb5bbf28c34f3a5e332a1fc7b2b73cf188910f',
+                            genesis_blockhash,
                             '0', '0xFFFFFFFF',
                             # Filter out gossip_timestamp_filter,
                             # channel_announcement and channel_updates.

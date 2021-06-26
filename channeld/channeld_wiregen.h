@@ -70,6 +70,11 @@ enum channeld_wire {
         WIRE_CHANNELD_SEND_ERROR = 1008,
         /*  Tell master channeld has sent the error message. */
         WIRE_CHANNELD_SEND_ERROR_REPLY = 1108,
+        /*  Ask channeld to quiesce. */
+        WIRE_CHANNELD_DEV_QUIESCE = 1009,
+        WIRE_CHANNELD_DEV_QUIESCE_REPLY = 1109,
+        /*  Tell master we're upgrading the commitment tx. */
+        WIRE_CHANNELD_UPGRADED = 1011,
 };
 
 const char *channeld_wire_name(int e);
@@ -86,8 +91,8 @@ bool channeld_wire_is_defined(u16 type);
 
 /* WIRE: CHANNELD_INIT */
 /*  Begin!  (passes gossipd-client fd) */
-u8 *towire_channeld_init(const tal_t *ctx, const struct chainparams *chainparams, const struct feature_set *our_features, const struct channel_id *channel_id, const struct bitcoin_txid *funding_txid, u16 funding_txout, struct amount_sat funding_satoshi, u32 minimum_depth, const struct channel_config *our_config, const struct channel_config *their_config, const struct fee_states *fee_states, u32 feerate_min, u32 feerate_max, u32 feerate_penalty, const struct bitcoin_signature *first_commit_sig, const struct per_peer_state *per_peer_state, const struct pubkey *remote_fundingkey, const struct basepoints *remote_basepoints, const struct pubkey *remote_per_commit, const struct pubkey *old_remote_per_commit, enum side opener, u32 fee_base, u32 fee_proportional, struct amount_msat local_msatoshi, const struct basepoints *our_basepoints, const struct pubkey *our_funding_pubkey, const struct node_id *local_node_id, const struct node_id *remote_node_id, u32 commit_msec, u16 cltv_delta, bool last_was_revoke, const struct changed_htlc *last_sent_commit, u64 next_index_local, u64 next_index_remote, u64 revocations_received, u64 next_htlc_id, const struct existing_htlc **htlcs, bool local_funding_locked, bool remote_funding_locked, const struct short_channel_id *funding_short_id, bool reestablish, bool send_shutdown, bool remote_shutdown_received, const u8 *final_scriptpubkey, u8 flags, const u8 *init_peer_pkt, bool reached_announce_depth, const struct secret *last_remote_secret, const u8 *their_features, const u8 *upfront_shutdown_script, const secp256k1_ecdsa_signature *remote_ann_node_sig, const secp256k1_ecdsa_signature *remote_ann_bitcoin_sig, bool option_static_remotekey, bool option_anchor_outputs, bool dev_fast_gossip, bool dev_fail_process_onionpacket, const struct penalty_base *pbases);
-bool fromwire_channeld_init(const tal_t *ctx, const void *p, const struct chainparams **chainparams, struct feature_set **our_features, struct channel_id *channel_id, struct bitcoin_txid *funding_txid, u16 *funding_txout, struct amount_sat *funding_satoshi, u32 *minimum_depth, struct channel_config *our_config, struct channel_config *their_config, struct fee_states **fee_states, u32 *feerate_min, u32 *feerate_max, u32 *feerate_penalty, struct bitcoin_signature *first_commit_sig, struct per_peer_state **per_peer_state, struct pubkey *remote_fundingkey, struct basepoints *remote_basepoints, struct pubkey *remote_per_commit, struct pubkey *old_remote_per_commit, enum side *opener, u32 *fee_base, u32 *fee_proportional, struct amount_msat *local_msatoshi, struct basepoints *our_basepoints, struct pubkey *our_funding_pubkey, struct node_id *local_node_id, struct node_id *remote_node_id, u32 *commit_msec, u16 *cltv_delta, bool *last_was_revoke, struct changed_htlc **last_sent_commit, u64 *next_index_local, u64 *next_index_remote, u64 *revocations_received, u64 *next_htlc_id, struct existing_htlc ***htlcs, bool *local_funding_locked, bool *remote_funding_locked, struct short_channel_id *funding_short_id, bool *reestablish, bool *send_shutdown, bool *remote_shutdown_received, u8 **final_scriptpubkey, u8 *flags, u8 **init_peer_pkt, bool *reached_announce_depth, struct secret *last_remote_secret, u8 **their_features, u8 **upfront_shutdown_script, secp256k1_ecdsa_signature **remote_ann_node_sig, secp256k1_ecdsa_signature **remote_ann_bitcoin_sig, bool *option_static_remotekey, bool *option_anchor_outputs, bool *dev_fast_gossip, bool *dev_fail_process_onionpacket, struct penalty_base **pbases);
+u8 *towire_channeld_init(const tal_t *ctx, const struct chainparams *chainparams, const struct feature_set *our_features, const struct channel_id *channel_id, const struct bitcoin_txid *funding_txid, u16 funding_txout, struct amount_sat funding_satoshi, u32 minimum_depth, const struct channel_config *our_config, const struct channel_config *their_config, const struct fee_states *fee_states, u32 feerate_min, u32 feerate_max, u32 feerate_penalty, const struct bitcoin_signature *first_commit_sig, const struct per_peer_state *per_peer_state, const struct pubkey *remote_fundingkey, const struct basepoints *remote_basepoints, const struct pubkey *remote_per_commit, const struct pubkey *old_remote_per_commit, enum side opener, u32 fee_base, u32 fee_proportional, struct amount_msat local_msatoshi, const struct basepoints *our_basepoints, const struct pubkey *our_funding_pubkey, const struct node_id *local_node_id, const struct node_id *remote_node_id, u32 commit_msec, u16 cltv_delta, bool last_was_revoke, const struct changed_htlc *last_sent_commit, u64 next_index_local, u64 next_index_remote, u64 revocations_received, u64 next_htlc_id, const struct existing_htlc **htlcs, bool local_funding_locked, bool remote_funding_locked, const struct short_channel_id *funding_short_id, bool reestablish, bool send_shutdown, bool remote_shutdown_received, const u8 *final_scriptpubkey, u8 flags, const u8 *init_peer_pkt, bool reached_announce_depth, const struct secret *last_remote_secret, const u8 *their_features, const u8 *upfront_shutdown_script, const secp256k1_ecdsa_signature *remote_ann_node_sig, const secp256k1_ecdsa_signature *remote_ann_bitcoin_sig, bool option_static_remotekey, bool option_anchor_outputs, bool dev_fast_gossip, bool dev_fail_process_onionpacket, const struct penalty_base *pbases, const u8 *reestablish_only);
+bool fromwire_channeld_init(const tal_t *ctx, const void *p, const struct chainparams **chainparams, struct feature_set **our_features, struct channel_id *channel_id, struct bitcoin_txid *funding_txid, u16 *funding_txout, struct amount_sat *funding_satoshi, u32 *minimum_depth, struct channel_config *our_config, struct channel_config *their_config, struct fee_states **fee_states, u32 *feerate_min, u32 *feerate_max, u32 *feerate_penalty, struct bitcoin_signature *first_commit_sig, struct per_peer_state **per_peer_state, struct pubkey *remote_fundingkey, struct basepoints *remote_basepoints, struct pubkey *remote_per_commit, struct pubkey *old_remote_per_commit, enum side *opener, u32 *fee_base, u32 *fee_proportional, struct amount_msat *local_msatoshi, struct basepoints *our_basepoints, struct pubkey *our_funding_pubkey, struct node_id *local_node_id, struct node_id *remote_node_id, u32 *commit_msec, u16 *cltv_delta, bool *last_was_revoke, struct changed_htlc **last_sent_commit, u64 *next_index_local, u64 *next_index_remote, u64 *revocations_received, u64 *next_htlc_id, struct existing_htlc ***htlcs, bool *local_funding_locked, bool *remote_funding_locked, struct short_channel_id *funding_short_id, bool *reestablish, bool *send_shutdown, bool *remote_shutdown_received, u8 **final_scriptpubkey, u8 *flags, u8 **init_peer_pkt, bool *reached_announce_depth, struct secret *last_remote_secret, u8 **their_features, u8 **upfront_shutdown_script, secp256k1_ecdsa_signature **remote_ann_node_sig, secp256k1_ecdsa_signature **remote_ann_bitcoin_sig, bool *option_static_remotekey, bool *option_anchor_outputs, bool *dev_fast_gossip, bool *dev_fail_process_onionpacket, struct penalty_base **pbases, u8 **reestablish_only);
 
 /* WIRE: CHANNELD_FUNDING_DEPTH */
 /*  master->channeld funding hit new depth(funding locked if >= lock depth) */
@@ -211,6 +216,20 @@ bool fromwire_channeld_send_error(const tal_t *ctx, const void *p, wirestring **
 u8 *towire_channeld_send_error_reply(const tal_t *ctx);
 bool fromwire_channeld_send_error_reply(const void *p);
 
+/* WIRE: CHANNELD_DEV_QUIESCE */
+/*  Ask channeld to quiesce. */
+u8 *towire_channeld_dev_quiesce(const tal_t *ctx);
+bool fromwire_channeld_dev_quiesce(const void *p);
+
+/* WIRE: CHANNELD_DEV_QUIESCE_REPLY */
+u8 *towire_channeld_dev_quiesce_reply(const tal_t *ctx);
+bool fromwire_channeld_dev_quiesce_reply(const void *p);
+
+/* WIRE: CHANNELD_UPGRADED */
+/*  Tell master we're upgrading the commitment tx. */
+u8 *towire_channeld_upgraded(const tal_t *ctx, bool option_static_remotekey);
+bool fromwire_channeld_upgraded(const void *p, bool *option_static_remotekey);
+
 
 #endif /* LIGHTNING_CHANNELD_CHANNELD_WIREGEN_H */
-// SHA256STAMP:60143693b0c3611c8ecdf7f3549ef9f4c280e359cac0cd1f4df38cdca2dad3cb
+// SHA256STAMP:7fe345eb02876c231759ec37daba697e85ac3a43137e4b7cb67d136587e2bda5

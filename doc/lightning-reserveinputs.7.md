@@ -4,7 +4,7 @@ lightning-reserveinputs -- Construct a transaction and reserve the UTXOs it spen
 SYNOPSIS
 --------
 
-**reserveinputs** *psbt* [*exclusive*]
+**reserveinputs** *psbt* [*exclusive*] [*reserve*]
 
 DESCRIPTION
 -----------
@@ -18,9 +18,20 @@ Normally the command will fail (with no reservations made) if an input
 is already reserved.  If *exclusive* is set to *False*, then existing
 reservations are simply extended, rather than causing failure.
 
+By default, reservations are for the next 72 blocks (approximately 6
+hours), but this can be changed by setting *reserve*.
 
 RETURN VALUE
 ------------
+
+[comment]: # (GENERATE-FROM-SCHEMA-START)
+On success, an object containing **reservations** is returned.  It is an array of objects, where each object contains:
+- **txid** (txid): the transaction id
+- **vout** (u32): the output number which was reserved
+- **was_reserved** (boolean): whether the input was already reserved
+- **reserved** (boolean): whether the input is now reserved (always *true*)
+- **reserved_to_block** (u32): what blockheight the reservation will expire
+[comment]: # (GENERATE-FROM-SCHEMA-END)
 
 On success, a *reservations* array is returned, with an entry for each input
 which was reserved:
@@ -51,3 +62,4 @@ RESOURCES
 
 Main web site: <https://github.com/ElementsProject/lightning>
 
+[comment]: # ( SHA256STAMP:bf45dfdf5c5c3a47e6e9ded7f42260ee07b1e6d02e84f39f2bce809650ed19b3)

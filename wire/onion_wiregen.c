@@ -230,7 +230,7 @@ bool fromwire_tlv_payload(const u8 **cursor, size_t *max, struct tlv_tlv_payload
 
 bool tlv_payload_is_valid(const struct tlv_tlv_payload *record, size_t *err_index)
 {
-	return tlv_fields_valid(record->fields, err_index);
+	return tlv_fields_valid(record->fields, NULL, err_index);
 }
 
 
@@ -457,7 +457,7 @@ bool fromwire_onionmsg_payload(const u8 **cursor, size_t *max, struct tlv_onionm
 
 bool onionmsg_payload_is_valid(const struct tlv_onionmsg_payload *record, size_t *err_index)
 {
-	return tlv_fields_valid(record->fields, err_index);
+	return tlv_fields_valid(record->fields, NULL, err_index);
 }
 
 
@@ -536,7 +536,7 @@ bool fromwire_encmsg_tlvs(const u8 **cursor, size_t *max, struct tlv_encmsg_tlvs
 
 bool encmsg_tlvs_is_valid(const struct tlv_encmsg_tlvs *record, size_t *err_index)
 {
-	return tlv_fields_valid(record->fields, err_index);
+	return tlv_fields_valid(record->fields, NULL, err_index);
 }
 
 
@@ -1026,4 +1026,4 @@ bool fromwire_mpp_timeout(const void *p)
 		return false;
 	return cursor != NULL;
 }
-// SHA256STAMP:474b138bc0e571b8e5b3a9ce48b263b13b9dc3d516eaada1154e3c3d518d46f9
+// SHA256STAMP:b64074e7469fc3eb617387ecd9381141df9f2fab9200406e73c2120b8e8311a2

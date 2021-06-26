@@ -11,7 +11,7 @@ from utils import (
     scriptpubkey_addr,
     EXPERIMENTAL_FEATURES
 )
-from pyln.testing.utils import SLOW_MACHINE, VALGRIND, EXPERIMENTAL_DUAL_FUND
+from pyln.testing.utils import SLOW_MACHINE, VALGRIND, EXPERIMENTAL_DUAL_FUND, FUNDAMOUNT
 
 import os
 import pytest
@@ -245,6 +245,40 @@ def test_second_channel(node_factory):
     l1.rpc.connect(l3.info['id'], 'localhost', l3.port)
     l1.fundchannel(l2, 10**6)
     l1.fundchannel(l3, 10**6)
+
+
+def test_channel_abandon(node_factory, bitcoind):
+    """Our open tx isn't mined, we doublespend it away"""
+    l1, l2 = node_factory.get_nodes(2)
+
+    SATS = 10**6
+
+    # Add some for fees
+    l1.fundwallet(SATS + 10000)
+    l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
+    l1.rpc.fundchannel(l2.info['id'], SATS, feerate='1875perkw')
+
+    opening_utxo = only_one([o for o in l1.rpc.listfunds()['outputs'] if o['reserved']])
+    psbt = l1.rpc.utxopsbt(0, "253perkw", 0, [opening_utxo['txid'] + ':' + str(opening_utxo['output'])], reserve=False, reservedok=True)['psbt']
+
+    # We expect a reservation for 2016 blocks; unreserve it.
+    reservations = only_one(l1.rpc.unreserveinputs(psbt, reserve=2015)['reservations'])
+    assert reservations['reserved']
+    assert reservations['reserved_to_block'] == bitcoind.rpc.getblockchaininfo()['blocks'] + 1
+
+    assert only_one(l1.rpc.unreserveinputs(psbt, reserve=1)['reservations'])['reserved'] is False
+
+    # Now it's unreserved, we can doublespend it (as long as we exceed
+    # previous fee to RBF!).
+    withdraw = l1.rpc.withdraw(l1.rpc.newaddr()['bech32'], "all")
+
+    assert bitcoind.rpc.decoderawtransaction(withdraw['tx'])['vout'][0]['value'] > SATS / 10**8
+    bitcoind.generate_block(1, wait_for_mempool=withdraw['txid'])
+
+    # FIXME: lightningd should notice channel will never now open!
+    print(l1.rpc.listpeers())
+    assert (only_one(only_one(l1.rpc.listpeers()['peers'])['channels'])['state']
+            == 'CHANNELD_AWAITING_LOCKIN')
 
 
 @pytest.mark.developer
@@ -543,7 +577,6 @@ def test_reconnect_no_update(node_factory, executor, bitcoind):
     # automatic retry.
     fundchannel_exec = executor.submit(l1.fundchannel, l2, 10**6, False)
     if l1.config('experimental-dual-fund'):
-        l2.daemon.wait_for_log(r"Peer has reconnected, state CHANNELD_NORMAL")
         l1.daemon.wait_for_log(r"dualopend.* Retransmitting funding_locked for channel")
     else:
         l1.daemon.wait_for_log(r"channeld.* Retransmitting funding_locked for channel")
@@ -556,7 +589,7 @@ def test_reconnect_no_update(node_factory, executor, bitcoind):
     # Close will trigger the @WIRE_SHUTDOWN and we then wait for the
     # automatic reconnection to trigger the retransmission.
     l1.rpc.close(l2.info['id'], 0)
-    l2.daemon.wait_for_log(r"closingd.* Retransmitting funding_locked for channel")
+    l2.daemon.wait_for_log(r"channeld.* Retransmitting funding_locked for channel")
     l1.daemon.wait_for_log(r"CLOSINGD_COMPLETE")
 
 
@@ -1219,7 +1252,7 @@ def test_funding_external_wallet_corners(node_factory, bitcoind):
 
     # on reconnect, channel should get destroyed
     l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
-    l1.daemon.wait_for_log('Rejecting WIRE_CHANNEL_REESTABLISH for unknown channel_id')
+    l1.daemon.wait_for_log('Reestablish on UNKNOWN channel')
     wait_for(lambda: len(l1.rpc.listpeers()['peers']) == 0)
     wait_for(lambda: len(l2.rpc.listpeers()['peers']) == 0)
 
@@ -1237,6 +1270,80 @@ def test_funding_external_wallet_corners(node_factory, bitcoind):
     with pytest.raises(RpcError, match=r'.* been broadcast.*'):
         l1.rpc.fundchannel_cancel(l2.info['id'])
     l1.rpc.close(l2.info['id'])
+
+
+@pytest.mark.developer("needs dev_forget_channel")
+@pytest.mark.openchannel('v2')
+def test_funding_v2_corners(node_factory, bitcoind):
+    l1 = node_factory.get_node(may_reconnect=True)
+    l2 = node_factory.get_node(may_reconnect=True)
+
+    amount = 2**24
+    l1.fundwallet(amount + 10000000)
+
+    amount = amount - 1
+
+    # make sure we can generate PSBTs.
+    addr = l1.rpc.newaddr()['bech32']
+    bitcoind.rpc.sendtoaddress(addr, (amount + 1000000) / 10**8)
+    bitcoind.generate_block(1)
+    wait_for(lambda: len(l1.rpc.listfunds()["outputs"]) != 0)
+
+    # Some random (valid) psbt
+    psbt = l1.rpc.fundpsbt(amount, '253perkw', 250, reserve=False)['psbt']
+    nonexist_chanid = '11' * 32
+
+    with pytest.raises(RpcError, match=r'Unknown peer'):
+        l1.rpc.openchannel_init(l2.info['id'], amount, psbt)
+
+    with pytest.raises(RpcError, match=r'Unknown channel'):
+        l1.rpc.openchannel_update(nonexist_chanid, psbt)
+
+    # Should not be able to continue without being in progress.
+    l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
+    with pytest.raises(RpcError, match=r'Unknown channel'):
+        l1.rpc.openchannel_signed(nonexist_chanid, psbt)
+
+    # Fail to open (too large)
+    with pytest.raises(RpcError, match=r'Amount exceeded 16777215'):
+        l1.rpc.openchannel_init(l2.info['id'], amount + 1, psbt)
+
+    start = l1.rpc.openchannel_init(l2.info['id'], amount, psbt)
+    with pytest.raises(RpcError, match=r'Channel funding in-progress. DUALOPEND_OPEN_INIT'):
+        l1.rpc.fundchannel(l2.info['id'], amount)
+
+    # We can abort a channel
+    l1.rpc.openchannel_abort(start['channel_id'])
+
+    # Should be able to 'restart' after canceling
+    amount2 = 1000000
+    l1.rpc.unreserveinputs(psbt)
+    psbt = l1.rpc.fundpsbt(amount2, '253perkw', 250, reserve=False)['psbt']
+    l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
+    start = l1.rpc.openchannel_init(l2.info['id'], amount2, psbt)
+
+    # Check that we're connected.
+    # This caused a valgrind crash prior to this commit
+    assert only_one(l2.rpc.listpeers()['peers'])
+
+    # Disconnect peer.
+    l1.rpc.disconnect(l2.info['id'], force=True)
+    wait_for(lambda: len(l1.rpc.listpeers()['peers']) == 0)
+
+    if not len(l2.rpc.listpeers()['peers']) == 1:
+        assert l2.daemon.wait_for_log('Unsaved peer failed')
+
+    with pytest.raises(RpcError, match=r'Unknown channel'):
+        l1.rpc.openchannel_abort(start['channel_id'])
+
+    with pytest.raises(RpcError, match=r'Unknown channel'):
+        l2.rpc.openchannel_abort(start['channel_id'])
+
+    l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
+    start = l1.rpc.openchannel_init(l2.info['id'], amount2, psbt)
+
+    # Be sure fundchannel_complete is successful
+    assert l1.rpc.openchannel_update(start['channel_id'], start['psbt'])['commitments_secured']
 
 
 @unittest.skipIf(SLOW_MACHINE and not VALGRIND, "Way too taxing on CI machines")
@@ -1310,6 +1417,80 @@ def test_funding_cancel_race(node_factory, bitcoind, executor):
 
     print("Cancelled {} complete {}".format(num_cancel, num_complete))
     assert num_cancel == len(nodes)
+
+    # We should have raced at least once!
+    if not node_factory.valgrind:
+        assert num_cancel > 0
+        assert num_complete > 0
+
+    # Speed up shutdown by stopping them all concurrently
+    executor.map(lambda n: n.stop(), node_factory.nodes)
+
+
+@unittest.skipIf(SLOW_MACHINE and not VALGRIND, "Way too taxing on CI machines")
+@pytest.mark.openchannel('v2')
+def test_funding_v2_cancel_race(node_factory, bitcoind, executor):
+    l1 = node_factory.get_node()
+
+    # make sure we can generate PSBTs.
+    addr = l1.rpc.newaddr()['bech32']
+    bitcoind.rpc.sendtoaddress(addr, 2000000 / 10**8)
+    bitcoind.generate_block(1)
+    wait_for(lambda: len(l1.rpc.listfunds()["outputs"]) != 0)
+
+    if node_factory.valgrind:
+        num = 5
+    else:
+        num = 100
+
+    nodes = node_factory.get_nodes(num)
+
+    num_complete = 0
+    num_cancel = 0
+    amount = 100000
+
+    for count, n in enumerate(nodes):
+        l1.rpc.connect(n.info['id'], 'localhost', n.port)
+        psbt = l1.rpc.fundpsbt(amount, '7500perkw', 250, reserve=False,
+                               excess_as_change=True,
+                               min_witness_weight=110)['psbt']
+        start = l1.rpc.openchannel_init(n.info['id'], amount, psbt)
+
+        # Submit two of each at once.
+        completes = []
+        cancels = []
+
+        # Switch order around.
+        for i in range(4):
+            if (i + count) % 2 == 0:
+                completes.append(executor.submit(l1.rpc.openchannel_update,
+                                                 start['channel_id'],
+                                                 start['psbt']))
+            else:
+                cancels.append(executor.submit(l1.rpc.openchannel_abort,
+                                               start['channel_id']))
+
+        # Only up to one should succeed.
+        success = False
+        for c in completes:
+            try:
+                c.result(TIMEOUT)
+                num_complete += 1
+                assert not success
+                success = True
+            except RpcError:
+                pass
+
+        for c in cancels:
+            try:
+                c.result(TIMEOUT)
+                num_cancel += 1
+            except RpcError:
+                pass
+        # Free up funds for next time
+        l1.rpc.unreserveinputs(psbt)
+
+    print("Cancelled {} complete {}".format(num_cancel, num_complete))
 
     # We should have raced at least once!
     if not node_factory.valgrind:
@@ -1724,7 +1905,7 @@ def test_multifunding_feerates(node_factory, bitcoind):
     assert only_one(only_one(l1.rpc.listpeers(l2.info['id'])['peers'])['channels'])['feerate']['perkw'] == commitment_tx_feerate_int
     assert only_one(only_one(l1.rpc.listpeers(l2.info['id'])['peers'])['channels'])['feerate']['perkb'] == commitment_tx_feerate_int * 4
 
-    txfee = only_one(only_one(l1.rpc.listpeers(l2.info['id'])['peers'])['channels'])['last_tx_fee']
+    txfee = only_one(only_one(l1.rpc.listpeers(l2.info['id'])['peers'])['channels'])['last_tx_fee_msat']
 
     # We get the expected close txid, force close the channel, then fish
     # the details about the transaction out of the mempoool entry
@@ -1752,7 +1933,7 @@ def test_multifunding_feerates(node_factory, bitcoind):
         expected_fee += 330
 
     assert expected_fee == entry['fees']['base'] * 10 ** 8
-    assert Millisatoshi(str(expected_fee) + 'sat') == Millisatoshi(txfee)
+    assert Millisatoshi(str(expected_fee) + 'sat') == txfee
 
 
 def test_multifunding_param_failures(node_factory):
@@ -2789,9 +2970,11 @@ def test_restart_many_payments(node_factory, bitcoind):
         # OK to use change from previous fundings
         l1.rpc.fundchannel(n.info['id'], 10**6, minconf=0)
 
-    # Now mine them, get scids.
-    bitcoind.generate_block(6, wait_for_mempool=num * 2)
+    # Now mine them, get scids; make sure they all see the first block
+    # otherwise they may complain about channel_announcement from the future.
+    bitcoind.generate_block(1, wait_for_mempool=num * 2)
     sync_blockheight(bitcoind, [l1] + nodes)
+    bitcoind.generate_block(5)
 
     wait_for(lambda: [only_one(n.rpc.listpeers()['peers'])['channels'][0]['state'] for n in nodes] == ['CHANNELD_NORMAL'] * len(nodes))
 
@@ -3154,8 +3337,8 @@ def test_wumbo_channels(node_factory, bitcoind):
     wait_for(lambda: 'CHANNELD_NORMAL' in [c['state'] for c in only_one(l1.rpc.listpeers(l2.info['id'])['peers'])['channels']])
 
     # Exact amount depends on fees, but it will be wumbo!
-    amount = [c['funding_msat'][l1.info['id']] for c in only_one(l1.rpc.listpeers(l2.info['id'])['peers'])['channels'] if c['state'] == 'CHANNELD_NORMAL'][0]
-    assert Millisatoshi(amount) > Millisatoshi(str((1 << 24) - 1) + "sat")
+    amount = [c['funding']['local_msat'] for c in only_one(l1.rpc.listpeers(l2.info['id'])['peers'])['channels'] if c['state'] == 'CHANNELD_NORMAL'][0]
+    assert amount > Millisatoshi(str((1 << 24) - 1) + "sat")
 
 
 @pytest.mark.openchannel('v1')
@@ -3291,8 +3474,241 @@ def test_openchannel_init_alternate(node_factory, executor):
 
     psbt1 = l1.rpc.fundpsbt('1000000msat', '253perkw', 250)['psbt']
     psbt2 = l2.rpc.fundpsbt('1000000msat', '253perkw', 250)['psbt']
-    l1.rpc.openchannel_init(l2.info['id'], 100000, psbt1)
+    init = l1.rpc.openchannel_init(l2.info['id'], 100000, psbt1)
 
     fut = executor.submit(l2.rpc.openchannel_init, l1.info['id'], '1000000msat', psbt2)
     with pytest.raises(RpcError):
         fut.result(10)
+
+    # FIXME: Clean up so it doesn't hang. Ok if these fail.
+    for node in [l1, l2]:
+        try:
+            node.rpc.openchannel_abort(init['channel_id'])
+        except RpcError:
+            # Ignoring all errors
+            print("nothing to do")
+
+
+@unittest.skipIf(not EXPERIMENTAL_FEATURES, "upgrade protocol not available")
+@pytest.mark.developer("dev-force-features required")
+def test_upgrade_statickey(node_factory, executor):
+    """l1 doesn't have option_static_remotekey, l2 offers it."""
+    l1, l2 = node_factory.line_graph(2, opts=[{'may_reconnect': True,
+                                               'dev-force-features': ["-13", "-21"]},
+                                              {'may_reconnect': True}])
+
+    l1.rpc.disconnect(l2.info['id'], force=True)
+    l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
+
+    l1.daemon.wait_for_logs([r"They sent current_type \[\]",
+                             r"They offered upgrade to \[13\]"])
+    l2.daemon.wait_for_log(r"They sent desired_type \[13\]")
+
+    l1.daemon.wait_for_log('option_static_remotekey enabled at 1/1')
+    l2.daemon.wait_for_log('option_static_remotekey enabled at 1/1')
+
+    # Make sure it's committed to db!
+    wait_for(lambda: l1.db_query('SELECT local_static_remotekey_start, remote_static_remotekey_start FROM channels;') == [{'local_static_remotekey_start': 1, 'remote_static_remotekey_start': 1}])
+
+    # They will consider themselves upgraded.
+    l1.rpc.disconnect(l2.info['id'], force=True)
+    # They won't offer upgrade!
+    assert not l1.daemon.is_in_log("They offered upgrade",
+                                   start=l1.daemon.logsearch_start)
+    l1.daemon.wait_for_log(r"They sent current_type \[13\]")
+    l2.daemon.wait_for_log(r"They sent desired_type \[13\]")
+
+
+@unittest.skipIf(not EXPERIMENTAL_FEATURES, "upgrade protocol not available")
+@pytest.mark.developer("dev-force-features required")
+def test_upgrade_statickey_onchaind(node_factory, executor, bitcoind):
+    """We test penalty before/after, and unilateral before/after"""
+    l1, l2 = node_factory.line_graph(2, opts=[{'may_reconnect': True,
+                                               'dev-force-features': ["-13", "-21"],
+                                               # We try to cheat!
+                                               'allow_broken_log': True},
+                                              {'may_reconnect': True}])
+
+    # TEST 1: Cheat from pre-upgrade.
+    tx = l1.rpc.dev_sign_last_tx(l2.info['id'])['tx']
+
+    l1.rpc.disconnect(l2.info['id'], force=True)
+    l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
+    l1.daemon.wait_for_log('option_static_remotekey enabled at 1/1')
+
+    # Pre-statickey penalty works.
+    bitcoind.rpc.sendrawtransaction(tx)
+    bitcoind.generate_block(1)
+
+    l2.wait_for_onchaind_broadcast('OUR_PENALTY_TX',
+                                   'THEIR_REVOKED_UNILATERAL/DELAYED_CHEAT_OUTPUT_TO_THEM')
+    bitcoind.generate_block(100)
+    wait_for(lambda: len(l2.rpc.listpeers()['peers']) == 0)
+
+    # TEST 2: Cheat from post-upgrade.
+    node_factory.join_nodes([l1, l2])
+    l1.rpc.disconnect(l2.info['id'], force=True)
+    l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
+
+    l1.daemon.wait_for_log('option_static_remotekey enabled at 1/1')
+    l2.daemon.wait_for_log('option_static_remotekey enabled at 1/1')
+
+    l1.pay(l2, 1000000)
+
+    # We will try to cheat later.
+    tx = l1.rpc.dev_sign_last_tx(l2.info['id'])['tx']
+
+    l1.pay(l2, 1000000)
+
+    # Pre-statickey penalty works.
+    bitcoind.rpc.sendrawtransaction(tx)
+    bitcoind.generate_block(1)
+
+    l2.wait_for_onchaind_broadcast('OUR_PENALTY_TX',
+                                   'THEIR_REVOKED_UNILATERAL/DELAYED_CHEAT_OUTPUT_TO_THEM')
+    bitcoind.generate_block(100)
+    wait_for(lambda: len(l2.rpc.listpeers()['peers']) == 0)
+
+    # TEST 3: Unilateral close from pre-upgrade
+    node_factory.join_nodes([l1, l2])
+
+    # Give them both something for onchain close.
+    l1.pay(l2, 1000000)
+
+    # Make sure it's completely quiescent.
+    l1.daemon.wait_for_log("chan#3: Removing out HTLC 0 state RCVD_REMOVE_ACK_REVOCATION FULFILLED")
+
+    l1.rpc.disconnect(l2.info['id'], force=True)
+    l1.daemon.wait_for_log('option_static_remotekey enabled at 3/3')
+
+    # But this is the *pre*-update commit tx!
+    l2.stop()
+    l1.rpc.close(l2.info['id'], unilateraltimeout=1)
+    bitcoind.generate_block(1, wait_for_mempool=1)
+    l2.start()
+
+    # They should both handle it fine.
+    l1.daemon.wait_for_log('Propose handling OUR_UNILATERAL/DELAYED_OUTPUT_TO_US by OUR_DELAYED_RETURN_TO_WALLET .* after 5 blocks')
+    l2.daemon.wait_for_logs(['Ignoring output .*: THEIR_UNILATERAL/OUTPUT_TO_US',
+                             'Ignoring output .*: THEIR_UNILATERAL/DELAYED_OUTPUT_TO_THEM'])
+    bitcoind.generate_block(5)
+    bitcoind.generate_block(100, wait_for_mempool=1)
+
+    wait_for(lambda: len(l2.rpc.listpeers()['peers']) == 0)
+
+    # TEST 4: Unilateral close from post-upgrade
+    node_factory.join_nodes([l1, l2])
+
+    l1.rpc.disconnect(l2.info['id'], force=True)
+    l1.daemon.wait_for_log('option_static_remotekey enabled at 1/1')
+
+    # Move to static_remotekey.
+    l1.pay(l2, 1000000)
+
+    l2.stop()
+    l1.rpc.close(l2.info['id'], unilateraltimeout=1)
+    bitcoind.generate_block(1, wait_for_mempool=1)
+    l2.start()
+
+    # They should both handle it fine.
+    l1.daemon.wait_for_log('Propose handling OUR_UNILATERAL/DELAYED_OUTPUT_TO_US by OUR_DELAYED_RETURN_TO_WALLET .* after 5 blocks')
+    l2.daemon.wait_for_logs(['Ignoring output .*: THEIR_UNILATERAL/OUTPUT_TO_US',
+                             'Ignoring output .*: THEIR_UNILATERAL/DELAYED_OUTPUT_TO_THEM'])
+
+    bitcoind.generate_block(5)
+    bitcoind.generate_block(100, wait_for_mempool=1)
+
+    wait_for(lambda: len(l2.rpc.listpeers()['peers']) == 0)
+
+
+@unittest.skipIf(not EXPERIMENTAL_FEATURES, "upgrade protocol not available")
+@pytest.mark.developer("dev-force-features, dev-disconnect required")
+def test_upgrade_statickey_fail(node_factory, executor, bitcoind):
+    """We reconnect at all points during retransmit, and we won't upgrade."""
+    l1_disconnects = ['-WIRE_COMMITMENT_SIGNED',
+                      '-WIRE_REVOKE_AND_ACK']
+    l2_disconnects = ['-WIRE_REVOKE_AND_ACK',
+                      '-WIRE_COMMITMENT_SIGNED',
+                      '=WIRE_UPDATE_FAIL_HTLC-nocommit']
+
+    l1, l2 = node_factory.line_graph(2, opts=[{'may_reconnect': True,
+                                               'dev-no-reconnect': None,
+                                               'disconnect': l1_disconnects,
+                                               'dev-force-features': ["-13", "-21"],
+                                               # Don't have feerate changes!
+                                               'feerates': (7500, 7500, 7500, 7500)},
+                                              {'may_reconnect': True,
+                                               'dev-no-reconnect': None,
+                                               'disconnect': l2_disconnects}])
+
+    # This HTLC will fail
+    l1.rpc.sendpay([{'msatoshi': 1000, 'id': l2.info['id'], 'delay': 5, 'channel': '1x1x1'}], '00' * 32)
+
+    # Each one should cause one disconnection, no upgrade.
+    for d in l1_disconnects + l2_disconnects[:-1]:
+        l1.daemon.wait_for_log('Peer connection lost')
+        l2.daemon.wait_for_log('Peer connection lost')
+        assert not l1.daemon.is_in_log('option_static_remotekey enabled')
+        assert not l2.daemon.is_in_log('option_static_remotekey enabled')
+        l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
+
+    # On the last reconnect, it retransmitted revoke_and_ack.
+    l1.daemon.wait_for_log('No upgrade: we retransmitted')
+    l2.daemon.wait_for_log('No upgrade: pending changes')
+
+    # Now when we reconnect, despite having an HTLC, we're quiescent.
+    l1.rpc.disconnect(l2.info['id'], force=True)
+    l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
+
+    l1.daemon.wait_for_log('option_static_remotekey enabled at 2/2')
+    l2.daemon.wait_for_log('option_static_remotekey enabled at 2/2')
+
+
+@unittest.skipIf(not EXPERIMENTAL_FEATURES, "quiescence is experimental")
+@pytest.mark.developer("quiescence triggering is dev only")
+def test_quiescence(node_factory, executor):
+    l1, l2 = node_factory.line_graph(2)
+
+    # Works fine.
+    l1.pay(l2, 1000)
+
+    assert l1.rpc.call('dev-quiesce', [l2.info['id']]) == {}
+
+    # Both should consider themselves quiescent.
+    l1.daemon.wait_for_log("STFU complete: we are quiescent")
+    l2.daemon.wait_for_log("STFU complete: we are quiescent")
+
+    # Should not be able to increase fees.
+    l1.rpc.call('dev-feerate', [l2.info['id'], 9999])
+
+    try:
+        l1.daemon.wait_for_log('peer_out WIRE_UPDATE_FEE', 5)
+        assert False
+    except TimeoutError:
+        pass
+
+
+def test_htlc_failed_noclose(node_factory):
+    """Test a bug where the htlc timeout would kick in even if the HTLC failed"""
+    l1, l2 = node_factory.line_graph(2)
+
+    payment_hash = l2.rpc.invoice(1000, "test", "test")['payment_hash']
+    routestep = {
+        'msatoshi': FUNDAMOUNT * 1000,
+        'id': l2.info['id'],
+        'delay': 5,
+        'channel': '1x1x1'  # note: can be bogus for 1-hop direct payments
+    }
+
+    # This fails at channeld
+    l1.rpc.sendpay([routestep], payment_hash)
+    with pytest.raises(RpcError, match="Capacity exceeded"):
+        l1.rpc.waitsendpay(payment_hash)
+
+    # Send a second one, too: make sure we don't crash.
+    l1.rpc.sendpay([routestep], payment_hash)
+    with pytest.raises(RpcError, match="Capacity exceeded"):
+        l1.rpc.waitsendpay(payment_hash)
+
+    time.sleep(35)
+    assert l1.rpc.getpeer(l2.info['id'])['connected']

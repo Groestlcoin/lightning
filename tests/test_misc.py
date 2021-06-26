@@ -634,6 +634,7 @@ def test_withdraw_misc(node_factory, bitcoind, chainparams):
     for out in l1.rpc.listfunds()['outputs']:
         if out['reserved']:
             inputs += [{'txid': out['txid'], 'vout': out['output']}]
+            assert out['reserved_to_block'] > bitcoind.rpc.getblockchaininfo()['blocks']
     l1.rpc.unreserveinputs(bitcoind.rpc.createpsbt(inputs, []))
 
     # Test withdrawal to self.
@@ -1176,6 +1177,7 @@ def test_funding_reorg_private(node_factory, bitcoind):
              == ['{}_AWAITING_LOCKIN:Funding needs 1 more confirmations for lockin.'.format(daemon)])
     bitcoind.generate_block(1)                      # height 107
     l1.wait_channel_active('106x1x0')
+    l2.wait_channel_active('106x1x0')
     l1.stop()
 
     # Create a fork that changes short_channel_id from 106x1x0 to 108x1x0
@@ -1211,6 +1213,7 @@ def test_funding_reorg_remote_lags(node_factory, bitcoind):
     l1.rpc.fundchannel(l2.info['id'], "all")
     bitcoind.generate_block(5)                      # heights 103 - 107
     l1.wait_channel_active('103x1x0')
+    l2.wait_channel_active('103x1x0')
 
     # Make l2 temporary blind for blocks > 107
     def no_more_blocks(req):
@@ -1418,7 +1421,7 @@ def test_htlc_send_timeout(node_factory, bitcoind, compat):
     assert not l2.daemon.is_in_log(r'{}-.*channeld.*: \[IN\] 0013'.format(l3.info['id']))
     assert not l2.daemon.is_in_log(r'{}-.*channeld.*: \[OUT\] 0084'.format(l3.info['id']))
     # L2 killed the channel with l3 because it was too slow.
-    l2.daemon.wait_for_log('{}-.*channeld-.*Adding HTLC too slow: killing connection'.format(l3.info['id']))
+    l2.daemon.wait_for_log('{}-.*channeld-.*Adding HTLC 0 too slow: killing connection'.format(l3.info['id']))
 
 
 def test_ipv4_and_ipv6(node_factory):
@@ -1897,6 +1900,8 @@ def test_list_features_only(node_factory):
         expected += ['option_anchor_outputs/odd']
         expected += ['option_shutdown_anysegwit/odd']
         expected += ['option_onion_messages/odd']
+    else:
+        expected += ['option_shutdown_anysegwit/odd']
     assert features == expected
 
 
@@ -2543,3 +2548,16 @@ def test_notimestamp_logging(node_factory):
     assert l1.daemon.logs[0].startswith("DEBUG")
 
     assert l1.rpc.listconfigs()['log-timestamps'] is False
+
+
+def test_getlog(node_factory):
+    """Test the getlog command"""
+    l1 = node_factory.get_node(options={'log-level': 'io'})
+
+    # Default will skip some entries
+    logs = l1.rpc.getlog()['log']
+    assert [l for l in logs if l['type'] == 'SKIPPED'] != []
+
+    # This should not
+    logs = l1.rpc.getlog(level='io')['log']
+    assert [l for l in logs if l['type'] == 'SKIPPED'] == []
