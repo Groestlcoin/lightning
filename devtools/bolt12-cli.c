@@ -373,6 +373,12 @@ static void print_payer_key(const struct pubkey32 *payer_key,
 	printf("\n");
 }
 
+static void print_payer_note(const char *payer_note)
+{
+	printf("payer_note: %.*s\n",
+	       (int)tal_bytelen(payer_note), payer_note);
+}
+
 static void print_timestamp(u64 timestamp)
 {
 	printf("timestamp: %"PRIu64" (%s)\n",
@@ -481,8 +487,8 @@ int main(int argc, char *argv[])
 
 	if (streq(hrp, "lno")) {
 		const struct tlv_offer *offer
-			= offer_decode_nosig(ctx, argv[2], strlen(argv[2]),
-					     NULL, NULL, &fail);
+			= offer_decode(ctx, argv[2], strlen(argv[2]),
+				       NULL, NULL, &fail);
 		if (!offer)
 			errx(ERROR_BAD_DECODE, "Bad offer: %s", fail);
 
@@ -517,7 +523,7 @@ int main(int argc, char *argv[])
 			print_features(offer->features);
 		if (offer->paths)
 			print_blindedpaths(offer->paths, NULL);
-		if (must_have(offer, signature) && offer->node_id)
+		if (offer->signature && offer->node_id)
 			well_formed &= print_signature("offer", "signature",
 						       offer->fields,
 						       offer->node_id,
@@ -535,6 +541,8 @@ int main(int argc, char *argv[])
 			print_chains(invreq->chains);
 		if (must_have(invreq, payer_key))
 			print_payer_key(invreq->payer_key, invreq->payer_info);
+		if (invreq->payer_note)
+			print_payer_note(invreq->payer_note);
 		if (must_have(invreq, offer_id))
 			print_offer_id(invreq->offer_id);
 		if (must_have(invreq, amount))
@@ -545,16 +553,25 @@ int main(int argc, char *argv[])
 			print_features(invreq->features);
 		if (invreq->quantity)
 			print_quantity(*invreq->quantity);
+		/* Note: old format didn't include this, so we don't complain! */
+		if (invreq->payer_signature)
+			well_formed &= print_signature("invoice_request",
+						       "payer_signature",
+						       invreq->fields,
+						       invreq->payer_key,
+						       invreq->payer_signature);
 		if (invreq->recurrence_counter) {
 			print_recurrence_counter(invreq->recurrence_counter,
 						 invreq->recurrence_start);
-			if (must_have(invreq, recurrence_signature)) {
+			/* Old form included recurrence_signature */
+			if (invreq->recurrence_signature)
 				well_formed &= print_signature("invoice_request",
 							       "recurrence_signature",
 							       invreq->fields,
 							       invreq->payer_key,
 							       invreq->recurrence_signature);
-			}
+			else /* New form definitely should have this! */
+				must_have(invreq, payer_signature);
 		} else {
 			must_not_have(invreq, recurrence_start);
 			must_not_have(invreq, recurrence_signature);
@@ -618,6 +635,8 @@ int main(int argc, char *argv[])
 			print_payer_key(invoice->payer_key, invoice->payer_info);
 		if (must_have(invoice, timestamp))
 			print_timestamp(*invoice->timestamp);
+		if (invoice->payer_note)
+			print_payer_note(invoice->payer_note);
 		print_relative_expiry(invoice->timestamp,
 				      invoice->relative_expiry);
 		if (must_have(invoice, payment_hash))

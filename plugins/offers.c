@@ -533,6 +533,9 @@ static void json_add_b12_invoice(struct json_stream *js,
 		json_add_pubkey32(js, "payer_key", invoice->payer_key);
 	if (invoice->payer_info)
 		json_add_hex_talarr(js, "payer_info", invoice->payer_info);
+	if (invoice->payer_note)
+		json_add_stringn(js, "payer_note", invoice->payer_note,
+				 tal_bytelen(invoice->payer_note));
 
 	/* BOLT-offers #12:
 	 *   - MUST reject the invoice if `timestamp` is not present.
@@ -663,16 +666,36 @@ static void json_add_invoice_request(struct json_stream *js,
 	}
 	if (invreq->payer_info)
 		json_add_hex_talarr(js, "payer_info", invreq->payer_info);
+	if (invreq->payer_note)
+		json_add_stringn(js, "payer_note", invreq->payer_note,
+				 tal_bytelen(invreq->payer_note));
 
 	/* BOLT-offers #12:
-	 * - if the offer had a `recurrence`:
-	 *   - MUST fail the request if there is no `recurrence_counter` field.
-	 *   - MUST fail the request if there is no `recurrence_signature` field.
-	 *   - MUST fail the request if `recurrence_signature` is not correct.
+	 *  - MUST fail the request if there is no `payer_signature` field.
+	 *  - MUST fail the request if `payer_signature` is not correct.
 	 */
-	if (invreq->recurrence_signature) {
-		json_add_bip340sig(js, "recurrence_signature",
-				   invreq->recurrence_signature);
+	/* Older spec didn't have this, so we allow omission for now. */
+	if (invreq->payer_signature) {
+		json_add_bip340sig(js, "payer_signature",
+				   invreq->payer_signature);
+		if (invreq->payer_key
+		    && !bolt12_check_signature(invreq->fields,
+					       "invoice_request",
+					       "payer_signature",
+					       invreq->payer_key,
+					       invreq->payer_signature)) {
+			json_add_string(js, "warning_invoice_request_invalid_payer_signature",
+					"Bad payer_signature");
+			valid = false;
+		}
+	} else {
+		json_add_string(js, "warning_invoice_request_missing_payer_signature",
+				"Missing payer_signature");
+		if (!deprecated_apis)
+			valid = false;
+	}
+
+	if (deprecated_apis && invreq->recurrence_counter) {
 		if (invreq->payer_key
 		    && !bolt12_check_signature(invreq->fields,
 					       "invoice_request",
@@ -680,13 +703,9 @@ static void json_add_invoice_request(struct json_stream *js,
 					       invreq->payer_key,
 					       invreq->recurrence_signature)) {
 			json_add_string(js, "warning_invoice_request_invalid_recurrence_signature",
-					"Bad recurrence_signature");
+				"Bad recurrence_signature");
 			valid = false;
 		}
-	} else if (invreq->recurrence_counter) {
-		json_add_string(js, "warning_invoice_request_missing_recurrence_signature",
-				"invoice_request requires recurrence_signature");
-		valid = false;
 	}
 
 	json_add_bool(js, "valid", valid);

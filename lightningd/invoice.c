@@ -72,8 +72,22 @@ static void json_add_invoice(struct json_stream *response,
 		json_add_string(response, "description", inv->description);
 
 	json_add_u64(response, "expires_at", inv->expiry_time);
-	if (inv->local_offer_id)
+	if (inv->local_offer_id) {
+		char *fail;
+		struct tlv_invoice *tinv;
+
 		json_add_sha256(response, "local_offer_id", inv->local_offer_id);
+
+		/* Everyone loves seeing their own payer notes!
+		 * Well: they will.  Trust me. */
+		tinv = invoice_decode(tmpctx,
+				      inv->invstring, strlen(inv->invstring),
+				      NULL, NULL, &fail);
+		if (tinv && tinv->payer_note)
+			json_add_stringn(response, "payer_note",
+					 tinv->payer_note,
+					 tal_bytelen(tinv->payer_note));
+	}
 }
 
 static struct command_result *tell_waiter(struct command *cmd,
@@ -443,7 +457,7 @@ invoice_check_payment(const tal_t *ctx,
 			log_debug(ld->log, "Attept to pay %s with amount %s > %s",
 				  type_to_string(tmpctx, struct sha256,
 						 &details->rhash),
-				  type_to_string(tmpctx, struct amount_msat, details->msat),
+				  type_to_string(tmpctx, struct amount_msat, &msat),
 				  type_to_string(tmpctx, struct amount_msat, &twice));
 			/* BOLT #4:
 			 *
@@ -1263,7 +1277,8 @@ AUTODATA(json_command, &invoice_command);
 static void json_add_invoices(struct json_stream *response,
 			      struct wallet *wallet,
 			      const struct json_escape *label,
-			      const struct sha256 *payment_hash)
+			      const struct sha256 *payment_hash,
+			      const struct sha256 *local_offer_id)
 {
 	struct invoice_iterator it;
 	const struct invoice_details *details;
@@ -1293,6 +1308,13 @@ static void json_add_invoices(struct json_stream *response,
 		while (wallet_invoice_iterate(wallet, &it)) {
 			details = wallet_invoice_iterator_deref(response,
 								wallet, &it);
+			/* FIXME: db can filter this better! */
+			if (local_offer_id) {
+				if (!details->local_offer_id
+				    || !sha256_eq(local_offer_id,
+						  details->local_offer_id))
+					continue;
+			}
 			json_object_start(response, NULL);
 			json_add_invoice(response, details);
 			json_object_end(response);
@@ -1309,34 +1331,49 @@ static struct command_result *json_listinvoices(struct command *cmd,
 	struct json_stream *response;
 	struct wallet *wallet = cmd->ld->wallet;
 	const char *invstring;
-	struct sha256 *payment_hash;
+	struct sha256 *payment_hash, *offer_id;
 	char *fail;
-	struct bolt11 *b11;
 
 	if (!param(cmd, buffer, params,
 		   p_opt("label", param_label, &label),
 		   p_opt("invstring", param_string, &invstring),
 		   p_opt("payment_hash", param_sha256, &payment_hash),
+		   p_opt("offer_id", param_sha256, &offer_id),
 		   NULL))
 		return command_param_failed();
 
-	if ((label && invstring) || (label && payment_hash) ||
-	    (invstring && payment_hash)) {
+	/* Yeah, I wasn't sure about this style either.  It's curt though! */
+	if (!!label + !!invstring + !!payment_hash + !!offer_id > 1) {
 		return command_fail(cmd, JSONRPC2_INVALID_PARAMS,
 				    "Can only specify one of"
-				    " {label}, {invstring} or {payment_hash}");
+				    " {label}, {invstring}, {payment_hash}"
+				    " or {offer_id}");
 	}
 
 	/* Extract the payment_hash from the invoice. */
 	if (invstring != NULL) {
+		struct bolt11 *b11;
 		b11 = bolt11_decode(cmd, invstring, cmd->ld->our_features, NULL,
 				    NULL, &fail);
-		payment_hash = &b11->payment_hash;
+		if (b11)
+			payment_hash = &b11->payment_hash;
+		else {
+			struct tlv_invoice *b12
+				= invoice_decode(tmpctx, invstring,
+						 strlen(invstring),
+						 cmd->ld->our_features, NULL,
+						 &fail);
+			if (!b12 || !b12->payment_hash) {
+				return command_fail(cmd, JSONRPC2_INVALID_PARAMS,
+						    "Invalid invstring");
+			}
+			payment_hash = b12->payment_hash;
+		}
 	}
 
 	response = json_stream_success(cmd);
 	json_array_start(response, "invoices");
-	json_add_invoices(response, wallet, label, payment_hash);
+	json_add_invoices(response, wallet, label, payment_hash, offer_id);
 	json_array_end(response);
 	return command_success(cmd, response);
 }
@@ -1345,7 +1382,7 @@ static const struct json_command listinvoices_command = {
 	"listinvoices",
 	"payment",
 	json_listinvoices,
-	"Show invoice matching {label}, {invstring} or {payment_hash} (or all, if "
+	"Show invoice matching {label}, {invstring}, {payment_hash} or {offerid} (or all, if "
 	"no query parameter specified)"
 };
 AUTODATA(json_command, &listinvoices_command);

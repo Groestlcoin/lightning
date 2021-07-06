@@ -4,7 +4,7 @@ lightning-listinvoices -- Command for querying invoice status
 SYNOPSIS
 --------
 
-**listinvoices** \[*label*\] \[*invstring*\] \[*payment_hash*\]
+**listinvoices** \[*label*\] \[*invstring*\] \[*payment_hash*\] \[*offer_id*\]
 
 DESCRIPTION
 -----------
@@ -14,8 +14,8 @@ if it exists, or the status of all invoices if given no argument.
 
 A specific invoice can be queried by providing either the `label`
 provided when creating the invoice, the `invstring` string representing
-the invoice, or the `payment_hash` of the invoice. Only one of the
-query parameters can be used at once.
+the invoice, the `payment_hash` of the invoice, or the local `offer_id`
+this invoice was issued for. Only one of the query parameters can be used at once.
 
 RETURN VALUE
 ------------
@@ -30,6 +30,8 @@ On success, an object containing **invoices** is returned.  It is an array of ob
 - **amount_msat** (msat, optional): the amount required to pay this invoice
 - **bolt11** (string, optional): the BOLT11 string (always present unless *bolt12* is)
 - **bolt12** (string, optional): the BOLT12 string (always present unless *bolt11* is)
+- **local_offer_id** (hex, optional): the *id* of our offer which created this invoice (**experimental-offers** only). (always 64 characters)
+- **payer_note** (string, optional): the optional *payer_note* from invoice_request which created this invoice (**experimental-offers** only).
 
 If **status** is "paid":
   - **pay_index** (u64): Unique incrementing index for this payment
@@ -53,4 +55,4 @@ RESOURCES
 
 Main web site: <https://github.com/ElementsProject/lightning>
 
-[comment]: # ( SHA256STAMP:67ff5d9aa945301f23d6694304e4b657a37f0b3f80cc1c13c2ff23a55fe51d4b)
+[comment]: # ( SHA256STAMP:99dd5cb3f84e8201903e531b601a04dafde3f6eae3f582b538caea7fac20aad0)

@@ -3619,10 +3619,17 @@ def test_offer(node_factory, bitcoind):
         offer = only_one(l1.rpc.call('listoffers', [ret['offer_id']])['offers'])
 
         assert offer['bolt12'] == ret['bolt12']
+        assert offer['bolt12_unsigned'] == ret['bolt12_unsigned']
         assert offer['offer_id'] == ret['offer_id']
 
         output = subprocess.check_output([bolt12tool, 'decode',
                                           offer['bolt12']]).decode('ASCII')
+        if amount == 'any':
+            assert 'amount' not in output
+        else:
+            assert 'amount' in output
+        output = subprocess.check_output([bolt12tool, 'decode',
+                                          offer['bolt12_unsigned']]).decode('ASCII')
         if amount == 'any':
             assert 'amount' not in output
         else:
@@ -3781,7 +3788,8 @@ def test_fetchinvoice(node_factory, bitcoind):
                                    'description': 'simple test'})
 
     inv1 = l1.rpc.call('fetchinvoice', {'offer': offer1['bolt12']})
-    inv2 = l1.rpc.call('fetchinvoice', {'offer': offer1['bolt12']})
+    inv2 = l1.rpc.call('fetchinvoice', {'offer': offer1['bolt12_unsigned'],
+                                        'payer_note': 'Thanks for the fish!'})
     assert inv1 != inv2
     assert 'next_period' not in inv1
     assert 'next_period' not in inv2
@@ -3790,6 +3798,15 @@ def test_fetchinvoice(node_factory, bitcoind):
     assert only_one(l3.rpc.call('listoffers', [offer1['offer_id']])['offers'])['used'] is True
     l1.rpc.pay(inv2['invoice'])
     assert only_one(l3.rpc.call('listoffers', [offer1['offer_id']])['offers'])['used'] is True
+
+    # listinvoices will show these on l3
+    assert [x['local_offer_id'] for x in l3.rpc.listinvoices()['invoices']] == [offer1['offer_id'], offer1['offer_id']]
+
+    assert 'payer_note' not in only_one(l3.rpc.call('listinvoices', {'invstring': inv1['invoice']})['invoices'])
+    assert only_one(l3.rpc.call('listinvoices', {'invstring': inv2['invoice']})['invoices'])['payer_note'] == 'Thanks for the fish!'
+
+    # BTW, test listinvoices-by-offer_id:
+    assert len(l3.rpc.listinvoices(offer_id=offer1['offer_id'])['invoices']) == 2
 
     # We can also set the amount explicitly, to tip.
     inv1 = l1.rpc.call('fetchinvoice', {'offer': offer1['bolt12'], 'msatoshi': 3})
@@ -3878,11 +3895,20 @@ def test_fetchinvoice(node_factory, bitcoind):
                                  'recurrence_label': 'test recurrence'})
 
     # Check we can request invoice without a channel.
-    l4 = node_factory.get_node(options={'experimental-offers': None})
+    l4, l5 = node_factory.get_nodes(2, opts={'experimental-offers': None})
     l4.rpc.connect(l2.info['id'], 'localhost', l2.port)
-    ret = l4.rpc.call('fetchinvoice', {'offer': offer3['bolt12'],
-                                       'recurrence_counter': 0,
-                                       'recurrence_label': 'test nochannel'})
+    # ... even if we can't find ourselves.
+    l4.rpc.call('fetchinvoice', {'offer': offer3['bolt12'],
+                                 'recurrence_counter': 0,
+                                 'recurrence_label': 'test nochannel'})
+    # ... even if we know it from gossmap
+    wait_for(lambda: l4.rpc.listnodes(l3.info['id'])['nodes'] != [])
+    l4.rpc.connect(l3.info['id'], 'localhost', l3.port)
+    l4.rpc.call('fetchinvoice', {'offer': offer1['bolt12']})
+
+    # ... even if we are also in gossmap.
+    node_factory.join_nodes([l3, l5], wait_for_announce=True)
+    l4.rpc.call('fetchinvoice', {'offer': offer1['bolt12']})
 
     # Now, test amount in different currency!
     plugin = os.path.join(os.path.dirname(__file__), 'plugins/currencyUSDAUD5000.py')
@@ -3946,6 +3972,54 @@ def test_fetchinvoice(node_factory, bitcoind):
                                      'recurrence_label': 'test paywindow'})
 
 
+@pytest.mark.developer("Needs dev-allow-localhost for autoconnect, dev-force-features to avoid routing onionmsgs")
+def test_fetchinvoice_autoconnect(node_factory, bitcoind):
+    """We should autoconnect if we need to, to route."""
+
+    if EXPERIMENTAL_FEATURES:
+        # We have to force option_onion_messages off!
+        opts1 = {'dev-force-features': '-39'}
+    else:
+        opts1 = {}
+    l1, l2 = node_factory.line_graph(2, wait_for_announce=True,
+                                     opts=[opts1,
+                                           {'experimental-offers': None,
+                                            'dev-allow-localhost': None}])
+
+    l3 = node_factory.get_node(options={'experimental-offers': None})
+    l3.rpc.connect(l1.info['id'], 'localhost', l1.port)
+    wait_for(lambda: l3.rpc.listnodes(l2.info['id'])['nodes'] != [])
+
+    offer = l2.rpc.call('offer', {'amount': '2msat',
+                                  'description': 'simple test'})
+    l3.rpc.call('fetchinvoice', {'offer': offer['bolt12']})
+    assert l3.rpc.listpeers(l2.info['id'])['peers'] != []
+
+    # Similarly for send-invoice offer.
+    l3.rpc.disconnect(l2.info['id'])
+    offer = l2.rpc.call('offerout', {'amount': '2msat',
+                                     'description': 'simple test'})
+    # Ofc l2 can't actually pay it!
+    with pytest.raises(RpcError, match='pay attempt failed: "Ran out of routes to try'):
+        l3.rpc.call('sendinvoice', {'offer': offer['bolt12'], 'label': 'payme!'})
+
+    assert l3.rpc.listpeers(l2.info['id'])['peers'] != []
+
+    # But if we create a channel l3->l1->l2 (and balance!), l2 can!
+    node_factory.join_nodes([l3, l1], wait_for_announce=True)
+    # Make sure l2 knows about it
+    wait_for(lambda: l2.rpc.listnodes(l3.info['id'])['nodes'] != [])
+
+    l3.rpc.pay(l2.rpc.invoice(FUNDAMOUNT * 500, 'balancer', 'balancer')['bolt11'])
+    # Make sure l2 has capacity (can be still resolving!).
+    wait_for(lambda: only_one(only_one(l2.rpc.listpeers(l1.info['id'])['peers'])['channels'])['spendable_msat'] != Millisatoshi(0))
+
+    l3.rpc.disconnect(l2.info['id'])
+    l3.rpc.call('sendinvoice', {'offer': offer['bolt12'], 'label': 'payme for real!'})
+    # It will have autoconnected, to send invoice (since l1 says it doesn't do onion messages!)
+    assert l3.rpc.listpeers(l2.info['id'])['peers'] != []
+
+
 def test_pay_waitblockheight_timeout(node_factory, bitcoind):
     plugin = os.path.join(os.path.dirname(__file__), 'plugins', 'endlesswaitblockheight.py')
     l1, l2 = node_factory.line_graph(2, opts=[{}, {'plugin': plugin}])
@@ -3980,9 +4054,8 @@ def test_sendinvoice(node_factory, bitcoind):
     assert only_one(l1.rpc.call('listoffers', [offer['offer_id']])['offers'])['used'] is False
 
     # sendinvoice should work.
-    out = l2.rpc.call('sendinvoice', {'offer': offer['bolt12'],
+    out = l2.rpc.call('sendinvoice', {'offer': offer['bolt12_unsigned'],
                                       'label': 'test sendinvoice 1'})
-    print(out)
     assert out['label'] == 'test sendinvoice 1'
     assert out['description'] == 'simple test'
     assert 'bolt12' in out

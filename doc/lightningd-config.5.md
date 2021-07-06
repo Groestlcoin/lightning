@@ -484,6 +484,11 @@ corresponding functionality, which are in draft status as BOLT12.
 This usually requires **experimental-onion-messages** as well.  See
 lightning-offer(7) and lightning-fetchinvoice(7).
 
+ **fetchinvoice-noconnect**
+
+Specifying this prevents `fetchinvoice` and `sendinvoice` from
+trying to connect directly to the offering node as a last resort.
+
  **experimental-shutdown-wrong-funding**
 
 Specifying this allows the `wrong_funding` field in shutdown: if a
@@ -508,7 +513,7 @@ to gain our eternal gratitude!
 AUTHOR
 ------
 
-Rusty Russell &lt;<rusty@rustcorp.com.au>&gt; wrote this man page, and
+Rusty Russell <<rusty@rustcorp.com.au>> wrote this man page, and
 much of the configuration language, but many others did the hard work of
 actually implementing these options.
 
