@@ -187,12 +187,23 @@ static void estimatefees_callback(const char *buf, const jsmntok_t *toks,
 			bitcoin_plugin_error(call->bitcoind, buf, toks,
 					     "estimatefees",
 					     "missing '%s' field", feerate_name(f));
+		/* We still use the bcli plugin for min and max, even with
+		 * force_feerates */
+		if (f < tal_count(call->bitcoind->ld->force_feerates)) {
+			feerates[f] = call->bitcoind->ld->force_feerates[f];
+			continue;
+		}
 
 		/* FIXME: We could trawl recent blocks for median fee... */
 		if (!json_to_u32(buf, feeratetok, &feerates[f])) {
-			log_unusual(call->bitcoind->log,
-				    "Unable to estimate %s fees",
-				    feerate_name(f));
+			if (chainparams->testnet)
+				log_debug(call->bitcoind->log,
+					  "Unable to estimate %s fees",
+					  feerate_name(f));
+			else
+				log_unusual(call->bitcoind->log,
+					    "Unable to estimate %s fees",
+					    feerate_name(f));
 
 #if DEVELOPER
 			/* This is needed to test for failed feerate estimates
