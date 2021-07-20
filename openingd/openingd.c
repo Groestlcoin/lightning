@@ -510,6 +510,7 @@ static bool funder_finalize_channel_setup(struct state *state,
 					     &state->funding_txid,
 					     state->funding_txout,
 					     state->minimum_depth,
+					     NULL, 0, /* No channel lease */
 					     state->funding,
 					     local_msat,
 					     take(new_fee_states(NULL, LOCAL,
@@ -1000,6 +1001,7 @@ static u8 *fundee_channel(struct state *state, const u8 *open_channel_msg)
 					     &state->funding_txid,
 					     state->funding_txout,
 					     state->minimum_depth,
+					     NULL, 0, /* No channel lease */
 					     state->funding,
 					     state->push_msat,
 					     take(new_fee_states(NULL, REMOTE,
@@ -1154,7 +1156,6 @@ static u8 *handle_peer_in(struct state *state)
 	if (t == WIRE_OPEN_CHANNEL)
 		return fundee_channel(state, msg);
 
-#if DEVELOPER
 	/* Handle custommsgs */
 	enum peer_wire type = fromwire_peektype(msg);
 	if (type % 2 == 1 && !peer_wire_is_defined(type)) {
@@ -1164,7 +1165,6 @@ static u8 *handle_peer_in(struct state *state)
 		wire_sync_write(REQ_FD, take(towire_custommsg_in(NULL, msg)));
 		return NULL;
 	}
-#endif
 
 	/* Handles standard cases, and legal unknown ones. */
 	if (handle_peer_gossip_or_error(state->pps,
@@ -1229,6 +1229,7 @@ static void handle_dev_memleak(struct state *state, const u8 *msg)
 			take(towire_openingd_dev_memleak_reply(NULL,
 							      found_leak)));
 }
+#endif /* DEVELOPER */
 
 /* We were told to send a custommsg to the peer by `lightningd`. All the
  * verification is done on the side of `lightningd` so we should be good to
@@ -1240,7 +1241,6 @@ static void openingd_send_custommsg(struct state *state, const u8 *msg)
 		master_badmsg(WIRE_CUSTOMMSG_OUT, msg);
 	sync_crypto_write(state->pps, take(inner));
 }
-#endif /* DEVELOPER */
 
 /* Standard lightningd-fd-is-ready-to-read demux code.  Again, we could hang
  * here, but if we can't trust our parent, who can we trust? */
@@ -1302,13 +1302,9 @@ static u8 *handle_master_in(struct state *state)
 
 	/* Now handle common messages. */
 	switch ((enum common_wire)t) {
-#if DEVELOPER
 	case WIRE_CUSTOMMSG_OUT:
 		openingd_send_custommsg(state, msg);
 		return NULL;
-#else
-	case WIRE_CUSTOMMSG_OUT:
-#endif
 	/* We send these. */
 	case WIRE_CUSTOMMSG_IN:
 		break;

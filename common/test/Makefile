@@ -25,12 +25,17 @@ common/test/run-json:					\
 	common/amount.o					\
 	common/base32.o					\
 	common/bigsize.o				\
+	common/channel_id.o				\
 	common/json.o					\
 	common/json_stream.o				\
+	common/lease_rates.o				\
+	common/node_id.o				\
+	common/pseudorand.o				\
 	common/wireaddr.o				\
 	common/type_to_string.o				\
 	wire/fromwire.o					\
 	wire/onion$(EXP)_wiregen.o			\
+	wire/peer$(EXP)_wiregen.o			\
 	wire/towire.o
 
 common/test/run-route common/test/run-route-specific:	\
@@ -48,6 +53,22 @@ common/test/run-route common/test/run-route-specific:	\
 common/test/run-gossmap_local:				\
 	wire/fromwire.o					\
 	wire/peer$(EXP)_wiregen.o			\
+	wire/tlvstream.o				\
 	wire/towire.o
+
+common/test/run-bolt12_merkle:				\
+	common/amount.o					\
+	common/bigsize.o				\
+	common/bech32.o					\
+	common/bech32_util.o				\
+	common/bolt12.o					\
+	common/node_id.o				\
+	common/type_to_string.o				\
+	wire/bolt12$(EXP)_wiregen.o			\
+	wire/fromwire.o					\
+	wire/tlvstream.o				\
+	wire/peer$(EXP)_wiregen.o			\
+	wire/towire.o
+
 
 check-units: $(COMMON_TEST_PROGRAMS:%=unittest/%)

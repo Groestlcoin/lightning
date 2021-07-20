@@ -2,6 +2,7 @@
 #include <bitcoin/script.h>
 #include <ccan/crypto/hkdf_sha256/hkdf_sha256.h>
 #include <ccan/tal/str/str.h>
+#include <common/blockheight_states.h>
 #include <common/closing_fee.h>
 #include <common/fee_states.h>
 #include <common/json_command.h>
@@ -160,7 +161,11 @@ new_inflight(struct channel *channel,
 	     struct amount_sat our_funds,
 	     struct wally_psbt *psbt STEALS,
 	     struct bitcoin_tx *last_tx,
-	     const struct bitcoin_signature last_sig)
+	     const struct bitcoin_signature last_sig,
+	     const u32 lease_expiry,
+	     const secp256k1_ecdsa_signature *lease_commit_sig,
+	     const u32 lease_chan_max_msat, const u16 lease_chan_max_ppt,
+	     const u32 lease_blockheight_start)
 {
 	struct wally_psbt *last_tx_psbt_clone;
 	struct channel_inflight *inflight
@@ -184,6 +189,19 @@ new_inflight(struct channel *channel,
 	inflight->last_tx = bitcoin_tx_with_psbt(inflight, last_tx_psbt_clone);
 	inflight->last_sig = last_sig;
 	inflight->tx_broadcast = false;
+
+	/* Channel lease infos */
+	inflight->lease_blockheight_start = lease_blockheight_start;
+	inflight->lease_expiry = lease_expiry;
+	if (lease_commit_sig)
+		inflight->lease_commit_sig
+			= tal_dup(inflight, secp256k1_ecdsa_signature,
+				  lease_commit_sig);
+	else
+		inflight->lease_commit_sig = NULL;
+
+	inflight->lease_chan_max_msat = lease_chan_max_msat;
+	inflight->lease_chan_max_ppt = lease_chan_max_ppt;
 
 	list_add_tail(&channel->inflights, &inflight->list);
 	tal_add_destructor(inflight, destroy_inflight);
@@ -268,6 +286,8 @@ struct channel *new_unsaved_channel(struct peer *peer,
 	channel->option_anchor_outputs = true;
 	channel->future_per_commitment_point = NULL;
 
+	channel->lease_commit_sig = NULL;
+
 	/* No shachain yet */
 	channel->their_shachain.id = 0;
 	shachain_init(&channel->their_shachain.chain);
@@ -341,7 +361,12 @@ struct channel *new_channel(struct peer *peer, u64 dbid,
 			    enum side closer,
 			    enum state_change reason,
 			    /* NULL or stolen */
-			    const struct bitcoin_outpoint *shutdown_wrong_funding)
+			    const struct bitcoin_outpoint *shutdown_wrong_funding,
+			    const struct height_states *height_states TAKES,
+			    u32 lease_expiry,
+			    secp256k1_ecdsa_signature *lease_commit_sig STEALS,
+			    u32 lease_chan_max_msat,
+			    u16 lease_chan_max_ppt)
 {
 	struct channel *channel = tal(peer->ld, struct channel);
 
@@ -429,6 +454,12 @@ struct channel *new_channel(struct peer *peer, u64 dbid,
 	channel->static_remotekey_start[REMOTE] = remote_static_remotekey_start;
 	channel->option_anchor_outputs = option_anchor_outputs;
 	channel->forgets = tal_arr(channel, struct command *, 0);
+
+	channel->lease_expiry = lease_expiry;
+	channel->lease_commit_sig = tal_steal(channel, lease_commit_sig);
+	channel->lease_chan_max_msat = lease_chan_max_msat;
+	channel->lease_chan_max_ppt = lease_chan_max_ppt;
+	channel->blockheight_states = dup_height_states(channel, height_states);
 
 	list_add_tail(&peer->channels, &channel->list);
 	channel->rr_number = peer->ld->rr_counter++;

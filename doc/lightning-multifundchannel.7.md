@@ -51,6 +51,12 @@ Readiness is indicated by **listpeers** reporting a *state* of
   on close. Only valid if both peers have negotiated
   `option_upfront_shutdown_script`.  Returns `close_to` set to
   closing script iff is negotiated.
+* *request_amt* is the amount of liquidity you'd like to lease from peer.
+  If peer supports `option_will_fund`, indicates to them to include this
+  much liquidity into the channel. Must also pass in *compact_lease*.
+* *compact_lease* is a compact represenation of the peer's expected
+  channel lease terms. If the peer's terms don't match this set, we will
+  fail to open the channel to this destination.
 
 There must be at least one entry in *destinations*;
 it cannot be an empty array.

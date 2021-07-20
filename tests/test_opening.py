@@ -16,6 +16,42 @@ def find_next_feerate(node, peer):
 
 
 @unittest.skipIf(TEST_NETWORK != 'regtest', 'elementsd doesnt yet support PSBT features we need')
+@pytest.mark.openchannel('v2')
+@pytest.mark.developer("requres 'dev-queryrates'")
+def test_queryrates(node_factory, bitcoind):
+    l1, l2 = node_factory.get_nodes(2)
+
+    amount = 10 ** 6
+
+    l1.fundwallet(amount * 10)
+    l2.fundwallet(amount * 10)
+
+    l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
+    with pytest.raises(RpcError, match=r'not advertising liquidity'):
+        l1.rpc.dev_queryrates(l2.info['id'], amount, amount * 10)
+
+    l2.rpc.call('funderupdate', {'policy': 'match',
+                                 'policy_mod': 100,
+                                 'per_channel_max': '1btc',
+                                 'fuzz_percent': 0,
+                                 'lease_fee_base_msat': '2sat',
+                                 'funding_weight': 1000,
+                                 'lease_fee_basis': 140,
+                                 'channel_fee_max_base_msat': '3sat',
+                                 'channel_fee_max_proportional_thousandths': 101})
+
+    l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
+    result = l1.rpc.dev_queryrates(l2.info['id'], amount, amount)
+    assert result['our_funding_msat'] == Millisatoshi(amount * 1000)
+    assert result['their_funding_msat'] == Millisatoshi(amount * 1000)
+    assert result['funding_weight'] == 1000
+    assert result['lease_fee_base_msat'] == Millisatoshi(2000)
+    assert result['lease_fee_basis'] == 140
+    assert result['channel_fee_max_base_msat'] == Millisatoshi(3000)
+    assert result['channel_fee_max_proportional_thousandths'] == 101
+
+
+@unittest.skipIf(TEST_NETWORK != 'regtest', 'elementsd doesnt yet support PSBT features we need')
 @pytest.mark.developer("uses dev-disconnect")
 @pytest.mark.openchannel('v1')  # Mixed v1 + v2, v2 manually turned on
 def test_multifunding_v2_best_effort(node_factory, bitcoind):
@@ -201,7 +237,7 @@ def test_v2_open_sigs_restart_while_dead(node_factory, bitcoind):
 
 @unittest.skipIf(TEST_NETWORK != 'regtest', 'elementsd doesnt yet support PSBT features we need')
 @pytest.mark.openchannel('v2')
-def test_v2_rbf(node_factory, bitcoind, chainparams):
+def test_v2_rbf_single(node_factory, bitcoind, chainparams):
     l1, l2 = node_factory.get_nodes(2, opts={'wumbo': None})
 
     l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
@@ -227,8 +263,7 @@ def test_v2_rbf(node_factory, bitcoind, chainparams):
     info_1 = only_one(only_one(l1.rpc.listpeers(l2.info['id'])['peers'])['channels'])
     assert info_1['initial_feerate'] == info_1['last_feerate']
     rate = int(info_1['last_feerate'][:-5])
-    assert int(info_1['next_feerate'][:-5]) == rate + rate // 4
-    assert info_1['next_fee_step'] == 1
+    assert int(info_1['next_feerate'][:-5]) == rate * 65 // 64
 
     # Initiate an RBF
     startweight = 42 + 172  # base weight, funding output
@@ -249,10 +284,35 @@ def test_v2_rbf(node_factory, bitcoind, chainparams):
     assert info_1['next_feerate'] == info_2['last_feerate']
 
     rate = int(info_2['last_feerate'][:-5])
-    assert int(info_2['next_feerate'][:-5]) == rate + rate // 4
-    assert info_2['next_fee_step'] == 2
+    assert int(info_2['next_feerate'][:-5]) == rate * 65 // 64
 
     # Sign our inputs, and continue
+    signed_psbt = l1.rpc.signpsbt(update['psbt'])['signed_psbt']
+
+    # Fails because we didn't put enough feerate in.
+    with pytest.raises(RpcError, match=r'insufficient fee'):
+        l1.rpc.openchannel_signed(chan_id, signed_psbt)
+
+    # Do it again, with a higher feerate
+    info_2 = only_one(only_one(l1.rpc.listpeers(l2.info['id'])['peers'])['channels'])
+    assert info_1['initial_feerate'] == info_2['initial_feerate']
+    assert info_1['next_feerate'] == info_2['last_feerate']
+    rate = int(info_2['last_feerate'][:-5])
+    assert int(info_2['next_feerate'][:-5]) == rate * 65 // 64
+
+    # We 4x the feerate to beat the min-relay fee
+    next_rate = '{}perkw'.format(rate * 65 // 64 * 4)
+    # Gotta unreserve the psbt and re-reserve with higher feerate
+    l1.rpc.unreserveinputs(initpsbt['psbt'])
+    initpsbt = l1.rpc.utxopsbt(chan_amount, next_rate, startweight,
+                               prev_utxos, reservedok=True,
+                               min_witness_weight=110,
+                               excess_as_change=True)
+    # Do the bump+sign
+    bump = l1.rpc.openchannel_bump(chan_id, chan_amount, initpsbt['psbt'],
+                                   funding_feerate=next_rate)
+    update = l1.rpc.openchannel_update(chan_id, bump['psbt'])
+    assert update['commitments_secured']
     signed_psbt = l1.rpc.signpsbt(update['psbt'])['signed_psbt']
     l1.rpc.openchannel_signed(chan_id, signed_psbt)
 
@@ -265,7 +325,6 @@ def test_v2_rbf(node_factory, bitcoind, chainparams):
     assert 'initial_feerate' not in info_1
     assert 'last_feerate' not in info_1
     assert 'next_feerate' not in info_1
-    assert 'next_fee_step' not in info_1
 
     # Shut l2 down, force close the channel.
     l2.stop()
@@ -304,7 +363,9 @@ def test_v2_rbf_multi(node_factory, bitcoind, chainparams):
     with pytest.raises(RpcError):
         l1.rpc.openchannel_abort(chan_id)
 
-    next_feerate = find_next_feerate(l1, l2)
+    rate = int(find_next_feerate(l1, l2)[:-5])
+    # We 4x the feerate to beat the min-relay fee
+    next_feerate = '{}perkw'.format(rate * 4)
 
     # Initiate an RBF
     startweight = 42 + 172  # base weight, funding output
@@ -314,15 +375,19 @@ def test_v2_rbf_multi(node_factory, bitcoind, chainparams):
                                excess_as_change=True)
 
     # Do the bump
-    bump = l1.rpc.openchannel_bump(chan_id, chan_amount, initpsbt['psbt'])
+    bump = l1.rpc.openchannel_bump(chan_id, chan_amount,
+                                   initpsbt['psbt'],
+                                   funding_feerate=next_feerate)
 
     # Abort this open attempt! We will re-try
     aborted = l1.rpc.openchannel_abort(chan_id)
     assert not aborted['channel_canceled']
 
-    # Do the bump, again
+    # Do the bump, again, same feerate
     l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
-    bump = l1.rpc.openchannel_bump(chan_id, chan_amount, initpsbt['psbt'])
+    bump = l1.rpc.openchannel_bump(chan_id, chan_amount,
+                                   initpsbt['psbt'],
+                                   funding_feerate=next_feerate)
 
     update = l1.rpc.openchannel_update(chan_id, bump['psbt'])
     assert update['commitments_secured']
@@ -331,9 +396,11 @@ def test_v2_rbf_multi(node_factory, bitcoind, chainparams):
     signed_psbt = l1.rpc.signpsbt(update['psbt'])['signed_psbt']
     l1.rpc.openchannel_signed(chan_id, signed_psbt)
 
-    next_feerate = find_next_feerate(l1, l2)
+    # We 2x the feerate to beat the min-relay fee
+    rate = int(find_next_feerate(l1, l2)[:-5])
+    next_feerate = '{}perkw'.format(rate * 2)
 
-    # Initiate an RBF, double the channel amount this time
+    # Initiate another RBF, double the channel amount this time
     startweight = 42 + 172  # base weight, funding output
     initpsbt = l1.rpc.utxopsbt(chan_amount * 2, next_feerate, startweight,
                                prev_utxos, reservedok=True,
@@ -341,7 +408,9 @@ def test_v2_rbf_multi(node_factory, bitcoind, chainparams):
                                excess_as_change=True)
 
     # Do the bump
-    bump = l1.rpc.openchannel_bump(chan_id, chan_amount * 2, initpsbt['psbt'])
+    bump = l1.rpc.openchannel_bump(chan_id, chan_amount * 2,
+                                   initpsbt['psbt'],
+                                   funding_feerate=next_feerate)
 
     update = l1.rpc.openchannel_update(chan_id, bump['psbt'])
     assert update['commitments_secured']
@@ -724,14 +793,18 @@ def test_rbf_fails_to_broadcast(node_factory, bitcoind, chainparams):
 
     def run_retry():
         startweight = 42 + 173
-        next_feerate = find_next_feerate(l1, l2)
+        rate = int(find_next_feerate(l1, l2)[:-5])
+        # We 2x the feerate to beat the min-relay fee
+        next_feerate = '{}perkw'.format(rate * 2)
         initpsbt = l1.rpc.utxopsbt(chan_amount, next_feerate, startweight,
                                    prev_utxos, reservedok=True,
                                    min_witness_weight=110,
                                    excess_as_change=True)
 
         l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
-        bump = l1.rpc.openchannel_bump(chan_id, chan_amount, initpsbt['psbt'])
+        bump = l1.rpc.openchannel_bump(chan_id, chan_amount,
+                                       initpsbt['psbt'],
+                                       funding_feerate=next_feerate)
         # We should be able to call this with while an open is progress
         # but not yet committed
         l1.rpc.dev_sign_last_tx(l2.info['id'])
@@ -741,37 +814,19 @@ def test_rbf_fails_to_broadcast(node_factory, bitcoind, chainparams):
         return l1.rpc.signpsbt(update['psbt'])['signed_psbt']
 
     signed_psbt = run_retry()
-    with pytest.raises(RpcError, match=r'insufficient fee, rejecting replacement'):
-        l1.rpc.openchannel_signed(chan_id, signed_psbt)
+    l1.rpc.openchannel_signed(chan_id, signed_psbt)
     inflights = only_one(only_one(l1.rpc.listpeers()['peers'])['channels'])['inflight']
-    assert inflights[-1]['funding_txid'] not in bitcoind.rpc.getrawmempool()
+    assert inflights[-1]['funding_txid'] in bitcoind.rpc.getrawmempool()
 
-    # If we restart and listpeers, it will crash
+    # Restart and listpeers, used to crash
     l1.restart()
-
     l1.rpc.listpeers()
 
-    # We've restarted. Let's RBF until we successfully get a
-    # new funding transaction for this channel
-    # do it again
-    signed_psbt = run_retry()
-    with pytest.raises(RpcError, match=r'insufficient fee, rejecting replacement'):
-        l1.rpc.openchannel_signed(chan_id, signed_psbt)
-    inflights = only_one(only_one(l1.rpc.listpeers()['peers'])['channels'])['inflight']
-    assert inflights[-1]['funding_txid'] not in bitcoind.rpc.getrawmempool()
-
-    # and again
-    signed_psbt = run_retry()
-    with pytest.raises(RpcError, match=r'insufficient fee, rejecting replacement'):
-        l1.rpc.openchannel_signed(chan_id, signed_psbt)
-    inflights = only_one(only_one(l1.rpc.listpeers()['peers'])['channels'])['inflight']
-    assert inflights[-1]['funding_txid'] not in bitcoind.rpc.getrawmempool()
-
-    # now we should be ok
+    # We've restarted. Let's RBF
     signed_psbt = run_retry()
     l1.rpc.openchannel_signed(chan_id, signed_psbt)
     inflights = only_one(only_one(l1.rpc.listpeers()['peers'])['channels'])['inflight']
-    assert len(inflights) == 5
+    assert len(inflights) == 3
     assert inflights[-1]['funding_txid'] in bitcoind.rpc.getrawmempool()
 
     l1.restart()
@@ -896,7 +951,9 @@ def test_rbf_non_last_mined(node_factory, bitcoind, chainparams):
 
     def run_retry():
         startweight = 42 + 173
-        next_feerate = find_next_feerate(l1, l2)
+        rate = int(find_next_feerate(l1, l2)[:-5])
+        # We 2x the feerate to beat the min-relay fee
+        next_feerate = '{}perkw'.format(rate * 2)
         initpsbt = l1.rpc.utxopsbt(chan_amount, next_feerate, startweight,
                                    prev_utxos, reservedok=True,
                                    min_witness_weight=110,
@@ -979,7 +1036,7 @@ def test_funder_options(node_factory, bitcoind):
     assert funder_opts['per_channel_min'] == '10000000msat'
     assert funder_opts['per_channel_max'] == '4294967295000msat'
     assert funder_opts['reserve_tank'] == '0msat'
-    assert funder_opts['fuzz_percent'] == 5
+    assert funder_opts['fuzz_percent'] == 0
     assert funder_opts['fund_probability'] == 100
 
     # l2 funds a chanenl with us. We don't contribute

@@ -311,7 +311,7 @@ static void json_add_offer(struct json_stream *js, const struct tlv_offer *offer
 	/* BOLT-offers #12:
 	 * A reader of an offer:
 	 *...
-	 *  - if `node_id`, `description` or `signature` is not set:
+	 *  - if `node_id` or `description` is not set:
 	 *    - MUST NOT respond to the offer.
 	 */
 	if (offer->description)
@@ -368,9 +368,14 @@ static void json_add_offer(struct json_stream *js, const struct tlv_offer *offer
 		json_object_end(js);
 	}
 
-	/* offer_decode fails if node_id or signature not set */
-	json_add_pubkey32(js, "node_id", offer->node_id);
-	json_add_bip340sig(js, "signature", offer->signature);
+	if (offer->node_id)
+		json_add_pubkey32(js, "node_id", offer->node_id);
+	else
+		valid = false;
+
+	/* If it's present, offer_decode checked it was valid */
+	if (offer->signature)
+		json_add_bip340sig(js, "signature", offer->signature);
 
 	json_add_bool(js, "valid", valid);
 }
@@ -674,10 +679,7 @@ static void json_add_invoice_request(struct json_stream *js,
 	 *  - MUST fail the request if there is no `payer_signature` field.
 	 *  - MUST fail the request if `payer_signature` is not correct.
 	 */
-	/* Older spec didn't have this, so we allow omission for now. */
 	if (invreq->payer_signature) {
-		json_add_bip340sig(js, "payer_signature",
-				   invreq->payer_signature);
 		if (invreq->payer_key
 		    && !bolt12_check_signature(invreq->fields,
 					       "invoice_request",
@@ -691,21 +693,7 @@ static void json_add_invoice_request(struct json_stream *js,
 	} else {
 		json_add_string(js, "warning_invoice_request_missing_payer_signature",
 				"Missing payer_signature");
-		if (!deprecated_apis)
-			valid = false;
-	}
-
-	if (deprecated_apis && invreq->recurrence_counter) {
-		if (invreq->payer_key
-		    && !bolt12_check_signature(invreq->fields,
-					       "invoice_request",
-					       "recurrence_signature",
-					       invreq->payer_key,
-					       invreq->recurrence_signature)) {
-			json_add_string(js, "warning_invoice_request_invalid_recurrence_signature",
-				"Bad recurrence_signature");
-			valid = false;
-		}
+		valid = false;
 	}
 
 	json_add_bool(js, "valid", valid);

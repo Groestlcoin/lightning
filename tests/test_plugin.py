@@ -21,6 +21,7 @@ import random
 import re
 import signal
 import sqlite3
+import stat
 import subprocess
 import time
 import unittest
@@ -1001,13 +1002,14 @@ def test_htlc_accepted_hook_fail(node_factory):
     ], wait_for_announce=True)
 
     # This must fail
-    phash = l2.rpc.invoice(1000, "lbl", "desc")['payment_hash']
+    inv = l2.rpc.invoice(1000, "lbl", "desc")
+    phash = inv['payment_hash']
     route = l1.rpc.getroute(l2.info['id'], 1000, 1)['route']
 
     # Here shouldn't use `pay` command because l2 rejects with WIRE_TEMPORARY_NODE_FAILURE,
     # then it will be excluded when l1 try another pay attempt.
     # Note if the destination is excluded, the route result is undefined.
-    l1.rpc.sendpay(route, phash)
+    l1.rpc.sendpay(route, phash, payment_secret=inv['payment_secret'])
     with pytest.raises(RpcError) as excinfo:
         l1.rpc.waitsendpay(phash)
     assert excinfo.value.error['data']['failcode'] == 0x2002
@@ -1231,22 +1233,24 @@ def test_forward_event_notification(node_factory, bitcoind, executor):
 
     wait_for(lambda: len(l1.rpc.listchannels()['channels']) == 8)
 
-    payment_hash13 = l3.rpc.invoice(amount, "first", "desc")['payment_hash']
+    inv = l3.rpc.invoice(amount, "first", "desc")
+    payment_hash13 = inv['payment_hash']
     route = l1.rpc.getroute(l3.info['id'], amount, 1)['route']
 
     # status: offered -> settled
-    l1.rpc.sendpay(route, payment_hash13)
+    l1.rpc.sendpay(route, payment_hash13, payment_secret=inv['payment_secret'])
     l1.rpc.waitsendpay(payment_hash13)
 
     # status: offered -> failed
     route = l1.rpc.getroute(l4.info['id'], amount, 1)['route']
     payment_hash14 = "f" * 64
     with pytest.raises(RpcError):
-        l1.rpc.sendpay(route, payment_hash14)
+        l1.rpc.sendpay(route, payment_hash14, payment_secret="f" * 64)
         l1.rpc.waitsendpay(payment_hash14)
 
     # status: offered -> local_failed
-    payment_hash15 = l5.rpc.invoice(amount, 'onchain_timeout', 'desc')['payment_hash']
+    inv = l5.rpc.invoice(amount, 'onchain_timeout', 'desc')
+    payment_hash15 = inv['payment_hash']
     fee = amount * 10 // 1000000 + 1
     c12 = l1.get_channel_scid(l2)
     c25 = l2.get_channel_scid(l5)
@@ -1259,7 +1263,7 @@ def test_forward_event_notification(node_factory, bitcoind, executor):
               'delay': 5,
               'channel': c25}]
 
-    executor.submit(l1.rpc.sendpay, route, payment_hash15)
+    executor.submit(l1.rpc.sendpay, route, payment_hash15, payment_secret=inv['payment_secret'])
 
     l5.daemon.wait_for_log('permfail')
     l5.wait_for_channel_onchain(l2.info['id'])
@@ -1320,16 +1324,18 @@ def test_sendpay_notifications(node_factory, bitcoind):
     l1, l2, l3 = node_factory.line_graph(3, opts=opts, wait_for_announce=True)
     chanid23 = l2.get_channel_scid(l3)
 
-    payment_hash1 = l3.rpc.invoice(amount, "first", "desc")['payment_hash']
-    payment_hash2 = l3.rpc.invoice(amount, "second", "desc")['payment_hash']
+    inv1 = l3.rpc.invoice(amount, "first", "desc")
+    payment_hash1 = inv1['payment_hash']
+    inv2 = l3.rpc.invoice(amount, "second", "desc")
+    payment_hash2 = inv2['payment_hash']
     route = l1.rpc.getroute(l3.info['id'], amount, 1)['route']
 
-    l1.rpc.sendpay(route, payment_hash1)
+    l1.rpc.sendpay(route, payment_hash1, payment_secret=inv1['payment_secret'])
     response1 = l1.rpc.waitsendpay(payment_hash1)
 
     l2.rpc.close(chanid23, 1)
 
-    l1.rpc.sendpay(route, payment_hash2)
+    l1.rpc.sendpay(route, payment_hash2, payment_secret=inv2['payment_secret'])
     with pytest.raises(RpcError) as err:
         l1.rpc.waitsendpay(payment_hash2)
 
@@ -1349,16 +1355,18 @@ def test_sendpay_notifications_nowaiter(node_factory):
     chanid23 = l2.get_channel_scid(l3)
     amount = 10**8
 
-    payment_hash1 = l3.rpc.invoice(amount, "first", "desc")['payment_hash']
-    payment_hash2 = l3.rpc.invoice(amount, "second", "desc")['payment_hash']
+    inv1 = l3.rpc.invoice(amount, "first", "desc")
+    payment_hash1 = inv1['payment_hash']
+    inv2 = l3.rpc.invoice(amount, "second", "desc")
+    payment_hash2 = inv2['payment_hash']
     route = l1.rpc.getroute(l3.info['id'], amount, 1)['route']
 
-    l1.rpc.sendpay(route, payment_hash1)
+    l1.rpc.sendpay(route, payment_hash1, payment_secret=inv1['payment_secret'])
     l1.daemon.wait_for_log(r'Received a sendpay_success')
 
     l2.rpc.close(chanid23, 1)
 
-    l1.rpc.sendpay(route, payment_hash2)
+    l1.rpc.sendpay(route, payment_hash2, payment_secret=inv2['payment_secret'])
     l1.daemon.wait_for_log(r'Received a sendpay_failure')
 
     results = l1.rpc.call('listsendpays_plugin')
@@ -1980,36 +1988,40 @@ def test_coin_movement_notices(node_factory, bitcoind, chainparams):
     wait_for(lambda: len(l1.rpc.listchannels()['channels']) == 4)
     amount = 10**8
 
-    payment_hash13 = l3.rpc.invoice(amount, "first", "desc")['payment_hash']
+    inv = l3.rpc.invoice(amount, "first", "desc")
+    payment_hash13 = inv['payment_hash']
     route = l1.rpc.getroute(l3.info['id'], amount, 1)['route']
 
     # status: offered -> settled
-    l1.rpc.sendpay(route, payment_hash13)
+    l1.rpc.sendpay(route, payment_hash13, payment_secret=inv['payment_secret'])
     l1.rpc.waitsendpay(payment_hash13)
 
     # status: offered -> failed
     route = l1.rpc.getroute(l3.info['id'], amount, 1)['route']
     payment_hash13 = "f" * 64
     with pytest.raises(RpcError):
-        l1.rpc.sendpay(route, payment_hash13)
+        l1.rpc.sendpay(route, payment_hash13, payment_secret=inv['payment_secret'])
         l1.rpc.waitsendpay(payment_hash13)
 
     # go the other direction
-    payment_hash31 = l1.rpc.invoice(amount // 2, "first", "desc")['payment_hash']
+    inv = l1.rpc.invoice(amount // 2, "first", "desc")
+    payment_hash31 = inv['payment_hash']
     route = l3.rpc.getroute(l1.info['id'], amount // 2, 1)['route']
-    l3.rpc.sendpay(route, payment_hash31)
+    l3.rpc.sendpay(route, payment_hash31, payment_secret=inv['payment_secret'])
     l3.rpc.waitsendpay(payment_hash31)
 
     # receive a payment (endpoint)
-    payment_hash12 = l2.rpc.invoice(amount, "first", "desc")['payment_hash']
+    inv = l2.rpc.invoice(amount, "first", "desc")
+    payment_hash12 = inv['payment_hash']
     route = l1.rpc.getroute(l2.info['id'], amount, 1)['route']
-    l1.rpc.sendpay(route, payment_hash12)
+    l1.rpc.sendpay(route, payment_hash12, payment_secret=inv['payment_secret'])
     l1.rpc.waitsendpay(payment_hash12)
 
     # send a payment (originator)
-    payment_hash21 = l1.rpc.invoice(amount // 2, "second", "desc")['payment_hash']
+    inv = l1.rpc.invoice(amount // 2, "second", "desc")
+    payment_hash21 = inv['payment_hash']
     route = l2.rpc.getroute(l1.info['id'], amount // 2, 1)['route']
-    l2.rpc.sendpay(route, payment_hash21)
+    l2.rpc.sendpay(route, payment_hash21, payment_secret=inv['payment_secret'])
     l2.rpc.waitsendpay(payment_hash21)
 
     # restart to test index
@@ -2477,3 +2489,51 @@ def test_custom_notification_topics(node_factory):
     # The plugin just dist what previously was a fatal mistake (emit
     # an unknown notification), make sure we didn't kill it.
     assert 'custom_notifications.py' in [p['name'] for p in l1.rpc.listconfigs()['plugins']]
+
+
+def test_restart_on_update(node_factory):
+    """Tests if plugin rescan restarts modified plugins
+    """
+    # we need to write plugin content dynamically
+    content = """#!/usr/bin/env python3
+from pyln.client import Plugin
+import time
+plugin = Plugin()
+@plugin.init()
+def init(options, configuration, plugin):
+    plugin.log("test_restart_on_update %s")
+plugin.run()
+    """
+
+    # get a node that is not started so we can put a plugin in its lightning_dir
+    n = node_factory.get_node(start=False)
+    lndir = n.daemon.lightning_dir
+
+    # write hello world plugin to lndir/plugins
+    os.makedirs(os.path.join(lndir, 'plugins'), exist_ok=True)
+    path = os.path.join(lndir, 'plugins', 'test_restart_on_update.py')
+    file = open(path, 'w+')
+    file.write(content % "1")
+    file.close()
+    os.chmod(path, os.stat(path).st_mode | stat.S_IEXEC)
+
+    # now fire up the node and wait for the plugin to print hello
+    n.daemon.start()
+    n.daemon.logsearch_start = 0
+    n.daemon.wait_for_log(r"test_restart_on_update 1")
+
+    # a rescan should not yet reload the plugin on the same file
+    n.rpc.plugin_rescan()
+    assert not n.daemon.is_in_log(r"Plugin changed, needs restart.")
+
+    # modify the file
+    file = open(path, 'w+')
+    file.write(content % "2")
+    file.close()
+    os.chmod(path, os.stat(path).st_mode | stat.S_IEXEC)
+
+    # rescan and check
+    n.rpc.plugin_rescan()
+    n.daemon.wait_for_log(r"Plugin changed, needs restart.")
+    n.daemon.wait_for_log(r"test_restart_on_update 2")
+    n.stop()

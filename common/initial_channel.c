@@ -6,11 +6,13 @@
 #include <ccan/array_size/array_size.h>
 #include <ccan/cast/cast.h>
 #include <ccan/tal/str/str.h>
+#include <common/blockheight_states.h>
 #include <common/features.h>
 #include <common/fee_states.h>
 #include <common/initial_channel.h>
 #include <common/initial_commit_tx.h>
 #include <common/keyset.h>
+#include <common/lease_rates.h>
 #include <common/type_to_string.h>
 #include <inttypes.h>
 #include <wire/peer_wire.h>
@@ -20,6 +22,8 @@ struct channel *new_initial_channel(const tal_t *ctx,
 				    const struct bitcoin_txid *funding_txid,
 				    unsigned int funding_txout,
 				    u32 minimum_depth,
+				    const struct height_states *height_states TAKES,
+				    u32 lease_expiry,
 				    struct amount_sat funding,
 				    struct amount_msat local_msatoshi,
 				    const struct fee_states *fee_states TAKES,
@@ -41,6 +45,7 @@ struct channel *new_initial_channel(const tal_t *ctx,
 	channel->funding_txout = funding_txout;
 	channel->funding = funding;
 	channel->minimum_depth = minimum_depth;
+	channel->lease_expiry = lease_expiry;
 	if (!amount_sat_sub_msat(&remote_msatoshi,
 				 channel->funding, local_msatoshi))
 		return tal_free(channel);
@@ -54,6 +59,13 @@ struct channel *new_initial_channel(const tal_t *ctx,
 
 	/* takes() if necessary */
 	channel->fee_states = dup_fee_states(channel, fee_states);
+
+	/* takes() if necessary */
+	if (!height_states)
+		channel->blockheight_states = NULL;
+	else
+		channel->blockheight_states
+			= dup_height_states(channel, height_states);
 
 	channel->view[LOCAL].owed[LOCAL]
 		= channel->view[REMOTE].owed[LOCAL]
@@ -87,6 +99,7 @@ struct bitcoin_tx *initial_channel_tx(const tal_t *ctx,
 {
 	struct keyset keyset;
 	struct bitcoin_tx *init_tx;
+	u32 csv_lock;
 
 	/* This assumes no HTLCs! */
 	assert(!channel->htlcs);
@@ -99,6 +112,16 @@ struct bitcoin_tx *initial_channel_tx(const tal_t *ctx,
 		*err_reason = "Cannot derive keyset";
 		return NULL;
 	}
+
+	/* Figure out the csv_lock (if there's a lease) */
+	if (channel->lease_expiry == 0)
+		csv_lock = 1;
+	else
+		/* For the initial commitment, starts max lease */
+		csv_lock = channel->lease_expiry
+			- get_blockheight(channel->blockheight_states,
+					  channel->opener,
+					  side);
 
 	*wscript = bitcoin_redeem_2of2(ctx,
 				       &channel->funding_pubkey[side],
@@ -119,7 +142,7 @@ struct bitcoin_tx *initial_channel_tx(const tal_t *ctx,
 				    channel->config[!side].channel_reserve,
 				    0 ^ channel->commitment_number_obscurer,
 				    direct_outputs,
-				    side,
+				    side, csv_lock,
 				    channel->option_anchor_outputs,
 				    err_reason);
 
@@ -136,6 +159,12 @@ struct bitcoin_tx *initial_channel_tx(const tal_t *ctx,
 u32 channel_feerate(const struct channel *channel, enum side side)
 {
 	return get_feerate(channel->fee_states, channel->opener, side);
+}
+
+u32 channel_blockheight(const struct channel *channel, enum side side)
+{
+	return get_blockheight(channel->blockheight_states,
+			       channel->opener, side);
 }
 
 #if EXPERIMENTAL_FEATURES

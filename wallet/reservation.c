@@ -287,7 +287,7 @@ static struct wally_psbt *psbt_using_utxos(const tal_t *ctx,
 		 */
 		if (utxos[i]->close_info
 		    && utxos[i]->close_info->option_anchor_outputs)
-			this_nsequence = 1;
+			this_nsequence = utxos[i]->close_info->csv;
 		else
 			this_nsequence = nsequence;
 
@@ -369,7 +369,7 @@ static struct command_result *finish_psbt(struct command *cmd,
 		u8 *b32script;
 
 		/* Checks for dust, returns 0sat if below dust */
-		change = change_amount(excess, feerate_per_kw);
+		change = change_amount(excess, feerate_per_kw, weight);
 		if (!amount_sat_greater(change, AMOUNT_SAT(0))) {
 			excess_as_change = false;
 			goto fee_calc;
@@ -682,6 +682,15 @@ static struct command_result *json_utxopsbt(struct command *cmd,
 							   struct bitcoin_txid,
 							   &utxo->txid),
 					    utxo->outnum);
+		if (utxo_is_csv_locked(utxo, current_height))
+			return command_fail(cmd, JSONRPC2_INVALID_PARAMS,
+					    "UTXO %s:%u is csv locked (%u)",
+					    type_to_string(tmpctx,
+							   struct bitcoin_txid,
+							   &utxo->txid),
+					    utxo->outnum,
+					    utxo->close_info->csv);
+
 
 		/* It supplies more input. */
 		if (!amount_sat_add(&input, input, utxo->amount))

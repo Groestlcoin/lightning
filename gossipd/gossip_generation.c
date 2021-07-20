@@ -26,10 +26,12 @@
  * between the dummy creation and the call with a signature. */
 static u8 *create_node_announcement(const tal_t *ctx, struct daemon *daemon,
 				    const secp256k1_ecdsa_signature *sig,
-				    u32 timestamp)
+				    u32 timestamp,
+				    const struct lease_rates *rates)
 {
 	u8 *addresses = tal_arr(tmpctx, u8, 0);
 	u8 *announcement;
+	struct tlv_node_ann_tlvs *na_tlv;
 	size_t i;
 
 	if (!sig)
@@ -38,13 +40,17 @@ static u8 *create_node_announcement(const tal_t *ctx, struct daemon *daemon,
 	for (i = 0; i < tal_count(daemon->announcable); i++)
 		towire_wireaddr(&addresses, &daemon->announcable[i]);
 
+	na_tlv = tlv_node_ann_tlvs_new(tmpctx);
+	na_tlv->option_will_fund = cast_const(struct lease_rates *, rates);
+
 	announcement =
 	    towire_node_announcement(ctx, sig,
 				     daemon->our_features->bits
 				     [NODE_ANNOUNCE_FEATURE],
 				     timestamp,
 				     &daemon->id, daemon->rgb, daemon->alias,
-				     addresses);
+				     addresses,
+				     na_tlv);
 	return announcement;
 }
 
@@ -90,13 +96,14 @@ bool cupdate_different(struct gossip_store *gs,
 		|| !memeq(oparts[1], osizes[1], nparts[1], nsizes[1]);
 }
 
-/* Get non-signature, non-timestamp parts of (valid!) node_announcement */
+/* Get non-signature, non-timestamp parts of (valid!) node_announcement,
+ * with TLV broken out separately  */
 static void get_nannounce_parts(const u8 *node_announcement,
-				const u8 *parts[2],
-				size_t sizes[2])
+				const u8 *parts[3],
+				size_t sizes[3])
 {
-	size_t len;
-	const u8 *flen;
+	size_t len, ad_len;
+	const u8 *flen, *ad_start;
 
 	/* BOLT #7:
 	 *
@@ -119,17 +126,43 @@ static void get_nannounce_parts(const u8 *node_announcement,
 	sizes[0] = 2 + fromwire_u16(&flen, &len);
 	assert(flen != NULL && len >= 4);
 
+	/* BOLT-0fe3485a5320efaa2be8cfa0e570ad4d0259cec3 #7:
+	 *
+	 *    * [`u32`:`timestamp`]
+	 *    * [`point`:`node_id`]
+	 *    * [`3*byte`:`rgb_color`]
+	 *    * [`32*byte`:`alias`]
+	 *    * [`u16`:`addrlen`]
+	 *    * [`addrlen*byte`:`addresses`]
+	 *    * [`node_ann_tlvs`:`tlvs`]
+	*/
 	parts[1] = node_announcement + 2 + 64 + sizes[0] + 4;
-	sizes[1] = tal_count(node_announcement) - (2 + 64 + sizes[0] + 4);
+
+	/* Find the end of the addresses */
+	ad_start = parts[1] + 33 + 3 + 32;
+	len = tal_count(node_announcement)
+		- (2 + 64 + sizes[0] + 4 + 33 + 3 + 32);
+	ad_len = fromwire_u16(&ad_start, &len);
+	assert(ad_start != NULL && len >= ad_len);
+
+	sizes[1] = 33 + 3 + 32 + 2 + ad_len;
+
+	/* Is there a TLV ? */
+	sizes[2] = len - ad_len;
+	if (sizes[2] != 0)
+		parts[2] = parts[1] + sizes[1];
+	else
+		parts[2] = NULL;
 }
 
 /* Is this node_announcement different from prev (not sigs and timestamps)? */
 bool nannounce_different(struct gossip_store *gs,
 			 const struct node *node,
-			 const u8 *nannounce)
+			 const u8 *nannounce,
+			 bool *only_missing_tlv)
 {
-	const u8 *oparts[2], *nparts[2];
-	size_t osizes[2], nsizes[2];
+	const u8 *oparts[3], *nparts[3];
+	size_t osizes[3], nsizes[3];
 	const u8 *orig;
 
 	/* Get last one we have. */
@@ -137,19 +170,59 @@ bool nannounce_different(struct gossip_store *gs,
 	get_nannounce_parts(orig, oparts, osizes);
 	get_nannounce_parts(nannounce, nparts, nsizes);
 
+	if (only_missing_tlv)
+		*only_missing_tlv = memeq(oparts[0], osizes[0], nparts[0], nsizes[0])
+			&& memeq(oparts[1], osizes[1], nparts[1], nsizes[1])
+			&& !memeq(oparts[2], osizes[2], nparts[2], nsizes[2]);
+
 	return !memeq(oparts[0], osizes[0], nparts[0], nsizes[0])
-		|| !memeq(oparts[1], osizes[1], nparts[1], nsizes[1]);
+		|| !memeq(oparts[1], osizes[1], nparts[1], nsizes[1])
+		|| !memeq(oparts[2], osizes[2], nparts[2], nsizes[2]);
 }
+
+static void sign_and_send_nannounce(struct daemon *daemon,
+				    u8 *nannounce,
+				    u32 timestamp)
+{
+	secp256k1_ecdsa_signature sig;
+	u8 *msg, *err;
+
+	/* Ask hsmd to sign it (synchronous) */
+	if (!wire_sync_write(HSM_FD, take(towire_hsmd_node_announcement_sig_req(NULL, nannounce))))
+		status_failed(STATUS_FAIL_MASTER_IO, "Could not write to HSM: %s", strerror(errno));
+
+	msg = wire_sync_read(tmpctx, HSM_FD);
+	if (!fromwire_hsmd_node_announcement_sig_reply(msg, &sig))
+		status_failed(STATUS_FAIL_MASTER_IO, "HSM returned an invalid node_announcement sig");
+
+	/* We got the signature for our provisional node_announcement back
+	 * from the HSM, create the real announcement and forward it to
+	 * gossipd so it can take care of forwarding it. */
+	nannounce = create_node_announcement(NULL, daemon, &sig,
+					     timestamp, daemon->rates);
+
+	/* This injects it into the routing code in routing.c; it should not
+	 * reject it! */
+	err = handle_node_announcement(daemon->rstate, take(nannounce),
+				       NULL, NULL);
+	if (err)
+		status_failed(STATUS_FAIL_INTERNAL_ERROR,
+			      "rejected own node announcement: %s",
+			      tal_hex(tmpctx, err));
+}
+
+
+/* Mutual recursion via timer */
+static void update_own_node_announcement_after_startup(struct daemon *daemon);
 
 /* This routine created a `node_announcement` for our node, and hands it to
  * the routing.c code like any other `node_announcement`.  Such announcements
  * are only accepted if there is an announced channel associated with that node
  * (to prevent spam), so we only call this once we've announced a channel. */
-static void update_own_node_announcement(struct daemon *daemon)
+static void update_own_node_announcement(struct daemon *daemon, bool startup)
 {
 	u32 timestamp = gossip_time_now(daemon->rstate).ts.tv_sec;
-	secp256k1_ecdsa_signature sig;
-	u8 *msg, *nannounce, *err;
+	u8 *nannounce;
 	struct node *self = get_node(daemon->rstate, &daemon->id);
 
 	/* Discard existing timer. */
@@ -162,15 +235,33 @@ static void update_own_node_announcement(struct daemon *daemon)
 		timestamp++;
 
 	/* Make unsigned announcement. */
-	nannounce = create_node_announcement(tmpctx, daemon, NULL, timestamp);
+	nannounce = create_node_announcement(tmpctx, daemon, NULL,
+					     timestamp,
+					     daemon->rates);
 
 	/* If it's the same as the previous, nothing to do. */
 	if (self && self->bcast.index) {
 		u32 next;
+		bool only_missing_tlv;
 
-		if (!nannounce_different(daemon->rstate->gs, self, nannounce))
+		if (!nannounce_different(daemon->rstate->gs, self, nannounce,
+					 &only_missing_tlv))
 			return;
 
+		/* Missing liquidity_ad, maybe we'll get plugin callback */
+		if (startup && only_missing_tlv) {
+			u32 delay = GOSSIP_NANN_STARTUP_DELAY(daemon->rstate->dev_fast_gossip);
+			status_debug("node_announcement: delaying"
+				     " %u secs at start", delay);
+
+			daemon->node_announce_timer
+				= new_reltimer(&daemon->timers,
+					       daemon,
+					       time_from_sec(delay),
+					       update_own_node_announcement_after_startup,
+					       daemon);
+			return;
+		}
 		/* BOLT #7:
 		 *
 		 * The origin node:
@@ -184,41 +275,27 @@ static void update_own_node_announcement(struct daemon *daemon)
 		if (timestamp < next) {
 			status_debug("node_announcement: delaying %u secs",
 				     next - timestamp);
+
 			daemon->node_announce_timer
 				= new_reltimer(&daemon->timers,
 					       daemon,
 					       time_from_sec(next - timestamp),
-					       update_own_node_announcement,
+					       update_own_node_announcement_after_startup,
 					       daemon);
 			return;
 		}
 	}
 
-	/* Ask hsmd to sign it (synchronous) */
-	if (!wire_sync_write(HSM_FD, take(towire_hsmd_node_announcement_sig_req(NULL, nannounce))))
-		status_failed(STATUS_FAIL_MASTER_IO, "Could not write to HSM: %s", strerror(errno));
+	sign_and_send_nannounce(daemon, nannounce, timestamp);
+}
 
-	msg = wire_sync_read(tmpctx, HSM_FD);
-	if (!fromwire_hsmd_node_announcement_sig_reply(msg, &sig))
-		status_failed(STATUS_FAIL_MASTER_IO, "HSM returned an invalid node_announcement sig");
-
-	/* We got the signature for our provisional node_announcement back
-	 * from the HSM, create the real announcement and forward it to
-	 * gossipd so it can take care of forwarding it. */
-	nannounce = create_node_announcement(NULL, daemon, &sig, timestamp);
-
-	/* This injects it into the routing code in routing.c; it should not
-	 * reject it! */
-	err = handle_node_announcement(daemon->rstate, take(nannounce),
-				       NULL, NULL);
-	if (err)
-		status_failed(STATUS_FAIL_INTERNAL_ERROR,
-			      "rejected own node announcement: %s",
-			      tal_hex(tmpctx, err));
+static void update_own_node_announcement_after_startup(struct daemon *daemon)
+{
+	update_own_node_announcement(daemon, false);
 }
 
 /* Should we announce our own node?  Called at strategic places. */
-void maybe_send_own_node_announce(struct daemon *daemon)
+void maybe_send_own_node_announce(struct daemon *daemon, bool startup)
 {
 	/* We keep an internal flag in the routing code to say we've announced
 	 * a local channel.  The alternative would be to have it make a
@@ -227,8 +304,7 @@ void maybe_send_own_node_announce(struct daemon *daemon)
 	if (!daemon->rstate->local_channel_announced)
 		return;
 
-	update_own_node_announcement(daemon);
-	daemon->rstate->local_channel_announced = false;
+	update_own_node_announcement(daemon, startup);
 }
 
 /* Our timer callbacks take a single argument, so we marshall everything

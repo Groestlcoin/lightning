@@ -62,6 +62,10 @@ struct channel {
 	/* Fee changes, some which may be in transit */
 	struct fee_states *fee_states;
 
+	/* Blockheight changes, some which may be in transit
+	 * (option_will_fund)*/
+	struct height_states *blockheight_states;
+
 	/* What it looks like to each side. */
 	struct channel_view view[NUM_SIDES];
 
@@ -70,6 +74,9 @@ struct channel {
 
 	/* Is this using option_anchor_outputs? */
 	bool option_anchor_outputs;
+
+	/* When the lease expires for the funds in this channel */
+	u32 lease_expiry;
 };
 
 /**
@@ -79,6 +86,8 @@ struct channel {
  * @funding_txid: The commitment transaction id.
  * @funding_txout: The commitment transaction output number.
  * @minimum_depth: The minimum confirmations needed for funding transaction.
+ * @height_states: The blockheight update states.
+ * @lease_expiry: Block the lease expires.
  * @funding_satoshis: The commitment transaction amount.
  * @local_msatoshi: The amount for the local side (remainder goes to remote)
  * @fee_states: The fee update states.
@@ -99,6 +108,8 @@ struct channel *new_initial_channel(const tal_t *ctx,
 				    const struct bitcoin_txid *funding_txid,
 				    unsigned int funding_txout,
 				    u32 minimum_depth,
+				    const struct height_states *height_states TAKES,
+				    u32 lease_expiry,
 				    struct amount_sat funding,
 				    struct amount_msat local_msatoshi,
 				    const struct fee_states *fee_states TAKES,
@@ -139,6 +150,13 @@ struct bitcoin_tx *initial_channel_tx(const tal_t *ctx,
  * @side: the side
  */
 u32 channel_feerate(const struct channel *channel, enum side side);
+
+/**
+ * channel_blockheight: Get blockheight for this side of channel.
+ * @channel: The channel
+ * @side: the side
+ */
+u32 channel_blockheight(const struct channel *channel, enum side side);
 
 #if EXPERIMENTAL_FEATURES
 /* BOLT-upgrade_protocol #2:

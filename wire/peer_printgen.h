@@ -68,6 +68,8 @@ void printwire_revoke_and_ack(const char *fieldname, const u8 *cursor);
 
 void printwire_update_fee(const char *fieldname, const u8 *cursor);
 
+void printwire_update_blockheight(const char *fieldname, const u8 *cursor);
+
 void printwire_channel_reestablish(const char *fieldname, const u8 *cursor);
 
 void printwire_announcement_signatures(const char *fieldname, const u8 *cursor);
@@ -92,8 +94,9 @@ void printwire_onion_message(const char *fieldname, const u8 *cursor);
 
 
 void printwire_witness_element(const char *fieldname, const u8 **cursor, size_t *plen);
+void printwire_lease_rates(const char *fieldname, const u8 **cursor, size_t *plen);
 void printwire_channel_update_checksums(const char *fieldname, const u8 **cursor, size_t *plen);
 void printwire_channel_update_timestamps(const char *fieldname, const u8 **cursor, size_t *plen);
 void printwire_witness_stack(const char *fieldname, const u8 **cursor, size_t *plen);
 #endif /* LIGHTNING_WIRE_PEER_PRINTGEN_H */
-// SHA256STAMP:aeea1df56a4d408e222ac2c9f2deb201fda3cd2062f3c65f1b3ca52e11600acd
+// SHA256STAMP:7c9612ec7cc62b3a44ae65d19b855b521e96796940b4c3d50977d768ace8712e

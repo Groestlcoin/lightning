@@ -7,6 +7,7 @@
 #include <ccan/array_size/array_size.h>
 #include <ccan/compiler/compiler.h>
 #include <ccan/crypto/sha256/sha256.h>
+#include <ccan/json_out/json_out.h>
 #include <ccan/str/str.h>
 #include <ccan/take/take.h>
 #include <common/addr.h>
@@ -16,6 +17,7 @@
 #include <common/json_stream.h>
 #include <common/json_tok.h>
 #include <common/jsonrpc_errors.h>
+#include <common/lease_rates.h>
 #include <common/node_id.h>
 #include <common/psbt_open.h>
 #include <common/pseudorand.h>
@@ -1374,9 +1376,8 @@ fail:
 
 }
 
-
 static struct command_result *
-perform_fundpsbt(struct multifundchannel_command *mfc)
+perform_fundpsbt(struct multifundchannel_command *mfc, u32 feerate)
 {
 	struct out_req *req;
 
@@ -1423,11 +1424,34 @@ perform_fundpsbt(struct multifundchannel_command *mfc)
 	else {
 		struct amount_sat sum = AMOUNT_SAT(0);
 		for (size_t i = 0; i < tal_count(mfc->destinations); ++i) {
+			struct amount_sat requested
+				= mfc->destinations[i].request_amt;
+
 			if (!amount_sat_add(&sum,
 					    sum, mfc->destinations[i].amount))
 				return mfc_fail(mfc, JSONRPC2_INVALID_PARAMS,
 						"Overflow while summing "
 						"destination values.");
+			/* Also add in any fees for requested amt! */
+			if (!amount_sat_zero(requested)) {
+				struct amount_sat fee;
+
+				/* Assume they send >= what we've
+				 * requested (otherwise we error) */
+				if (!lease_rates_calc_fee(mfc->destinations[i].rates,
+							  requested, requested,
+							  feerate,
+							  &fee))
+					return mfc_fail(mfc, JSONRPC2_INVALID_PARAMS,
+							"Overflow calculating"
+							" lease fee.");
+
+
+				if (!amount_sat_add(&sum, sum, fee))
+					return mfc_fail(mfc, JSONRPC2_INVALID_PARAMS,
+							"Overflow while summing"
+							" lease fee");
+			}
 		}
 		json_add_string(req->js, "satoshi",
 				type_to_string(tmpctx, struct amount_sat,
@@ -1461,6 +1485,54 @@ perform_fundpsbt(struct multifundchannel_command *mfc)
 				tal_fmt(tmpctx, "%u", 110));
 	}
 
+
+	return send_outreq(mfc->cmd->plugin, req);
+}
+
+static struct command_result *
+after_getfeerate(struct command *cmd,
+		 const char *buf,
+		 const jsmntok_t *result,
+		 struct multifundchannel_command *mfc)
+{
+	const char *err;
+	u32 feerate;
+
+	plugin_log(mfc->cmd->plugin, LOG_DBG,
+		   "mfc %"PRIu64": 'parsefeerate' done", mfc->id);
+
+	err = json_scan(tmpctx, buf, result,
+			"{perkw:%}",
+			JSON_SCAN(json_to_number, &feerate));
+	if (err)
+		mfc_fail(mfc, JSONRPC2_INVALID_PARAMS,
+			 "Unable to parse feerate %s: %*.s",
+			 err, json_tok_full_len(result),
+			 json_tok_full(buf, result));
+
+	return perform_fundpsbt(mfc, feerate);
+}
+
+static struct command_result *
+getfeerate(struct multifundchannel_command *mfc)
+{
+	struct out_req *req;
+	/* With the introduction of channel leases (option_will_fund),
+	 * we need to include enough in the PSBT to cover our expected
+	 * fees for the channel open. This requires that we know
+	 * the feerate ahead of time, so that we can figure the
+	 * expected lease fees, and add that to the funding amount. */
+	req = jsonrpc_request_start(mfc->cmd->plugin,
+				    mfc->cmd,
+				    "parsefeerate",
+				    &after_getfeerate,
+				    &mfc_forward_error,
+				    mfc);
+
+	/* Internally, it defaults to 'opening', so we use that here */
+	if (!mfc->feerate_str)
+		mfc->feerate_str = "opening";
+	json_add_string(req->js, "feerate", mfc->feerate_str);
 
 	return send_outreq(mfc->cmd->plugin, req);
 }
@@ -1509,7 +1581,7 @@ after_multiconnect(struct multifundchannel_command *mfc)
 					     dest->error_message);
 	}
 
-	return perform_fundpsbt(mfc);
+	return getfeerate(mfc);
 }
 
 static struct command_result *
@@ -1813,9 +1885,10 @@ param_destinations_array(struct command *cmd, const char *name,
 		struct multifundchannel_destination *dest;
 		const char *id;
 		char *addrhint;
-		struct amount_sat *amount;
+		struct amount_sat *amount, *request_amt;
 		bool *announce;
 		struct amount_msat *push_msat;
+		struct lease_rates *rates;
 
 		dest = &(*dests)[i];
 
@@ -1830,6 +1903,9 @@ param_destinations_array(struct command *cmd, const char *name,
 			    * passed in to fundchannel_start) if invalid*/
 			   p_opt("close_to", param_string,
 				 &dest->close_to_str),
+			   p_opt_def("request_amt", param_sat, &request_amt,
+				     AMOUNT_SAT(0)),
+			   p_opt("compact_lease", param_lease_hex, &rates),
 			   NULL))
 			return command_param_failed();
 
@@ -1852,6 +1928,12 @@ param_destinations_array(struct command *cmd, const char *name,
 						     json_dest,
 						     "output would be dust");
 
+		if (!amount_sat_zero(*request_amt) && !rates)
+			return command_fail_badparam(cmd, name, buffer,
+					             json_dest,
+						     "Must pass in 'compact_"
+						     "lease' if requesting"
+						     " funds from peer");
 		dest->index = i;
 		dest->addrhint = addrhint;
 		dest->their_features = NULL;
@@ -1864,6 +1946,8 @@ param_destinations_array(struct command *cmd, const char *name,
 		dest->psbt = NULL;
 		dest->updated_psbt = NULL;
 		dest->protocol = FUND_CHANNEL;
+		dest->request_amt = *request_amt;
+		dest->rates = tal_steal(*dests, rates);
 
 		/* Only one destination can have "all" indicator.  */
 		if (dest->all) {

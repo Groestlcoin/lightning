@@ -69,6 +69,7 @@ LIGHTNINGD_COMMON_OBJS :=			\
 	common/bigsize.o			\
 	common/bip32.o				\
 	common/blinding.o			\
+	common/blockheight_states.o		\
 	common/bolt11.o				\
 	common/bolt11_json.o			\
 	common/bolt12.o				\
@@ -100,6 +101,7 @@ LIGHTNINGD_COMMON_OBJS :=			\
 	common/json_helpers.o			\
 	common/json_stream.o			\
 	common/json_tok.o			\
+	common/lease_rates.o			\
 	common/memleak.o			\
 	common/msg_queue.o			\
 	common/node_id.o			\

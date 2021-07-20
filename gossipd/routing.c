@@ -1598,6 +1598,7 @@ bool routing_add_node_announcement(struct routing_state *rstate,
 	u8 rgb_color[3];
 	u8 alias[32];
 	u8 *features, *addresses;
+	struct tlv_node_ann_tlvs *na_tlv;
 
 	if (was_unknown)
 		*was_unknown = false;
@@ -1607,10 +1608,12 @@ bool routing_add_node_announcement(struct routing_state *rstate,
 		tal_steal(tmpctx, msg);
 
 	/* Note: validity of node_id is already checked. */
+	na_tlv = tlv_node_ann_tlvs_new(tmpctx);
 	if (!fromwire_node_announcement(tmpctx, msg,
 					&signature, &features, &timestamp,
 					&node_id, rgb_color, alias,
-					&addresses)) {
+					&addresses,
+					na_tlv)) {
 		return false;
 	}
 
@@ -1653,6 +1656,8 @@ bool routing_add_node_announcement(struct routing_state *rstate,
 	}
 
 	if (node->bcast.index) {
+		bool only_tlv_diff;
+
 		if (index != 0) {
 			status_broken("gossip_store node_announcement %u replaces %u!",
 				      index, node->bcast.index);
@@ -1667,7 +1672,8 @@ bool routing_add_node_announcement(struct routing_state *rstate,
 
 		/* Allow redundant updates once every 7 days */
 		if (timestamp < node->bcast.timestamp + GOSSIP_PRUNE_INTERVAL(rstate->dev_fast_gossip_prune) / 2
-		    && !nannounce_different(rstate->gs, node, msg)) {
+		    && !nannounce_different(rstate->gs, node, msg,
+					    &only_tlv_diff)) {
 			SUPERVERBOSE(
 			    "Ignoring redundant nannounce for %s"
 			    " (last %u, now %u)",
@@ -1737,15 +1743,18 @@ u8 *handle_node_announcement(struct routing_state *rstate, const u8 *node_ann,
 	u8 *features, *addresses;
 	struct wireaddr *wireaddrs;
 	size_t len = tal_count(node_ann);
+	struct tlv_node_ann_tlvs *na_tlv;
 
 	if (was_unknown)
 		*was_unknown = false;
 
 	serialized = tal_dup_arr(tmpctx, u8, node_ann, len, 0);
+	na_tlv = tlv_node_ann_tlvs_new(tmpctx);
 	if (!fromwire_node_announcement(tmpctx, serialized,
 					&signature, &features, &timestamp,
 					&node_id, rgb_color, alias,
-					&addresses)) {
+					&addresses,
+					na_tlv)) {
 		/* BOLT #7:
 		 *
 		 *   - if `node_id` is NOT a valid compressed public key:

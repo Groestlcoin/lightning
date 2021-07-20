@@ -281,7 +281,18 @@ def test_gossip_jsonrpc(node_factory):
     assert only_one(channels1)['destination'] == l2.info['id']
     assert channels1 == channels2
 
-    l2.rpc.listchannels()['channels']
+    # Test listchannels-by-destination
+    channels1 = l1.rpc.listchannels(destination=l1.info['id'])['channels']
+    channels2 = l2.rpc.listchannels(destination=l1.info['id'])['channels']
+    assert only_one(channels1)['destination'] == l1.info['id']
+    assert only_one(channels1)['source'] == l2.info['id']
+    assert channels1 == channels2
+
+    # Test only one of short_channel_id, source or destination can be supplied
+    with pytest.raises(RpcError, match=r"Can only specify one of.*"):
+        l1.rpc.listchannels(source=l1.info['id'], destination=l2.info['id'])
+    with pytest.raises(RpcError, match=r"Can only specify one of.*"):
+        l1.rpc.listchannels(short_channel_id="1x1x1", source=l2.info['id'])
 
     # Now proceed to funding-depth and do a full gossip round
     l1.bitcoin.generate_block(5)
@@ -928,6 +939,85 @@ def test_gossip_addresses(node_factory, bitcoind):
     ]
 
 
+@unittest.skipIf(TEST_NETWORK != 'regtest', 'elementsd doesnt yet support PSBT features we need')
+@pytest.mark.developer("needs dev-fast-gossip")
+@pytest.mark.openchannel('v2')
+def test_gossip_lease_rates(node_factory, bitcoind):
+    lease_opts = {'lease-fee-basis': 50,
+                  'lease-fee-base-msat': '2000msat',
+                  'channel-fee-max-base-msat': '500sat',
+                  'channel-fee-max-proportional-thousandths': 200}
+    l1, l2 = node_factory.get_nodes(2, opts=[lease_opts, {}])
+
+    # These logs happen during startup, start looking from the beginning
+    l1.daemon.logsearch_start = 0
+    l2.daemon.logsearch_start = 0
+
+    rates = l1.rpc.call('funderupdate')
+    assert rates['channel_fee_max_base_msat'] == Millisatoshi('500000msat')
+    assert rates['channel_fee_max_proportional_thousandths'] == 200
+    assert rates['funding_weight'] == 666  # Default on regtest
+    assert rates['lease_fee_base_msat'] == Millisatoshi('2000msat')
+    assert rates['lease_fee_basis'] == 50
+
+    rates = l2.rpc.call('funderupdate')
+    assert 'channel_fee_max_base_msat' not in rates
+    assert 'channel_fee_max_proportional_thousandths' not in rates
+    assert 'funding_weight' not in rates
+    assert 'lease_fee_base_msat' not in rates
+    assert 'lease_fee_basis' not in rates
+
+    # Open a channel, check that the node_announcements
+    # include offer details, as expected
+    l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
+    l1.fundchannel(l2, 10**6)
+
+    # Announce depth is ALWAYS 6 blocks
+    bitcoind.generate_block(5)
+
+    l2.daemon.wait_for_log('Received node_announcement for node {}'
+                           .format(l1.info['id']))
+    l1.daemon.wait_for_log('Received node_announcement for node {}'
+                           .format(l2.info['id']))
+
+    l2_nodeinfo = only_one(l1.rpc.listnodes(l2.info['id'])['nodes'])
+    l1_nodeinfo = only_one(l2.rpc.listnodes(l1.info['id'])['nodes'])
+
+    assert 'option_will_fund' not in l2_nodeinfo
+    rates = l1_nodeinfo['option_will_fund']
+    assert rates['channel_fee_max_base_msat'] == Millisatoshi('500000msat')
+    assert rates['channel_fee_max_proportional_thousandths'] == 200
+    assert rates['funding_weight'] == 666  # Default on regtest
+    assert rates['lease_fee_base_msat'] == Millisatoshi('2000msat')
+    assert rates['lease_fee_basis'] == 50
+
+    # Update the node announce (set new on l2, turn off l1)
+    # (Turn off by setting everything to zero)
+    l1.rpc.call('funderupdate', {'channel_fee_max_base_msat': '0msat',
+                                 'channel_fee_max_proportional_thousandths': 0,
+                                 'funding_weight': 0,
+                                 'lease_fee_base_msat': '0msat',
+                                 'lease_fee_basis': 0})
+    l2.rpc.call('funderupdate', {'channel_fee_max_base_msat': '30000msat',
+                                 'channel_fee_max_proportional_thousandths': 100,
+                                 'lease_fee_base_msat': '400000msat',
+                                 'lease_fee_basis': 20})
+
+    l1.daemon.wait_for_log('Received node_announcement for node {}'.format(l2.info['id']))
+    l2.daemon.wait_for_log('Received node_announcement for node {}'.format(l1.info['id']))
+
+    l2_nodeinfo = only_one(l1.rpc.listnodes(l2.info['id'])['nodes'])
+    l1_nodeinfo = only_one(l2.rpc.listnodes(l1.info['id'])['nodes'])
+
+    assert 'option_will_fund' not in l1_nodeinfo
+    rates = l2_nodeinfo['option_will_fund']
+    assert rates['channel_fee_max_base_msat'] == Millisatoshi('30000msat')
+    assert rates['channel_fee_max_proportional_thousandths'] == 100
+    assert rates['funding_weight'] == 666  # Default on regtest
+    assert rates['lease_fee_base_msat'] == Millisatoshi('400000msat')
+    assert rates['lease_fee_basis'] == 20
+
+
 def test_gossip_store_load(node_factory):
     """Make sure we can read canned gossip store"""
     l1 = node_factory.get_node(start=False)
@@ -1083,6 +1173,28 @@ def test_node_reannounce(node_factory, bitcoind, chainparams):
     assert msgs == msgs2
     # Won't have queued up another one, either.
     assert not l1.daemon.is_in_log('node_announcement: delaying')
+
+    # Try updating the lease rates ad
+    ad = l1.rpc.call('setleaserates',
+                     {'lease_fee_base_msat': '1000sat',
+                      'lease_fee_basis': 20,
+                      'funding_weight': 150,
+                      'channel_fee_max_base_msat': '2000msat',
+                      'channel_fee_max_proportional_thousandths': 22})
+
+    assert ad['lease_fee_base_msat'] == Millisatoshi('1000000msat')
+    assert ad['lease_fee_basis'] == 20
+    assert ad['funding_weight'] == 150
+    assert ad['channel_fee_max_base_msat'] == Millisatoshi('2000msat')
+    assert ad['channel_fee_max_proportional_thousandths'] == 22
+
+    msgs2 = l1.query_gossip('gossip_timestamp_filter',
+                            genesis_blockhash,
+                            '0', '0xFFFFFFFF',
+                            # Filter out gossip_timestamp_filter,
+                            # channel_announcement and channel_updates.
+                            filters=['0109', '0102', '0100'])
+    assert msgs != msgs2
 
 
 def test_gossipwith(node_factory):

@@ -3,6 +3,7 @@
 #include <common/bolt12_merkle.h>
 #include <common/hash_u5.h>
 #include <common/key_derive.h>
+#include <common/lease_rates.h>
 #include <common/type_to_string.h>
 #include <hsmd/capabilities.h>
 #include <hsmd/libhsmd.h>
@@ -93,6 +94,9 @@ bool hsmd_check_client_capabilities(struct hsmd_client *client,
 	case WIRE_HSMD_SIGN_MUTUAL_CLOSE_TX:
 		return (client->capabilities & HSM_CAP_SIGN_CLOSING_TX) != 0;
 
+	case WIRE_HSMD_SIGN_OPTION_WILL_FUND_OFFER:
+		return (client->capabilities & HSM_CAP_SIGN_WILL_FUND_OFFER) != 0;
+
 	case WIRE_HSMD_INIT:
 	case WIRE_HSMD_CLIENT_HSMFD:
 	case WIRE_HSMD_SIGN_WITHDRAWAL:
@@ -119,6 +123,7 @@ bool hsmd_check_client_capabilities(struct hsmd_client *client,
 	case WIRE_HSMSTATUS_CLIENT_BAD_REQUEST:
 	case WIRE_HSMD_SIGN_COMMITMENT_TX_REPLY:
 	case WIRE_HSMD_SIGN_TX_REPLY:
+	case WIRE_HSMD_SIGN_OPTION_WILL_FUND_OFFER_REPLY:
 	case WIRE_HSMD_GET_PER_COMMITMENT_POINT_REPLY:
 	case WIRE_HSMD_CHECK_FUTURE_SECRET_REPLY:
 	case WIRE_HSMD_GET_CHANNEL_BASEPOINTS_REPLY:
@@ -383,7 +388,10 @@ static void sign_our_inputs(struct utxo **utxos, struct wally_psbt *psbt)
 
 			/* It's actually a P2WSH in this case. */
 			if (utxo->close_info && utxo->close_info->option_anchor_outputs) {
-				const u8 *wscript = anchor_to_remote_redeem(tmpctx, &pubkey);
+				const u8 *wscript
+					= anchor_to_remote_redeem(tmpctx,
+								  &pubkey,
+								  utxo->close_info->csv);
 				psbt_input_set_witscript(psbt, j, wscript);
 				psbt_input_set_wit_utxo(psbt, j,
 							scriptpubkey_p2wsh(psbt, wscript),
@@ -466,6 +474,41 @@ static u8 *handle_sign_message(struct hsmd_client *c, const u8 *msg_in)
 	}
 
 	return towire_hsmd_sign_message_reply(NULL, &rsig);
+}
+
+/*~ lightningd asks us to sign a liquidity ad offer */
+static u8 *handle_sign_option_will_fund_offer(struct hsmd_client *c,
+					      const u8 *msg_in)
+{
+	struct pubkey funding_pubkey;
+	u32 lease_expiry, channel_fee_base_max_msat;
+	u16 channel_fee_max_ppt;
+	struct sha256 sha;
+	secp256k1_ecdsa_signature sig;
+	struct privkey node_pkey;
+
+	if (!fromwire_hsmd_sign_option_will_fund_offer(msg_in,
+						       &funding_pubkey,
+						       &lease_expiry,
+						       &channel_fee_base_max_msat,
+						       &channel_fee_max_ppt))
+		return hsmd_status_malformed_request(c, msg_in);
+
+	lease_rates_get_commitment(&funding_pubkey, lease_expiry,
+				   channel_fee_base_max_msat,
+				   channel_fee_max_ppt,
+				   &sha);
+
+	node_key(&node_pkey, NULL);
+
+	if (!secp256k1_ecdsa_sign(secp256k1_ctx, &sig,
+				  sha.u.u8,
+				  node_pkey.secret.data,
+				  NULL, NULL))
+		return hsmd_status_bad_request(c, msg_in,
+					       "Failed to sign message");
+
+	return towire_hsmd_sign_option_will_fund_offer_reply(NULL, &sig);
 }
 
 /*~ lightningd asks us to sign a bolt12 (e.g. offer). */
@@ -1352,6 +1395,8 @@ u8 *hsmd_handle_client_message(const tal_t *ctx, struct hsmd_client *client,
 		return handle_ecdh(client, msg);
 	case WIRE_HSMD_SIGN_INVOICE:
 		return handle_sign_invoice(client, msg);
+	case WIRE_HSMD_SIGN_OPTION_WILL_FUND_OFFER:
+		return handle_sign_option_will_fund_offer(client, msg);
 	case WIRE_HSMD_SIGN_BOLT12:
 		return handle_sign_bolt12(client, msg);
 	case WIRE_HSMD_SIGN_MESSAGE:
@@ -1397,6 +1442,7 @@ u8 *hsmd_handle_client_message(const tal_t *ctx, struct hsmd_client *client,
 	case WIRE_HSMSTATUS_CLIENT_BAD_REQUEST:
 	case WIRE_HSMD_SIGN_COMMITMENT_TX_REPLY:
 	case WIRE_HSMD_SIGN_TX_REPLY:
+	case WIRE_HSMD_SIGN_OPTION_WILL_FUND_OFFER_REPLY:
 	case WIRE_HSMD_GET_PER_COMMITMENT_POINT_REPLY:
 	case WIRE_HSMD_CHECK_FUTURE_SECRET_REPLY:
 	case WIRE_HSMD_GET_CHANNEL_BASEPOINTS_REPLY:

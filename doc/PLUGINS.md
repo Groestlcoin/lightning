@@ -1100,13 +1100,20 @@ the v2 protocol, and it has passed basic sanity checks:
     "max_accepted_htlcs": 483,
     "channel_flags": 1
     "locktime": 2453,
-    "channel_max_msat": "16777215000msat"
+    "channel_max_msat": "16777215000msat",
+    "requested_lease_msat": "100000000msat",
+    "lease_blockheight_start": 683990,
+    "node_blockheight": 683990
   }
 }
 ```
 
 There may be additional fields, such as `shutdown_scriptpubkey`.  You can
 see the definitions of these fields in [BOLT 2's description of the open_channel message][bolt2-open-channel].
+
+`requested_lease_msat`, `lease_blockheight_start`, and `node_blockheight` are
+only present if the opening peer has requested a funding lease,
+per `option_will_fund`.
 
 The returned result must contain a `result` member which is either
 the string `reject` or `continue`.  If `reject` and
@@ -1462,7 +1469,7 @@ will be respected. Others will be ignored and a warning will be logged.
 ### `custommsg`
 
 The `custommsg` plugin hook is the receiving counterpart to the
-[`dev-sendcustommsg`][sendcustommsg] RPC method and allows plugins to handle
+[`sendcustommsg`][sendcustommsg] RPC method and allows plugins to handle
 messages that are not handled internally. The goal of these two components is
 to allow the implementation of custom protocols or prototypes on top of a
 c-lightning node, without having to change the node's implementation itself.
@@ -1610,7 +1617,7 @@ The plugin must broadcast it and respond with the following fields:
 [bolt4-failure-messages]: https://github.com/lightningnetwork/lightning-rfc/blob/master/04-onion-routing.md#failure-messages
 [bolt4-failure-onion]: https://github.com/lightningnetwork/lightning-rfc/blob/master/04-onion-routing.md#returning-errors
 [bolt2-open-channel]: https://github.com/lightningnetwork/lightning-rfc/blob/master/02-peer-protocol.md#the-open_channel-message
-[sendcustommsg]: lightning-dev-sendcustommsg.7.html
+[sendcustommsg]: lightning-sendcustommsg.7.html
 [oddok]: https://github.com/lightningnetwork/lightning-rfc/blob/master/00-introduction.md#its-ok-to-be-odd
 [spec]: [https://github.com/lightningnetwork/lightning-rfc]
 [bolt9]: https://github.com/lightningnetwork/lightning-rfc/blob/master/09-features.md

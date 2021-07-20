@@ -49,6 +49,7 @@ const char *channeld_wire_name(int e)
 	case WIRE_CHANNELD_DEV_QUIESCE: return "WIRE_CHANNELD_DEV_QUIESCE";
 	case WIRE_CHANNELD_DEV_QUIESCE_REPLY: return "WIRE_CHANNELD_DEV_QUIESCE_REPLY";
 	case WIRE_CHANNELD_UPGRADED: return "WIRE_CHANNELD_UPGRADED";
+	case WIRE_CHANNELD_BLOCKHEIGHT: return "WIRE_CHANNELD_BLOCKHEIGHT";
 	}
 
 	snprintf(invalidbuf, sizeof(invalidbuf), "INVALID %i", e);
@@ -87,6 +88,7 @@ bool channeld_wire_is_defined(u16 type)
 	case WIRE_CHANNELD_DEV_QUIESCE:;
 	case WIRE_CHANNELD_DEV_QUIESCE_REPLY:;
 	case WIRE_CHANNELD_UPGRADED:;
+	case WIRE_CHANNELD_BLOCKHEIGHT:;
 	      return true;
 	}
 	return false;
@@ -98,7 +100,7 @@ bool channeld_wire_is_defined(u16 type)
 
 /* WIRE: CHANNELD_INIT */
 /* Begin!  (passes gossipd-client fd) */
-u8 *towire_channeld_init(const tal_t *ctx, const struct chainparams *chainparams, const struct feature_set *our_features, const struct channel_id *channel_id, const struct bitcoin_txid *funding_txid, u16 funding_txout, struct amount_sat funding_satoshi, u32 minimum_depth, const struct channel_config *our_config, const struct channel_config *their_config, const struct fee_states *fee_states, u32 feerate_min, u32 feerate_max, u32 feerate_penalty, const struct bitcoin_signature *first_commit_sig, const struct per_peer_state *per_peer_state, const struct pubkey *remote_fundingkey, const struct basepoints *remote_basepoints, const struct pubkey *remote_per_commit, const struct pubkey *old_remote_per_commit, enum side opener, u32 fee_base, u32 fee_proportional, struct amount_msat local_msatoshi, const struct basepoints *our_basepoints, const struct pubkey *our_funding_pubkey, const struct node_id *local_node_id, const struct node_id *remote_node_id, u32 commit_msec, u16 cltv_delta, bool last_was_revoke, const struct changed_htlc *last_sent_commit, u64 next_index_local, u64 next_index_remote, u64 revocations_received, u64 next_htlc_id, const struct existing_htlc **htlcs, bool local_funding_locked, bool remote_funding_locked, const struct short_channel_id *funding_short_id, bool reestablish, bool send_shutdown, bool remote_shutdown_received, const u8 *final_scriptpubkey, u8 flags, const u8 *init_peer_pkt, bool reached_announce_depth, const struct secret *last_remote_secret, const u8 *their_features, const u8 *upfront_shutdown_script, const secp256k1_ecdsa_signature *remote_ann_node_sig, const secp256k1_ecdsa_signature *remote_ann_bitcoin_sig, bool option_static_remotekey, bool option_anchor_outputs, bool dev_fast_gossip, bool dev_fail_process_onionpacket, const struct penalty_base *pbases, const u8 *reestablish_only)
+u8 *towire_channeld_init(const tal_t *ctx, const struct chainparams *chainparams, const struct feature_set *our_features, const struct channel_id *channel_id, const struct bitcoin_txid *funding_txid, u16 funding_txout, struct amount_sat funding_satoshi, u32 minimum_depth, u32 our_blockheight, const struct height_states *blockheight_states, u32 lease_expiry, const struct channel_config *our_config, const struct channel_config *their_config, const struct fee_states *fee_states, u32 feerate_min, u32 feerate_max, u32 feerate_penalty, const struct bitcoin_signature *first_commit_sig, const struct per_peer_state *per_peer_state, const struct pubkey *remote_fundingkey, const struct basepoints *remote_basepoints, const struct pubkey *remote_per_commit, const struct pubkey *old_remote_per_commit, enum side opener, u32 fee_base, u32 fee_proportional, struct amount_msat local_msatoshi, const struct basepoints *our_basepoints, const struct pubkey *our_funding_pubkey, const struct node_id *local_node_id, const struct node_id *remote_node_id, u32 commit_msec, u16 cltv_delta, bool last_was_revoke, const struct changed_htlc *last_sent_commit, u64 next_index_local, u64 next_index_remote, u64 revocations_received, u64 next_htlc_id, const struct existing_htlc **htlcs, bool local_funding_locked, bool remote_funding_locked, const struct short_channel_id *funding_short_id, bool reestablish, bool send_shutdown, bool remote_shutdown_received, const u8 *final_scriptpubkey, u8 flags, const u8 *init_peer_pkt, bool reached_announce_depth, const struct secret *last_remote_secret, const u8 *their_features, const u8 *upfront_shutdown_script, const secp256k1_ecdsa_signature *remote_ann_node_sig, const secp256k1_ecdsa_signature *remote_ann_bitcoin_sig, bool option_static_remotekey, bool option_anchor_outputs, bool dev_fast_gossip, bool dev_fail_process_onionpacket, const struct penalty_base *pbases, const u8 *reestablish_only)
 {
 	u16 num_last_sent_commit = tal_count(last_sent_commit);
 	u16 num_existing_htlcs = tal_count(htlcs);
@@ -118,6 +120,9 @@ u8 *towire_channeld_init(const tal_t *ctx, const struct chainparams *chainparams
 	towire_u16(&p, funding_txout);
 	towire_amount_sat(&p, funding_satoshi);
 	towire_u32(&p, minimum_depth);
+	towire_u32(&p, our_blockheight);
+	towire_height_states(&p, blockheight_states);
+	towire_u32(&p, lease_expiry);
 	towire_channel_config(&p, our_config);
 	towire_channel_config(&p, their_config);
 	towire_fee_states(&p, fee_states);
@@ -192,7 +197,7 @@ u8 *towire_channeld_init(const tal_t *ctx, const struct chainparams *chainparams
 
 	return memcheck(p, tal_count(p));
 }
-bool fromwire_channeld_init(const tal_t *ctx, const void *p, const struct chainparams **chainparams, struct feature_set **our_features, struct channel_id *channel_id, struct bitcoin_txid *funding_txid, u16 *funding_txout, struct amount_sat *funding_satoshi, u32 *minimum_depth, struct channel_config *our_config, struct channel_config *their_config, struct fee_states **fee_states, u32 *feerate_min, u32 *feerate_max, u32 *feerate_penalty, struct bitcoin_signature *first_commit_sig, struct per_peer_state **per_peer_state, struct pubkey *remote_fundingkey, struct basepoints *remote_basepoints, struct pubkey *remote_per_commit, struct pubkey *old_remote_per_commit, enum side *opener, u32 *fee_base, u32 *fee_proportional, struct amount_msat *local_msatoshi, struct basepoints *our_basepoints, struct pubkey *our_funding_pubkey, struct node_id *local_node_id, struct node_id *remote_node_id, u32 *commit_msec, u16 *cltv_delta, bool *last_was_revoke, struct changed_htlc **last_sent_commit, u64 *next_index_local, u64 *next_index_remote, u64 *revocations_received, u64 *next_htlc_id, struct existing_htlc ***htlcs, bool *local_funding_locked, bool *remote_funding_locked, struct short_channel_id *funding_short_id, bool *reestablish, bool *send_shutdown, bool *remote_shutdown_received, u8 **final_scriptpubkey, u8 *flags, u8 **init_peer_pkt, bool *reached_announce_depth, struct secret *last_remote_secret, u8 **their_features, u8 **upfront_shutdown_script, secp256k1_ecdsa_signature **remote_ann_node_sig, secp256k1_ecdsa_signature **remote_ann_bitcoin_sig, bool *option_static_remotekey, bool *option_anchor_outputs, bool *dev_fast_gossip, bool *dev_fail_process_onionpacket, struct penalty_base **pbases, u8 **reestablish_only)
+bool fromwire_channeld_init(const tal_t *ctx, const void *p, const struct chainparams **chainparams, struct feature_set **our_features, struct channel_id *channel_id, struct bitcoin_txid *funding_txid, u16 *funding_txout, struct amount_sat *funding_satoshi, u32 *minimum_depth, u32 *our_blockheight, struct height_states **blockheight_states, u32 *lease_expiry, struct channel_config *our_config, struct channel_config *their_config, struct fee_states **fee_states, u32 *feerate_min, u32 *feerate_max, u32 *feerate_penalty, struct bitcoin_signature *first_commit_sig, struct per_peer_state **per_peer_state, struct pubkey *remote_fundingkey, struct basepoints *remote_basepoints, struct pubkey *remote_per_commit, struct pubkey *old_remote_per_commit, enum side *opener, u32 *fee_base, u32 *fee_proportional, struct amount_msat *local_msatoshi, struct basepoints *our_basepoints, struct pubkey *our_funding_pubkey, struct node_id *local_node_id, struct node_id *remote_node_id, u32 *commit_msec, u16 *cltv_delta, bool *last_was_revoke, struct changed_htlc **last_sent_commit, u64 *next_index_local, u64 *next_index_remote, u64 *revocations_received, u64 *next_htlc_id, struct existing_htlc ***htlcs, bool *local_funding_locked, bool *remote_funding_locked, struct short_channel_id *funding_short_id, bool *reestablish, bool *send_shutdown, bool *remote_shutdown_received, u8 **final_scriptpubkey, u8 *flags, u8 **init_peer_pkt, bool *reached_announce_depth, struct secret *last_remote_secret, u8 **their_features, u8 **upfront_shutdown_script, secp256k1_ecdsa_signature **remote_ann_node_sig, secp256k1_ecdsa_signature **remote_ann_bitcoin_sig, bool *option_static_remotekey, bool *option_anchor_outputs, bool *dev_fast_gossip, bool *dev_fail_process_onionpacket, struct penalty_base **pbases, u8 **reestablish_only)
 {
 	u16 num_last_sent_commit;
 	u16 num_existing_htlcs;
@@ -215,6 +220,9 @@ bool fromwire_channeld_init(const tal_t *ctx, const void *p, const struct chainp
  	*funding_txout = fromwire_u16(&cursor, &plen);
  	*funding_satoshi = fromwire_amount_sat(&cursor, &plen);
  	*minimum_depth = fromwire_u32(&cursor, &plen);
+ 	*our_blockheight = fromwire_u32(&cursor, &plen);
+ 	*blockheight_states = fromwire_height_states(ctx, &cursor, &plen);
+ 	*lease_expiry = fromwire_u32(&cursor, &plen);
  	fromwire_channel_config(&cursor, &plen, our_config);
  	fromwire_channel_config(&cursor, &plen, their_config);
  	*fee_states = fromwire_fee_states(ctx, &cursor, &plen);
@@ -482,7 +490,7 @@ bool fromwire_channeld_got_funding_locked(const void *p, struct pubkey *next_per
 
 /* WIRE: CHANNELD_SENDING_COMMITSIG */
 /* When we send a commitment_signed message */
-u8 *towire_channeld_sending_commitsig(const tal_t *ctx, u64 commitnum, const struct penalty_base *pbase, const struct fee_states *fee_states, const struct changed_htlc *changed, const struct bitcoin_signature *commit_sig, const struct bitcoin_signature *htlc_sigs)
+u8 *towire_channeld_sending_commitsig(const tal_t *ctx, u64 commitnum, const struct penalty_base *pbase, const struct fee_states *fee_states, const struct height_states *blockheight_states, const struct changed_htlc *changed, const struct bitcoin_signature *commit_sig, const struct bitcoin_signature *htlc_sigs)
 {
 	u16 num_changed = tal_count(changed);
 	u16 num_htlc_sigs = tal_count(htlc_sigs);
@@ -497,6 +505,7 @@ u8 *towire_channeld_sending_commitsig(const tal_t *ctx, u64 commitnum, const str
 		towire_penalty_base(&p, pbase);
 	}
 	towire_fee_states(&p, fee_states);
+	towire_height_states(&p, blockheight_states);
 	/* SENT_ADD_COMMIT */
 	towire_u16(&p, num_changed);
 	for (size_t i = 0; i < num_changed; i++)
@@ -508,7 +517,7 @@ u8 *towire_channeld_sending_commitsig(const tal_t *ctx, u64 commitnum, const str
 
 	return memcheck(p, tal_count(p));
 }
-bool fromwire_channeld_sending_commitsig(const tal_t *ctx, const void *p, u64 *commitnum, struct penalty_base **pbase, struct fee_states **fee_states, struct changed_htlc **changed, struct bitcoin_signature *commit_sig, struct bitcoin_signature **htlc_sigs)
+bool fromwire_channeld_sending_commitsig(const tal_t *ctx, const void *p, u64 *commitnum, struct penalty_base **pbase, struct fee_states **fee_states, struct height_states **blockheight_states, struct changed_htlc **changed, struct bitcoin_signature *commit_sig, struct bitcoin_signature **htlc_sigs)
 {
 	u16 num_changed;
 	u16 num_htlc_sigs;
@@ -526,6 +535,7 @@ bool fromwire_channeld_sending_commitsig(const tal_t *ctx, const void *p, u64 *c
 		fromwire_penalty_base(&cursor, &plen, *pbase);
 	}
  	*fee_states = fromwire_fee_states(ctx, &cursor, &plen);
+ 	*blockheight_states = fromwire_height_states(ctx, &cursor, &plen);
  	/* SENT_ADD_COMMIT */
 	num_changed = fromwire_u16(&cursor, &plen);
  	// 2nd case changed
@@ -563,7 +573,7 @@ bool fromwire_channeld_sending_commitsig_reply(const void *p)
 
 /* WIRE: CHANNELD_GOT_COMMITSIG */
 /* When we have a commitment_signed message */
-u8 *towire_channeld_got_commitsig(const tal_t *ctx, u64 commitnum, const struct fee_states *fee_states, const struct bitcoin_signature *signature, const struct bitcoin_signature *htlc_signature, const struct added_htlc *added, const struct fulfilled_htlc *fulfilled, const struct failed_htlc **failed, const struct changed_htlc *changed, const struct bitcoin_tx *tx)
+u8 *towire_channeld_got_commitsig(const tal_t *ctx, u64 commitnum, const struct fee_states *fee_states, const struct height_states *blockheight_states, const struct bitcoin_signature *signature, const struct bitcoin_signature *htlc_signature, const struct added_htlc *added, const struct fulfilled_htlc *fulfilled, const struct failed_htlc **failed, const struct changed_htlc *changed, const struct bitcoin_tx *tx)
 {
 	u16 num_htlcs = tal_count(htlc_signature);
 	u16 num_added = tal_count(added);
@@ -575,6 +585,7 @@ u8 *towire_channeld_got_commitsig(const tal_t *ctx, u64 commitnum, const struct 
 	towire_u16(&p, WIRE_CHANNELD_GOT_COMMITSIG);
 	towire_u64(&p, commitnum);
 	towire_fee_states(&p, fee_states);
+	towire_height_states(&p, blockheight_states);
 	towire_bitcoin_signature(&p, signature);
 	towire_u16(&p, num_htlcs);
 	for (size_t i = 0; i < num_htlcs; i++)
@@ -598,7 +609,7 @@ u8 *towire_channeld_got_commitsig(const tal_t *ctx, u64 commitnum, const struct 
 
 	return memcheck(p, tal_count(p));
 }
-bool fromwire_channeld_got_commitsig(const tal_t *ctx, const void *p, u64 *commitnum, struct fee_states **fee_states, struct bitcoin_signature *signature, struct bitcoin_signature **htlc_signature, struct added_htlc **added, struct fulfilled_htlc **fulfilled, struct failed_htlc ***failed, struct changed_htlc **changed, struct bitcoin_tx **tx)
+bool fromwire_channeld_got_commitsig(const tal_t *ctx, const void *p, u64 *commitnum, struct fee_states **fee_states, struct height_states **blockheight_states, struct bitcoin_signature *signature, struct bitcoin_signature **htlc_signature, struct added_htlc **added, struct fulfilled_htlc **fulfilled, struct failed_htlc ***failed, struct changed_htlc **changed, struct bitcoin_tx **tx)
 {
 	u16 num_htlcs;
 	u16 num_added;
@@ -613,6 +624,7 @@ bool fromwire_channeld_got_commitsig(const tal_t *ctx, const void *p, u64 *commi
 		return false;
  	*commitnum = fromwire_u64(&cursor, &plen);
  	*fee_states = fromwire_fee_states(ctx, &cursor, &plen);
+ 	*blockheight_states = fromwire_height_states(ctx, &cursor, &plen);
  	fromwire_bitcoin_signature(&cursor, &plen, signature);
  	num_htlcs = fromwire_u16(&cursor, &plen);
  	// 2nd case htlc_signature
@@ -667,7 +679,7 @@ bool fromwire_channeld_got_commitsig_reply(const void *p)
 }
 
 /* WIRE: CHANNELD_GOT_REVOKE */
-u8 *towire_channeld_got_revoke(const tal_t *ctx, u64 revokenum, const struct secret *per_commitment_secret, const struct pubkey *next_per_commit_point, const struct fee_states *fee_states, const struct changed_htlc *changed, const struct penalty_base *pbase, const struct bitcoin_tx *penalty_tx)
+u8 *towire_channeld_got_revoke(const tal_t *ctx, u64 revokenum, const struct secret *per_commitment_secret, const struct pubkey *next_per_commit_point, const struct fee_states *fee_states, const struct height_states *blockheight_states, const struct changed_htlc *changed, const struct penalty_base *pbase, const struct bitcoin_tx *penalty_tx)
 {
 	u16 num_changed = tal_count(changed);
 	u8 *p = tal_arr(ctx, u8, 0);
@@ -678,6 +690,7 @@ u8 *towire_channeld_got_revoke(const tal_t *ctx, u64 revokenum, const struct sec
 	towire_pubkey(&p, next_per_commit_point);
 	/* RCVD_ADD_ACK_REVOCATION */
 	towire_fee_states(&p, fee_states);
+	towire_height_states(&p, blockheight_states);
 	towire_u16(&p, num_changed);
 	for (size_t i = 0; i < num_changed; i++)
 		towire_changed_htlc(&p, changed + i);
@@ -696,7 +709,7 @@ u8 *towire_channeld_got_revoke(const tal_t *ctx, u64 revokenum, const struct sec
 
 	return memcheck(p, tal_count(p));
 }
-bool fromwire_channeld_got_revoke(const tal_t *ctx, const void *p, u64 *revokenum, struct secret *per_commitment_secret, struct pubkey *next_per_commit_point, struct fee_states **fee_states, struct changed_htlc **changed, struct penalty_base **pbase, struct bitcoin_tx **penalty_tx)
+bool fromwire_channeld_got_revoke(const tal_t *ctx, const void *p, u64 *revokenum, struct secret *per_commitment_secret, struct pubkey *next_per_commit_point, struct fee_states **fee_states, struct height_states **blockheight_states, struct changed_htlc **changed, struct penalty_base **pbase, struct bitcoin_tx **penalty_tx)
 {
 	u16 num_changed;
 
@@ -710,6 +723,7 @@ bool fromwire_channeld_got_revoke(const tal_t *ctx, const void *p, u64 *revokenu
  	fromwire_pubkey(&cursor, &plen, next_per_commit_point);
  	/* RCVD_ADD_ACK_REVOCATION */
 	*fee_states = fromwire_fee_states(ctx, &cursor, &plen);
+ 	*blockheight_states = fromwire_height_states(ctx, &cursor, &plen);
  	num_changed = fromwire_u16(&cursor, &plen);
  	// 2nd case changed
 	*changed = num_changed ? tal_arr(ctx, struct changed_htlc, num_changed) : NULL;
@@ -1145,4 +1159,26 @@ bool fromwire_channeld_upgraded(const void *p, bool *option_static_remotekey)
  	*option_static_remotekey = fromwire_bool(&cursor, &plen);
 	return cursor != NULL;
 }
-// SHA256STAMP:7fe345eb02876c231759ec37daba697e85ac3a43137e4b7cb67d136587e2bda5
+
+/* WIRE: CHANNELD_BLOCKHEIGHT */
+/* Tell peer about our latest and greatest blockheight. */
+u8 *towire_channeld_blockheight(const tal_t *ctx, u32 blockheight)
+{
+	u8 *p = tal_arr(ctx, u8, 0);
+
+	towire_u16(&p, WIRE_CHANNELD_BLOCKHEIGHT);
+	towire_u32(&p, blockheight);
+
+	return memcheck(p, tal_count(p));
+}
+bool fromwire_channeld_blockheight(const void *p, u32 *blockheight)
+{
+	const u8 *cursor = p;
+	size_t plen = tal_count(p);
+
+	if (fromwire_u16(&cursor, &plen) != WIRE_CHANNELD_BLOCKHEIGHT)
+		return false;
+ 	*blockheight = fromwire_u32(&cursor, &plen);
+	return cursor != NULL;
+}
+// SHA256STAMP:977cf1dac7bbca4163cfbbf53f8f448430775368496205ee6f181eb4d8c8c8af

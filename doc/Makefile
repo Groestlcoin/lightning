@@ -20,7 +20,6 @@ MANPAGES := doc/lightning-cli.1 \
 	doc/lightning-delexpiredinvoice.7 \
 	doc/lightning-delinvoice.7 \
 	doc/lightning-delpay.7 \
-	doc/lightning-dev-sendcustommsg.7 \
 	doc/lightning-disableoffer.7 \
 	doc/lightning-disconnect.7 \
 	doc/lightning-feerates.7 \
@@ -55,6 +54,7 @@ MANPAGES := doc/lightning-cli.1 \
 	doc/lightning-openchannel_signed.7 \
 	doc/lightning-openchannel_update.7 \
 	doc/lightning-pay.7 \
+	doc/lightning-parsefeerate.7 \
 	doc/lightning-plugin.7 \
 	doc/lightning-reserveinputs.7 \
 	doc/lightning-sendinvoice.7 \
@@ -62,6 +62,7 @@ MANPAGES := doc/lightning-cli.1 \
 	doc/lightning-sendonionmessage.7 \
 	doc/lightning-sendpay.7 \
 	doc/lightning-setchannelfee.7 \
+	doc/lightning-sendcustommsg.7 \
 	doc/lightning-signmessage.7 \
 	doc/lightning-txprepare.7 \
 	doc/lightning-txdiscard.7 \

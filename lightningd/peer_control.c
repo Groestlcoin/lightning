@@ -774,31 +774,31 @@ static void json_add_channel(struct lightningd *ld,
 
 	if (!list_empty(&channel->inflights)) {
 		struct channel_inflight *initial, *inflight;
-		u32 last_feerate, next_feerate, feerate;
-		u8 feestep;
-
-		last_feerate = channel_last_funding_feerate(channel);
-		assert(last_feerate > 0);
-		next_feerate = last_feerate + last_feerate / 4;
+		u32 last_feerate, next_feerate;
 
 		initial = list_top(&channel->inflights,
 				   struct channel_inflight, list);
-		feerate = initial->funding->feerate;
-
 		json_add_string(response, "initial_feerate",
-			        tal_fmt(tmpctx, "%d%s", feerate,
+			        tal_fmt(tmpctx, "%d%s",
+					initial->funding->feerate,
 					feerate_style_name(FEERATE_PER_KSIPA)));
+
+		last_feerate = channel_last_funding_feerate(channel);
+		assert(last_feerate > 0);
 		json_add_string(response, "last_feerate",
 				tal_fmt(tmpctx, "%d%s", last_feerate,
 					feerate_style_name(FEERATE_PER_KSIPA)));
+
+		/* BOLT-9e7723387c8859b511e178485605a0b9133b9869 #2:
+		 * - MUST set `funding_feerate_perkw` greater than or equal to
+		 *   65/64 times the last sent `funding_feerate_perkw`
+		 *   rounded down.
+		 */
+		next_feerate = last_feerate * 65 / 64;
+		assert(next_feerate > last_feerate);
 		json_add_string(response, "next_feerate",
 				tal_fmt(tmpctx, "%d%s", next_feerate,
 					feerate_style_name(FEERATE_PER_KSIPA)));
-
-		/* Now we derive the feestep */
-		for (feestep = 0; feerate < next_feerate; feestep++)
-			feerate += feerate / 4;
-		json_add_num(response, "next_fee_step", feestep);
 
 		/* List the inflights */
 		json_array_start(response, "inflight");
@@ -1344,6 +1344,19 @@ static void update_channel_from_inflight(struct lightningd *ld,
 	channel->funding = inflight->funding->total_funds;
 	channel->our_funds = inflight->funding->our_funds;
 
+	/* Lease infos ! */
+	channel->lease_expiry = inflight->lease_expiry;
+	tal_free(channel->lease_commit_sig);
+	channel->lease_commit_sig
+		= tal_steal(channel, inflight->lease_commit_sig);
+	channel->lease_chan_max_msat = inflight->lease_chan_max_msat;
+	channel->lease_chan_max_ppt = inflight->lease_chan_max_ppt;
+
+	tal_free(channel->blockheight_states);
+	channel->blockheight_states = new_height_states(channel,
+							channel->opener,
+							&inflight->lease_blockheight_start);
+
 	/* Make a 'clone' of this tx */
 	psbt_copy = clone_psbt(channel, inflight->last_tx->psbt);
 	channel_set_last_tx(channel,
@@ -1658,7 +1671,7 @@ static struct command_result *json_close(struct command *cmd,
 	struct channel *channel COMPILER_WANTS_INIT("gcc 7.3.0 fails, 8.3 OK");
 	unsigned int *timeout;
 	const u8 *close_to_script = NULL;
-	bool close_script_set, wrong_funding_changed;
+	bool close_script_set, wrong_funding_changed, *force_lease_close;
 	const char *fee_negotiation_step_str;
 	struct bitcoin_outpoint *wrong_funding;
 	char* end;
@@ -1672,6 +1685,8 @@ static struct command_result *json_close(struct command *cmd,
 		   p_opt("fee_negotiation_step", param_string,
 			 &fee_negotiation_step_str),
 		   p_opt("wrong_funding", param_outpoint, &wrong_funding),
+		   p_opt_def("force_lease_closed", param_bool,
+			     &force_lease_close, false),
 		   NULL))
 		return command_param_failed();
 
@@ -1701,6 +1716,15 @@ static struct command_result *json_close(struct command *cmd,
 				    "Peer has no active channel");
 	}
 
+	if (!*force_lease_close && channel->opener != LOCAL
+	    && get_block_height(cmd->ld->topology) < channel->lease_expiry)
+		return command_fail(cmd, LIGHTNINGD,
+				    "Peer leased this channel from us, we"
+				    " shouldn't close until lease has expired"
+				    " (lease expires block %u,"
+				    " current block %u)",
+				    channel->lease_expiry,
+				    get_block_height(cmd->ld->topology));
 
 	/* If we've set a local shutdown script for this peer, and it's not the
 	 * default upfront script, try to close to a different channel.
@@ -2780,6 +2804,8 @@ void peer_dev_memleak(struct command *cmd)
 	peer_memleak_req_next(cmd, NULL);
 }
 
+#endif /* DEVELOPER */
+
 struct custommsg_payload {
 	struct node_id peer_id;
 	const u8 *msg;
@@ -2964,6 +2990,18 @@ static struct command_result *json_sendcustommsg(struct command *cmd,
 }
 
 static const struct json_command sendcustommsg_command = {
+    "sendcustommsg",
+    "utility",
+    json_sendcustommsg,
+    "Send a custom message to the peer with the given {node_id}",
+    .verbose = "sendcustommsg node_id hexcustommsg",
+};
+
+AUTODATA(json_command, &sendcustommsg_command);
+
+#ifdef COMPAT_V0100
+#ifdef DEVELOPER
+static const struct json_command dev_sendcustommsg_command = {
     "dev-sendcustommsg",
     "utility",
     json_sendcustommsg,
@@ -2971,6 +3009,6 @@ static const struct json_command sendcustommsg_command = {
     .verbose = "dev-sendcustommsg node_id hexcustommsg",
 };
 
-AUTODATA(json_command, &sendcustommsg_command);
-
-#endif /* DEVELOPER */
+AUTODATA(json_command, &dev_sendcustommsg_command);
+#endif  /* DEVELOPER */
+#endif /* COMPAT_V0100 */

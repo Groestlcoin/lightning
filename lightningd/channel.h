@@ -45,6 +45,13 @@ struct channel_inflight {
 	/* Commitment tx and sigs */
 	struct bitcoin_tx *last_tx;
 	struct bitcoin_signature last_sig;
+
+	/* Channel lease infos */
+	u32 lease_expiry;
+	secp256k1_ecdsa_signature *lease_commit_sig;
+	u32 lease_chan_max_msat;
+	u16 lease_chan_max_ppt;
+	u32 lease_blockheight_start;
 };
 
 struct open_attempt {
@@ -144,6 +151,9 @@ struct channel {
 	/* Fee status */
 	const struct fee_states *fee_states;
 
+	/* Height states (option_will_fund, update_blockheight) */
+	const struct height_states *blockheight_states;
+
 	/* Our local basepoints */
 	struct basepoints local_basepoints;
 
@@ -208,6 +218,18 @@ struct channel {
 
 	/* Outstanding command for this channel, v2 only */
 	struct command *openchannel_signed_cmd;
+
+	/* Block lease expires at, zero is no lease */
+	u32 lease_expiry;
+
+	/* Lease commitment, useful someone breaks their promise
+	 * wrt channel fees */
+	secp256k1_ecdsa_signature *lease_commit_sig;
+
+	/* Lease commited maximum channel fee base msat */
+	u32 lease_chan_max_msat;
+	/* Lease commited max part per thousandth channel fee (ppm * 1000) */
+	u16 lease_chan_max_ppt;
 };
 
 /* For v2 opens, a channel that has not yet been committed/saved to disk */
@@ -273,7 +295,12 @@ struct channel *new_channel(struct peer *peer, u64 dbid,
 			    enum side closer,
 			    enum state_change reason,
 			    /* NULL or stolen */
-			    const struct bitcoin_outpoint *shutdown_wrong_funding STEALS);
+			    const struct bitcoin_outpoint *shutdown_wrong_funding STEALS,
+			    const struct height_states *height_states TAKES,
+			    u32 lease_expiry,
+			    secp256k1_ecdsa_signature *lease_commit_sig STEALS,
+			    u32 lease_chan_max_msat,
+			    u16 lease_chan_max_ppt);
 
 /* new_inflight - Create a new channel_inflight for a channel */
 struct channel_inflight *
@@ -285,7 +312,12 @@ new_inflight(struct channel *channel,
 	     struct amount_sat our_funds,
 	     struct wally_psbt *funding_psbt STEALS,
 	     struct bitcoin_tx *last_tx STEALS,
-	     const struct bitcoin_signature last_sig);
+	     const struct bitcoin_signature last_sig,
+	     const u32 lease_expiry,
+	     const secp256k1_ecdsa_signature *lease_commit_sig,
+	     const u32 lease_chan_max_msat,
+	     const u16 lease_chan_max_ppt,
+	     const u32 lease_blockheight_start);
 
 /* Given a txid, find an inflight channel stub. Returns NULL if none found */
 struct channel_inflight *channel_inflight_find(struct channel *channel,

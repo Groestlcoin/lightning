@@ -514,17 +514,23 @@ class LightningRpc(UnixDomainSocketRpc):
         payload.update({k: v for k, v in kwargs.items()})
         return self.call("check", payload)
 
-    def close(self, peer_id, unilateraltimeout=None, destination=None, fee_negotiation_step=None):
+    def close(self, peer_id, unilateraltimeout=None, destination=None, fee_negotiation_step=None, force_lease_closed=False):
         """
         Close the channel with peer {id}, forcing a unilateral
         close after {unilateraltimeout} seconds if non-zero, and
         the to-local output will be sent to {destination}.
+
+        If channel funds have been leased to the peer and the
+        lease has not yet expired, you can force a close with
+        {force_lease_closed}. Note that your funds will still be
+        locked until the lease expires.
         """
         payload = {
             "id": peer_id,
             "unilateraltimeout": unilateraltimeout,
             "destination": destination,
-            "fee_negotiation_step": fee_negotiation_step
+            "fee_negotiation_step": fee_negotiation_step,
+            "force_lease_closed": force_lease_closed,
         }
         return self.call("close", payload)
 
@@ -692,7 +698,7 @@ class LightningRpc(UnixDomainSocketRpc):
         }
         return self.call("feerates", payload)
 
-    def fundchannel(self, node_id, amount, feerate=None, announce=True, minconf=None, utxos=None, push_msat=None, close_to=None):
+    def fundchannel(self, node_id, amount, feerate=None, announce=True, minconf=None, utxos=None, push_msat=None, close_to=None, request_amt=None, compact_lease=None):
         """
         Fund channel with {id} using {amount} satoshis with feerate
         of {feerate} (uses default feerate if unset).
@@ -701,6 +707,10 @@ class LightningRpc(UnixDomainSocketRpc):
         If {utxos} is specified (as a list of 'txid:vout' strings),
         fund a channel from these specifics utxos.
         {close_to} is a valid Bitcoin address.
+
+        {request_amt} is the lease amount to request from the peer. Only
+        valid if peer is advertising a liquidity ad + supports v2 channel opens
+        (dual-funding)
         """
         payload = {
             "id": node_id,
@@ -711,6 +721,8 @@ class LightningRpc(UnixDomainSocketRpc):
             "utxos": utxos,
             "push_msat": push_msat,
             "close_to": close_to,
+            "request_amt": request_amt,
+            "compact_lease": compact_lease,
         }
         return self.call("fundchannel", payload)
 
@@ -843,13 +855,15 @@ class LightningRpc(UnixDomainSocketRpc):
         }
         return self.call("invoice", payload)
 
-    def listchannels(self, short_channel_id=None, source=None):
+    def listchannels(self, short_channel_id=None, source=None, destination=None):
         """
-        Show all known channels, accept optional {short_channel_id} or {source}.
+        Show all known channels or filter by optional
+        {short_channel_id}, {source} or {destination}.
         """
         payload = {
             "short_channel_id": short_channel_id,
-            "source": source
+            "source": source,
+            "destination": destination
         }
         return self.call("listchannels", payload)
 
@@ -1006,7 +1020,7 @@ class LightningRpc(UnixDomainSocketRpc):
         }
         return self.call("pay", payload)
 
-    def openchannel_init(self, node_id, channel_amount, psbt, feerate=None, funding_feerate=None, announce=True, close_to=None, *args, **kwargs):
+    def openchannel_init(self, node_id, channel_amount, psbt, feerate=None, funding_feerate=None, announce=True, close_to=None, request_amt=None, *args, **kwargs):
         """Initiate an openchannel with a peer """
         payload = {
             "id": node_id,
@@ -1016,6 +1030,7 @@ class LightningRpc(UnixDomainSocketRpc):
             "funding_feerate": funding_feerate,
             "announce": announce,
             "close_to": close_to,
+            "request_amt": request_amt,
         }
         return self.call("openchannel_init", payload)
 
@@ -1036,12 +1051,13 @@ class LightningRpc(UnixDomainSocketRpc):
         }
         return self.call("openchannel_update", payload)
 
-    def openchannel_bump(self, channel_id, amount, initialpsbt):
+    def openchannel_bump(self, channel_id, amount, initialpsbt, funding_feerate=None):
         """ Initiate an RBF for an in-progress open """
         payload = {
             "channel_id": channel_id,
             "amount": amount,
             "initialpsbt": initialpsbt,
+            "funding_feerate": funding_feerate,
         }
         return self.call("openchannel_bump", payload)
 

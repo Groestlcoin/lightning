@@ -6,7 +6,7 @@ from tqdm import tqdm
 
 import pytest
 import random
-import time 
+import time
 
 
 num_workers = 10
@@ -28,19 +28,19 @@ def test_single_hop(node_factory, executor):
     fs = []
     invoices = []
     for i in tqdm(range(num_payments)):
-        invoices.append(l2.rpc.invoice(1000, 'invoice-%d' % (i), 'desc')['payment_hash'])
+        inv = l2.rpc.invoice(1000, 'invoice-%d' % (i), 'desc')
+        invoices.append((inv['payment_hash'], inv['payment_secret']))
 
     print("Sending payments")
     start_time = time.time()
 
-    def do_pay(i):
-        p = l1.rpc.sendpay(route, i)
-        filler_time = time.time()
+    def do_pay(i, s):
+        p = l1.rpc.sendpay(route, i, payment_secret=s)
         r = l1.rpc.waitsendpay(p['payment_hash'])
         return r
 
-    for i in invoices:
-        fs.append(executor.submit(do_pay, i))
+    for i, s in invoices:
+        fs.append(executor.submit(do_pay, i, s))
 
     for f in tqdm(futures.as_completed(fs), total=len(fs)):
         f.result()

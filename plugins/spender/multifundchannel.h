@@ -143,6 +143,12 @@ struct multifundchannel_destination {
 
 	/* serial of the funding output for this channel (OPEN_CHANNEL) */
 	u64 funding_serial;
+
+	/* amount to request peer to lease (OPEN_CHANNEL) */
+	struct amount_sat request_amt;
+
+	/* Channel lease rates that we expect the peer to respond with */
+	struct lease_rates *rates;
 };
 
 

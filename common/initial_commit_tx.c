@@ -51,9 +51,10 @@ bool try_subtract_fee(enum side opener, enum side side,
 
 u8 *to_self_wscript(const tal_t *ctx,
 		    u16 to_self_delay,
+		    u32 csv,
 		    const struct keyset *keyset)
 {
-	return bitcoin_wscript_to_local(ctx, to_self_delay,
+	return bitcoin_wscript_to_local(ctx, to_self_delay, csv,
 					&keyset->self_revocation_key,
 					&keyset->self_delayed_payment_key);
 }
@@ -87,6 +88,7 @@ struct bitcoin_tx *initial_commit_tx(const tal_t *ctx,
 				     u64 obscured_commitment_number,
 				     struct wally_tx_output *direct_outputs[NUM_SIDES],
 				     enum side side,
+				     u32 csv_lock,
 				     bool option_anchor_outputs,
 				     char** err_reason)
 {
@@ -96,6 +98,7 @@ struct bitcoin_tx *initial_commit_tx(const tal_t *ctx,
 	bool to_local, to_remote;
 	struct amount_msat total_pay;
 	struct amount_sat amount;
+	enum side lessor = !opener;
 	u32 sequence;
 	void *dummy_local = (void *)LOCAL, *dummy_remote = (void *)REMOTE;
 	const void *output_order[NUM_SIDES];
@@ -208,7 +211,10 @@ struct bitcoin_tx *initial_commit_tx(const tal_t *ctx,
 	 *    output](#to_local-output).
 	 */
 	if (amount_msat_greater_eq_sat(self_pay, dust_limit)) {
-		u8 *wscript = to_self_wscript(tmpctx, to_self_delay, keyset);
+		u8 *wscript = to_self_wscript(tmpctx,
+					      to_self_delay,
+					      side == lessor ? csv_lock : 0,
+					      keyset);
 		amount = amount_msat_to_sat_round_down(self_pay);
 		int pos = bitcoin_tx_add_output(
 		    tx, scriptpubkey_p2wsh(tx, wscript), wscript, amount);
@@ -241,8 +247,11 @@ struct bitcoin_tx *initial_commit_tx(const tal_t *ctx,
 
 		amount = amount_msat_to_sat_round_down(other_pay);
 		if (option_anchor_outputs) {
-			scriptpubkey = scriptpubkey_p2wsh(tmpctx,
-							  anchor_to_remote_redeem(tmpctx, &keyset->other_payment_key));
+			const u8 *redeem
+				= anchor_to_remote_redeem(tmpctx,
+						&keyset->other_payment_key,
+						(!side) == lessor ? csv_lock : 1);
+			scriptpubkey = scriptpubkey_p2wsh(tmpctx, redeem);
 		} else {
 			scriptpubkey = scriptpubkey_p2wpkh(tmpctx,
 							   &keyset->other_payment_key);

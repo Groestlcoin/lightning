@@ -5,6 +5,7 @@
 #include <ccan/mem/mem.h>
 #include <ccan/tal/str/str.h>
 #include <common/addr.h>
+#include <common/blockheight_states.h>
 #include <common/channel_config.h>
 #include <common/features.h>
 #include <common/fee_states.h>
@@ -105,6 +106,7 @@ wallet_commit_channel(struct lightningd *ld,
 	s64 final_key_idx;
 	u64 static_remotekey_start;
 	bool option_anchor_outputs;
+	u32 lease_start_blockheight = 0; /* No leases on v1 */
 
 	/* We cannot both be the fundee *and* have a `fundchannel_start`
 	 * command running!
@@ -216,7 +218,10 @@ wallet_commit_channel(struct lightningd *ld,
 			      option_anchor_outputs,
 			      NUM_SIDES, /* closer not yet known */
 			      uc->fc ? REASON_USER : REASON_REMOTE,
-			      NULL);
+			      NULL,
+			      take(new_height_states(NULL, uc->fc ? LOCAL : REMOTE,
+						     &lease_start_blockheight)),
+			      0, NULL, 0, 0); /* No leases on v1s */
 
 	/* Now we finally put it in the database. */
 	wallet_channel_insert(ld->wallet, channel);
@@ -892,13 +897,9 @@ static unsigned int openingd_msg(struct subd *openingd,
 	}
 
 	switch ((enum common_wire)t) {
-#if DEVELOPER
 	case WIRE_CUSTOMMSG_IN:
 		handle_custommsg_in(openingd->ld, openingd->node_id, msg);
 		return 0;
-#else
-	case WIRE_CUSTOMMSG_IN:
-#endif
 	/* We send these. */
 	case WIRE_CUSTOMMSG_OUT:
 		break;

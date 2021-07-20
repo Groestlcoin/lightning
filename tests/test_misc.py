@@ -1154,6 +1154,12 @@ def test_blockchaintrack(node_factory, bitcoind):
     assert [o for o in l1.rpc.listfunds()['outputs'] if o['status'] != "unconfirmed"] == []
 
 
+def chan_active(node, scid, is_active):
+    chans = node.rpc.listchannels(scid)['channels']
+    print(chans)
+    return [c['active'] for c in chans] == [is_active, is_active]
+
+
 @pytest.mark.developer("needs DEVELOPER=1")
 @pytest.mark.openchannel('v2')
 @pytest.mark.openchannel('v1')
@@ -1189,8 +1195,8 @@ def test_funding_reorg_private(node_factory, bitcoind):
     l2.daemon.wait_for_logs([r'Removing stale block {}'.format(106),
                              r'Got depth change .->{} for .* REORG'.format(0)])
 
-    wait_for(lambda: [c['active'] for c in l2.rpc.listchannels('106x1x0')['channels']] == [False, False])
-    wait_for(lambda: [c['active'] for c in l2.rpc.listchannels('108x1x0')['channels']] == [True, True])
+    wait_for(lambda: chan_active(l2, '106x1x0', False))
+    wait_for(lambda: chan_active(l2, '108x1x0', True))
 
     l1.rpc.close(l2.info['id'])
     bitcoind.generate_block(1, True)
@@ -1235,8 +1241,8 @@ def test_funding_reorg_remote_lags(node_factory, bitcoind):
     # Unblinding l2 brings it back in sync, restarts channeld and sends its announce sig
     l2.daemon.rpcproxy.mock_rpc('getblockhash', None)
 
-    wait_for(lambda: [c['active'] for c in l2.rpc.listchannels('103x1x0')['channels']] == [False, False])
-    wait_for(lambda: [c['active'] for c in l2.rpc.listchannels('104x1x0')['channels']] == [True, True])
+    wait_for(lambda: chan_active(l2, '103x1x0', False))
+    wait_for(lambda: chan_active(l2, '104x1x0', True))
 
     wait_for(lambda: only_one(l2.rpc.listpeers()['peers'][0]['channels'])['status'] == [
         'CHANNELD_NORMAL:Reconnected, and reestablished.',
@@ -1462,6 +1468,11 @@ def test_feerates(node_factory):
     types = ["opening", "mutual_close", "unilateral_close", "delayed_to_us",
              "htlc_resolution", "penalty"]
 
+    # Try parsing the feerates, won't work because can't estimate
+    for t in types:
+        with pytest.raises(RpcError, match=r'Cannot estimate fees'):
+            feerate = l1.rpc.parsefeerate(t)
+
     # Query feerates (shouldn't give any!)
     wait_for(lambda: len(l1.rpc.feerates('perkw')['perkw']) == 2)
     feerates = l1.rpc.feerates('perkw')
@@ -1539,6 +1550,13 @@ def test_feerates(node_factory):
     htlc_feerate = feerates["perkw"]["htlc_resolution"]
     htlc_timeout_cost = feerates["onchain_fee_estimates"]["htlc_timeout_satoshis"]
     htlc_success_cost = feerates["onchain_fee_estimates"]["htlc_success_satoshis"]
+
+    # Try parsing the feerates, won't work because can't estimate
+    for t in types:
+        feerate = l1.rpc.parsefeerate(t)
+        assert feerate['perkw']
+        assert 'perkb' not in feerate
+
     if EXPERIMENTAL_FEATURES:
         # option_anchor_outputs
         assert htlc_timeout_cost == htlc_feerate * 666 // 1000
@@ -1700,7 +1718,7 @@ def test_bad_onion(node_factory, bitcoind):
     l1, l2, l3, l4 = node_factory.line_graph(4, wait_for_announce=True,
                                              opts={'log-level': 'io'})
 
-    h = l4.rpc.invoice(123000, 'test_bad_onion', 'description')['payment_hash']
+    inv = l4.rpc.invoice(123000, 'test_bad_onion', 'description')
     route = l1.rpc.getroute(l4.info['id'], 123000, 1)['route']
 
     assert len(route) == 3
@@ -1709,9 +1727,9 @@ def test_bad_onion(node_factory, bitcoind):
 
     # Replace id with a different pubkey, so onion encoded badly at third hop.
     route[2]['id'] = mangled_nodeid
-    l1.rpc.sendpay(route, h)
+    l1.rpc.sendpay(route, inv['payment_hash'], payment_secret=inv['payment_secret'])
     with pytest.raises(RpcError) as err:
-        l1.rpc.waitsendpay(h)
+        l1.rpc.waitsendpay(inv['payment_hash'])
 
     # FIXME: #define PAY_TRY_OTHER_ROUTE		204
     PAY_TRY_OTHER_ROUTE = 204
@@ -1733,9 +1751,9 @@ def test_bad_onion(node_factory, bitcoind):
 
     # Replace id with a different pubkey, so onion encoded badly at second hop.
     route[1]['id'] = mangled_nodeid
-    l1.rpc.sendpay(route, h)
+    l1.rpc.sendpay(route, inv['payment_hash'], payment_secret=inv['payment_secret'])
     with pytest.raises(RpcError) as err:
-        l1.rpc.waitsendpay(h)
+        l1.rpc.waitsendpay(inv['payment_hash'])
 
     # FIXME: #define PAY_TRY_OTHER_ROUTE		204
     PAY_TRY_OTHER_ROUTE = 204
@@ -1750,13 +1768,13 @@ def test_bad_onion_immediate_peer(node_factory, bitcoind):
     """Test that we handle the malformed msg when we're the origin"""
     l1, l2 = node_factory.line_graph(2, opts={'dev-fail-process-onionpacket': None})
 
-    h = l2.rpc.invoice(123000, 'test_bad_onion_immediate_peer', 'description')['payment_hash']
+    inv = l2.rpc.invoice(123000, 'test_bad_onion_immediate_peer', 'description')
     route = l1.rpc.getroute(l2.info['id'], 123000, 1)['route']
     assert len(route) == 1
 
-    l1.rpc.sendpay(route, h)
+    l1.rpc.sendpay(route, inv['payment_hash'], payment_secret=inv['payment_secret'])
     with pytest.raises(RpcError) as err:
-        l1.rpc.waitsendpay(h)
+        l1.rpc.waitsendpay(inv['payment_hash'])
 
     # FIXME: #define PAY_UNPARSEABLE_ONION		202
     PAY_UNPARSEABLE_ONION = 202
@@ -1893,7 +1911,7 @@ def test_list_features_only(node_factory):
                 'option_var_onion_optin/odd',
                 'option_gossip_queries_ex/odd',
                 'option_static_remotekey/odd',
-                'option_payment_secret/odd',
+                'option_payment_secret/even',
                 'option_basic_mpp/odd',
                 ]
     if EXPERIMENTAL_FEATURES:
@@ -2237,7 +2255,6 @@ def test_waitblockheight(node_factory, executor, bitcoind):
     fut2.result(5)
 
 
-@pytest.mark.developer("Needs dev-sendcustommsg")
 def test_sendcustommsg(node_factory):
     """Check that we can send custommsgs to peers in various states.
 
@@ -2261,27 +2278,27 @@ def test_sendcustommsg(node_factory):
     # a message to it.
     node_id = '02df5ffe895c778e10f7742a6c5b8a0cefbe9465df58b92fadeb883752c8107c8f'
     with pytest.raises(RpcError, match=r'No such peer'):
-        l1.rpc.dev_sendcustommsg(node_id, msg)
+        l1.rpc.sendcustommsg(node_id, msg)
 
     # `l3` is disconnected and we can't send messages to it
     assert(not l2.rpc.listpeers(l3.info['id'])['peers'][0]['connected'])
     with pytest.raises(RpcError, match=r'Peer is not connected'):
-        l2.rpc.dev_sendcustommsg(l3.info['id'], msg)
+        l2.rpc.sendcustommsg(l3.info['id'], msg)
 
     # We should not be able to send a bogus `ping` message, since it collides
     # with a message defined in the spec, and could potentially mess up our
     # internal state.
     with pytest.raises(RpcError, match=r'Cannot send messages of type 18 .WIRE_PING.'):
-        l2.rpc.dev_sendcustommsg(l2.info['id'], r'0012')
+        l2.rpc.sendcustommsg(l2.info['id'], r'0012')
 
     # The sendcustommsg RPC call is currently limited to odd-typed messages,
     # since they will not result in disconnections or even worse channel
     # failures.
     with pytest.raises(RpcError, match=r'Cannot send even-typed [0-9]+ custom message'):
-        l2.rpc.dev_sendcustommsg(l2.info['id'], r'00FE')
+        l2.rpc.sendcustommsg(l2.info['id'], r'00FE')
 
     # This should work since the peer is currently owned by `channeld`
-    l2.rpc.dev_sendcustommsg(l1.info['id'], msg)
+    l2.rpc.sendcustommsg(l1.info['id'], msg)
     l2.daemon.wait_for_log(
         r'{peer_id}-{owner}-chan#[0-9]: \[OUT\] {msg}'.format(
             owner='channeld', msg=msg, peer_id=l1.info['id']
@@ -2296,7 +2313,7 @@ def test_sendcustommsg(node_factory):
     ])
 
     # This should work since the peer is currently owned by `openingd`
-    l2.rpc.dev_sendcustommsg(l4.info['id'], msg)
+    l2.rpc.sendcustommsg(l4.info['id'], msg)
     l2.daemon.wait_for_log(
         r'{peer_id}-{owner}-chan#[0-9]: \[OUT\] {msg}'.format(
             owner='openingd', msg=msg, peer_id=l4.info['id']
@@ -2478,14 +2495,14 @@ def test_listforwards(node_factory, bitcoind):
     l1.rpc.pay(i41['bolt11'])
 
     # failed payment
-    failed_payment_hash = l3.rpc.invoice(4000, 'failed', 'desc')['payment_hash']
+    failed_inv = l3.rpc.invoice(4000, 'failed', 'desc')
     failed_route = l1.rpc.getroute(l3.info['id'], 4000, 1)['route']
 
     l2.rpc.close(c23, 1)
 
     with pytest.raises(RpcError):
-        l1.rpc.sendpay(failed_route, failed_payment_hash)
-        l1.rpc.waitsendpay(failed_payment_hash)
+        l1.rpc.sendpay(failed_route, failed_inv['payment_hash'], payment_secret=failed_inv['payment_secret'])
+        l1.rpc.waitsendpay(failed_inv['payment_hash'])
 
     all_forwards = l2.rpc.listforwards()['forwards']
     print(json.dumps(all_forwards, indent=True))
@@ -2493,7 +2510,7 @@ def test_listforwards(node_factory, bitcoind):
     assert len(all_forwards) == 3
     assert i31['payment_hash'] in map(lambda x: x['payment_hash'], all_forwards)
     assert i41['payment_hash'] in map(lambda x: x['payment_hash'], all_forwards)
-    assert failed_payment_hash in map(lambda x: x['payment_hash'], all_forwards)
+    assert failed_inv['payment_hash'] in map(lambda x: x['payment_hash'], all_forwards)
 
     # status=settled
     settled_forwards = l2.rpc.listforwards(status='settled')['forwards']

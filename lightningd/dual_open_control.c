@@ -10,6 +10,7 @@
 #include <ccan/ccan/tal/tal.h>
 #include <ccan/short_types/short_types.h>
 #include <common/amount.h>
+#include <common/blockheight_states.h>
 #include <common/channel_config.h>
 #include <common/channel_id.h>
 #include <common/derive_basepoints.h>
@@ -18,6 +19,7 @@
 #include <common/htlc.h>
 #include <common/json_helpers.h>
 #include <common/json_tok.h>
+#include <common/lease_rates.h>
 #include <common/per_peer_state.h>
 #include <common/psbt_open.h>
 #include <common/shutdown_scriptpubkey.h>
@@ -244,10 +246,15 @@ struct openchannel2_payload {
 	/* What's the maximum amount of funding
 	 * this channel can hold */
 	struct amount_sat channel_max;
+	/* If they've requested funds, this is their request */
+	struct amount_sat requested_lease_amt;
+	u32 lease_blockheight_start;
+	u32 node_blockheight;
 
 	struct amount_sat accepter_funding;
 	struct wally_psbt *psbt;
 	const u8 *our_shutdown_scriptpubkey;
+	struct lease_rates *rates;
 	char *err_msg;
 };
 
@@ -283,6 +290,14 @@ static void openchannel2_hook_serialize(struct openchannel2_payload *payload,
 				    payload->shutdown_scriptpubkey);
 	json_add_amount_sat_only(stream, "channel_max_msat",
 				 payload->channel_max);
+	if (!amount_sat_zero(payload->requested_lease_amt)) {
+		json_add_amount_sat_only(stream, "requested_lease_msat",
+					 payload->requested_lease_amt);
+		json_add_num(stream, "lease_blockheight_start",
+			     payload->lease_blockheight_start);
+		json_add_num(stream, "node_blockheight",
+			     payload->node_blockheight);
+	}
 	json_object_end(stream);
 }
 
@@ -619,11 +634,11 @@ rbf_channel_hook_deserialize(struct rbf_channel_payload *payload,
 		fatal("Plugin failed to supply our_funding_msat field");
 
 	if (payload->psbt
-	    && amount_sat_eq(payload->our_funding, AMOUNT_SAT(0)))
+	    && amount_sat_zero(payload->our_funding))
 		fatal("Plugin failed to supply our_funding_msat field");
 
 	if (!payload->psbt &&
-		!amount_sat_eq(payload->our_funding, AMOUNT_SAT(0))) {
+		!amount_sat_zero(payload->our_funding)) {
 
 		log_broken(channel->log, "`our_funding_msat` returned"
 			   " but no `psbt` present. %.*s",
@@ -687,7 +702,8 @@ openchannel2_hook_cb(struct openchannel2_payload *payload STEALS)
 	msg = towire_dualopend_got_offer_reply(NULL,
 					       payload->accepter_funding,
 					       payload->psbt,
-					       payload->our_shutdown_scriptpubkey);
+					       payload->our_shutdown_scriptpubkey,
+					       payload->rates);
 
 	subd_send_msg(dualopend, take(msg));
 }
@@ -699,6 +715,7 @@ openchannel2_hook_deserialize(struct openchannel2_payload *payload,
 			      const jsmntok_t *toks)
 {
 	const u8 *shutdown_script;
+	const char *err;
 	struct subd *dualopend = payload->dualopend;
 
 	/* If our daemon died, we're done */
@@ -756,6 +773,38 @@ openchannel2_hook_deserialize(struct openchannel2_payload *payload,
 	else
 		payload->our_shutdown_scriptpubkey = shutdown_script;
 
+
+	struct amount_sat sats;
+	struct amount_msat msats;
+	payload->rates = tal(payload, struct lease_rates);
+	err = json_scan(payload, buffer, toks,
+			"{lease_fee_base_msat:%"
+			",lease_fee_basis:%"
+			",channel_fee_max_base_msat:%"
+			",channel_fee_max_proportional_thousandths:%"
+			",funding_weight:%}",
+			JSON_SCAN(json_to_sat, &sats),
+			JSON_SCAN(json_to_u16,
+				  &payload->rates->lease_fee_basis),
+			JSON_SCAN(json_to_msat, &msats),
+			JSON_SCAN(json_to_u16,
+				  &payload->rates->channel_fee_max_proportional_thousandths),
+			JSON_SCAN(json_to_u16,
+				  &payload->rates->funding_weight));
+
+	/* It's possible they didn't send these back! */
+	if (err)
+		payload->rates = tal_free(payload->rates);
+
+	/* Convert to u32s */
+	if (payload->rates &&
+	    !lease_rates_set_lease_fee_sat(payload->rates, sats))
+		fatal("Plugin sent overflowing `lease_fee_base_msat`");
+
+	if (payload->rates &&
+	    !lease_rates_set_chan_fee_base_msat(payload->rates, msats))
+		fatal("Plugin sent overflowing `channel_fee_max_base_msat`");
+
 	/* Add a serial_id to everything that doesn't have one yet */
 	if (payload->psbt)
 		psbt_add_serials(payload->psbt, TX_ACCEPTER);
@@ -777,11 +826,11 @@ openchannel2_hook_deserialize(struct openchannel2_payload *payload,
 		fatal("Plugin failed to supply our_funding_msat field");
 
 	if (payload->psbt
-	    && amount_sat_eq(payload->accepter_funding, AMOUNT_SAT(0)))
+	    && amount_sat_zero(payload->accepter_funding))
 		fatal("Plugin failed to supply our_funding_msat field");
 
 	if (!payload->psbt
-	    && !amount_sat_eq(payload->accepter_funding, AMOUNT_SAT(0))) {
+	    && !amount_sat_zero(payload->accepter_funding)) {
 		/* Gotta give a PSBT if you set the accepter_funding amount */
 		/* Let dualopend know we've failed */
 		payload->err_msg = "Client error. Unable to continue";
@@ -1064,7 +1113,12 @@ wallet_update_channel(struct lightningd *ld,
 		      struct amount_sat total_funding,
 		      struct amount_sat our_funding,
 		      u32 funding_feerate,
-		      struct wally_psbt *psbt STEALS)
+		      struct wally_psbt *psbt STEALS,
+		      const u32 lease_expiry,
+		      secp256k1_ecdsa_signature *lease_commit_sig STEALS,
+		      const u32 lease_chan_max_msat,
+		      const u16 lease_chan_max_ppt,
+		      const u32 lease_blockheight_start)
 {
 	struct amount_msat our_msat;
 	struct channel_inflight *inflight;
@@ -1084,6 +1138,17 @@ wallet_update_channel(struct lightningd *ld,
 	channel->our_msat = our_msat;
 	channel->msat_to_us_min = our_msat;
 	channel->msat_to_us_max = our_msat;
+	channel->lease_expiry = lease_expiry;
+
+	tal_free(channel->lease_commit_sig);
+	channel->lease_commit_sig = tal_steal(channel, lease_commit_sig);
+	channel->lease_chan_max_msat = lease_chan_max_msat;
+	channel->lease_chan_max_ppt = lease_chan_max_ppt;
+
+	tal_free(channel->blockheight_states);
+	channel->blockheight_states = new_height_states(channel,
+							channel->opener,
+							&lease_blockheight_start);
 
 	channel_set_last_tx(channel,
 			    tal_steal(channel, remote_commit),
@@ -1102,7 +1167,12 @@ wallet_update_channel(struct lightningd *ld,
 				channel->our_funds,
 				psbt,
 				channel->last_tx,
-				channel->last_sig);
+				channel->last_sig,
+				channel->lease_expiry,
+				channel->lease_commit_sig,
+				channel->lease_chan_max_msat,
+				channel->lease_chan_max_ppt,
+				lease_blockheight_start);
 	wallet_inflight_add(ld->wallet, inflight);
 
 	return inflight;
@@ -1123,7 +1193,12 @@ wallet_commit_channel(struct lightningd *ld,
 		      u32 commitment_feerate,
 		      const u8 *our_upfront_shutdown_script,
 		      const u8 *remote_upfront_shutdown_script,
-		      struct wally_psbt *psbt STEALS)
+		      struct wally_psbt *psbt STEALS,
+		      const u32 lease_blockheight_start,
+		      const u32 lease_expiry,
+		      secp256k1_ecdsa_signature *lease_commit_sig STEALS,
+		      const u32 lease_chan_max_msat,
+		      const u16 lease_chan_max_ppt)
 {
 	struct amount_msat our_msat;
 	struct channel_inflight *inflight;
@@ -1190,6 +1265,18 @@ wallet_commit_channel(struct lightningd *ld,
 	 * in theory, but it's only used for timing out. */
 	channel->first_blocknum = get_block_height(ld->topology);
 
+	/* Update lease info for channel */
+	channel->blockheight_states = new_height_states(channel,
+							channel->opener,
+							&lease_blockheight_start);
+	channel->lease_expiry = lease_expiry;
+
+	tal_free(channel->lease_commit_sig);
+	channel->lease_commit_sig = tal_steal(channel, lease_commit_sig);
+
+	channel->lease_chan_max_msat = lease_chan_max_msat;
+	channel->lease_chan_max_ppt = lease_chan_max_ppt;
+
 	/* Now we finally put it in the database. */
 	wallet_channel_insert(ld->wallet, channel);
 
@@ -1202,7 +1289,12 @@ wallet_commit_channel(struct lightningd *ld,
 				channel->our_funds,
 				psbt,
 				channel->last_tx,
-				channel->last_sig);
+				channel->last_sig,
+				channel->lease_expiry,
+				channel->lease_commit_sig,
+				channel->lease_chan_max_msat,
+				channel->lease_chan_max_ppt,
+				lease_blockheight_start);
 	wallet_inflight_add(ld->wallet, inflight);
 
 	return inflight;
@@ -1494,6 +1586,47 @@ static void handle_peer_tx_sigs_sent(struct subd *dualopend,
 	}
 }
 
+static void handle_dry_run_finished(struct subd *dualopend, const u8 *msg)
+{
+	struct json_stream *response;
+	struct channel_id c_id;
+	struct channel *channel = dualopend->channel;
+	struct command *cmd;
+	struct lease_rates *rates;
+	struct amount_sat their_funding, our_funding;
+
+	assert(channel->open_attempt);
+	cmd = channel->open_attempt->cmd;
+	channel->open_attempt->cmd = NULL;
+
+	if (!fromwire_dualopend_dry_run(msg, msg, &c_id,
+					&our_funding,
+					&their_funding,
+					&rates)) {
+		channel_internal_error(channel,
+				       "Bad WIRE_DUALOPEND_DRY_RUN_FINISHED: %s",
+				       tal_hex(msg, msg));
+
+		return;
+	}
+
+	/* Free up this open attempt */
+	channel->open_attempt = tal_free(channel->open_attempt);
+
+	response = json_stream_success(cmd);
+	json_add_amount_sat_only(response, "our_funding_msat", our_funding);
+	json_add_amount_sat_only(response, "their_funding_msat", their_funding);
+
+	if (rates) {
+		json_add_lease_rates(response, rates);
+		/* As a convenience, add a hexstring version of this data */
+		json_add_string(response, "compact_lease",
+				lease_rates_tohex(tmpctx, rates));
+	}
+
+	was_pending(command_success(cmd, response));
+}
+
 static void handle_peer_locked(struct subd *dualopend, const u8 *msg)
 {
 	struct pubkey remote_per_commit;
@@ -1686,7 +1819,9 @@ static void accepter_got_offer(struct subd *dualopend,
 					  &payload->max_accepted_htlcs,
 					  &payload->channel_flags,
 					  &payload->locktime,
-					  &payload->shutdown_scriptpubkey)) {
+					  &payload->shutdown_scriptpubkey,
+					  &payload->requested_lease_amt,
+					  &payload->lease_blockheight_start)) {
 		channel_internal_error(channel, "Bad DUALOPEND_GOT_OFFER: %s",
 				       tal_hex(tmpctx, msg));
 		return;
@@ -1699,6 +1834,7 @@ static void accepter_got_offer(struct subd *dualopend,
 	 * the plugin */
 	payload->feerate_our_min = feerate_min(dualopend->ld, NULL);
 	payload->feerate_our_max = feerate_max(dualopend->ld, NULL);
+	payload->node_blockheight = get_block_height(dualopend->ld->topology);
 
 	payload->channel_max = chainparams->max_funding;
 	if (feature_negotiated(dualopend->ld->our_features,
@@ -1823,6 +1959,72 @@ static void handle_peer_tx_sigs_msg(struct subd *dualopend,
 	/* Send notification with peer's signed PSBT */
 	notify_openchannel_peer_sigs(ld, &channel->cid,
 				     inflight->funding_psbt);
+}
+
+static bool verify_option_will_fund_signature(struct peer *peer,
+					      struct pubkey *funding_pubkey,
+					      u32 lease_expiry,
+					      u32 chan_fee_msat,
+					      u16 chan_fee_ppt,
+					      const secp256k1_ecdsa_signature *sig)
+
+{
+	struct pubkey their_pubkey;
+	struct sha256 sha;
+	int ret;
+
+	lease_rates_get_commitment(funding_pubkey, lease_expiry,
+				   chan_fee_msat, chan_fee_ppt,
+				   &sha);
+
+	if (!pubkey_from_node_id(&their_pubkey, &peer->id)) {
+		log_broken(peer->ld->log,
+			   "Unable to extract pubkey from peer's node id %s",
+			   type_to_string(tmpctx, struct node_id, &peer->id));
+		return false;
+	}
+
+	ret = secp256k1_ecdsa_verify(secp256k1_ctx, sig, sha.u.u8,
+				     &their_pubkey.pubkey);
+	return ret == 1;
+}
+
+static void handle_validate_lease(struct subd *dualopend,
+				  const u8 *msg)
+{
+	const secp256k1_ecdsa_signature sig;
+	u16 chan_fee_max_ppt;
+	u32 chan_fee_max_base_msat, lease_expiry;
+	struct pubkey their_pubkey;
+	struct channel *chan;
+	char *err_msg;
+
+	if (!fromwire_dualopend_validate_lease(msg,
+					       cast_const(secp256k1_ecdsa_signature *, &sig),
+					       &lease_expiry,
+					       &chan_fee_max_base_msat,
+					       &chan_fee_max_ppt,
+					       &their_pubkey)) {
+		channel_internal_error(dualopend->channel,
+				       "Bad DUALOPEND_VALIDATE_LEASE: %s",
+				       tal_hex(tmpctx, msg));
+		return;
+	}
+
+	assert(dualopend->channel);
+	chan = dualopend->channel;
+
+	if (!verify_option_will_fund_signature(chan->peer, &their_pubkey,
+					       lease_expiry,
+					       chan_fee_max_base_msat,
+					       chan_fee_max_ppt,
+					       &sig))
+		err_msg = "Unable to verify sig";
+	else
+		err_msg = NULL;
+
+	subd_send_msg(dualopend,
+		      take(towire_dualopend_validate_lease_reply(NULL, err_msg)));
 }
 
 static void handle_validate_rbf(struct subd *dualopend,
@@ -1986,12 +2188,15 @@ json_openchannel_bump(struct command *cmd,
 	struct channel *channel;
 	struct amount_sat *amount, psbt_val;
 	struct wally_psbt *psbt;
+	u32 last_feerate_perkw, next_feerate_min, *feerate_per_kw_funding;
 	struct open_attempt *oa;
 
 	if (!param(cmd, buffer, params,
 		   p_req("channel_id", param_channel_id, &cid),
 		   p_req("amount", param_sat, &amount),
 		   p_req("initialpsbt", param_psbt, &psbt),
+		   p_opt("funding_feerate", param_feerate,
+			 &feerate_per_kw_funding),
 		   NULL))
 		return command_param_failed();
 
@@ -2032,6 +2237,20 @@ json_openchannel_bump(struct command *cmd,
 				    "Unknown channel %s",
 				    type_to_string(tmpctx, struct channel_id,
 						   cid));
+
+	last_feerate_perkw = channel_last_funding_feerate(channel);
+	next_feerate_min = last_feerate_perkw * 65 / 64;
+	assert(next_feerate_min > last_feerate_perkw);
+	if (!feerate_per_kw_funding) {
+		feerate_per_kw_funding = tal(cmd, u32);
+		*feerate_per_kw_funding = next_feerate_min;
+	} else if (*feerate_per_kw_funding < next_feerate_min)
+		return command_fail(cmd, JSONRPC2_INVALID_PARAMS,
+				    "Next feerate must be at least 1/64th"
+				    " greater than the last. Min req %u,"
+				    " you proposed %u",
+				    next_feerate_min,
+				    *feerate_per_kw_funding);
 
 	/* BOLT #2:
 	 *  - if both nodes advertised `option_support_large_channel`:
@@ -2092,7 +2311,9 @@ json_openchannel_bump(struct command *cmd,
 						   psbt));
 
 	subd_send_msg(channel->owner,
-		      take(towire_dualopend_rbf_init(NULL, *amount, psbt)));
+		      take(towire_dualopend_rbf_init(NULL, *amount,
+						     *feerate_per_kw_funding,
+						     psbt)));
 	return command_still_pending(cmd);
 }
 
@@ -2265,10 +2486,33 @@ static struct command_result *json_openchannel_update(struct command *cmd,
 	return command_still_pending(cmd);
 }
 
+static struct command_result *init_set_feerate(struct command *cmd,
+					       u32 **feerate_per_kw,
+					       u32 **feerate_per_kw_funding)
+
+{
+	if (!*feerate_per_kw_funding) {
+		*feerate_per_kw_funding = tal(cmd, u32);
+		**feerate_per_kw_funding = opening_feerate(cmd->ld->topology);
+		if (!**feerate_per_kw_funding)
+			return command_fail(cmd, LIGHTNINGD,
+					    "`funding_feerate` not specified and fee "
+					    "estimation failed");
+	}
+	if (!*feerate_per_kw) {
+		*feerate_per_kw = tal(cmd, u32);
+		/* FIXME: Anchors are on by default, we should use the lowest
+		 * possible feerate */
+		**feerate_per_kw = **feerate_per_kw_funding;
+	}
+
+	return NULL;
+}
+
 static struct command_result *json_openchannel_init(struct command *cmd,
-						     const char *buffer,
-						     const jsmntok_t *obj UNNEEDED,
-						     const jsmntok_t *params)
+						    const char *buffer,
+						    const jsmntok_t *obj UNNEEDED,
+						    const jsmntok_t *params)
 {
 	struct node_id *id;
 	struct peer *peer;
@@ -2276,10 +2520,12 @@ static struct command_result *json_openchannel_init(struct command *cmd,
 	bool *announce_channel;
 	u32 *feerate_per_kw_funding;
 	u32 *feerate_per_kw;
-	struct amount_sat *amount, psbt_val;
+	struct amount_sat *amount, psbt_val, *request_amt;
 	struct wally_psbt *psbt;
 	const u8 *our_upfront_shutdown_script;
 	struct open_attempt *oa;
+	struct lease_rates *rates;
+	struct command_result *res;
 	u8 *msg;
 
 	if (!param(cmd, buffer, params,
@@ -2290,9 +2536,16 @@ static struct command_result *json_openchannel_init(struct command *cmd,
 		   p_opt("funding_feerate", param_feerate, &feerate_per_kw_funding),
 		   p_opt_def("announce", param_bool, &announce_channel, true),
 		   p_opt("close_to", param_bitcoin_address, &our_upfront_shutdown_script),
+		   p_opt_def("request_amt", param_sat, &request_amt, AMOUNT_SAT(0)),
+		   p_opt("compact_lease", param_lease_hex, &rates),
 		   NULL))
 		return command_param_failed();
 
+	/* Gotta expect some rates ! */
+	if (!amount_sat_zero(*request_amt) && !rates)
+		return command_fail(cmd, JSONRPC2_INVALID_PARAMS,
+				    "Must pass in 'compact_lease' if requesting"
+				    " funds from peer");
 	psbt_val = AMOUNT_SAT(0);
 	for (size_t i = 0; i < psbt->num_inputs; i++) {
 		struct amount_sat in_amt = psbt_input_get_amount(psbt, i);
@@ -2318,20 +2571,9 @@ static struct command_result *json_openchannel_init(struct command *cmd,
 						   struct wally_psbt,
 						   psbt));
 
-	if (!feerate_per_kw_funding) {
-		feerate_per_kw_funding = tal(cmd, u32);
-		*feerate_per_kw_funding = opening_feerate(cmd->ld->topology);
-		if (!*feerate_per_kw_funding)
-			return command_fail(cmd, LIGHTNINGD,
-					    "`funding_feerate` not specified and fee "
-					    "estimation failed");
-	}
-	if (!feerate_per_kw) {
-		feerate_per_kw = tal(cmd, u32);
-		/* FIXME: Anchors are on by default, we should use the lowest
-		 * possible feerate */
-		*feerate_per_kw = *feerate_per_kw_funding;
-	}
+	res = init_set_feerate(cmd, &feerate_per_kw, &feerate_per_kw_funding);
+	if (res)
+		return res;
 
 	if (!topology_synced(cmd->ld->topology)) {
 		return command_fail(cmd, FUNDING_STILL_SYNCING_BITCOIN,
@@ -2421,7 +2663,11 @@ static struct command_result *json_openchannel_init(struct command *cmd,
 					   oa->our_upfront_shutdown_script,
 					   *feerate_per_kw,
 					   *feerate_per_kw_funding,
-					   channel->channel_flags);
+					   channel->channel_flags,
+					   *request_amt,
+					   get_block_height(cmd->ld->topology),
+					   false,
+					   rates);
 
 	subd_send_msg(channel->owner, take(msg));
 	return command_still_pending(cmd);
@@ -2515,8 +2761,9 @@ static void handle_commit_received(struct subd *dualopend,
 	struct bitcoin_tx *remote_commit;
 	struct bitcoin_signature remote_commit_sig;
 	struct bitcoin_txid funding_txid;
-	u16 funding_outnum;
-	u32 feerate_funding, feerate_commitment;
+	u16 funding_outnum, lease_chan_max_ppt;
+	u32 feerate_funding, feerate_commitment, lease_expiry,
+	    lease_chan_max_msat, lease_blockheight_start;
 	struct amount_sat total_funding, funding_ours;
 	u8 *remote_upfront_shutdown_script,
 	   *local_upfront_shutdown_script;
@@ -2526,6 +2773,7 @@ static void handle_commit_received(struct subd *dualopend,
 	struct openchannel2_psbt_payload *payload;
 	struct channel_inflight *inflight;
 	struct command *cmd = oa->cmd;
+	secp256k1_ecdsa_signature *lease_commit_sig;
 
 	if (!fromwire_dualopend_commit_rcvd(tmpctx, msg,
 					    &channel_info.their_config,
@@ -2547,7 +2795,12 @@ static void handle_commit_received(struct subd *dualopend,
 					    &feerate_funding,
 					    &feerate_commitment,
 					    &local_upfront_shutdown_script,
-					    &remote_upfront_shutdown_script)) {
+					    &remote_upfront_shutdown_script,
+					    &lease_blockheight_start,
+					    &lease_expiry,
+					    &lease_commit_sig,
+					    &lease_chan_max_msat,
+					    &lease_chan_max_ppt)) {
 		channel_internal_error(channel,
 				       "Bad WIRE_DUALOPEND_COMMIT_RCVD: %s",
 				       tal_hex(msg, msg));
@@ -2588,7 +2841,12 @@ static void handle_commit_received(struct subd *dualopend,
 								oa->our_upfront_shutdown_script :
 								local_upfront_shutdown_script,
 						       remote_upfront_shutdown_script,
-						       psbt))) {
+						       psbt,
+						       lease_blockheight_start,
+						       lease_expiry,
+						       lease_commit_sig,
+						       lease_chan_max_msat,
+						       lease_chan_max_ppt))) {
 			channel_internal_error(channel,
 					       "wallet_commit_channel failed"
 					       " (chan %s)",
@@ -2617,7 +2875,12 @@ static void handle_commit_received(struct subd *dualopend,
 						       total_funding,
 						       funding_ours,
 						       feerate_funding,
-						       psbt))) {
+						       psbt,
+						       lease_expiry,
+						       lease_commit_sig,
+						       lease_chan_max_msat,
+						       lease_chan_max_ppt,
+						       lease_blockheight_start))) {
 			channel_internal_error(channel,
 					       "wallet_update_channel failed"
 					       " (chan %s)",
@@ -2706,6 +2969,9 @@ static unsigned int dual_opend_msg(struct subd *dualopend,
 		case WIRE_DUALOPEND_RBF_VALIDATE:
 			handle_validate_rbf(dualopend, msg);
 			return 0;
+		case WIRE_DUALOPEND_VALIDATE_LEASE:
+			handle_validate_lease(dualopend, msg);
+			return 0;
 		case WIRE_DUALOPEND_FUNDING_SIGS:
 			handle_peer_tx_sigs_msg(dualopend, msg);
 			return 0;
@@ -2714,6 +2980,9 @@ static unsigned int dual_opend_msg(struct subd *dualopend,
 			return 0;
 		case WIRE_DUALOPEND_PEER_LOCKED:
 			handle_peer_locked(dualopend, msg);
+			return 0;
+		case WIRE_DUALOPEND_DRY_RUN:
+			handle_dry_run_finished(dualopend, msg);
 			return 0;
 		case WIRE_DUALOPEND_CHANNEL_LOCKED:
 			if (tal_count(fds) != 3)
@@ -2741,6 +3010,7 @@ static unsigned int dual_opend_msg(struct subd *dualopend,
 		case WIRE_DUALOPEND_GOT_OFFER_REPLY:
 		case WIRE_DUALOPEND_GOT_RBF_OFFER_REPLY:
 		case WIRE_DUALOPEND_RBF_VALID:
+		case WIRE_DUALOPEND_VALIDATE_LEASE_REPLY:
 		case WIRE_DUALOPEND_FAIL:
 		case WIRE_DUALOPEND_PSBT_UPDATED:
 		case WIRE_DUALOPEND_SEND_TX_SIGS:
@@ -2751,13 +3021,9 @@ static unsigned int dual_opend_msg(struct subd *dualopend,
 	}
 
 	switch ((enum common_wire)t) {
-#if DEVELOPER
 	case WIRE_CUSTOMMSG_IN:
 		handle_custommsg_in(dualopend->ld, dualopend->node_id, msg);
 		return 0;
-#else
-	case WIRE_CUSTOMMSG_IN:
-#endif
 	/* We send these. */
 	case WIRE_CUSTOMMSG_OUT:
 		break;
@@ -2768,6 +3034,118 @@ static unsigned int dual_opend_msg(struct subd *dualopend,
 	tal_free(dualopend);
 	return 0;
 }
+
+#if DEVELOPER
+static struct command_result *json_queryrates(struct command *cmd,
+					      const char *buffer,
+					      const jsmntok_t *obj UNNEEDED,
+					      const jsmntok_t *params)
+{
+	struct node_id *id;
+	struct peer *peer;
+	struct channel *channel;
+	u32 *feerate_per_kw_funding;
+	u32 *feerate_per_kw;
+	struct amount_sat *amount, *request_amt;
+	struct wally_psbt *psbt;
+	struct open_attempt *oa;
+	u8 *msg;
+	struct command_result *res;
+
+	if (!param(cmd, buffer, params,
+		   p_req("id", param_node_id, &id),
+		   p_req("amount", param_sat, &amount),
+		   p_req("request_amt", param_sat, &request_amt),
+		   p_opt("commitment_feerate", param_feerate, &feerate_per_kw),
+		   p_opt("funding_feerate", param_feerate, &feerate_per_kw_funding),
+		   NULL))
+		return command_param_failed();
+
+	res = init_set_feerate(cmd, &feerate_per_kw, &feerate_per_kw_funding);
+	if (res)
+		return res;
+
+	peer = peer_by_id(cmd->ld, id);
+	if (!peer) {
+		return command_fail(cmd, FUNDING_UNKNOWN_PEER, "Unknown peer");
+	}
+
+	/* We can't query rates for a peer we have a channel with */
+	channel = peer_active_channel(peer);
+	if (channel)
+		return command_fail(cmd, LIGHTNINGD, "Peer in state %s,"
+				    " can't query peer's rates if already"
+				    " have a channel",
+				    channel_state_name(channel));
+
+	channel = peer_unsaved_channel(peer);
+	if (!channel || !channel->owner)
+		return command_fail(cmd, FUNDING_PEER_NOT_CONNECTED,
+				    "Peer not connected");
+	if (channel->open_attempt
+	     || !list_empty(&channel->inflights))
+		return command_fail(cmd, FUNDING_STATE_INVALID,
+				    "Channel funding in-progress. %s",
+				    channel_state_name(channel));
+
+	if (!feature_negotiated(cmd->ld->our_features,
+			        peer->their_features,
+				OPT_DUAL_FUND)) {
+		return command_fail(cmd, FUNDING_V2_NOT_SUPPORTED,
+				    "v2 openchannel not supported "
+				    "by peer, can't query rates");
+	}
+
+	/* BOLT #2:
+	 *  - if both nodes advertised `option_support_large_channel`:
+	 *    - MAY set `funding_satoshis` greater than or equal to 2^24 satoshi.
+	 *  - otherwise:
+	 *    - MUST set `funding_satoshis` to less than 2^24 satoshi.
+	 */
+	if (!feature_negotiated(cmd->ld->our_features,
+				peer->their_features, OPT_LARGE_CHANNELS)
+	    && amount_sat_greater(*amount, chainparams->max_funding))
+		return command_fail(cmd, FUND_MAX_EXCEEDED,
+				    "Amount exceeded %s",
+				    type_to_string(tmpctx, struct amount_sat,
+						   &chainparams->max_funding));
+
+	/* Get a new open_attempt going, keeps us from re-initing
+	 * while looking */
+	channel->opener = LOCAL;
+	channel->open_attempt = oa = new_channel_open_attempt(channel);
+	channel->channel_flags = OUR_CHANNEL_FLAGS;
+	oa->funding = *amount;
+	oa->cmd = cmd;
+	/* empty psbt to start */
+	psbt = create_psbt(tmpctx, 0, 0, 0);
+
+	msg = towire_dualopend_opener_init(NULL,
+					   psbt, *amount,
+					   oa->our_upfront_shutdown_script,
+					   *feerate_per_kw,
+					   *feerate_per_kw_funding,
+					   channel->channel_flags,
+					   *request_amt,
+					   get_block_height(cmd->ld->topology),
+					   true,
+					   NULL);
+
+	subd_send_msg(channel->owner, take(msg));
+	return command_still_pending(cmd);
+
+}
+
+static const struct json_command queryrates_command = {
+	"dev-queryrates",
+	"channels",
+	json_queryrates,
+	"Ask a peer what their contribution and liquidity rates are"
+	" for the given {amount} and {requested_amt}"
+};
+
+AUTODATA(json_command, &queryrates_command);
+#endif /* DEVELOPER */
 
 static const struct json_command openchannel_init_command = {
 	"openchannel_init",
@@ -2824,7 +3202,8 @@ static void start_fresh_dualopend(struct peer *peer,
 
 	hsmfd = hsm_get_client_fd(peer->ld, &peer->id, channel->unsaved_dbid,
 				  HSM_CAP_COMMITMENT_POINT
-				  | HSM_CAP_SIGN_REMOTE_TX);
+				  | HSM_CAP_SIGN_REMOTE_TX
+				  | HSM_CAP_SIGN_WILL_FUND_OFFER);
 
 	channel->owner = new_channel_subd(peer->ld,
 					  "lightning_dualopend",
@@ -2877,10 +3256,10 @@ void peer_restart_dualopend(struct peer *peer,
 			    struct per_peer_state *pps,
 			    struct channel *channel)
 {
-	u32 max_to_self_delay;
+	u32 max_to_self_delay, blockheight;
 	struct amount_msat min_effective_htlc_capacity;
 	struct channel_config unused_config;
-	struct channel_inflight *inflight, *first_inflight;
+	struct channel_inflight *inflight;
         int hsmfd;
 	u8 *msg;
 
@@ -2890,7 +3269,8 @@ void peer_restart_dualopend(struct peer *peer,
 	}
 	hsmfd = hsm_get_client_fd(peer->ld, &peer->id, channel->dbid,
 				  HSM_CAP_COMMITMENT_POINT
-				  | HSM_CAP_SIGN_REMOTE_TX);
+				  | HSM_CAP_SIGN_REMOTE_TX
+				  | HSM_CAP_SIGN_WILL_FUND_OFFER);
 
 	channel_set_owner(channel,
 			  new_channel_subd(peer->ld, "lightning_dualopend",
@@ -2920,13 +3300,9 @@ void peer_restart_dualopend(struct peer *peer,
 
 	inflight = channel_current_inflight(channel);
 	assert(inflight);
+	blockheight = get_blockheight(channel->blockheight_states,
+				      channel->opener, LOCAL);
 
-	/* Get the first inflight to figure out the original feerate
-	 * for this channel. It's fine if it's the same as the current */
-	first_inflight = list_top(&channel->inflights,
-				  struct channel_inflight,
-				  list);
-	assert(first_inflight);
 	msg = towire_dualopend_reinit(NULL,
 				      chainparams,
 				      peer->ld->our_features,
@@ -2943,7 +3319,6 @@ void peer_restart_dualopend(struct peer *peer,
 				      channel->minimum_depth,
 				      &inflight->funding->txid,
 				      inflight->funding->outnum,
-				      first_inflight->funding->feerate,
 				      inflight->funding->feerate,
 				      channel->funding,
 				      channel->our_msat,
@@ -2959,7 +3334,12 @@ void peer_restart_dualopend(struct peer *peer,
 				      channel->remote_upfront_shutdown_script,
 				      inflight->remote_tx_sigs,
                                       channel->fee_states,
-				      channel->channel_flags);
+				      channel->channel_flags,
+				      blockheight,
+				      inflight->lease_expiry,
+				      inflight->lease_commit_sig,
+				      inflight->lease_chan_max_msat,
+				      inflight->lease_chan_max_ppt);
 
 
 	subd_send_msg(channel->owner, take(msg));

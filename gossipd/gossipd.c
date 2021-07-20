@@ -32,6 +32,7 @@
 #include <common/daemon_conn.h>
 #include <common/ecdh_hsmd.h>
 #include <common/features.h>
+#include <common/lease_rates.h>
 #include <common/memleak.h>
 #include <common/ping.h>
 #include <common/pseudorand.h>
@@ -157,13 +158,15 @@ static bool get_node_announcement(const tal_t *ctx,
 				  u8 rgb_color[3],
 				  u8 alias[32],
 				  u8 **features,
-				  struct wireaddr **wireaddrs)
+				  struct wireaddr **wireaddrs,
+				  struct lease_rates **rates)
 {
 	const u8 *msg;
 	struct node_id id;
 	secp256k1_ecdsa_signature signature;
 	u32 timestamp;
 	u8 *addresses;
+	struct tlv_node_ann_tlvs *na_tlvs;
 
 	if (!n->bcast.index)
 		return false;
@@ -171,11 +174,13 @@ static bool get_node_announcement(const tal_t *ctx,
 	msg = gossip_store_get(tmpctx, daemon->rstate->gs, n->bcast.index);
 
 	/* Note: validity of node_id is already checked. */
+	na_tlvs = tlv_node_ann_tlvs_new(ctx);
 	if (!fromwire_node_announcement(ctx, msg,
 					&signature, features,
 					&timestamp,
 					&id, rgb_color, alias,
-					&addresses)) {
+					&addresses,
+					na_tlvs)) {
 		status_broken("Bad local node_announcement @%u: %s",
 			      n->bcast.index, tal_hex(tmpctx, msg));
 		return false;
@@ -194,6 +199,8 @@ static bool get_node_announcement(const tal_t *ctx,
 	}
 
 	*wireaddrs = fromwire_wireaddr_array(ctx, addresses);
+	*rates = tal_steal(ctx, na_tlvs->option_will_fund);
+
 	tal_free(addresses);
 	return true;
 }
@@ -205,14 +212,15 @@ static bool get_node_announcement_by_id(const tal_t *ctx,
 					u8 rgb_color[3],
 					u8 alias[32],
 					u8 **features,
-					struct wireaddr **wireaddrs)
+					struct wireaddr **wireaddrs,
+					struct lease_rates **rates)
 {
 	struct node *n = get_node(daemon->rstate, node_id);
 	if (!n)
 		return false;
 
 	return get_node_announcement(ctx, daemon, n, rgb_color, alias,
-				     features, wireaddrs);
+				     features, wireaddrs, rates);
 }
 
 /*~Routines to handle gossip messages from peer, forwarded by subdaemons.
@@ -281,7 +289,7 @@ static u8 *handle_channel_update_msg(struct peer *peer, const u8 *msg)
 	 * routing until you have both anyway.  For this reason, we might have
 	 * just sent out our own channel_announce, so we check if it's time to
 	 * send a node_announcement too. */
-	maybe_send_own_node_announce(peer->daemon);
+	maybe_send_own_node_announce(peer->daemon, false);
 	return NULL;
 }
 
@@ -728,6 +736,7 @@ static struct io_plan *peer_msg_in(struct io_conn *conn,
 	case WIRE_COMMITMENT_SIGNED:
 	case WIRE_REVOKE_AND_ACK:
 	case WIRE_UPDATE_FEE:
+	case WIRE_UPDATE_BLOCKHEIGHT:
 	case WIRE_CHANNEL_REESTABLISH:
 	case WIRE_ANNOUNCEMENT_SIGNATURES:
 	case WIRE_GOSSIP_TIMESTAMP_FILTER:
@@ -918,6 +927,7 @@ static struct io_plan *connectd_get_address(struct io_conn *conn,
 	u8 alias[32];
 	u8 *features;
 	struct wireaddr *addrs;
+	struct lease_rates *rates;
 
 	if (!fromwire_gossipd_get_addrs(msg, &id)) {
 		status_broken("Bad gossipd_get_addrs msg from connectd: %s",
@@ -926,7 +936,8 @@ static struct io_plan *connectd_get_address(struct io_conn *conn,
 	}
 
 	if (!get_node_announcement_by_id(tmpctx, daemon, &id,
-					 rgb_color, alias, &features, &addrs))
+					 rgb_color, alias, &features, &addrs,
+					 &rates))
 		addrs = NULL;
 
 	daemon_conn_send(daemon->connectd,
@@ -1121,7 +1132,7 @@ static struct io_plan *gossip_init(struct io_conn *conn,
 
 	/* If that announced channels, we can announce ourselves (options
 	 * or addresses might have changed!) */
-	maybe_send_own_node_announce(daemon);
+	maybe_send_own_node_announce(daemon, true);
 
 	/* Start the twice- weekly refresh timer. */
 	notleak(new_reltimer(&daemon->timers, daemon,
@@ -1347,7 +1358,7 @@ static struct io_plan *handle_txout_reply(struct io_conn *conn,
 
 	/* Anywhere we might have announced a channel, we check if it's time to
 	 * announce ourselves (ie. if we just announced our own first channel) */
-	maybe_send_own_node_announce(daemon);
+	maybe_send_own_node_announce(daemon, false);
 
 	return daemon_conn_read_next(conn, daemon->master);
 }
@@ -1396,6 +1407,27 @@ static struct io_plan *inject_gossip(struct io_conn *conn,
 err_extracted:
 	daemon_conn_send(daemon->master,
 			 take(towire_gossipd_addgossip_reply(NULL, err)));
+	return daemon_conn_read_next(conn, daemon->master);
+}
+
+static struct io_plan *handle_new_lease_rates(struct io_conn *conn,
+					      struct daemon *daemon,
+					      const u8 *msg)
+{
+	struct lease_rates *rates = tal(daemon, struct lease_rates);
+
+	if (!fromwire_gossipd_new_lease_rates(msg, rates))
+		master_badmsg(WIRE_GOSSIPD_NEW_LEASE_RATES, msg);
+
+	daemon->rates = tal_free(daemon->rates);
+	if (!lease_rates_empty(rates))
+		daemon->rates = rates;
+	else
+		tal_free(rates);
+
+	/* Send the update over to the peer */
+	maybe_send_own_node_announce(daemon, false);
+
 	return daemon_conn_read_next(conn, daemon->master);
 }
 
@@ -1486,6 +1518,9 @@ static struct io_plan *recv_req(struct io_conn *conn,
 	case WIRE_GOSSIPD_ADDGOSSIP:
 		return inject_gossip(conn, daemon, msg);
 
+	case WIRE_GOSSIPD_NEW_LEASE_RATES:
+		return handle_new_lease_rates(conn, daemon, msg);
+
 #if DEVELOPER
 	case WIRE_GOSSIPD_DEV_SET_MAX_SCIDS_ENCODE_SIZE:
 		return dev_set_max_scids_encode_size(conn, daemon, msg);
@@ -1548,6 +1583,7 @@ int main(int argc, char *argv[])
 	daemon->deferred_txouts = tal_arr(daemon, struct short_channel_id, 0);
 	daemon->node_announce_timer = NULL;
 	daemon->current_blockheight = 0; /* i.e. unknown */
+	daemon->rates = NULL;
 
 	/* Tell the ecdh() function how to talk to hsmd */
 	ecdh_hsmd_setup(HSM_FD, status_failed);

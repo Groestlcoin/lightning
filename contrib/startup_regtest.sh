@@ -101,13 +101,15 @@ start_nodes() {
 			funder-min-their-funding=10000
 			funder-per-channel-max=100000
 			funder-fuzz-percent=0
+			lease-fee-base-msat=2sat
+			lease-fee-basis=50
 			EOF
 		fi
 
 
 		# Start the lightning nodes
 		test -f "/tmp/l$i-$network/lightningd-$network.pid" || \
-			"$LIGHTNINGD" "--lightning-dir=/tmp/l$i-$network" --daemon
+			"$LIGHTNINGD" "--lightning-dir=/tmp/l$i-$network" &
 		# shellcheck disable=SC2139 disable=SC2086
 		alias l$i-cli="$LCLI --lightning-dir=/tmp/l$i-$network"
 		# shellcheck disable=SC2139 disable=SC2086
