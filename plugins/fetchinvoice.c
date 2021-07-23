@@ -253,8 +253,11 @@ static struct command_result *handle_invreq_response(struct command *cmd,
 	if ((badfield = field_diff(sent->invreq, inv, payer_info)))
 		goto badinv;
 
-	/* Get the amount we expected. */
-	if (sent->offer->amount && !sent->offer->currency) {
+	/* Get the amount we expected: firstly, if that's what we sent,
+	 * secondly, if specified in the invoice. */
+	if (sent->invreq->amount) {
+		expected_amount = tal_dup(tmpctx, u64, sent->invreq->amount);
+	} else if (sent->offer->amount && !sent->offer->currency) {
 		expected_amount = tal(tmpctx, u64);
 
 		*expected_amount = *sent->offer->amount;
@@ -1413,17 +1416,17 @@ static struct command_result *json_sendinvoice(struct command *cmd,
 	}
 
 	/* BOLT-offers #12:
-	 *   - MUST set `timestamp` to the number of seconds since Midnight 1
-	 *    January 1970, UTC.
+	 *   - MUST set `created_at` to the number of seconds since Midnight 1
+	 *    January 1970, UTC when the offer was created.
 	 */
-	sent->inv->timestamp = tal(sent->inv, u64);
-	*sent->inv->timestamp = time_now().ts.tv_sec;
+	sent->inv->created_at = tal(sent->inv, u64);
+	*sent->inv->created_at = time_now().ts.tv_sec;
 
 	/* BOLT-offers #12:
 	 * - if the expiry for accepting payment is not 7200 seconds after
-	 *   `timestamp`:
-	 *   - MUST set `relative_expiry` `seconds_from_timestamp` to the number
-	 *     of seconds after `timestamp` that payment of this invoice should
+	 *   `created_at`:
+	 *   - MUST set `relative_expiry` `seconds_from_creation` to the number
+	 *     of seconds after `created_at` that payment of this invoice should
 	 *     not be attempted.
 	 */
 	if (sent->wait_timeout != 7200) {

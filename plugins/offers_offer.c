@@ -255,6 +255,31 @@ struct offer_info {
 	bool *single_use;
 };
 
+static struct command_result *check_result(struct command *cmd,
+					   const char *buf,
+					   const jsmntok_t *result,
+					   void *arg UNNEEDED)
+{
+	bool active;
+
+	/* If it's inactive, we can't return it, */
+	if (!json_to_bool(buf, json_get_member(buf, result, "active"),
+			  &active)) {
+		return command_fail(cmd,
+				    LIGHTNINGD,
+				    "Bad creaoffer status reply %.*s",
+				    json_tok_full_len(result),
+				    json_tok_full(buf, result));
+	}
+	if (!active)
+		return command_fail(cmd,
+				    OFFER_ALREADY_EXISTS,
+				    "Offer already exists, but isn't active");
+
+	/* Otherwise, push through the result. */
+	return forward_result(cmd, buf, result, arg);
+}
+
 static struct command_result *create_offer(struct command *cmd,
 					   struct offer_info *offinfo)
 {
@@ -262,7 +287,7 @@ static struct command_result *create_offer(struct command *cmd,
 
 	/* We simply pass this through. */
 	req = jsonrpc_request_start(cmd->plugin, cmd, "createoffer",
-				    forward_result, forward_error,
+				    check_result, forward_error,
 				    offinfo);
 	json_add_string(req->js, "bolt12",
 			offer_encode(tmpctx, offinfo->offer));
@@ -318,6 +343,28 @@ struct command_result *json_offer(struct command *cmd,
 		   /* FIXME: hints support! */
 		   NULL))
 		return command_param_failed();
+
+	/* BOLT-offers #12:
+	 * - MUST NOT set `quantity_min` or `quantity_max` less than 1.
+	 */
+	if (offer->quantity_min && *offer->quantity_min < 1)
+		return command_fail_badparam(cmd, "quantity_min",
+					     buffer, params,
+					     "must be >= 1");
+	if (offer->quantity_max && *offer->quantity_max < 1)
+		return command_fail_badparam(cmd, "quantity_max",
+					     buffer, params,
+					     "must be >= 1");
+	/* BOLT-offers #12:
+	 * - if both:
+	 *    - MUST set `quantity_min` less than or equal to `quantity_max`.
+	 */
+	if (offer->quantity_min && offer->quantity_max) {
+		if (*offer->quantity_min > *offer->quantity_max)
+			return command_fail_badparam(cmd, "quantity_min",
+						     buffer, params,
+						     "must be <= quantity_max");
+	}
 
 	/* BOLT-offers #12:
 	 *
@@ -414,9 +461,8 @@ struct command_result *json_offerout(struct command *cmd,
 
 	offer->node_id = tal_dup(offer, struct pubkey32, &id);
 
-	/* We simply pass this through. */
 	req = jsonrpc_request_start(cmd->plugin, cmd, "createoffer",
-				    forward_result, forward_error,
+				    check_result, forward_error,
 				    offer);
 	json_add_string(req->js, "bolt12", offer_encode(tmpctx, offer));
 	if (label)

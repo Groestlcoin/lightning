@@ -3723,6 +3723,10 @@ def test_offer(node_factory, bitcoind):
     plugin = os.path.join(os.path.dirname(__file__), 'plugins/currencyUSDAUD5000.py')
     l1 = node_factory.get_node(options={'plugin': plugin, 'experimental-offers': None})
 
+    # Try empty description
+    ret = l1.rpc.call('offer', [9, ''])
+    l1.rpc.decode(ret['bolt12'])
+
     bolt12tool = os.path.join(os.path.dirname(__file__), "..", "devtools", "bolt12-cli")
     # Try different amount strings
     for amount in ['1msat', '0.1btc', 'any', '1USD', '1.10AUD']:
@@ -3801,6 +3805,26 @@ def test_offer(node_factory, bitcoind):
     output = subprocess.check_output([bolt12tool, 'decode',
                                       offer['bolt12']]).decode('UTF-8')
     assert 'quantity_max: 2' in output
+
+    # BOLT-offers #12:
+    # 	 * - MUST NOT set `quantity_min` or `quantity_max` less than 1.
+    with pytest.raises(RpcError, match='quantity_min: must be >= 1'):
+        ret = l1.rpc.call('offer', {'amount': '100000sat',
+                                    'description': 'quantity_min test',
+                                    'quantity_min': 0})
+
+    with pytest.raises(RpcError, match='quantity_max: must be >= 1'):
+        ret = l1.rpc.call('offer', {'amount': '100000sat',
+                                    'description': 'quantity_max test',
+                                    'quantity_max': 0})
+    # BOLT-offers #12:
+    # - if both:
+    #    - MUST set `quantity_min` greater or equal to `quantity_max`.
+    with pytest.raises(RpcError, match='quantity_min: must be <= quantity_max'):
+        ret = l1.rpc.call('offer', {'amount': '100000sat',
+                                    'description': 'quantity_max test',
+                                    'quantity_min': 10,
+                                    'quantity_max': 9})
 
     # Test absolute_expiry
     exp = int(time.time() + 2)
@@ -3898,6 +3922,7 @@ def test_fetchinvoice(node_factory, bitcoind):
     # Simple offer first.
     offer1 = l3.rpc.call('offer', {'amount': '2msat',
                                    'description': 'simple test'})
+    assert offer1['created'] is True
 
     inv1 = l1.rpc.call('fetchinvoice', {'offer': offer1['bolt12']})
     inv2 = l1.rpc.call('fetchinvoice', {'offer': offer1['bolt12_unsigned'],
@@ -3933,6 +3958,15 @@ def test_fetchinvoice(node_factory, bitcoind):
     # Underpay is rejected.
     with pytest.raises(RpcError, match="Remote node sent failure message.*Amount must be at least 2msat"):
         l1.rpc.call('fetchinvoice', {'offer': offer1['bolt12'], 'msatoshi': 1})
+
+    # If no amount is specified in offer, one must be in invoice.
+    offer_noamount = l3.rpc.call('offer', {'amount': 'any',
+                                           'description': 'any amount test'})
+    with pytest.raises(RpcError, match="msatoshi parameter required"):
+        l1.rpc.call('fetchinvoice', {'offer': offer_noamount['bolt12']})
+    inv1 = l1.rpc.call('fetchinvoice', {'offer': offer_noamount['bolt12'], 'msatoshi': 100})
+    # But amount won't appear in changes
+    assert 'msat' not in inv1['changes']
 
     # Single-use invoice can be fetched multiple times, only paid once.
     offer2 = l3.rpc.call('offer', {'amount': '1msat',
@@ -4040,6 +4074,15 @@ def test_fetchinvoice(node_factory, bitcoind):
     l3.daemon.wait_for_log("Unknown command 'currencyconvert'")
     # But we can still pay the (already-converted) invoice.
     l1.rpc.pay(inv['invoice'])
+
+    # Identical creation gives it again, just with created false.
+    offer1 = l3.rpc.call('offer', {'amount': '2msat',
+                                   'description': 'simple test'})
+    assert offer1['created'] is False
+    l3.rpc.call('disableoffer', {'offer_id': offer1['offer_id']})
+    with pytest.raises(RpcError, match="1000.*Offer already exists, but isn't active"):
+        l3.rpc.call('offer', {'amount': '2msat',
+                              'description': 'simple test'})
 
     # Test timeout.
     l3.stop()
@@ -4208,6 +4251,27 @@ def test_sendinvoice(node_factory, bitcoind):
     l1.rpc.call('sendinvoice', {'offer': refund['bolt12'],
                                 'label': 'test sendinvoice refund'})
     wait_for(lambda: only_one(l2.rpc.call('listoffers', [refund['offer_id']])['offers'])['used'] is True)
+
+    # Offer with vendor: we must not copy vendor into our invoice!
+    offer = l1.rpc.call('offerout', {'amount': '10000sat',
+                                     'description': 'simple test',
+                                     'vendor': "clightning test suite"})
+
+    out = l2.rpc.call('sendinvoice', {'offer': offer['bolt12'],
+                                      'label': 'test sendinvoice 3'})
+    assert out['label'] == 'test sendinvoice 3'
+    assert out['description'] == 'simple test'
+    assert 'vendor' not in out
+    assert 'bolt12' in out
+    assert 'payment_hash' in out
+    assert out['status'] == 'paid'
+    assert 'payment_preimage' in out
+    assert 'expires_at' in out
+    assert out['msatoshi'] == 10000000
+    assert out['amount_msat'] == Millisatoshi(10000000)
+    assert 'pay_index' in out
+    assert out['msatoshi_received'] == 10000000
+    assert out['amount_received_msat'] == Millisatoshi(10000000)
 
 
 def test_self_pay(node_factory):
