@@ -2,7 +2,7 @@ from fixtures import *  # noqa: F401,F403
 from fixtures import TEST_NETWORK
 from pyln.client import RpcError, Millisatoshi
 from utils import (
-    only_one, wait_for, sync_blockheight, first_channel_id
+    only_one, wait_for, sync_blockheight, first_channel_id, calc_lease_fee
 )
 
 import pytest
@@ -332,6 +332,85 @@ def test_v2_rbf_single(node_factory, bitcoind, chainparams):
     assert resp['type'] == 'unilateral'
     l1.daemon.wait_for_log(' to CHANNELD_SHUTTING_DOWN')
     l1.daemon.wait_for_log('sendrawtx exit 0')
+
+
+@unittest.skipIf(TEST_NETWORK != 'regtest', 'elementsd doesnt yet support PSBT features we need')
+@pytest.mark.openchannel('v2')
+def test_v2_rbf_liquidity_ad(node_factory, bitcoind, chainparams):
+
+    opts = {'funder-policy': 'match', 'funder-policy-mod': 100,
+            'lease-fee-base-msat': '100sat', 'lease-fee-basis': 100,
+            'may_reconnect': True}
+    l1, l2 = node_factory.get_nodes(2, opts=opts)
+
+    # what happens when we RBF?
+    feerate = 2000
+    amount = 500000
+    l1.fundwallet(20000000)
+    l2.fundwallet(20000000)
+
+    # l1 leases a channel from l2
+    l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
+    rates = l1.rpc.dev_queryrates(l2.info['id'], amount, amount)
+    l1.daemon.wait_for_log('disconnect')
+    l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
+    chan_id = l1.rpc.fundchannel(l2.info['id'], amount, request_amt=amount,
+                                 feerate='{}perkw'.format(feerate),
+                                 compact_lease=rates['compact_lease'])['channel_id']
+
+    vins = [x for x in l1.rpc.listfunds()['outputs'] if x['reserved']]
+    assert only_one(vins)
+    prev_utxos = ["{}:{}".format(vins[0]['txid'], vins[0]['output'])]
+
+    # Check that we're waiting for lockin
+    l1.daemon.wait_for_log(' to DUALOPEND_AWAITING_LOCKIN')
+
+    est_fees = calc_lease_fee(amount, feerate, rates)
+
+    # This should be the accepter's amount
+    fundings = only_one(only_one(l1.rpc.listpeers()['peers'])['channels'])['funding']
+    assert Millisatoshi(est_fees + amount * 1000) == Millisatoshi(fundings['remote_msat'])
+
+    # rbf the lease with a higher amount
+    rate = int(find_next_feerate(l1, l2)[:-5])
+    # We 4x the feerate to beat the min-relay fee
+    next_feerate = '{}perkw'.format(rate * 4)
+
+    # Initiate an RBF
+    startweight = 42 + 172  # base weight, funding output
+    initpsbt = l1.rpc.utxopsbt(amount, next_feerate, startweight,
+                               prev_utxos, reservedok=True,
+                               min_witness_weight=110,
+                               excess_as_change=True)['psbt']
+
+    # do the bump
+    bump = l1.rpc.openchannel_bump(chan_id, amount, initpsbt,
+                                   funding_feerate=next_feerate)
+    update = l1.rpc.openchannel_update(chan_id, bump['psbt'])
+    assert update['commitments_secured']
+    # Sign our inputs, and continue
+    signed_psbt = l1.rpc.signpsbt(update['psbt'])['signed_psbt']
+    l1.rpc.openchannel_signed(chan_id, signed_psbt)
+
+    # what happens when the channel opens?
+    bitcoind.generate_block(6)
+    l1.daemon.wait_for_log('to CHANNELD_NORMAL')
+
+    # This should be the accepter's amount
+    fundings = only_one(only_one(l1.rpc.listpeers()['peers'])['channels'])['funding']
+    # FIXME: The lease goes away :(
+    assert Millisatoshi(0) == Millisatoshi(fundings['remote_msat'])
+
+    wait_for(lambda: [c['active'] for c in l1.rpc.listchannels(l1.get_channel_scid(l2))['channels']] == [True, True])
+
+    # send some payments, mine a block or two
+    inv = l2.rpc.invoice(10**4, '1', 'no_1')
+    l1.rpc.pay(inv['bolt11'])
+
+    # l2 attempts to close a channel that it leased, should succeed
+    # (channel isnt leased)
+    l2.rpc.close(l1.get_channel_scid(l2))
+    l1.daemon.wait_for_log('State changed from CLOSINGD_SIGEXCHANGE to CLOSINGD_COMPLETE')
 
 
 @unittest.skipIf(TEST_NETWORK != 'regtest', 'elementsd doesnt yet support PSBT features we need')
@@ -1047,6 +1126,7 @@ def test_funder_options(node_factory, bitcoind):
     assert funder_opts['reserve_tank_msat'] == Millisatoshi('0msat')
     assert funder_opts['fuzz_percent'] == 0
     assert funder_opts['fund_probability'] == 100
+    assert funder_opts['leases_only']
 
     # l2 funds a chanenl with us. We don't contribute
     l2.rpc.connect(l1.info['id'], 'localhost', l1.port)
@@ -1066,7 +1146,8 @@ def test_funder_options(node_factory, bitcoind):
                                'per_channel_max_msat': '10000000000msat',
                                'reserve_tank_msat': '3000000msat',
                                'fund_probability': 99,
-                               'fuzz_percent': 0})
+                               'fuzz_percent': 0,
+                               'leases_only': False})
 
     assert funder_opts['policy'] == 'available'
     assert funder_opts['policy_mod'] == 100
@@ -1126,7 +1207,8 @@ def test_funder_contribution_limits(node_factory, bitcoind):
                  'min_their_funding_msat': '1000msat',
                  'per_channel_min_msat': '1000000msat',
                  'fund_probability': 100,
-                 'fuzz_percent': 0})
+                 'fuzz_percent': 0,
+                 'leases_only': False})
 
     # Set our contribution to 50k sat, should only use 7 of 12 available utxos
     l3.rpc.call('funderupdate',
@@ -1136,7 +1218,8 @@ def test_funder_contribution_limits(node_factory, bitcoind):
                  'per_channel_min_msat': '1000sat',
                  'per_channel_max_msat': '500000sat',
                  'fund_probability': 100,
-                 'fuzz_percent': 0})
+                 'fuzz_percent': 0,
+                 'leases_only': False})
 
     l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
     l1.fundchannel(l2, 10**7)
