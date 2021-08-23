@@ -145,7 +145,7 @@ struct daemon {
 	struct addrinfo *proxyaddr;
 
 	/* They can tell us we must use proxy even for non-Tor addresses. */
-	bool use_proxy_always;
+	bool always_use_proxy;
 
 	/* There are DNS seeds we can use to look up node addresses as a last
 	 * resort, but doing so leaks our address so can be disabled. */
@@ -214,8 +214,9 @@ static bool broken_resolver(struct daemon *daemon)
 	const char *hostname = "nxdomain-test.doesntexist";
 	int err;
 
-	/* If they told us to never do DNS queries, don't even do this one and also not if we just say that we don't */
-	if (!daemon->use_dns || daemon->use_proxy_always) {
+	/* If they told us to never do DNS queries, don't even do this one and
+	 * also not if we just say that we don't */
+	if (!daemon->use_dns || daemon->always_use_proxy) {
 		daemon->broken_resolver_response = NULL;
 		return false;
 	}
@@ -820,7 +821,7 @@ static struct io_plan *conn_proxy_init(struct io_conn *conn,
 static void try_connect_one_addr(struct connecting *connect)
 {
  	int fd, af;
-	bool use_proxy = connect->daemon->use_proxy_always;
+	bool use_proxy = connect->daemon->always_use_proxy;
 	const struct wireaddr_internal *addr = &connect->addrs[connect->addrnum];
 	struct io_conn *conn;
 
@@ -1312,7 +1313,7 @@ static struct io_plan *connect_init(struct io_conn *conn,
 		&daemon->id,
 		&proposed_wireaddr,
 		&proposed_listen_announce,
-		&proxyaddr, &daemon->use_proxy_always,
+		&proxyaddr, &daemon->always_use_proxy,
 		&daemon->dev_allow_localhost, &daemon->use_dns,
 		&tor_password,
 		&daemon->use_v3_autotor,
@@ -1460,9 +1461,18 @@ static void add_seed_addrs(struct wireaddr_internal **addrs,
 	}
 }
 
+static bool wireaddr_int_equals_wireaddr(struct wireaddr_internal *addr_a,
+					 struct wireaddr *addr_b)
+{
+	if (!addr_a || !addr_b)
+		return false;
+	return wireaddr_eq(&addr_a->u.wireaddr, addr_b);
+}
+
 /*~ This asks gossipd for any addresses advertized by the node. */
 static void add_gossip_addrs(struct wireaddr_internal **addrs,
-			     const struct node_id *id)
+			     const struct node_id *id,
+			     struct wireaddr_internal *addrhint)
 {
 	u8 *msg;
 	struct wireaddr *normal_addrs;
@@ -1484,6 +1494,24 @@ static void add_gossip_addrs(struct wireaddr_internal **addrs,
 
 	/* Wrap each one in a wireaddr_internal and add to addrs. */
 	for (size_t i = 0; i < tal_count(normal_addrs); i++) {
+		/* add TOR addresses in a second loop */
+		if (normal_addrs[i].type == ADDR_TYPE_TOR_V2 ||
+		    normal_addrs[i].type == ADDR_TYPE_TOR_V3)
+			continue;
+		if (wireaddr_int_equals_wireaddr(addrhint, &normal_addrs[i]))
+			continue;
+		struct wireaddr_internal addr;
+		addr.itype = ADDR_INTERNAL_WIREADDR;
+		addr.u.wireaddr = normal_addrs[i];
+		tal_arr_expand(addrs, addr);
+	}
+	/* so connectd prefers direct connections if possible. */
+	for (size_t i = 0; i < tal_count(normal_addrs); i++) {
+		if (normal_addrs[i].type != ADDR_TYPE_TOR_V2 &&
+		    normal_addrs[i].type != ADDR_TYPE_TOR_V3)
+			continue;
+		if (wireaddr_int_equals_wireaddr(addrhint, &normal_addrs[i]))
+			continue;
 		struct wireaddr_internal addr;
 		addr.itype = ADDR_INTERNAL_WIREADDR;
 		addr.u.wireaddr = normal_addrs[i];
@@ -1501,7 +1529,7 @@ static void try_connect_peer(struct daemon *daemon,
 			     struct wireaddr_internal *addrhint)
 {
 	struct wireaddr_internal *addrs;
-	bool use_proxy = daemon->use_proxy_always;
+	bool use_proxy = daemon->always_use_proxy;
 	struct connecting *connect;
 
 	/* Already done?  May happen with timer. */
@@ -1525,10 +1553,11 @@ static void try_connect_peer(struct daemon *daemon,
 	addrs = tal_arr(tmpctx, struct wireaddr_internal, 0);
 
 	/* They can supply an optional address for the connect RPC */
+	/* We add this first so its tried first by connectd */
 	if (addrhint)
 		tal_arr_expand(&addrs, *addrhint);
 
-	add_gossip_addrs(&addrs, id);
+	add_gossip_addrs(&addrs, id, addrhint);
 
 	if (tal_count(addrs) == 0) {
 		/* Don't resolve via DNS seed if we're supposed to use proxy. */

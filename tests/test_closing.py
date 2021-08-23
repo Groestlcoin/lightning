@@ -739,7 +739,7 @@ def test_channel_lease_falls_behind(node_factory, bitcoind):
 
     l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
     rates = l1.rpc.dev_queryrates(l2.info['id'], amount, amount)
-    l1.daemon.wait_for_log('disconnect')
+    wait_for(lambda: len(l1.rpc.listpeers(l2.info['id'])['peers']) == 0)
     l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
     # l1 leases a channel from l2
     l1.rpc.fundchannel(l2.info['id'], amount, request_amt=amount,
@@ -779,7 +779,7 @@ def test_channel_lease_post_expiry(node_factory, bitcoind):
     # l1 leases a channel from l2
     l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
     rates = l1.rpc.dev_queryrates(l2.info['id'], amount, amount)
-    l1.daemon.wait_for_log('disconnect')
+    wait_for(lambda: len(l1.rpc.listpeers(l2.info['id'])['peers']) == 0)
     l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
     l1.rpc.fundchannel(l2.info['id'], amount, request_amt=amount,
                        feerate='{}perkw'.format(feerate),
@@ -864,7 +864,7 @@ def test_channel_lease_unilat_closes(node_factory, bitcoind):
 
     l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
     rates = l1.rpc.dev_queryrates(l2.info['id'], amount, amount)
-    l1.daemon.wait_for_log('disconnect')
+    wait_for(lambda: len(l1.rpc.listpeers(l2.info['id'])['peers']) == 0)
     l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
     # l1 leases a channel from l2
     l1.rpc.fundchannel(l2.info['id'], amount, request_amt=amount,
@@ -874,7 +874,7 @@ def test_channel_lease_unilat_closes(node_factory, bitcoind):
     # l2 leases a channel from l3
     l2.rpc.connect(l3.info['id'], 'localhost', l3.port)
     rates = l2.rpc.dev_queryrates(l3.info['id'], amount, amount)
-    l3.daemon.wait_for_log('disconnect')
+    wait_for(lambda: len(l2.rpc.listpeers(l3.info['id'])['peers']) == 0)
     l2.rpc.connect(l3.info['id'], 'localhost', l3.port)
     l2.rpc.fundchannel(l3.info['id'], amount, request_amt=amount,
                        feerate='{}perkw'.format(feerate), minconf=0,
@@ -910,7 +910,7 @@ def test_channel_lease_unilat_closes(node_factory, bitcoind):
     l3.rpc.close(l2.info['id'], 1, force_lease_closed=True)
 
     # Wait til to_self_delay expires, l1 should claim to_local back
-    bitcoind.generate_block(10, wait_for_mempool=1)
+    bitcoind.generate_block(10, wait_for_mempool=2)
     l1.daemon.wait_for_log('Broadcasting OUR_DELAYED_RETURN_TO_WALLET')
     bitcoind.generate_block(1, wait_for_mempool=1)
     l1.daemon.wait_for_log('Resolved OUR_UNILATERAL/DELAYED_OUTPUT_TO_US by our proposal OUR_DELAYED_RETURN_TO_WALLET')
@@ -932,8 +932,10 @@ def test_channel_lease_unilat_closes(node_factory, bitcoind):
     # we *can* spend the 1csv lock one
     l2.rpc.withdraw(l2.rpc.newaddr()['bech32'], "all", utxos=[utxo3])
 
-    bitcoind.generate_block(4032)
-    sync_blockheight(bitcoind, [l2, l3])
+    # This can timeout, so do it in four easy stages.
+    for i in range(4):
+        bitcoind.generate_block(4032 // 4)
+        sync_blockheight(bitcoind, [l2, l3])
 
     l2.rpc.withdraw(l2.rpc.newaddr()['bech32'], "all", utxos=[utxo1])
 
@@ -963,7 +965,7 @@ def test_channel_lease_lessor_cheat(node_factory, bitcoind, chainparams):
 
     l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
     rates = l1.rpc.dev_queryrates(l2.info['id'], amount, amount)
-    l1.daemon.wait_for_log('disconnect')
+    wait_for(lambda: len(l1.rpc.listpeers(l2.info['id'])['peers']) == 0)
     l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
     # l1 leases a channel from l2
     l1.rpc.fundchannel(l2.info['id'], amount, request_amt=amount,
@@ -1036,7 +1038,7 @@ def test_channel_lease_lessee_cheat(node_factory, bitcoind, chainparams):
 
     l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
     rates = l1.rpc.dev_queryrates(l2.info['id'], amount, amount)
-    l1.daemon.wait_for_log('disconnect')
+    wait_for(lambda: len(l1.rpc.listpeers(l2.info['id'])['peers']) == 0)
     l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
     # l1 leases a channel from l2
     l1.rpc.fundchannel(l2.info['id'], amount, request_amt=amount,
@@ -2027,13 +2029,18 @@ def test_onchain_middleman_their_unilateral_in(node_factory, bitcoind):
     l2.rpc.connect(l1.info['id'], 'localhost', l1.port)
     l2.rpc.connect(l3.info['id'], 'localhost', l3.port)
 
-    l2.fundchannel(l1, 10**6)
+    c12, _ = l2.fundchannel(l1, 10**6)
     c23, _ = l2.fundchannel(l3, 10**6)
     channel_id = first_channel_id(l1, l2)
 
     # Make sure routes finalized.
     bitcoind.generate_block(5)
     l1.wait_channel_active(c23)
+
+    # Make sure l3 sees gossip for channel now; it can get upset
+    # and give bad gossip msg if channel is closed before it sees
+    # node announcement.
+    wait_for(lambda: l3.rpc.listchannels(c12)['channels'] != [])
 
     # Give l1 some money to play with.
     l2.pay(l1, 2 * 10**8)

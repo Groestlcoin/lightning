@@ -519,6 +519,19 @@ static bool excluded(const struct utxo **excludes,
 static bool deep_enough(u32 maxheight, const struct utxo *utxo,
 			u32 current_blockheight)
 {
+	if (utxo->close_info
+	    && utxo->close_info->option_anchor_outputs) {
+		/* All option_anchor_output close_infos
+		 * have a csv of at least 1 */
+		if (!utxo->blockheight)
+			return false;
+
+		u32 csv_free = *utxo->blockheight + utxo->close_info->csv - 1;
+		assert(csv_free >= *utxo->blockheight);
+
+		if (csv_free > current_blockheight)
+			return false;
+	}
 	/* If we require confirmations check that we have a
 	 * confirmation height and that it is below the required
 	 * maxheight (current_height - minconf) */
@@ -526,13 +539,6 @@ static bool deep_enough(u32 maxheight, const struct utxo *utxo,
 		return true;
 	if (!utxo->blockheight)
 		return false;
-	/* Check that CSV-lock is now free! */
-	if (utxo->close_info) {
-		u32 csv_free = *utxo->blockheight + utxo->close_info->csv;
-		assert(csv_free > *utxo->blockheight);
-		if (current_blockheight < csv_free)
-			return false;
-	}
 	return *utxo->blockheight <= maxheight;
 }
 
@@ -3556,7 +3562,7 @@ void wallet_block_add(struct wallet *w, struct block *b)
 void wallet_block_remove(struct wallet *w, struct block *b)
 {
 	struct db_stmt *stmt =
-	    db_prepare_v2(w->db, SQL("DELETE FROM blocks WHERE hash = ?"));
+		db_prepare_v2(w->db, SQL("DELETE FROM blocks WHERE hash = ?"));
 	db_bind_sha256d(stmt, 0, &b->blkid.shad);
 	db_exec_prepared_v2(take(stmt));
 
@@ -3738,21 +3744,12 @@ struct outpoint *wallet_outpoint_for_scid(struct wallet *w, tal_t *ctx,
 	return op;
 }
 
-const struct short_channel_id *
-wallet_utxoset_get_spent(const tal_t *ctx, struct wallet *w, u32 blockheight)
+/* Turns "SELECT blockheight, txindex, outnum" into scids */
+static const struct short_channel_id *db_scids(const tal_t *ctx,
+					       struct db_stmt *stmt STEALS)
 {
-	struct db_stmt *stmt;
-	struct short_channel_id *res;
-	stmt = db_prepare_v2(w->db, SQL("SELECT"
-					" blockheight,"
-					" txindex,"
-					" outnum "
-					"FROM utxoset "
-					"WHERE spendheight = ?"));
-	db_bind_int(stmt, 0, blockheight);
-	db_query_prepared(stmt);
+	struct short_channel_id *res = tal_arr(ctx, struct short_channel_id, 0);
 
-	res = tal_arr(ctx, struct short_channel_id, 0);
 	while (db_step(stmt)) {
 		struct short_channel_id scid;
 		u64 blocknum, txnum, outnum;
@@ -3767,6 +3764,40 @@ wallet_utxoset_get_spent(const tal_t *ctx, struct wallet *w, u32 blockheight)
 	}
 	tal_free(stmt);
 	return res;
+}
+
+const struct short_channel_id *
+wallet_utxoset_get_spent(const tal_t *ctx, struct wallet *w,
+			 u32 blockheight)
+{
+	struct db_stmt *stmt;
+	stmt = db_prepare_v2(w->db, SQL("SELECT"
+					" blockheight,"
+					" txindex,"
+					" outnum "
+					"FROM utxoset "
+					"WHERE spendheight = ?"));
+	db_bind_int(stmt, 0, blockheight);
+	db_query_prepared(stmt);
+
+	return db_scids(ctx, stmt);
+}
+
+const struct short_channel_id *
+wallet_utxoset_get_created(const tal_t *ctx, struct wallet *w,
+			   u32 blockheight)
+{
+	struct db_stmt *stmt;
+	stmt = db_prepare_v2(w->db, SQL("SELECT"
+					" blockheight,"
+					" txindex,"
+					" outnum "
+					"FROM utxoset "
+					"WHERE blockheight = ?"));
+	db_bind_int(stmt, 0, blockheight);
+	db_query_prepared(stmt);
+
+	return db_scids(ctx, stmt);
 }
 
 void wallet_transaction_add(struct wallet *w, const struct wally_tx *tx,
