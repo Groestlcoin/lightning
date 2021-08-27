@@ -1023,6 +1023,12 @@ struct db_query db_sqlite3_queries[] = {
          .readonly = false,
     },
     {
+         .name = "CREATE TABLE datastore (  key BLOB,  data BLOB,  generation BIGINT,  PRIMARY KEY (key));",
+         .query = "CREATE TABLE datastore (  key BLOB,  data BLOB,  generation INTEGER,  PRIMARY KEY (key));",
+         .placeholders = 0,
+         .readonly = false,
+    },
+    {
          .name = "UPDATE vars SET intval = intval + 1 WHERE name = 'data_version' AND intval = ?",
          .query = "UPDATE vars SET intval = intval + 1 WHERE name = 'data_version' AND intval = ?",
          .placeholders = 1,
@@ -2001,6 +2007,36 @@ struct db_query db_sqlite3_queries[] = {
          .readonly = true,
     },
     {
+         .name = "UPDATE datastore SET data=?, generation=generation+1 WHERE key=?;",
+         .query = "UPDATE datastore SET data=?, generation=generation+1 WHERE key=?;",
+         .placeholders = 2,
+         .readonly = false,
+    },
+    {
+         .name = "INSERT INTO datastore VALUES (?, ?, 0);",
+         .query = "INSERT INTO datastore VALUES (?, ?, 0);",
+         .placeholders = 2,
+         .readonly = false,
+    },
+    {
+         .name = "DELETE FROM datastore WHERE key = ?",
+         .query = "DELETE FROM datastore WHERE key = ?",
+         .placeholders = 1,
+         .readonly = false,
+    },
+    {
+         .name = "SELECT key, data, generation FROM datastore WHERE key >= ? ORDER BY key;",
+         .query = "SELECT key, data, generation FROM datastore WHERE key >= ? ORDER BY key;",
+         .placeholders = 1,
+         .readonly = true,
+    },
+    {
+         .name = "SELECT key, data, generation FROM datastore ORDER BY key;",
+         .query = "SELECT key, data, generation FROM datastore ORDER BY key;",
+         .placeholders = 0,
+         .readonly = true,
+    },
+    {
          .name = "SELECT name FROM sqlite_master WHERE type='table';",
          .query = "SELECT name FROM sqlite_master WHERE type='table';",
          .placeholders = 0,
@@ -2026,10 +2062,10 @@ struct db_query db_sqlite3_queries[] = {
     },
 };
 
-#define DB_SQLITE3_QUERY_COUNT 336
+#define DB_SQLITE3_QUERY_COUNT 342
 
 #endif /* HAVE_SQLITE3 */
 
 #endif /* LIGHTNINGD_WALLET_GEN_DB_SQLITE3 */
 
-// SHA256STAMP:411593f0957475d832c02cd75a8b0eed30b00fc6178797262ae7dd697de22383
+// SHA256STAMP:1808964024bcccbd2787e723881f263b1a77ea33c302ac2b6d61dae20486a7e4

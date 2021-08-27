@@ -1529,4 +1529,68 @@ enum offer_status wallet_offer_disable(struct wallet *w,
  */
 void wallet_offer_mark_used(struct db *db, const struct sha256 *offer_id)
 	NO_NULL_ARGS;
+
+/**
+ * Add an new key/value to the datastore (generation 0)
+ * @w: the wallet
+ * @key: the new key (if returns non-NULL)
+ * @data: the new data (if returns non-NULL)
+ */
+void wallet_datastore_create(struct wallet *w, const char **key, const u8 *data);
+
+/**
+ * Update an existing key/value to the datastore.
+ * @w: the wallet
+ * @key: the first key (if returns non-NULL)
+ * @data: the first data (if returns non-NULL)
+ */
+void wallet_datastore_update(struct wallet *w,
+			     const char **key,
+			     const u8 *data);
+
+/**
+ * Remove a key from the datastore
+ * @w: the wallet
+ * @key: the key
+ */
+void wallet_datastore_remove(struct wallet *w, const char **key);
+
+/**
+ * Iterate through the datastore.
+ * @ctx: the tal ctx to allocate off
+ * @w: the wallet
+ * @startkey: NULL, or the first key to start with
+ * @key: the first key (if returns non-NULL)
+ * @data: the first data (if returns non-NULL)
+ * @generation: the first generation (if returns non-NULL)
+ *
+ * Returns pointer to hand as @stmt to wallet_datastore_next(), or NULL.
+ * If you choose not to call wallet_datastore_next() you must free it!
+ */
+struct db_stmt *wallet_datastore_first(const tal_t *ctx,
+				       struct wallet *w,
+				       const char **startkey,
+				       const char ***key,
+				       const u8 **data,
+				       u64 *generation);
+
+/**
+ * Iterate through the datastore.
+ * @ctx: the tal ctx to allocate off
+ * @w: the wallet
+ * @stmt: the previous statement.
+ * @key: the key (if returns non-NULL)
+ * @data: the data (if returns non-NULL)
+ * @generation: the generation (if returns non-NULL)
+ *
+ * Returns pointer to hand as @stmt to wallet_datastore_next(), or NULL.
+ * If you choose not to call wallet_datastore_next() you must free it!
+ */
+struct db_stmt *wallet_datastore_next(const tal_t *ctx,
+				      struct wallet *w,
+				      struct db_stmt *stmt,
+				      const char ***key,
+				      const u8 **data,
+				      u64 *generation);
+
 #endif /* LIGHTNING_WALLET_WALLET_H */

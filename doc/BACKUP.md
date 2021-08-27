@@ -97,7 +97,7 @@ The `backup` plugin requires Python 3.
   * Ideally you have an NFS or other network-based mount on your system,
     into which you will put the backup.
 * Stop your Lightning node.
-* `/path/to/backup-cli init ${LIGHTNINGDIR} file:///path/to/nfs/mount`.
+* `/path/to/backup-cli init --lightning-dir ${LIGHTNINGDIR} file:///path/to/nfs/mount/file.bkp`.
   This creates an initial copy of the database at the NFS mount.
 * Add these settings to your `lightningd` configuration:
   * `important-plugin=/path/to/backup.py`
@@ -241,6 +241,31 @@ You may be interested in `raid1c3` and `raid1c4` modes if you have
 three or four storage devices.
 BTRFS would probably work better if you were purchasing an entire set
 of new storage devices to set up a new node.
+
+## SQLite Litestream Replication
+`/!\` WHO SHOULD DO THIS: Casual users
+
+One of the simpler things on any system is to use Litestream to replicate the SQLite database.
+It continuously streams SQLite changes to file or external storage - the cloud storage option 
+should not be used. 
+Backups/replication should not be on the same disk as the original SQLite DB.
+
+/etc/litestream.yml : 
+
+    dbs:
+     - path: /home/bitcoin/.lightning/bitcoin/lightningd.sqlite3
+       replicas:
+         - path: /media/storage/lightning_backup
+         
+ and start the service using systemctl:
+ 
+    $ sudo systemctl start litestream
+
+Restore:
+
+    $ litestream restore -o /media/storage/lightning_backup  /home/bitcoin/restore_lightningd.sqlite3
+
+   
 
 ## PostgreSQL Cluster
 

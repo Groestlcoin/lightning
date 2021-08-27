@@ -749,6 +749,13 @@ static struct migration dbmigrations[] = {
 	 ");"),
      fillin_missing_channel_blockheights},
     {SQL("ALTER TABLE outputs ADD csv_lock INTEGER DEFAULT 1;"), NULL},
+    {SQL("CREATE TABLE datastore ("
+	 "  key BLOB,"
+	 "  data BLOB,"
+	 "  generation BIGINT,"
+	 "  PRIMARY KEY (key)"
+	 ");"),
+     NULL},
 };
 
 /* Leak tracking. */
