@@ -732,6 +732,16 @@ static void replace_command(struct rpc_command_hook_payload *p,
 		goto fail;
 	}
 
+	// deprecated phase to give the possibility to all to migrate and stay safe
+	// from this more restrictive change.
+	if (!deprecated_apis) {
+		const jsmntok_t *jsonrpc = json_get_member(buffer, replacetok, "jsonrpc");
+		if (!jsonrpc || jsonrpc->type != JSMN_STRING || !json_tok_streq(buffer, jsonrpc, "2.0")) {
+			bad = "jsonrpc: \"2.0\" must be specified in the request";
+			goto fail;
+		}
+	}
+
 	was_pending(command_exec(p->cmd->jcon, p->cmd, buffer, replacetok,
 				 params));
 	return;
@@ -883,10 +893,22 @@ parse_request(struct json_connection *jcon, const jsmntok_t tok[])
 		json_command_malformed(jcon, "null", "No id");
 		return NULL;
 	}
+
 	if (id->type != JSMN_STRING && id->type != JSMN_PRIMITIVE) {
 		json_command_malformed(jcon, "null",
 				       "Expected string/primitive for id");
 		return NULL;
+	}
+
+	// Adding a deprecated phase to make sure that all the c-lightning wrapper
+	// can migrate all the frameworks
+	if (!deprecated_apis) {
+		const jsmntok_t *jsonrpc = json_get_member(jcon->buffer, tok, "jsonrpc");
+
+		if (!jsonrpc || jsonrpc->type != JSMN_STRING || !json_tok_streq(jcon->buffer, jsonrpc, "2.0")) {
+			json_command_malformed(jcon, "null", "jsonrpc: \"2.0\" must be specified in the request");
+			return NULL;
+		}
 	}
 
 	/* Allocate the command off of the `jsonrpc` object and not
