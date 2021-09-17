@@ -1,12 +1,11 @@
 #ifndef LIGHTNING_LIGHTNINGD_CHANNEL_H
 #define LIGHTNING_LIGHTNINGD_CHANNEL_H
 #include "config.h"
-#include <ccan/list/list.h>
 #include <common/channel_id.h>
-#include <common/per_peer_state.h>
+#include <common/channel_type.h>
 #include <common/tx_roles.h>
+#include <common/utils.h>
 #include <lightningd/channel_state.h>
-#include <lightningd/peer_htlcs.h>
 #include <wallet/wallet.h>
 
 struct channel_id;
@@ -174,6 +173,9 @@ struct channel {
 	/* optional wrong_funding for mutual close */
 	const struct bitcoin_outpoint *shutdown_wrong_funding;
 
+	/* optional feerate min/max for mutual close */
+	u32 *closing_feerate_range;
+
 	/* Reestablishment stuff: last sent commit and revocation details. */
 	bool last_was_revoke;
 	struct changed_htlc *last_sent_commit;
@@ -201,8 +203,8 @@ struct channel {
 	/* At what commit numbers does `option_static_remotekey` apply? */
 	u64 static_remotekey_start[NUM_SIDES];
 
-	/* Was this negotiated with `option_anchor_outputs? */
-	bool option_anchor_outputs;
+	/* What features apply to this channel? */
+	const struct channel_type *type;
 
 	/* Any commands trying to forget us. */
 	struct command **forgets;
@@ -291,7 +293,7 @@ struct channel *new_channel(struct peer *peer, u64 dbid,
 			    const u8 *remote_upfront_shutdown_script STEALS,
 			    u64 local_static_remotekey_start,
 			    u64 remote_static_remotekey_start,
-			    bool option_anchor_outputs,
+			    const struct channel_type *type STEALS,
 			    enum side closer,
 			    enum state_change reason,
 			    /* NULL or stolen */
@@ -446,6 +448,11 @@ static inline bool channel_closed(const struct channel *channel)
 		|| channel->state == FUNDING_SPEND_SEEN
 		|| channel->state == ONCHAIN
 		|| channel->state == CLOSED;
+}
+
+static inline bool channel_has(const struct channel *channel, int f)
+{
+	return channel_type_has(channel->type, f);
 }
 
 void get_channel_basepoints(struct lightningd *ld,

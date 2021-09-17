@@ -7,6 +7,7 @@
 #include <ccan/opt/opt.h>
 #include <ccan/read_write_all/read_write_all.h>
 #include <ccan/str/hex/hex.h>
+#include <ccan/tal/str/str.h>
 #include <common/crypto_sync.h>
 #include <common/dev_disconnect.h>
 #include <common/features.h>
@@ -16,6 +17,7 @@
 #include <netdb.h>
 #include <poll.h>
 #include <secp256k1_ecdh.h>
+#include <stdio.h>
 #include <wire/peer_wire.h>
 
 #define io_write_ simple_write

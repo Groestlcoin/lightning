@@ -6,7 +6,7 @@ SYNOPSIS
 
 **(WARNING: experimental-offers only)**
 
-**fetchinvoice** *offer* \[*msatoshi*\] \[*quantity*\] \[*recurrence_counter*\] \[*recurrence_start*\] \[*recurrence_label*\] \[*timeout*\]
+**fetchinvoice** *offer* \[*msatoshi*\] \[*quantity*\] \[*recurrence_counter*\] \[*recurrence_start*\] \[*recurrence_label*\] \[*timeout*\] \[*payer_note*\]
 
 DESCRIPTION
 -----------
@@ -43,6 +43,8 @@ calls for the same recurrence, as it is used to link them together.
 *timeout* is an optional timeout; if we don't get a reply before this
 we fail (default, 60 seconds).
 
+*payer_note* is an optional payer note to include in the fetched invoice.
+
 RETURN VALUE
 ------------
 
@@ -61,6 +63,7 @@ On success, an object is returned, containing:
   - **endtime** (u64): UNIX timestamp that the next period ends
   - **paywindow_start** (u64): UNIX timestamp of the earliest time that the next invoice can be fetched
   - **paywindow_end** (u64): UNIX timestamp of the latest time that the next invoice can be fetched
+
 [comment]: # (GENERATE-FROM-SCHEMA-END)
 
 The following error codes may occur:
@@ -85,4 +88,4 @@ RESOURCES
 
 Main web site: <https://github.com/ElementsProject/lightning>
 
-[comment]: # ( SHA256STAMP:c98a6dd644a23fb336aa2ce190e15ae602da8b4142afbed28e4243114f679e90)
+[comment]: # ( SHA256STAMP:5820acc18bb293035f040e2079363cd2ae03fd31be0c4de78b957502fbd31b4e)

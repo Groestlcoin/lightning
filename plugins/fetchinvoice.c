@@ -1,28 +1,23 @@
 #include <bitcoin/chainparams.h>
-#include <bitcoin/preimage.h>
 #include <ccan/array_size/array_size.h>
 #include <ccan/json_out/json_out.h>
 #include <ccan/mem/mem.h>
 #include <ccan/str/hex/hex.h>
 #include <ccan/tal/str/str.h>
-#include <ccan/time/time.h>
-#include <ccan/utf8/utf8.h>
 #include <common/blindedpath.h>
-#include <common/bolt11.h>
-#include <common/bolt12.h>
 #include <common/bolt12_merkle.h>
 #include <common/dijkstra.h>
 #include <common/gossmap.h>
 #include <common/json_stream.h>
+#include <common/json_tok.h>
 #include <common/memleak.h>
 #include <common/overflows.h>
 #include <common/route.h>
 #include <common/type_to_string.h>
-#include <common/utils.h>
 #include <errno.h>
-#include <inttypes.h>
 #include <plugins/libplugin.h>
 #include <secp256k1_schnorrsig.h>
+#include <sodium.h>
 
 static struct gossmap *global_gossmap;
 static struct node_id local_id;

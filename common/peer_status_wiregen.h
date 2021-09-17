@@ -34,4 +34,4 @@ bool fromwire_status_peer_error(const tal_t *ctx, const void *p, struct channel_
 
 
 #endif /* LIGHTNING_COMMON_PEER_STATUS_WIREGEN_H */
-// SHA256STAMP:4606ed7d72f93f4fe260080b8b6810ef1b0efa60e96d22b987a6bd16213e365f
+// SHA256STAMP:3e1d1ae6327232326b2a08f788c59485e0c4abd37bdb55604f111e087f605520

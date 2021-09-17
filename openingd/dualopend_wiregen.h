@@ -225,4 +225,4 @@ bool fromwire_dualopend_validate_lease_reply(const tal_t *ctx, const void *p, wi
 
 
 #endif /* LIGHTNING_OPENINGD_DUALOPEND_WIREGEN_H */
-// SHA256STAMP:bedb1217727e81cbd377567f3db8348b524bd79ccc7030f338c800e84c47b368
+// SHA256STAMP:da973afd41ef15546d902945a3108aa3c02571d13ffaff0aed63c1ac39740f04

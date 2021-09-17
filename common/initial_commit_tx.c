@@ -1,12 +1,10 @@
 #include <bitcoin/script.h>
-#include <bitcoin/tx.h>
-#include <ccan/endian/endian.h>
+#include <ccan/array_size/array_size.h>
 #include <common/initial_commit_tx.h>
 #include <common/keyset.h>
 #include <common/permute_tx.h>
 #include <common/status.h>
 #include <common/type_to_string.h>
-#include <inttypes.h>
 
 /* BOLT #3:
  *
@@ -101,7 +99,8 @@ struct bitcoin_tx *initial_commit_tx(const tal_t *ctx,
 	enum side lessor = !opener;
 	u32 sequence;
 	void *dummy_local = (void *)LOCAL, *dummy_remote = (void *)REMOTE;
-	const void *output_order[NUM_SIDES];
+	/* There is a direct, and possibly an anchor output for each side. */
+	const void *output_order[2 * NUM_SIDES];
 	const u8 *funding_wscript = bitcoin_redeem_2of2(tmpctx,
 							&funding_key[LOCAL],
 							&funding_key[REMOTE]);
@@ -141,7 +140,7 @@ struct bitcoin_tx *initial_commit_tx(const tal_t *ctx,
 	 *
 	 * 3. Subtract this base fee from the funder (either `to_local` or
 	 * `to_remote`).
-	 * If `option_anchor_outputs` applies to the commitment transaction,
+	 * If `option_anchors` applies to the commitment transaction,
 	 * also subtract two times the fixed anchor size of 330 sats from the
 	 * funder (either `to_local` or `to_remote`).
 	 */
@@ -234,7 +233,7 @@ struct bitcoin_tx *initial_commit_tx(const tal_t *ctx,
 	if (amount_msat_greater_eq_sat(other_pay, dust_limit)) {
 		/* BOLT #3:
 		 *
-		 * If `option_anchor_outputs` applies to the commitment
+		 * If `option_anchors` applies to the commitment
 		 * transaction, the `to_remote` output is encumbered by a one
 		 * block csv lock.
 		 *    <remote_pubkey> OP_CHECKSIGVERIFY 1 OP_CHECKSEQUENCEVERIFY
@@ -265,7 +264,7 @@ struct bitcoin_tx *initial_commit_tx(const tal_t *ctx,
 		to_remote = false;
 
 	/* BOLT #3:
-	 * 8. If `option_anchor_outputs` applies to the commitment transaction:
+	 * 8. If `option_anchors` applies to the commitment transaction:
 	 *    * if `to_local` exists or there are untrimmed HTLCs, add a
 	 *      [`to_local_anchor` output]...
 	 *    * if `to_remote` exists or there are untrimmed HTLCs, add a
@@ -286,6 +285,7 @@ struct bitcoin_tx *initial_commit_tx(const tal_t *ctx,
 	}
 
 	assert(n <= tx->wtx->num_outputs);
+	assert(n <= ARRAY_SIZE(output_order));
 
 	/* BOLT #3:
 	 *

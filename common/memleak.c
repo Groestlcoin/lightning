@@ -20,14 +20,12 @@
  *    table: these are the leaks.
  */
 #include "config.h"
-#include <assert.h>
 #include <backtrace.h>
+#include <ccan/cast/cast.h>
 #include <ccan/crypto/siphash24/siphash24.h>
 #include <ccan/htable/htable.h>
 #include <ccan/intmap/intmap.h>
-#include <common/daemon.h>
 #include <common/memleak.h>
-#include <common/utils.h>
 
 struct backtrace_state *backtrace_state;
 
@@ -160,6 +158,24 @@ void memleak_remove_intmap_(struct htable *memtable, const struct intmap *m)
 		memleak_remove_region(memtable, p, tal_bytelen(p));
 }
 
+static bool handle_strmap(const char *member, void *p, void *memtable_)
+{
+	struct htable *memtable = memtable_;
+
+	/* membername may *not* be a tal ptr, but it can be! */
+	pointer_referenced(memtable, member);
+	memleak_remove_region(memtable, p, tal_bytelen(p));
+
+	/* Keep going */
+	return true;
+}
+
+/* FIXME: If strmap used tal, this wouldn't be necessary! */
+void memleak_remove_strmap_(struct htable *memtable, const struct strmap *m)
+{
+	strmap_iterate_(m, handle_strmap, memtable);
+}
+
 static bool ptr_match(const void *candidate, void *ptr)
 {
 	return candidate == ptr;
@@ -289,6 +305,59 @@ void memleak_init(void)
 	memleak_track = true;
 	if (backtrace_state)
 		add_backtrace_notifiers(NULL);
+}
+
+static int dump_syminfo(void *data, uintptr_t pc UNUSED,
+			const char *filename, int lineno,
+			const char *function)
+{
+	void PRINTF_FMT(1,2) (*print)(const char *fmt, ...) = data;
+	/* This can happen in backtraces. */
+	if (!filename || !function)
+		return 0;
+
+	print("    %s:%u (%s)", filename, lineno, function);
+	return 0;
+}
+
+static void dump_leak_backtrace(const uintptr_t *bt,
+				void PRINTF_FMT(1,2)
+				(*print)(const char *fmt, ...))
+{
+	if (!bt)
+		return;
+
+	/* First one serves as counter. */
+	print("  backtrace:");
+	for (size_t i = 1; i < bt[0]; i++) {
+		backtrace_pcinfo(backtrace_state,
+				 bt[i], dump_syminfo,
+				 NULL, print);
+	}
+}
+
+bool dump_memleak(struct htable *memtable,
+		  void PRINTF_FMT(1,2) (*print)(const char *fmt, ...))
+{
+	const tal_t *i;
+	const uintptr_t *backtrace;
+	bool found_leak = false;
+
+	while ((i = memleak_get(memtable, &backtrace)) != NULL) {
+		print("MEMLEAK: %p", i);
+		if (tal_name(i))
+			print("  label=%s", tal_name(i));
+
+		dump_leak_backtrace(backtrace, print);
+		print("  parents:");
+		for (tal_t *p = tal_parent(i); p; p = tal_parent(p)) {
+			print("    %s", tal_name(p));
+			p = tal_parent(p);
+		}
+		found_leak = true;
+	}
+
+	return found_leak;
 }
 #else /* !DEVELOPER */
 void *notleak_(const void *ptr, bool plus_children UNNEEDED)

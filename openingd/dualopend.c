@@ -11,54 +11,36 @@
  * new and improved, two-party opening protocol, which allows bother peers to
  * contribute inputs to the transaction
  */
-#include <bitcoin/feerate.h>
-#include <bitcoin/privkey.h>
 #include <bitcoin/script.h>
-#include <bitcoin/tx.h>
-#include <bitcoin/varint.h>
-#include <ccan/ccan/array_size/array_size.h>
-#include <ccan/ccan/mem/mem.h>
-#include <ccan/ccan/take/take.h>
-#include <ccan/ccan/time/time.h>
-#include <ccan/fdpass/fdpass.h>
-#include <ccan/short_types/short_types.h>
-#include <common/amount.h>
+#include <ccan/array_size/array_size.h>
+#include <ccan/cast/cast.h>
+#include <ccan/mem/mem.h>
+#include <ccan/tal/str/str.h>
 #include <common/billboard.h>
 #include <common/blockheight_states.h>
-#include <common/channel_config.h>
-#include <common/channel_id.h>
+#include <common/channel_type.h>
 #include <common/crypto_sync.h>
-#include <common/features.h>
-#include <common/fee_states.h>
 #include <common/gossip_rcvd_filter.h>
 #include <common/gossip_store.h>
-#include <common/htlc.h>
 #include <common/initial_channel.h>
 #include <common/lease_rates.h>
 #include <common/memleak.h>
 #include <common/peer_billboard.h>
 #include <common/peer_failed.h>
-#include <common/penalty_base.h>
-#include <common/per_peer_state.h>
 #include <common/psbt_internal.h>
 #include <common/psbt_open.h>
 #include <common/read_peer_msg.h>
 #include <common/setup.h>
 #include <common/status.h>
 #include <common/subdaemon.h>
-#include <common/tx_roles.h>
 #include <common/type_to_string.h>
-#include <common/utils.h>
-#include <common/version.h>
 #include <common/wire_error.h>
 #include <errno.h>
 #include <hsmd/hsmd_wiregen.h>
-#include <inttypes.h>
 #include <openingd/common.h>
 #include <openingd/dualopend_wiregen.h>
 #include <unistd.h>
 #include <wire/common_wiregen.h>
-#include <wire/peer_wire.h>
 #include <wire/wire_sync.h>
 
 /* stdin == lightningd, 3 == peer, 4 == gossipd, 5 = gossip_store, 6 = hsmd */
@@ -898,7 +880,7 @@ static void dualopend_dev_memleak(struct state *state)
 	memleak_remove_region(memtable, state, tal_bytelen(state));
 
 	/* If there's anything left, dump it to logs, and return true. */
-	dump_memleak(memtable);
+	dump_memleak(memtable, memleak_status_broken);
 }
 #endif /* DEVELOPER */
 
@@ -1692,6 +1674,7 @@ static void revert_channel_state(struct state *state)
 	struct amount_sat total;
 	struct amount_msat our_msats;
 	enum side opener = state->our_role == TX_INITIATOR ? LOCAL : REMOTE;
+	const struct channel_type *type;
 
 	/* We've already checked this */
 	if (!amount_sat_add(&total, tx_state->opener_funding,
@@ -1706,6 +1689,8 @@ static void revert_channel_state(struct state *state)
 		abort();
 
 	tal_free(state->channel);
+	type = default_channel_type(NULL,
+				    state->our_features, state->their_features);
 	state->channel = new_initial_channel(state,
 					     &state->channel_id,
 					     &tx_state->funding_txid,
@@ -1725,7 +1710,9 @@ static void revert_channel_state(struct state *state)
 					     &state->their_points,
 					     &state->our_funding_pubkey,
 					     &state->their_funding_pubkey,
-					     true, true,
+					     take(type),
+					     feature_offered(state->their_features,
+							     OPT_LARGE_CHANNELS),
 					     opener);
 }
 
@@ -1747,6 +1734,7 @@ static u8 *accepter_commits(struct state *state,
 	const u8 *wscript;
 	u8 *msg;
 	char *error;
+	const struct channel_type *type;
 
 	/* Find the funding transaction txid */
 	psbt_txid(NULL, tx_state->psbt, &tx_state->funding_txid, NULL);
@@ -1807,6 +1795,8 @@ static u8 *accepter_commits(struct state *state,
 	if (state->channel)
 		state->channel = tal_free(state->channel);
 
+	type = default_channel_type(NULL,
+				    state->our_features, state->their_features);
 	state->channel = new_initial_channel(state,
 					     &state->channel_id,
 					     &tx_state->funding_txid,
@@ -1827,7 +1817,9 @@ static u8 *accepter_commits(struct state *state,
 					     &state->their_points,
 					     &state->our_funding_pubkey,
 					     &state->their_funding_pubkey,
-					     true, true,
+					     take(type),
+					     feature_offered(state->their_features,
+							     OPT_LARGE_CHANNELS),
 					     REMOTE);
 
 	local_commit = initial_channel_tx(state, &wscript, state->channel,
@@ -2375,6 +2367,7 @@ static u8 *opener_commits(struct state *state,
 	const u8 *wscript;
 	u8 *msg;
 	char *error;
+	const struct channel_type *type;
 
 	wscript = bitcoin_redeem_2of2(tmpctx, &state->our_funding_pubkey,
 				      &state->their_funding_pubkey);
@@ -2417,6 +2410,8 @@ static u8 *opener_commits(struct state *state,
 	}
 
 	/* Ok, we're mostly good now? Let's do this */
+	type = default_channel_type(NULL,
+				    state->our_features, state->their_features);
 	state->channel = new_initial_channel(state,
 					     &cid,
 					     &tx_state->funding_txid,
@@ -2435,7 +2430,9 @@ static u8 *opener_commits(struct state *state,
 					     &state->their_points,
 					     &state->our_funding_pubkey,
 					     &state->their_funding_pubkey,
-					     true, true,
+					     take(type),
+					     feature_offered(state->their_features,
+							     OPT_LARGE_CHANNELS),
 					     /* Opener is local */
 					     LOCAL);
 
@@ -3411,7 +3408,7 @@ static bool dualopend_handle_custommsg(const u8 *msg)
 /* BOLT #2:
  *
  * A receiving node:
- *  - if `option_static_remotekey` applies to the commitment transaction:
+ *  - if `option_static_remotekey` or `option_anchors` applies to the commitment transaction:
  *    - if `next_revocation_number` is greater than expected above, AND
  *    `your_last_per_commitment_secret` is correct for that
  *    `next_revocation_number` minus 1:
@@ -3759,6 +3756,7 @@ int main(int argc, char *argv[])
 	u8 *msg;
 	struct amount_sat total_funding;
 	struct amount_msat our_msat;
+	const struct channel_type *type;
 
 	subdaemon_setup(argc, argv);
 
@@ -3841,6 +3839,9 @@ int main(int argc, char *argv[])
 
 		/*~ We only reconnect on channels that the
 		 * saved the the database (exchanged commitment sigs) */
+		type = default_channel_type(NULL,
+					    state->our_features,
+					    state->their_features);
 		state->channel = new_initial_channel(state,
 						     &state->channel_id,
 						     &state->tx_state->funding_txid,
@@ -3858,7 +3859,10 @@ int main(int argc, char *argv[])
 						     &state->their_points,
 						     &state->our_funding_pubkey,
 						     &state->their_funding_pubkey,
-						     true, true, opener);
+						     take(type),
+						     feature_offered(state->their_features,
+								     OPT_LARGE_CHANNELS),
+						     opener);
 
 		if (opener == LOCAL)
 			state->our_role = TX_INITIATOR;

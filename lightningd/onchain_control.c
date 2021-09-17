@@ -1,18 +1,18 @@
 #include <bitcoin/feerate.h>
-#include <bitcoin/script.h>
 #include <common/key_derive.h>
-#include <common/utils.h>
+#include <common/type_to_string.h>
 #include <errno.h>
+#include <hsmd/capabilities.h>
 #include <inttypes.h>
 #include <lightningd/chaintopology.h>
+#include <lightningd/channel.h>
 #include <lightningd/coin_mvts.h>
 #include <lightningd/hsm_control.h>
-#include <lightningd/log.h>
 #include <lightningd/onchain_control.h>
 #include <lightningd/peer_control.h>
 #include <lightningd/subd.h>
-#include <lightningd/watch.h>
-#include <wire/wire_sync.h>
+#include <onchaind/onchaind_wiregen.h>
+#include <wallet/txfilter.h>
 
 /* We dump all the known preimages when onchaind starts up. */
 static void onchaind_tell_fulfill(struct channel *channel)
@@ -705,7 +705,7 @@ enum watch_result onchaind_funding_spent(struct channel *channel,
 				  &channel->channel_info.remote_fundingkey,
 				  channel->static_remotekey_start[LOCAL],
 				  channel->static_remotekey_start[REMOTE],
-				  channel->option_anchor_outputs,
+				   channel_has(channel, OPT_ANCHOR_OUTPUTS),
 				  is_replay,
 				  feerate_min(ld, NULL));
 	subd_send_msg(channel->owner, take(msg));

@@ -1,6 +1,4 @@
-#include <bitcoin/signature.h>
 #include <ccan/cast/cast.h>
-#include <ccan/crypto/sha256/sha256.h>
 #include <ccan/ilog/ilog.h>
 #include <ccan/mem/mem.h>
 #include <common/bolt12_merkle.h>

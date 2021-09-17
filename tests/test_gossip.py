@@ -1964,3 +1964,41 @@ def test_addgossip(node_factory):
 
     with pytest.raises(RpcError, match='Bad signature'):
         l3.rpc.addgossip(badupdate)
+
+
+def test_topology_leak(node_factory, bitcoind):
+    l1, l2, l3 = node_factory.line_graph(3)
+
+    l1.rpc.listchannels()
+    bitcoind.generate_block(5)
+
+    # Wait until l1 sees all the channels.
+    wait_for(lambda: len(l1.rpc.listchannels()['channels']) == 4)
+
+    # Close and wait for gossip to catchup.
+    txid = l2.rpc.close(l3.info['id'])['txid']
+    bitcoind.generate_block(1, txid)
+
+    wait_for(lambda: len(l1.rpc.listchannels()['channels']) == 2)
+
+
+def test_parms_listforwards(node_factory):
+    """
+    Simple test to ensure that the order of the listforwards
+    is correct as describe in the documentation.
+
+    This test is written by a issue report in the IR channel,
+    it is simple and not useful, but it is good to have to avoid
+    simile errors in the future.
+    """
+    l1, l2 = node_factory.line_graph(2)
+
+    l2.stop()
+    l2.daemon.opts['allow-deprecated-apis'] = True
+    l2.start()
+
+    forwards_new = l1.rpc.listforwards("settled")["forwards"]
+    forwards_dep = l2.rpc.call("listforwards", {"in_channel": "0x1x2", "out_channel": "0x2x3", "status": "settled"})["forwards"]
+
+    assert len(forwards_new) == 0
+    assert len(forwards_dep) == 0

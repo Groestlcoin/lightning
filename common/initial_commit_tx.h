@@ -4,7 +4,6 @@
 #include "config.h"
 #include <bitcoin/chainparams.h>
 #include <bitcoin/pubkey.h>
-#include <common/amount.h>
 #include <common/htlc.h>
 #include <common/utils.h>
 
@@ -33,7 +32,7 @@ static inline size_t commit_tx_base_weight(size_t num_untrimmed_htlcs,
 	 *
 	 * The base fee for a commitment transaction:
 	 *  - MUST be calculated to match:
-	 *    1. Start with `weight` = 724 (1124 if `option_anchor_outputs` applies).
+	 *    1. Start with `weight` = 724 (1124 if `option_anchors` applies).
 	 */
 	if (option_anchor_outputs)
 		weight = 1124;

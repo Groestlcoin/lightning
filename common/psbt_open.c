@@ -1,11 +1,10 @@
-#include "common/psbt_open.h"
-#include <assert.h>
+#include "config.h"
 #include <bitcoin/psbt.h>
 #include <bitcoin/script.h>
-#include <bitcoin/tx.h>
 #include <ccan/asort/asort.h>
 #include <ccan/ccan/endian/endian.h>
 #include <ccan/ccan/mem/mem.h>
+#include <common/psbt_open.h>
 #include <common/pseudorand.h>
 #include <common/utils.h>
 
@@ -80,11 +79,11 @@ static const u8 *linearize_input(const tal_t *ctx,
 	/* signatures, keypaths, etc - we dont care if they change */
 	psbt->inputs[0].final_witness = NULL;
 	psbt->inputs[0].final_scriptsig_len = 0;
+	psbt->inputs[0].witness_script = NULL;
 	psbt->inputs[0].witness_script_len = 0;
 	psbt->inputs[0].redeem_script_len = 0;
 	psbt->inputs[0].keypaths.num_items = 0;
 	psbt->inputs[0].signatures.num_items = 0;
-
 
 	const u8 *bytes = psbt_get_bytes(ctx, psbt, &byte_len);
 
@@ -490,4 +489,20 @@ bool psbt_has_our_input(const struct wally_psbt *psbt)
 	}
 
 	return false;
+}
+
+bool psbt_contribs_changed(struct wally_psbt *orig,
+			   struct wally_psbt *new)
+{
+	struct psbt_changeset *cs;
+	bool ok;
+	cs = psbt_get_changeset(NULL, orig, new);
+
+	ok = tal_count(cs->added_ins) > 0 ||
+	    tal_count(cs->rm_ins) > 0 ||
+	    tal_count(cs->added_outs) > 0 ||
+	    tal_count(cs->rm_outs) > 0;
+
+	tal_free(cs);
+	return ok;
 }

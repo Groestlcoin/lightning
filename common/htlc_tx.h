@@ -2,7 +2,6 @@
 #define LIGHTNING_COMMON_HTLC_TX_H
 #include "config.h"
 #include <bitcoin/chainparams.h>
-#include <common/amount.h>
 #include <common/htlc.h>
 #include <common/utils.h>
 
@@ -47,7 +46,8 @@ static inline struct amount_sat htlc_timeout_fee(u32 feerate_per_kw,
 	/* BOLT #3:
 	 *
 	 * The fee for an HTLC-timeout transaction:
-	 * - MUST BE calculated to match:
+	 *...
+	 * - Otherwise, MUST BE calculated to match:
 	 *   1. Multiply `feerate_per_kw` by 663 (666 if `option_anchor_outputs`
 	 *      applies) and divide by 1000 (rounding down).
 	 */
@@ -65,6 +65,7 @@ static inline struct amount_sat htlc_success_fee(u32 feerate_per_kw,
 	/* BOLT #3:
 	 *
 	 * The fee for an HTLC-success transaction:
+	 *...
 	 * - MUST BE calculated to match:
 	 *   1. Multiply `feerate_per_kw` by 703 (706 if `option_anchor_outputs`
 	 *      applies) and divide by 1000 (rounding down).

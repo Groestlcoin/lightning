@@ -1,5 +1,4 @@
 #include <ccan/ccan/tal/str/str.h>
-#include <common/amount.h>
 #include <common/channel_config.h>
 #include <common/features.h>
 #include <common/initial_commit_tx.h>
@@ -63,7 +62,7 @@ bool check_config_bounds(const tal_t *ctx,
 	}
 
 	/* BOLT #2:
-	 *  - if `option_anchor_outputs` applies to this commitment
+	 *  - if `option_anchors` applies to this commitment
 	 *    transaction and the sending node is the funder:
 	 *   - MUST be able to additionally pay for `to_local_anchor` and
 	 *    `to_remote_anchor` above its reserve.

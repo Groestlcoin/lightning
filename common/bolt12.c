@@ -1,9 +1,5 @@
-#include <bitcoin/block.h>
 #include <bitcoin/chainparams.h>
-#include <ccan/cast/cast.h>
-#include <ccan/crypto/sha256/sha256.h>
-#include <ccan/mem/mem.h>
-#include <common/bech32.h>
+#include <ccan/tal/str/str.h>
 #include <common/bech32_util.h>
 #include <common/bolt12.h>
 #include <common/bolt12_merkle.h>

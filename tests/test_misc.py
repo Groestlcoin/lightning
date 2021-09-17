@@ -134,11 +134,16 @@ def test_bitcoin_failure(node_factory, bitcoind):
     bitcoind.cmd_line += ["-blocksonly"]
     bitcoind.start()
 
-    l2 = node_factory.get_node(start=False, expect_fail=True)
+    # Ignore BROKEN log message about blocksonly mode.
+    l2 = node_factory.get_node(start=False, expect_fail=True,
+                               allow_broken_log=True)
     with pytest.raises(ValueError):
         l2.start(stderr=subprocess.PIPE)
     assert l2.daemon.is_in_stderr(r".*deactivating transaction relay is not"
                                   " supported.") is not None
+    # wait_for_log gets upset since daemon is not running.
+    wait_for(lambda: l2.daemon.is_in_log('deactivating transaction'
+                                         ' relay is not supported'))
 
 
 def test_bitcoin_ibd(node_factory, bitcoind):
@@ -1919,6 +1924,7 @@ def test_list_features_only(node_factory):
         expected += ['option_anchor_outputs/odd']
         expected += ['option_shutdown_anysegwit/odd']
         expected += ['option_onion_messages/odd']
+        expected += ['supports_open_accept_channel_type']
     else:
         expected += ['option_shutdown_anysegwit/odd']
     assert features == expected

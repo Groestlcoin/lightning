@@ -10,25 +10,20 @@
 #include "log.h"
 #include "watch.h"
 #include <ccan/array_size/array_size.h>
-#include <ccan/asort/asort.h>
-#include <ccan/build_assert/build_assert.h>
 #include <ccan/io/io.h>
 #include <ccan/tal/str/str.h>
-#include <common/coin_mvt.h>
-#include <common/configdir.h>
-#include <common/features.h>
 #include <common/htlc_tx.h>
 #include <common/json_command.h>
-#include <common/jsonrpc_errors.h>
 #include <common/memleak.h>
 #include <common/param.h>
 #include <common/timeout.h>
-#include <common/utils.h>
-#include <inttypes.h>
-#include <lightningd/channel_control.h>
+#include <common/type_to_string.h>
 #include <lightningd/coin_mvts.h>
 #include <lightningd/gossip_control.h>
 #include <lightningd/io_loop_with_timers.h>
+#include <lightningd/json.h>
+#include <math.h>
+#include <wallet/txfilter.h>
 
 /* Mutual recursion via timer. */
 static void try_extend_tip(struct chain_topology *topo);
@@ -46,10 +41,10 @@ static void maybe_completed_init(struct chain_topology *topo)
 
 static void next_topology_timer(struct chain_topology *topo)
 {
-	/* This takes care of its own lifetime. */
-	notleak(new_reltimer(topo->timers, topo,
-			     time_from_sec(topo->poll_seconds),
-			     try_extend_tip, topo));
+	assert(!topo->extend_timer);
+	topo->extend_timer = new_reltimer(topo->ld->timers, topo,
+					  time_from_sec(topo->poll_seconds),
+					  try_extend_tip, topo);
 }
 
 static bool we_broadcast(const struct chain_topology *topo,
@@ -437,6 +432,9 @@ static void update_feerates(struct bitcoind *bitcoind,
 
 static void start_fee_estimate(struct chain_topology *topo)
 {
+	topo->updatefee_timer = NULL;
+	if (topo->stopping)
+		return;
 	/* Once per new block head, update fee estimates. */
 	bitcoind_estimate_fees(topo->bitcoind, NUM_FEERATES, update_feerates,
 			       topo);
@@ -582,10 +580,10 @@ AUTODATA(json_command, &parse_feerate_command);
 
 static void next_updatefee_timer(struct chain_topology *topo)
 {
-	/* This takes care of its own lifetime. */
-	notleak(new_reltimer(topo->timers, topo,
-			     time_from_sec(topo->poll_seconds),
-			     start_fee_estimate, topo));
+	assert(!topo->updatefee_timer);
+	topo->updatefee_timer = new_reltimer(topo->ld->timers, topo,
+					     time_from_sec(topo->poll_seconds),
+					     start_fee_estimate, topo);
 }
 
 struct sync_waiter {
@@ -940,6 +938,9 @@ static void get_new_block(struct bitcoind *bitcoind,
 
 static void try_extend_tip(struct chain_topology *topo)
 {
+	topo->extend_timer = NULL;
+	if (topo->stopping)
+		return;
 	bitcoind_getrawblockbyheight(topo->bitcoind, topo->tip->height + 1,
 				     get_new_block, topo);
 }
@@ -1069,6 +1070,7 @@ struct chain_topology *new_topology(struct lightningd *ld, struct log *log)
 	topo->feerate_uninitialized = true;
 	topo->root = NULL;
 	topo->sync_waiters = tal(topo, struct list_head);
+	topo->stopping = false;
 	list_head_init(topo->sync_waiters);
 
 	return topo;
@@ -1149,24 +1151,27 @@ check_chain(struct bitcoind *bitcoind, const char *chain,
 		return;
 	}
 
-	notleak(new_reltimer(bitcoind->ld->timers, bitcoind,
-			     /* Be 4x more aggressive in this case. */
-			     time_divide(time_from_sec(bitcoind->ld->topology
-						       ->poll_seconds), 4),
-			     retry_check_chain, bitcoind->ld->topology));
-	}
+	assert(!bitcoind->checkchain_timer);
+	bitcoind->checkchain_timer
+		= new_reltimer(bitcoind->ld->timers, bitcoind,
+			       /* Be 4x more aggressive in this case. */
+			       time_divide(time_from_sec(bitcoind->ld->topology
+							 ->poll_seconds), 4),
+			       retry_check_chain, bitcoind->ld->topology);
+}
 
 static void retry_check_chain(struct chain_topology *topo)
 {
+	topo->bitcoind->checkchain_timer = NULL;
+	if (topo->stopping)
+		return;
 	bitcoind_getchaininfo(topo->bitcoind, false, check_chain, topo);
 }
 
 void setup_topology(struct chain_topology *topo,
-		    struct timers *timers,
 		    u32 min_blockheight, u32 max_blockheight)
 {
 	memset(&topo->feerate, 0, sizeof(topo->feerate));
-	topo->timers = timers;
 
 	topo->min_blockheight = min_blockheight;
 	topo->max_blockheight = max_blockheight;
@@ -1178,6 +1183,7 @@ void setup_topology(struct chain_topology *topo,
 	log_debug(topo->ld->log, "All Groestlcoin plugin commands registered");
 
 	/* Sanity checks, then topology initialization. */
+	topo->bitcoind->checkchain_timer = NULL;
 	bitcoind_getchaininfo(topo->bitcoind, true, check_chain, topo);
 
 	tal_add_destructor(topo, destroy_chain_topology);
@@ -1191,4 +1197,15 @@ void setup_topology(struct chain_topology *topo,
 void begin_topology(struct chain_topology *topo)
 {
 	try_extend_tip(topo);
+}
+
+void stop_topology(struct chain_topology *topo)
+{
+	/* Stop timers from re-arming. */
+	topo->stopping = true;
+
+	/* Remove timers while we're cleaning up plugins. */
+	tal_free(topo->bitcoind->checkchain_timer);
+	tal_free(topo->extend_timer);
+	tal_free(topo->updatefee_timer);
 }

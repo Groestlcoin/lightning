@@ -1,9 +1,7 @@
-#include <ccan/array_size/array_size.h>
 #include <common/json_helpers.h>
+#include <common/type_to_string.h>
 #include <lightningd/channel.h>
-#include <lightningd/json.h>
 #include <lightningd/notification.h>
-#include <lightningd/peer_htlcs.h>
 
 static struct notification *find_notification_by_topic(const char* topic)
 {
@@ -553,4 +551,15 @@ void notify_channel_open_failed(struct lightningd *ld,
 	serialize(n->stream, cid);
 	jsonrpc_notification_end(n);
 	plugins_notify(ld->plugins, take(n));
+}
+
+REGISTER_NOTIFICATION(shutdown, NULL);
+
+bool notify_plugin_shutdown(struct lightningd *ld, struct plugin *p)
+{
+	struct jsonrpc_notification *n =
+		jsonrpc_notification_start(NULL, "shutdown");
+
+	jsonrpc_notification_end(n);
+	return plugin_single_notify(p, take(n));
 }

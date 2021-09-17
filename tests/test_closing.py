@@ -6,7 +6,7 @@ from pyln.testing.utils import SLOW_MACHINE
 from utils import (
     only_one, sync_blockheight, wait_for, TIMEOUT,
     account_balance, first_channel_id, closing_fee, TEST_NETWORK,
-    scriptpubkey_addr, calc_lease_fee
+    scriptpubkey_addr, calc_lease_fee, EXPERIMENTAL_FEATURES
 )
 
 import os
@@ -446,6 +446,7 @@ def closing_negotiation_step(node_factory, bitcoind, chainparams, opts):
     assert opts['expected_close_fee'] == fee_mempool
 
 
+@unittest.skipIf(EXPERIMENTAL_FEATURES, "anchors uses quick-close, not negotiation")
 def test_closing_negotiation_step_30pct(node_factory, bitcoind, chainparams):
     """Test that the closing fee negotiation step works, 30%"""
     opts = {}
@@ -460,20 +461,7 @@ def test_closing_negotiation_step_30pct(node_factory, bitcoind, chainparams):
     closing_negotiation_step(node_factory, bitcoind, chainparams, opts)
 
 
-def test_closing_negotiation_step_50pct(node_factory, bitcoind, chainparams):
-    """Test that the closing fee negotiation step works, 50%, the default"""
-    opts = {}
-    opts['fee_negotiation_step'] = '50%'
-
-    opts['close_initiated_by'] = 'opener'
-    opts['expected_close_fee'] = 20334 if not chainparams['elements'] else 25789
-    closing_negotiation_step(node_factory, bitcoind, chainparams, opts)
-
-    opts['close_initiated_by'] = 'peer'
-    opts['expected_close_fee'] = 20334 if not chainparams['elements'] else 25789
-    closing_negotiation_step(node_factory, bitcoind, chainparams, opts)
-
-
+@unittest.skipIf(EXPERIMENTAL_FEATURES, "anchors uses quick-close, not negotiation")
 def test_closing_negotiation_step_100pct(node_factory, bitcoind, chainparams):
     """Test that the closing fee negotiation step works, 100%"""
     opts = {}
@@ -493,6 +481,7 @@ def test_closing_negotiation_step_100pct(node_factory, bitcoind, chainparams):
     closing_negotiation_step(node_factory, bitcoind, chainparams, opts)
 
 
+@unittest.skipIf(EXPERIMENTAL_FEATURES, "anchors uses quick-close, not negotiation")
 def test_closing_negotiation_step_1sat(node_factory, bitcoind, chainparams):
     """Test that the closing fee negotiation step works, 1sat"""
     opts = {}
@@ -507,6 +496,7 @@ def test_closing_negotiation_step_1sat(node_factory, bitcoind, chainparams):
     closing_negotiation_step(node_factory, bitcoind, chainparams, opts)
 
 
+@unittest.skipIf(EXPERIMENTAL_FEATURES, "anchors uses quick-close, not negotiation")
 def test_closing_negotiation_step_700sat(node_factory, bitcoind, chainparams):
     """Test that the closing fee negotiation step works, 700sat"""
     opts = {}
@@ -3127,6 +3117,43 @@ def test_shutdown_alternate_txid(node_factory, bitcoind):
     wait_for(lambda: l1.rpc.listpeers()['peers'] == [])
 
 
+@unittest.skipIf(not EXPERIMENTAL_FEATURES, "Needs anchor_outputs")
+@pytest.mark.developer("needs to set dev-disconnect")
+def test_closing_higherfee(node_factory, bitcoind, executor):
+    """With anchor outputs we can ask for a *higher* fee than the last commit tx"""
+
+    # We change the feerate before it starts negotiating close, so it aims
+    # for *higher* than last commit tx.
+    l1, l2 = node_factory.line_graph(2, opts=[{'may_reconnect': True,
+                                               'dev-no-reconnect': None,
+                                               'feerates': (7500, 7500, 7500, 7500),
+                                               'disconnect': ['-WIRE_CLOSING_SIGNED']},
+                                              {'may_reconnect': True,
+                                               'dev-no-reconnect': None,
+                                               'feerates': (7500, 7500, 7500, 7500)}])
+    # This will trigger disconnect.
+    fut = executor.submit(l1.rpc.close, l2.info['id'])
+    l1.daemon.wait_for_log('dev_disconnect')
+
+    # Now adjust fees so l1 asks for more on reconnect.
+    l1.set_feerates((30000,) * 4, False)
+    l2.set_feerates((30000,) * 4, False)
+    l1.restart()
+    l2.restart()
+    l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
+
+    # This causes us to *exceed* previous requirements!
+    l1.daemon.wait_for_log(r'deriving max fee from rate 30000 -> 16440sat \(not 1000000sat\)')
+
+    # This will fail because l1 restarted!
+    with pytest.raises(RpcError, match=r'Connection to RPC server lost.'):
+        fut.result(TIMEOUT)
+
+    # But we still complete negotiation!
+    wait_for(lambda: only_one(l1.rpc.listpeers()['peers'])['channels'][0]['state'] == 'CLOSINGD_COMPLETE')
+    wait_for(lambda: only_one(l2.rpc.listpeers()['peers'])['channels'][0]['state'] == 'CLOSINGD_COMPLETE')
+
+
 @pytest.mark.developer("needs dev_disconnect")
 def test_htlc_rexmit_while_closing(node_factory, executor):
     """Retranmitting an HTLC revocation while shutting down should work"""
@@ -3285,3 +3312,61 @@ def test_anysegwit_close_needs_feature(node_factory, bitcoind):
     l1.rpc.close(l2.info['id'], destination='bcrt1pw508d6qejxtdg4y5r3zarvary0c5xw7kw508d6qejxtdg4y5r3zarvary0c5xw7k0ylj56')
     wait_for(lambda: only_one(only_one(l1.rpc.listpeers()['peers'])['channels'])['state'] == 'CLOSINGD_COMPLETE')
     bitcoind.generate_block(1, wait_for_mempool=1)
+
+
+def test_close_feerate_range(node_factory, bitcoind, chainparams):
+    """Test the quick-close fee range negotiation"""
+    l1, l2 = node_factory.line_graph(2)
+
+    notifications = []
+
+    def save_notifications(message, progress, request, **kwargs):
+        notifications.append(message)
+
+    # Lowball the range here.
+    with l1.rpc.notify(save_notifications):
+        l1.rpc.close(l2.info['id'], feerange=['253perkw', 'normal'])
+
+    if not chainparams['elements']:
+        l1_range = [138, 4110]
+        l2_range = [1027, 1000000]
+    else:
+        # That fee output is a little chunky.
+        l1_range = [175, 5212]
+        l2_range = [1303, 1000000]
+
+    l1.daemon.wait_for_log('Negotiating closing fee between {}sat and {}sat satoshi'.format(l1_range[0], l1_range[1]))
+    l2.daemon.wait_for_log('Negotiating closing fee between {}sat and {}sat satoshi'.format(l2_range[0], l2_range[1]))
+
+    overlap = [max(l1_range[0], l2_range[0]), min(l1_range[1], l2_range[1])]
+    l1.daemon.wait_for_log('performing quickclose in range {}sat-{}sat'.format(overlap[0], overlap[1]))
+
+    log = l1.daemon.is_in_log('Their actual closing tx fee is .*sat')
+    rate = re.match('.*Their actual closing tx fee is ([0-9]*sat).*', log).group(1)
+
+    assert notifications == ['Sending closing fee offer {}, with range {}sat-{}sat'.format(rate,
+                                                                                           l1_range[0],
+                                                                                           l1_range[1]),
+                             'Received closing fee offer {}, with range {}sat-{}sat'.format(rate,
+                                                                                            l2_range[0],
+                                                                                            l2_range[1])]
+
+
+def test_close_twice(node_factory, executor):
+    # First feerate is too low, second fixes it.
+    l1, l2 = node_factory.line_graph(2, opts=[{'allow_warning': True,
+                                               'may_reconnect': True},
+                                              {'allow_warning': True,
+                                               'may_reconnect': True,
+                                               'feerates': (15000, 15000, 15000, 15000)}])
+
+    # This makes it disconnect, since feerate is too low.
+    fut = executor.submit(l1.rpc.close, l2.info['id'], feerange=['253perkw', '500perkw'])
+    l1.daemon.wait_for_log('WARNING.*Unable to agree on a feerate')
+
+    fut2 = executor.submit(l1.rpc.close, l2.info['id'], feerange=['253perkw', '15000perkw'])
+
+    # Now reconnect, it should work.
+    l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
+    assert fut.result(TIMEOUT)['type'] == 'mutual'
+    assert fut2.result(TIMEOUT)['type'] == 'mutual'

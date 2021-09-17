@@ -1,43 +1,27 @@
-#include <bitcoin/preimage.h>
-#include <bitcoin/tx.h>
-#include <ccan/build_assert/build_assert.h>
 #include <ccan/cast/cast.h>
-#include <ccan/crypto/ripemd160/ripemd160.h>
-#include <ccan/mem/mem.h>
 #include <ccan/tal/str/str.h>
 #include <channeld/channeld_wiregen.h>
 #include <common/blinding.h>
-#include <common/coin_mvt.h>
+#include <common/configdir.h>
 #include <common/ecdh.h>
 #include <common/json_command.h>
 #include <common/json_helpers.h>
-#include <common/jsonrpc_errors.h>
+#include <common/json_tok.h>
 #include <common/onion.h>
 #include <common/onionreply.h>
-#include <common/overflows.h>
 #include <common/param.h>
-#include <common/sphinx.h>
 #include <common/timeout.h>
-#include <common/utils.h>
+#include <common/type_to_string.h>
 #include <gossipd/gossipd_wiregen.h>
 #include <lightningd/chaintopology.h>
+#include <lightningd/channel.h>
 #include <lightningd/coin_mvts.h>
-#include <lightningd/htlc_end.h>
-#include <lightningd/htlc_set.h>
-#include <lightningd/json.h>
-#include <lightningd/jsonrpc.h>
-#include <lightningd/lightningd.h>
-#include <lightningd/log.h>
-#include <lightningd/options.h>
 #include <lightningd/pay.h>
 #include <lightningd/peer_control.h>
 #include <lightningd/peer_htlcs.h>
 #include <lightningd/plugin_hook.h>
 #include <lightningd/subd.h>
 #include <onchaind/onchaind_wiregen.h>
-#include <wallet/wallet.h>
-#include <wire/onion_wire.h>
-#include <wire/wire_sync.h>
 
 #ifndef SUPERVERBOSE
 #define SUPERVERBOSE(...)
@@ -1127,7 +1111,6 @@ static bool ecdh_maybe_blinding(const struct pubkey *ephemeral_key,
 	return true;
 }
 
-/* AUTODATA wants a different line number */
 REGISTER_PLUGIN_HOOK(htlc_accepted,
 		     htlc_accepted_hook_deserialize,
 		     htlc_accepted_hook_final,
@@ -2048,8 +2031,9 @@ struct commitment_revocation_payload {
 	struct bitcoin_txid commitment_txid;
 	const struct bitcoin_tx *penalty_tx;
 	struct wallet *wallet;
-	u64 channel_id;
+	u64 channel_dbid;
 	u64 commitnum;
+	struct channel_id channel_id;
 };
 
 static void commitment_revocation_hook_serialize(
@@ -2058,11 +2042,13 @@ static void commitment_revocation_hook_serialize(
 {
 	json_add_txid(stream, "commitment_txid", &payload->commitment_txid);
 	json_add_tx(stream, "penalty_tx", payload->penalty_tx);
+	json_add_channel_id(stream, "channel_id", &payload->channel_id);
+	json_add_u64(stream, "commitnum", payload->commitnum);
 }
 
 static void
 commitment_revocation_hook_cb(struct commitment_revocation_payload *p STEALS){
-	wallet_penalty_base_delete(p->wallet, p->channel_id, p->commitnum);
+	wallet_penalty_base_delete(p->wallet, p->channel_dbid, p->commitnum);
 }
 
 static bool
@@ -2209,8 +2195,9 @@ void peer_got_revoke(struct channel *channel, const u8 *msg)
 	payload->commitment_txid = pbase->txid;
 	payload->penalty_tx = tal_steal(payload, penalty_tx);
 	payload->wallet = ld->wallet;
-	payload->channel_id = channel->dbid;
+	payload->channel_dbid = channel->dbid;
 	payload->commitnum = pbase->commitment_num;
+	payload->channel_id = channel->cid;
 	plugin_hook_call_commitment_revocation(ld, payload);
 }
 
@@ -2661,13 +2648,30 @@ static struct command_result *json_listforwards(struct command *cmd,
 	const char *status_str;
 	enum forward_status status = FORWARD_ANY;
 
+	// TODO: We will remove soon after the deprecated period.
+	if (params && deprecated_apis && params->type == JSMN_ARRAY) {
+		struct short_channel_id scid;
+		/* We need to catch [ null, null, "settled" ], and
+		 * [ "1x2x3" ] as old-style */
+	        if ((params->size > 0 && json_to_short_channel_id(buffer, params + 1, &scid)) ||
+		    (params->size == 3 && !json_to_short_channel_id(buffer, params + 3, &scid))) {
+			if (!param(cmd, buffer, params,
+				   p_opt("in_channel", param_short_channel_id, &chan_in),
+				   p_opt("out_channel", param_short_channel_id, &chan_out),
+				   p_opt("status", param_string, &status_str),
+				   NULL))
+				return command_param_failed();
+			goto parsed;
+		}
+	}
+
 	if (!param(cmd, buffer, params,
+		   p_opt("status", param_string, &status_str),
 		   p_opt("in_channel", param_short_channel_id, &chan_in),
 		   p_opt("out_channel", param_short_channel_id, &chan_out),
-		   p_opt("status", param_string, &status_str),
 		   NULL))
 		return command_param_failed();
-
+ parsed:
 	if (status_str && !string_to_forward_status(status_str, &status))
 		return command_fail(cmd, JSONRPC2_INVALID_PARAMS, "Unrecognized status: %s", status_str);
 
@@ -2683,5 +2687,4 @@ static const struct json_command listforwards_command = {
 	json_listforwards,
 	"List all forwarded payments and their information optionally filtering by [in_channel] [out_channel] and [state]"
 };
-
 AUTODATA(json_command, &listforwards_command);

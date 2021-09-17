@@ -7,52 +7,31 @@
  * there's nothing permanent about the channel: lightningd will only have to
  * commit to the database once openingd succeeds.
  */
-#include <bitcoin/block.h>
-#include <bitcoin/chainparams.h>
-#include <bitcoin/privkey.h>
-#include <bitcoin/psbt.h>
 #include <bitcoin/script.h>
 #include <ccan/array_size/array_size.h>
 #include <ccan/breakpoint/breakpoint.h>
-#include <ccan/cast/cast.h>
-#include <ccan/fdpass/fdpass.h>
-#include <ccan/mem/mem.h>
 #include <ccan/tal/str/str.h>
+#include <common/channel_type.h>
 #include <common/crypto_sync.h>
-#include <common/derive_basepoints.h>
-#include <common/features.h>
 #include <common/fee_states.h>
 #include <common/gossip_rcvd_filter.h>
 #include <common/gossip_store.h>
 #include <common/initial_channel.h>
-#include <common/initial_commit_tx.h>
-#include <common/key_derive.h>
 #include <common/memleak.h>
-#include <common/overflows.h>
 #include <common/peer_billboard.h>
 #include <common/peer_failed.h>
-#include <common/peer_status_wiregen.h>
-#include <common/penalty_base.h>
 #include <common/read_peer_msg.h>
 #include <common/shutdown_scriptpubkey.h>
 #include <common/status.h>
 #include <common/subdaemon.h>
 #include <common/type_to_string.h>
-#include <common/version.h>
 #include <common/wire_error.h>
 #include <errno.h>
-#include <gossipd/gossipd_peerd_wiregen.h>
 #include <hsmd/hsmd_wiregen.h>
-#include <inttypes.h>
 #include <openingd/common.h>
 #include <openingd/openingd_wiregen.h>
-#include <poll.h>
-#include <secp256k1.h>
-#include <stdio.h>
-#include <wally_bip32.h>
 #include <wire/common_wiregen.h>
 #include <wire/peer_wire.h>
-#include <wire/wire.h>
 #include <wire/wire_sync.h>
 
 /* stdin == lightningd, 3 == peer, 4 == gossipd, 5 = gossip_store, 6 = hsmd */
@@ -114,8 +93,8 @@ struct state {
 	 * as initial channels never have HTLCs. */
 	struct channel *channel;
 
-	bool option_static_remotekey;
-	bool option_anchor_outputs;
+	/* Channel type we agreed on (even before channel populated) */
+	struct channel_type *channel_type;
 
 	struct feature_set *our_features;
 };
@@ -150,6 +129,8 @@ static void negotiation_aborted(struct state *state, bool am_opener,
 	* failed. */
 	memset(&state->channel_id, 0, sizeof(state->channel_id));
 	state->channel = tal_free(state->channel);
+
+	state->channel_type = tal_free(state->channel_type);
 }
 
 /*~ For negotiation failures: we tell them the parameter we didn't like. */
@@ -370,9 +351,23 @@ static u8 *funder_channel_start(struct state *state, u8 channel_flags)
 						     state->our_features,
 						     state->their_features);
 
+	state->channel_type = default_channel_type(state,
+						   state->our_features,
+						   state->their_features);
+
 	open_tlvs = tlv_open_channel_tlvs_new(tmpctx);
 	open_tlvs->upfront_shutdown_script
 		= state->upfront_shutdown_script[LOCAL];
+
+	/* BOLT #2:
+	 *  - if it includes `channel_type`:
+	 *     - MUST set it to a defined type representing the type it wants.
+	 *     - MUST use the smallest bitmap possible to represent the channel
+	 *       type.
+	 *     - SHOULD NOT set it to a type containing a feature which was not
+	 *       negotiated.
+	 */
+	open_tlvs->channel_type = state->channel_type->features;
 
 	msg = towire_open_channel(NULL,
 				  &chainparams->genesis_blockhash,
@@ -436,6 +431,21 @@ static u8 *funder_channel_start(struct state *state, u8 channel_flags)
 	set_remote_upfront_shutdown(state, accept_tlvs->upfront_shutdown_script);
 
 	/* BOLT #2:
+	 * - if `channel_type` is set, and `channel_type` was set in
+	 *   `open_channel`, and they are not equal types:
+	 *    - MUST reject the channel.
+	 */
+	if (accept_tlvs->channel_type
+	    && !featurebits_eq(accept_tlvs->channel_type,
+			       state->channel_type->features)) {
+		negotiation_failed(state, true,
+				   "Return unoffered channel_type: %s",
+				   fmt_featurebits(tmpctx,
+						   accept_tlvs->channel_type));
+		return NULL;
+	}
+
+	/* BOLT #2:
 	 *
 	 * The `temporary_channel_id` MUST be the same as the
 	 * `temporary_channel_id` in the `open_channel` message. */
@@ -466,7 +476,9 @@ static u8 *funder_channel_start(struct state *state, u8 channel_flags)
 				 &state->remoteconf,
 				 &state->localconf,
 				 true,
-				 state->option_anchor_outputs,
+				 feature_negotiated(state->our_features,
+						    state->their_features,
+						    OPT_ANCHOR_OUTPUTS),
 				 &err_reason)) {
 		negotiation_failed(state, true, "%s", err_reason);
 		return NULL;
@@ -484,11 +496,12 @@ static u8 *funder_channel_start(struct state *state, u8 channel_flags)
 		       tal_hex(tmpctx, funding_output_script));
 
 	return towire_openingd_funder_start_reply(state,
-						 funding_output_script,
-						 feature_negotiated(
-							 state->our_features,
-							 state->their_features,
-							 OPT_UPFRONT_SHUTDOWN_SCRIPT));
+						  funding_output_script,
+						  feature_negotiated(
+							  state->our_features,
+							  state->their_features,
+							  OPT_UPFRONT_SHUTDOWN_SCRIPT),
+						  state->channel_type);
 }
 
 static bool funder_finalize_channel_setup(struct state *state,
@@ -531,8 +544,9 @@ static bool funder_finalize_channel_setup(struct state *state,
 					     &state->their_points,
 					     &state->our_funding_pubkey,
 					     &state->their_funding_pubkey,
-					     state->option_static_remotekey,
-					     state->option_anchor_outputs,
+					     state->channel_type,
+					     feature_offered(state->their_features,
+							     OPT_LARGE_CHANNELS),
 					     /* Opener is local */
 					     LOCAL);
 	/* We were supposed to do enough checks above, but just in case,
@@ -577,7 +591,8 @@ static bool funder_finalize_channel_setup(struct state *state,
 						   *tx,
 						   &state->channel->funding_pubkey[REMOTE],
 						   &state->first_per_commitment_point[REMOTE],
-						   state->channel->option_static_remotekey);
+						    channel_has(state->channel,
+								OPT_STATIC_REMOTEKEY));
 
 	wire_sync_write(HSM_FD, take(msg));
 	msg = wire_sync_read(tmpctx, HSM_FD);
@@ -673,12 +688,14 @@ static bool funder_finalize_channel_setup(struct state *state,
 
 	if (!check_tx_sig(*tx, 0, NULL, wscript, &state->their_funding_pubkey, sig)) {
 		peer_failed_err(state->pps, &state->channel_id,
-				"Bad signature %s on tx %s using key %s",
+				"Bad signature %s on tx %s using key %s (channel_type=%s)",
 				type_to_string(tmpctx, struct bitcoin_signature,
 					       sig),
 				type_to_string(tmpctx, struct bitcoin_tx, *tx),
 				type_to_string(tmpctx, struct pubkey,
-					       &state->their_funding_pubkey));
+					       &state->their_funding_pubkey),
+				fmt_featurebits(tmpctx,
+						state->channel->type->features));
 	}
 
 	/* We save their sig to our first commitment tx */
@@ -741,7 +758,8 @@ static u8 *funder_channel_complete(struct state *state)
 					   state->funding_txout,
 					   state->feerate_per_kw,
 					   state->localconf.channel_reserve,
-					   state->upfront_shutdown_script[REMOTE]);
+					   state->upfront_shutdown_script[REMOTE],
+					   state->channel_type);
 }
 
 /*~ The peer sent us an `open_channel`, that means we're the fundee. */
@@ -794,6 +812,31 @@ static u8 *fundee_channel(struct state *state, const u8 *open_channel_msg)
 				    &state->channel_id,
 				    "Parsing open_channel %s", tal_hex(tmpctx, open_channel_msg));
 	set_remote_upfront_shutdown(state, open_tlvs->upfront_shutdown_script);
+
+	/* BOLT #2:
+	 * The receiving node MUST fail the channel if:
+	 *...
+	 *   - It supports `channel_type`, `channel_type` was set, and the
+	 *     `type` is not suitable.
+	 */
+	if (open_tlvs->channel_type) {
+		state->channel_type =
+			channel_type_accept(state,
+					    open_tlvs->channel_type,
+					    state->our_features,
+					    state->their_features);
+		if (!state->channel_type) {
+			negotiation_failed(state, false,
+					   "Did not support channel_type %s",
+					   fmt_featurebits(tmpctx,
+							   open_tlvs->channel_type));
+			return NULL;
+		}
+	} else
+		state->channel_type
+			= default_channel_type(state,
+					       state->our_features,
+					       state->their_features);
 
 	/* BOLT #2:
 	 *
@@ -908,7 +951,9 @@ static u8 *fundee_channel(struct state *state, const u8 *open_channel_msg)
 				 &state->remoteconf,
 				 &state->localconf,
 				 false,
-				 state->option_anchor_outputs,
+				 feature_negotiated(state->our_features,
+						    state->their_features,
+						    OPT_ANCHOR_OUTPUTS),
 				 &err_reason)) {
 		negotiation_failed(state, false, "%s", err_reason);
 		return NULL;
@@ -939,9 +984,7 @@ static u8 *fundee_channel(struct state *state, const u8 *open_channel_msg)
 
 	/* If they give us a reason to reject, do so. */
 	if (err_reason) {
-		u8 *errmsg = towire_errorfmt(NULL, &state->channel_id,
-					     "%s", err_reason);
-		sync_crypto_write(state->pps, take(errmsg));
+		negotiation_failed(state, false, "%s", err_reason);
 		tal_free(err_reason);
 		return NULL;
 	}
@@ -956,6 +999,11 @@ static u8 *fundee_channel(struct state *state, const u8 *open_channel_msg)
 	accept_tlvs = tlv_accept_channel_tlvs_new(tmpctx);
 	accept_tlvs->upfront_shutdown_script
 		= state->upfront_shutdown_script[LOCAL];
+	/* BOLT #2:
+	 * - if it sets `channel_type`:
+	 *    - MUST set it to the `channel_type` from `open_channel`
+	 */
+	accept_tlvs->channel_type = state->channel_type->features;
 
 	msg = towire_accept_channel(NULL, &state->channel_id,
 				    state->localconf.dust_limit,
@@ -1021,8 +1069,9 @@ static u8 *fundee_channel(struct state *state, const u8 *open_channel_msg)
 					     &state->our_points, &theirs,
 					     &state->our_funding_pubkey,
 					     &their_funding_pubkey,
-					     state->option_static_remotekey,
-					     state->option_anchor_outputs,
+					     state->channel_type,
+					     feature_offered(state->their_features,
+							     OPT_LARGE_CHANNELS),
 					     REMOTE);
 	/* We don't expect this to fail, but it does do some additional
 	 * internal sanity checks. */
@@ -1110,7 +1159,8 @@ static u8 *fundee_channel(struct state *state, const u8 *open_channel_msg)
 						   remote_commit,
 						   &state->channel->funding_pubkey[REMOTE],
 						   &state->first_per_commitment_point[REMOTE],
-						   state->channel->option_static_remotekey);
+						    channel_has(state->channel,
+								OPT_STATIC_REMOTEKEY));
 
 	wire_sync_write(HSM_FD, take(msg));
 	msg = wire_sync_read(tmpctx, HSM_FD);
@@ -1150,7 +1200,8 @@ static u8 *fundee_channel(struct state *state, const u8 *open_channel_msg)
 				     msg,
 				     state->localconf.channel_reserve,
 				     state->upfront_shutdown_script[LOCAL],
-				     state->upfront_shutdown_script[REMOTE]);
+				     state->upfront_shutdown_script[REMOTE],
+				     state->channel_type);
 }
 
 /*~ Standard "peer sent a message, handle it" demuxer.  Though it really only
@@ -1234,7 +1285,7 @@ static void handle_dev_memleak(struct state *state, const u8 *msg)
 	memleak_remove_region(memtable, state, sizeof(*state));
 
 	/* If there's anything left, dump it to logs, and return true. */
-	found_leak = dump_memleak(memtable);
+	found_leak = dump_memleak(memtable, memleak_status_broken);
 	wire_sync_write(REQ_FD,
 			take(towire_openingd_dev_memleak_reply(NULL,
 							      found_leak)));
@@ -1277,9 +1328,10 @@ static u8 *handle_master_in(struct state *state)
 			wire_sync_write(REQ_FD, take(msg));
 		return NULL;
 	case WIRE_OPENINGD_FUNDER_COMPLETE:
-		if (!fromwire_openingd_funder_complete(msg,
-						      &funding_txid,
-						      &funding_txout))
+		if (!fromwire_openingd_funder_complete(state, msg,
+						       &funding_txid,
+						       &funding_txout,
+						       &state->channel_type))
 			master_badmsg(WIRE_OPENINGD_FUNDER_COMPLETE, msg);
 		state->funding_txid = funding_txid;
 		state->funding_txout = funding_txout;
@@ -1353,6 +1405,7 @@ int main(int argc, char *argv[])
 	if (!fromwire_openingd_init(state, msg,
 				   &chainparams,
 				   &state->our_features,
+				   &state->their_features,
 				   &state->localconf,
 				   &state->max_to_self_delay,
 				   &state->min_effective_htlc_capacity,
@@ -1361,9 +1414,6 @@ int main(int argc, char *argv[])
 				   &state->our_funding_pubkey,
 				   &state->minimum_depth,
 				   &state->min_feerate, &state->max_feerate,
-				   &state->their_features,
-				   &state->option_static_remotekey,
-				   &state->option_anchor_outputs,
 				   &force_tmp_channel_id,
 				   &dev_fast_gossip))
 		master_badmsg(WIRE_OPENINGD_INIT, msg);

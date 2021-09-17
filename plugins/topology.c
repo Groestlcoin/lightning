@@ -2,22 +2,18 @@
 #include <ccan/crypto/siphash24/siphash24.h>
 #include <ccan/htable/htable_type.h>
 #include <ccan/json_escape/json_escape.h>
-#include <ccan/json_out/json_out.h>
 #include <ccan/tal/str/str.h>
-#include <ccan/time/time.h>
 #include <common/dijkstra.h>
 #include <common/gossmap.h>
 #include <common/json_stream.h>
+#include <common/json_tok.h>
 #include <common/memleak.h>
 #include <common/pseudorand.h>
 #include <common/route.h>
 #include <common/type_to_string.h>
-#include <common/utils.h>
 #include <common/wireaddr.h>
 #include <errno.h>
-#include <inttypes.h>
 #include <plugins/libplugin.h>
-#include <wire/peer_wire.h>
 
 /* Access via get_gossmap() */
 static struct gossmap *global_gossmap;
@@ -684,6 +680,14 @@ done:
 	return command_finished(cmd, js);
 }
 
+#if DEVELOPER
+static void memleak_mark(struct plugin *p, struct htable *memtable)
+{
+	memleak_remove_region(memtable, global_gossmap,
+			      tal_bytelen(global_gossmap));
+}
+#endif
+
 static const char *init(struct plugin *p,
 			const char *buf UNUSED, const jsmntok_t *config UNUSED)
 {
@@ -694,9 +698,9 @@ static const char *init(struct plugin *p,
 		 take(json_out_obj(NULL, NULL, NULL)),
 		 "{id:%}", JSON_SCAN(json_to_node_id, &local_id));
 
-	global_gossmap = notleak_with_children(gossmap_load(NULL,
-					    GOSSIP_STORE_FILENAME,
-					    &num_cupdates_rejected));
+	global_gossmap = gossmap_load(NULL,
+				      GOSSIP_STORE_FILENAME,
+				      &num_cupdates_rejected);
 	if (!global_gossmap)
 		plugin_err(plugin, "Could not load gossmap %s: %s",
 			   GOSSIP_STORE_FILENAME, strerror(errno));
@@ -705,6 +709,9 @@ static const char *init(struct plugin *p,
 		plugin_log(plugin, LOG_DBG,
 			   "gossmap ignored %zu channel updates",
 			   num_cupdates_rejected);
+#if DEVELOPER
+	plugin_set_memleak_handler(p, memleak_mark);
+#endif
 	return NULL;
 }
 

@@ -14,8 +14,10 @@
 #include <common/json_command.h>
 #include <common/json_helpers.h>
 #include <common/jsonrpc_errors.h>
+#include <common/node_id.h>
 #include <common/param.h>
 #include <common/status_levels.h>
+#include <common/utils.h>
 
 struct json_out;
 struct plugin;
@@ -164,6 +166,9 @@ struct command_result *command_param_failed(void);
 /* Call this on fatal error. */
 void NORETURN plugin_err(struct plugin *p, const char *fmt, ...);
 
+/* Normal exit (makes sure to flush output!). */
+void NORETURN plugin_exit(struct plugin *p, int exitcode);
+
 /* This command is finished, here's a detailed error; @cmd cannot be
  * NULL, data can be NULL; otherwise it must be a JSON object. */
 struct command_result *WARN_UNUSED_RESULT
@@ -289,14 +294,14 @@ void NORETURN LAST_ARG_NULL plugin_main(char *argv[],
 							    const jsmntok_t *),
 					const enum plugin_restartability restartability,
 					bool init_rpc,
-					struct feature_set *features,
-					const struct plugin_command *commands,
+					struct feature_set *features STEALS,
+					const struct plugin_command *commands TAKES,
 					size_t num_commands,
-					const struct plugin_notification *notif_subs,
+					const struct plugin_notification *notif_subs TAKES,
 					size_t num_notif_subs,
-					const struct plugin_hook *hook_subs,
+					const struct plugin_hook *hook_subs TAKES,
 					size_t num_hook_subs,
-					const char **notif_topics,
+					const char **notif_topics TAKES,
 					size_t num_notif_topics,
 					...);
 
@@ -338,5 +343,12 @@ struct createonion_response *json_to_createonion_response(const tal_t *ctx,
 
 struct route_hop *json_to_route(const tal_t *ctx, const char *buffer,
 				const jsmntok_t *toks);
+
+#if DEVELOPER
+struct htable;
+void plugin_set_memleak_handler(struct plugin *plugin,
+				void (*mark_mem)(struct plugin *plugin,
+						 struct htable *memtable));
+#endif /* DEVELOPER */
 
 #endif /* LIGHTNING_PLUGINS_LIBPLUGIN_H */

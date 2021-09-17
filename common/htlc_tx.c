@@ -1,6 +1,5 @@
 #include <bitcoin/preimage.h>
 #include <bitcoin/script.h>
-#include <bitcoin/tx.h>
 #include <common/htlc_tx.h>
 #include <common/keyset.h>
 
@@ -44,7 +43,7 @@ static struct bitcoin_tx *htlc_tx(const tal_t *ctx,
 	 *    * `txin[0]` outpoint: `txid` of the commitment transaction and
 	 *      `output_index` of the matching HTLC output for the HTLC
 	 *      transaction
-	 *    * `txin[0]` sequence: `0` (set to `1` for `option_anchor_outputs`)
+	 *    * `txin[0]` sequence: `0` (set to `1` for `option_anchors`)
 	 */
 	amount = amount_msat_to_sat_round_down(msat);
 	bitcoin_tx_add_input(tx, commit_txid, commit_output_number,

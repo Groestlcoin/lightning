@@ -1,24 +1,28 @@
 #include <ccan/array_size/array_size.h>
 #include <ccan/ccan/tal/grab_file/grab_file.h>
 #include <ccan/crc32c/crc32c.h>
-#include <ccan/list/list.h>
+#include <ccan/io/io.h>
 #include <ccan/mem/mem.h>
 #include <ccan/opt/opt.h>
+#include <ccan/pipecmd/pipecmd.h>
+#include <ccan/tal/path/path.h>
 #include <ccan/tal/str/str.h>
 #include <ccan/utf8/utf8.h>
+#include <common/configdir.h>
 #include <common/features.h>
+#include <common/json_command.h>
 #include <common/json_helpers.h>
-#include <common/utils.h>
+#include <common/memleak.h>
+#include <common/timeout.h>
 #include <common/version.h>
-#include <lightningd/json.h>
+#include <dirent.h>
+#include <errno.h>
+#include <lightningd/io_loop_with_timers.h>
 #include <lightningd/notification.h>
-#include <lightningd/options.h>
 #include <lightningd/plugin.h>
 #include <lightningd/plugin_control.h>
 #include <lightningd/plugin_hook.h>
-#include <signal.h>
 #include <sys/stat.h>
-#include <sys/types.h>
 
 /* Only this file can include this generated header! */
 # include <plugins/list_of_builtin_plugins_gen.h>
@@ -87,22 +91,6 @@ struct plugins *plugins_new(const tal_t *ctx, struct log_book *log_book,
 	memleak_add_helper(p, memleak_help_pending_requests);
 
 	return p;
-}
-
-void plugins_free(struct plugins *plugins)
-{
-	struct plugin *p;
-
-	plugins->shutdown = true;
-
-	/* Plugins are usually the unit of allocation, and they are internally
-	 * consistent, so let's free each plugin first. */
-	while (!list_empty(&plugins->plugins)) {
-		p = list_pop(&plugins->plugins, struct plugin, list);
-		tal_free(p);
-	}
-
-	tal_free(plugins);
 }
 
 /* Check that all the plugin's subscriptions are actually for known
@@ -205,8 +193,12 @@ static void destroy_plugin(struct plugin *p)
 
 	/* If we are shutting down, do not continue to checking if
 	 * the dying plugin is important.  */
-	if (p->plugins->shutdown)
+	if (p->plugins->shutdown) {
+		/* But return if this was the last plugin! */
+		if (list_empty(&p->plugins->plugins))
+			io_break(p->plugins);
 		return;
+	}
 
 	/* Now check if the dying plugin is important.  */
 	if (p->important) {
@@ -1958,21 +1950,36 @@ static bool plugin_subscriptions_contains(struct plugin *plugin,
 	return false;
 }
 
+bool plugin_single_notify(struct plugin *p,
+			  const struct jsonrpc_notification *n TAKES)
+{
+	bool interested;
+	if (plugin_subscriptions_contains(p, n->method)) {
+		plugin_send(p, json_stream_dup(p, n->stream, p->log));
+		interested = true;
+	} else
+		interested = false;
+
+	if (taken(n))
+		tal_free(n);
+
+	return interested;
+}
+
 void plugins_notify(struct plugins *plugins,
 		    const struct jsonrpc_notification *n TAKES)
 {
 	struct plugin *p;
 
+	if (taken(n))
+		tal_steal(tmpctx, n);
+
 	/* If we're shutting down, ld->plugins will be NULL */
 	if (plugins) {
 		list_for_each(&plugins->plugins, p, list) {
-			if (plugin_subscriptions_contains(p, n->method))
-				plugin_send(p, json_stream_dup(p, n->stream,
-							       p->log));
+			plugin_single_notify(p, n);
 		}
 	}
-	if (taken(n))
-		tal_free(n);
 }
 
 static void destroy_request(struct jsonrpc_request *req,
@@ -2066,4 +2073,50 @@ bool was_plugin_destroyed(struct plugin_destroyed *pd)
 	}
 	tal_free(pd);
 	return true;
+}
+
+static void plugin_shutdown_timeout(struct lightningd *ld)
+{
+	io_break(ld->plugins);
+}
+
+void shutdown_plugins(struct lightningd *ld)
+{
+	struct plugin *p, *next;
+
+	/* This makes sure we don't complain about important plugins
+	 * vanishing! */
+	ld->plugins->shutdown = true;
+
+	/* Tell them all to shutdown; if they care. */
+	list_for_each_safe(&ld->plugins->plugins, p, next, list) {
+		/* Kill immediately, deletes self from list. */
+		if (!notify_plugin_shutdown(ld, p))
+			tal_free(p);
+	}
+
+	/* If anyone was interested in shutdown, give them time. */
+	if (!list_empty(&ld->plugins->plugins)) {
+		struct oneshot *t;
+
+		/* 30 seconds should do it. */
+		t = new_reltimer(ld->timers, ld,
+				 time_from_sec(30),
+				 plugin_shutdown_timeout, ld);
+
+		io_loop_with_timers(ld);
+		tal_free(t);
+
+		/* Report and free remaining plugins. */
+		while (!list_empty(&ld->plugins->plugins)) {
+			p = list_pop(&ld->plugins->plugins, struct plugin, list);
+			log_debug(ld->log,
+				  "%s: failed to shutdown, killing.",
+				  p->shortname);
+			tal_free(p);
+		}
+	}
+
+	/* NULL stops notifications trying to access plugins. */
+	ld->plugins = tal_free(ld->plugins);
 }

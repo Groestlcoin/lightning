@@ -1,11 +1,13 @@
 #include <ccan/array_size/array_size.h>
 #include <ccan/tal/str/str.h>
-#include <common/json_stream.h>
+#include <common/json_tok.h>
+#include <common/memleak.h>
 #include <plugins/libplugin.h>
 
 
 const char *name_option;
 static bool self_disable = false;
+static bool dont_shutdown = false;
 
 static struct command_result *json_helloworld(struct command *cmd,
 					      const char *buf,
@@ -56,6 +58,18 @@ static void json_connected(struct command *cmd,
 		   json_strdup(tmpctx, buf, idtok));
 }
 
+static void json_shutdown(struct command *cmd,
+			  const char *buf,
+			  const jsmntok_t *params)
+{
+	plugin_log(cmd->plugin, LOG_DBG, "shutdown called");
+
+	if (dont_shutdown)
+		return;
+
+	plugin_exit(cmd->plugin, 0);
+}
+
 static struct command_result *testrpc_cb(struct command *cmd,
 					 const char *buf,
 					 const jsmntok_t *params,
@@ -86,6 +100,14 @@ static struct command_result *json_testrpc(struct command *cmd,
 	return send_outreq(cmd->plugin, req);
 }
 
+#if DEVELOPER
+static void memleak_mark(struct plugin *p, struct htable *memtable)
+{
+	/* name_option is not a leak! */
+	memleak_remove_region(memtable, &name_option, sizeof(name_option));
+}
+#endif /* DEVELOPER */
+
 static const char *init(struct plugin *p,
 			const char *buf UNUSED,
 			const jsmntok_t *config UNUSED)
@@ -94,6 +116,11 @@ static const char *init(struct plugin *p,
 
 	if (self_disable)
 		return "Disabled via selfdisable option";
+
+#if DEVELOPER
+	plugin_set_memleak_handler(p, memleak_mark);
+#endif
+
 	return NULL;
 }
 
@@ -137,6 +164,9 @@ static const struct plugin_hook hooks[] = { {
 static const struct plugin_notification notifs[] = { {
 		"connect",
 		json_connected,
+	}, {
+		"shutdown",
+		json_shutdown
 	}
 };
 
@@ -159,5 +189,9 @@ int main(int argc, char *argv[])
 				  "flag",
 				  "Whether to disable.",
 				  flag_option, &self_disable),
+		    plugin_option("dont_shutdown",
+				  "flag",
+				  "Whether to timeout when asked to shutdown.",
+				  flag_option, &dont_shutdown),
 		    NULL);
 }

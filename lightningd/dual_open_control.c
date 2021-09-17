@@ -2,42 +2,33 @@
  * dualopend subdaemons. It manages the callbacks and database
  * saves and funding tx watching for a channel open */
 
-#include <bitcoin/psbt.h>
-#include <bitcoin/script.h>
 #include <ccan/array_size/array_size.h>
-#include <ccan/ccan/mem/mem.h>
-#include <ccan/ccan/take/take.h>
-#include <ccan/ccan/tal/tal.h>
-#include <ccan/short_types/short_types.h>
-#include <common/amount.h>
+#include <ccan/cast/cast.h>
+#include <ccan/mem/mem.h>
+#include <ccan/tal/str/str.h>
 #include <common/blockheight_states.h>
-#include <common/channel_config.h>
-#include <common/channel_id.h>
-#include <common/derive_basepoints.h>
-#include <common/features.h>
-#include <common/fee_states.h>
-#include <common/htlc.h>
+#include <common/json_command.h>
 #include <common/json_helpers.h>
 #include <common/json_tok.h>
-#include <common/lease_rates.h>
-#include <common/per_peer_state.h>
+#include <common/param.h>
 #include <common/psbt_open.h>
 #include <common/shutdown_scriptpubkey.h>
 #include <common/type_to_string.h>
-#include <connectd/connectd_wiregen.h>
+#include <errno.h>
 #include <hsmd/capabilities.h>
 #include <lightningd/chaintopology.h>
+#include <lightningd/channel.h>
 #include <lightningd/channel_control.h>
 #include <lightningd/closing_control.h>
 #include <lightningd/dual_open_control.h>
 #include <lightningd/hsm_control.h>
+#include <lightningd/json.h>
 #include <lightningd/notification.h>
 #include <lightningd/opening_common.h>
 #include <lightningd/peer_control.h>
 #include <lightningd/plugin_hook.h>
 #include <openingd/dualopend_wiregen.h>
 #include <wire/common_wiregen.h>
-#include <wire/peer_wire.h>
 
 struct commit_rcvd {
 	struct channel *channel;
@@ -474,48 +465,6 @@ hook_extract_amount(struct subd *dualopend,
 	return true;
 }
 
-#define CHECK_CHANGES(set, dir) 					\
-	do {		   						\
-		for (size_t i = 0; i < tal_count(set); i++) { 		\
-			ok = psbt_get_serial_id(&set[i].dir.unknowns,	\
-						&serial_id); 		\
-			assert(ok); 					\
-			if (serial_id % 2 != opener_side)		\
-				return true;				\
-		}							\
-	} while (false)
-
-static bool psbt_side_contribs_changed(struct wally_psbt *orig,
-				       struct wally_psbt *new,
-				       enum side opener_side)
-{
-	struct psbt_changeset *cs;
-	u64 serial_id;
-	bool ok;
-
-	cs = psbt_get_changeset(tmpctx, orig, new);
-
-	if (tal_count(cs->added_ins) == 0 &&
-	    tal_count(cs->rm_ins) == 0 &&
-	    tal_count(cs->added_outs) == 0 &&
-	    tal_count(cs->rm_outs) == 0)
-		return false;
-
-	/* If there were *any* changes, then the answer to the 'both sides'
-	 * question is "yes, there were changes" */
-	if (opener_side == NUM_SIDES)
-		return true;
-
-	/* Check that none of the included updates have a serial
-	 * id that's the peer's parity */
-	CHECK_CHANGES(cs->added_ins, input);
-	CHECK_CHANGES(cs->rm_ins, input);
-	CHECK_CHANGES(cs->added_outs, output);
-	CHECK_CHANGES(cs->rm_outs, output);
-
-	return false;
-}
-
 static void rbf_channel_remove_dualopend(struct subd *dualopend,
 					 struct rbf_channel_payload *payload)
 {
@@ -932,7 +881,7 @@ openchannel2_signed_deserialize(struct openchannel2_psbt_payload *payload,
 	 * totally managled the data here but left the serial_ids intact,
 	 * you'll get a failure back from the peer when you send
 	 * commitment sigs */
-	if (psbt_side_contribs_changed(payload->psbt, psbt, NUM_SIDES))
+	if (psbt_contribs_changed(payload->psbt, psbt))
 		fatal("Plugin must not change psbt input/output set. "
 		      "orig: %s. updated: %s",
 		      type_to_string(tmpctx, struct wally_psbt,

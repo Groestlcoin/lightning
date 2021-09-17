@@ -2,24 +2,8 @@
 #define LIGHTNING_LIGHTNINGD_PLUGIN_H
 #include "config.h"
 #include <ccan/intmap/intmap.h>
-#include <ccan/io/io.h>
-#include <ccan/pipecmd/pipecmd.h>
-#include <ccan/take/take.h>
-#include <ccan/tal/path/path.h>
-#include <ccan/tal/tal.h>
-#include <common/json_command.h>
-#include <common/jsonrpc_errors.h>
-#include <common/memleak.h>
-#include <common/param.h>
-#include <common/timeout.h>
-#include <dirent.h>
-#include <errno.h>
-#include <lightningd/io_loop_with_timers.h>
 #include <lightningd/jsonrpc.h>
 #include <lightningd/lightningd.h>
-#include <lightningd/log.h>
-#include <stdarg.h>
-#include <unistd.h>
 
 
 enum plugin_state {
@@ -190,26 +174,6 @@ void plugins_add_default_dir(struct plugins *plugins);
 void plugins_init(struct plugins *plugins);
 
 /**
- * Free all resources that are held by plugins in the correct order.
- *
- * This function ensures that the resources dangling off of the plugins struct
- * are freed in the correct order. This is necessary since the struct manages
- * two orthogonal sets of resources:
- *
- *  - Plugins
- *  - Hook calls and notifications
- *
- * The tal hierarchy is organized in a plugin centric way, i.e., the plugins
- * may exit in an arbitrary order and they'll unregister pointers in the other
- * resources. However this will fail if `tal_free` decides to free one of the
- * non-plugin resources (technically a sibling in the allocation tree) before
- * the plugins we will get a use-after-free. This function fixes this by
- * freeing in the correct order without adding additional child-relationships
- * in the allocation structure and without adding destructors.
- */
-void plugins_free(struct plugins *plugins);
-
-/**
  * Register a plugin for initialization and execution.
  *
  * @param plugins: Plugin context
@@ -270,6 +234,11 @@ bool plugins_send_getmanifest(struct plugins *plugins);
  */
 void plugin_kill(struct plugin *plugin, enum log_level loglevel,
 		 const char *fmt, ...);
+
+/**
+ * Tell all the plugins we're shutting down, and free them.
+ */
+void shutdown_plugins(struct lightningd *ld);
 
 /**
  * Returns the plugin which registers the command with name {cmd_name}
@@ -351,6 +320,17 @@ char *add_plugin_dir(struct plugins *plugins, const char *dir,
  */
 void clear_plugins(struct plugins *plugins);
 
+/**
+ * Send notification to this single plugin, if interested.
+ *
+ * Returns true if it was subscribed to the notification.
+ */
+bool plugin_single_notify(struct plugin *p,
+			  const struct jsonrpc_notification *n TAKES);
+
+/**
+ * Send notification to all interested plugins.
+ */
 void plugins_notify(struct plugins *plugins,
 		    const struct jsonrpc_notification *n TAKES);
 

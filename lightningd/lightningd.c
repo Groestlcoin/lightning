@@ -27,7 +27,6 @@
 /*~ This is Ian Lance Taylor's libbacktrace.  It turns out that it's
  * horrifically difficult to obtain a decent backtrace in C; the standard
  * backtrace function is useless in most programs. */
-#include <backtrace.h>
 
 /*~ These headers are from CCAN: http://ccodearchive.net.
  *
@@ -40,16 +39,9 @@
  * in detail below.
  */
 #include <ccan/array_size/array_size.h>
-#include <ccan/cast/cast.h>
-#include <ccan/crypto/hkdf_sha256/hkdf_sha256.h>
-#include <ccan/err/err.h>
-#include <ccan/io/fdpass/fdpass.h>
-#include <ccan/io/io.h>
-#include <ccan/json_escape/json_escape.h>
-#include <ccan/noerr/noerr.h>
+#include <ccan/opt/opt.h>
 #include <ccan/pipecmd/pipecmd.h>
 #include <ccan/read_write_all/read_write_all.h>
-#include <ccan/take/take.h>
 #include <ccan/tal/grab_file/grab_file.h>
 #include <ccan/tal/path/path.h>
 #include <ccan/tal/str/str.h>
@@ -58,33 +50,28 @@
  *  (separate daemons, or the lightning-cli program). */
 #include <common/daemon.h>
 #include <common/ecdh_hsmd.h>
-#include <common/features.h>
 #include <common/hsm_encryption.h>
 #include <common/memleak.h>
 #include <common/timeout.h>
-#include <common/utils.h>
+#include <common/type_to_string.h>
 #include <common/version.h>
 
 #include <errno.h>
 #include <fcntl.h>
 #include <header_versions_gen.h>
-#include <lightningd/bitcoind.h>
 #include <lightningd/chaintopology.h>
+#include <lightningd/channel.h>
 #include <lightningd/channel_control.h>
 #include <lightningd/coin_mvts.h>
 #include <lightningd/connect_control.h>
-#include <lightningd/invoice.h>
 #include <lightningd/io_loop_with_timers.h>
-#include <lightningd/jsonrpc.h>
-#include <lightningd/log.h>
-#include <lightningd/memdump.h>
 #include <lightningd/onchain_control.h>
 #include <lightningd/options.h>
-#include <signal.h>
-#include <sodium.h>
+#include <lightningd/plugin.h>
 #include <sys/resource.h>
-#include <sys/types.h>
-#include <unistd.h>
+#include <sys/stat.h>
+#include <wallet/txfilter.h>
+#include <wally_bip32.h>
 
 static void destroy_alt_subdaemons(struct lightningd *ld);
 #if DEVELOPER
@@ -1035,8 +1022,7 @@ int main(int argc, char *argv[])
 
 	/*~ Initialize block topology.  This does its own io_loop to
 	 * talk to groestlcoind, so does its own db transactions. */
-	setup_topology(ld->topology, ld->timers,
-		       min_blockheight, max_blockheight);
+	setup_topology(ld->topology, min_blockheight, max_blockheight);
 
 	db_begin_transaction(ld->wallet->db);
 
@@ -1142,12 +1128,15 @@ int main(int argc, char *argv[])
 		stop_response = tal_steal(NULL, ld->stop_response);
 	}
 
+	/* Stop topology callbacks. */
+	stop_topology(ld->topology);
+
 	/* We're not going to collect our children. */
 	remove_sigchild_handler();
-	shutdown_subdaemons(ld);
 
-	/* Remove plugins. */
-	plugins_free(ld->plugins);
+	/* Tell plugins we're shutting down. */
+	shutdown_plugins(ld);
+	shutdown_subdaemons(ld);
 
 	/* Clean up the JSON-RPC. This needs to happen in a DB transaction since
 	 * it might actually be touching the DB in some destructors, e.g.,

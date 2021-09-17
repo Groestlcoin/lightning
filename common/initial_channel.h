@@ -3,17 +3,11 @@
 #define LIGHTNING_COMMON_INITIAL_CHANNEL_H
 #include "config.h"
 
-#include <bitcoin/pubkey.h>
-#include <bitcoin/shadouble.h>
 #include <bitcoin/tx.h>
-#include <ccan/short_types/short_types.h>
-#include <ccan/tal/tal.h>
-#include <common/amount.h>
 #include <common/channel_config.h>
 #include <common/channel_id.h>
 #include <common/derive_basepoints.h>
 #include <common/htlc.h>
-#include <stdbool.h>
 
 struct signature;
 struct added_htlc;
@@ -69,11 +63,11 @@ struct channel {
 	/* What it looks like to each side. */
 	struct channel_view view[NUM_SIDES];
 
-	/* Is this using option_static_remotekey? */
-	bool option_static_remotekey;
+	/* Features which apply to this channel. */
+	struct channel_type *type;
 
-	/* Is this using option_anchor_outputs? */
-	bool option_anchor_outputs;
+	/* Are we using big channels? */
+	bool option_wumbo;
 
 	/* When the lease expires for the funds in this channel */
 	u32 lease_expiry;
@@ -97,8 +91,8 @@ struct channel {
  * @remote_basepoints: remote basepoints.
  * @local_fundingkey: local funding key
  * @remote_fundingkey: remote funding key
- * @option_static_remotekey: was this created with option_static_remotekey?
- * @option_anchor_outputs: was this created with option_anchor_outputs?
+ * @type: type for this channel
+ * @option_wumbo: has peer currently negotiated wumbo?
  * @opener: which side initiated it.
  *
  * Returns channel, or NULL if malformed.
@@ -119,8 +113,8 @@ struct channel *new_initial_channel(const tal_t *ctx,
 				    const struct basepoints *remote_basepoints,
 				    const struct pubkey *local_funding_pubkey,
 				    const struct pubkey *remote_funding_pubkey,
-				    bool option_static_remotekey,
-				    bool option_anchor_outputs,
+				    const struct channel_type *type TAKES,
+				    bool option_wumbo,
 				    enum side opener);
 
 /**
@@ -158,14 +152,10 @@ u32 channel_feerate(const struct channel *channel, enum side side);
  */
 u32 channel_blockheight(const struct channel *channel, enum side side);
 
-#if EXPERIMENTAL_FEATURES
 /* BOLT-upgrade_protocol #2:
  * Channel features are explicitly enumerated as `channel_type` bitfields,
  * using odd features bits.
  */
-struct channel_type *channel_type(const tal_t *ctx,
-				  const struct channel *channel);
-
 /* What features can we upgrade?  (Returns NULL if none). */
 struct channel_type **channel_upgradable_types(const tal_t *ctx,
 					       const struct channel *channel);
@@ -173,6 +163,7 @@ struct channel_type **channel_upgradable_types(const tal_t *ctx,
 /* What features do we want? */
 struct channel_type *channel_desired_type(const tal_t *ctx,
 					  const struct channel *channel);
-#endif /* EXPERIMENTAL_FEATURES */
 
+/* Convenience for querying channel->type */
+bool channel_has(const struct channel *channel, int feature);
 #endif /* LIGHTNING_COMMON_INITIAL_CHANNEL_H */

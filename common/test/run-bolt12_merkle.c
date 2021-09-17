@@ -5,11 +5,9 @@
 #include "../bolt12_merkle.c"
 #include <assert.h>
 #include <ccan/array_size/array_size.h>
-#include <ccan/cast/cast.h>
-#include <ccan/tal/str/str.h>
+#include <common/channel_type.h>
 #include <common/features.h>
 #include <common/setup.h>
-#include <stdarg.h>
 
 /* Definition of n1 from the spec */
 #include <wire/peer_wire.h>
@@ -24,12 +22,18 @@ int features_unsupported(const struct feature_set *our_features UNNEEDED,
 void fromwire_channel_id(const u8 **cursor UNNEEDED, size_t *max UNNEEDED,
 			 struct channel_id *channel_id UNNEEDED)
 { fprintf(stderr, "fromwire_channel_id called!\n"); abort(); }
+/* Generated stub for fromwire_channel_type */
+struct channel_type *fromwire_channel_type(const tal_t *ctx UNNEEDED, const u8 **cursor UNNEEDED, size_t *plen UNNEEDED)
+{ fprintf(stderr, "fromwire_channel_type called!\n"); abort(); }
 /* Generated stub for fromwire_onionmsg_path */
 struct onionmsg_path *fromwire_onionmsg_path(const tal_t *ctx UNNEEDED, const u8 **cursor UNNEEDED, size_t *plen UNNEEDED)
 { fprintf(stderr, "fromwire_onionmsg_path called!\n"); abort(); }
 /* Generated stub for towire_channel_id */
 void towire_channel_id(u8 **pptr UNNEEDED, const struct channel_id *channel_id UNNEEDED)
 { fprintf(stderr, "towire_channel_id called!\n"); abort(); }
+/* Generated stub for towire_channel_type */
+void towire_channel_type(u8 **p UNNEEDED, const struct channel_type *channel_type UNNEEDED)
+{ fprintf(stderr, "towire_channel_type called!\n"); abort(); }
 /* Generated stub for towire_onionmsg_path */
 void towire_onionmsg_path(u8 **p UNNEEDED, const struct onionmsg_path *onionmsg_path UNNEEDED)
 { fprintf(stderr, "towire_onionmsg_path called!\n"); abort(); }

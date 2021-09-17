@@ -1,17 +1,13 @@
 #include "config.h"
-#include <assert.h>
 #include <bitcoin/psbt.h>
 #include <ccan/ccan/array_size/array_size.h>
-#include <ccan/ccan/cast/cast.h>
 #include <ccan/ccan/mem/mem.h>
-#include <ccan/ccan/tal/str/str.h>
 #include <common/json_stream.h>
+#include <common/lease_rates.h>
 #include <common/psbt_open.h>
 #include <common/type_to_string.h>
-#include <common/utils.h>
 #include <plugins/spender/multifundchannel.h>
 #include <plugins/spender/openchannel.h>
-#include <wally_psbt.h>
 
 static struct list_head mfc_commands;
 
@@ -90,8 +86,9 @@ static bool update_parent_psbt(const tal_t *ctx,
 	if (wally_psbt_clone_alloc(new_node_psbt, 0, &new_node_copy)
 			!= WALLY_OK)
 		abort();
-	/* copy is cleaned up below */
-	tal_wally_end(NULL);
+	/* copy is cleaned up below, but we need parts we steal from it
+	 * owned by the clone.  */
+	tal_wally_end(clone);
 
 	changes = psbt_get_changeset(NULL, old_node_psbt,
 				     new_node_copy);

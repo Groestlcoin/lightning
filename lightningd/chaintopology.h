@@ -2,16 +2,8 @@
 #define LIGHTNING_LIGHTNINGD_CHAINTOPOLOGY_H
 #include "config.h"
 #include <bitcoin/block.h>
-#include <bitcoin/tx.h>
 #include <ccan/list/list.h>
-#include <ccan/short_types/short_types.h>
-#include <ccan/structeq/structeq.h>
-#include <ccan/time/time.h>
-#include <jsmn.h>
-#include <lightningd/json.h>
 #include <lightningd/watch.h>
-#include <math.h>
-#include <stddef.h>
 
 struct bitcoin_tx;
 struct bitcoind;
@@ -113,8 +105,8 @@ struct chain_topology {
 	/* The groestlcoind. */
 	struct bitcoind *bitcoind;
 
-	/* Our timer list. */
-	struct timers *timers;
+	/* Timers we're running. */
+	struct oneshot *extend_timer, *updatefee_timer;
 
 	/* Bitcoin transactions we're broadcasting */
 	struct list_head outgoing_txs;
@@ -126,6 +118,9 @@ struct chain_topology {
 	/* The number of headers known to the bitcoin backend at startup. Not
 	 * updated after the initial check. */
 	u32 headercount;
+
+	/* Are we stopped? */
+	bool stopping;
 };
 
 /* Information relevant to locating a TX in a blockchain. */
@@ -193,10 +188,12 @@ void broadcast_tx_ahf(struct chain_topology *topo,
 				     const char *err));
 
 struct chain_topology *new_topology(struct lightningd *ld, struct log *log);
-void setup_topology(struct chain_topology *topology, struct timers *timers,
+void setup_topology(struct chain_topology *topology,
 		    u32 min_blockheight, u32 max_blockheight);
 
 void begin_topology(struct chain_topology *topo);
+
+void stop_topology(struct chain_topology *topo);
 
 struct txlocator *locate_tx(const void *ctx, const struct chain_topology *topo, const struct bitcoin_txid *txid);
 

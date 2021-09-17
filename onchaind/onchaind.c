@@ -1,16 +1,10 @@
 #include <bitcoin/feerate.h>
-#include <bitcoin/psbt.h>
 #include <bitcoin/script.h>
 #include <ccan/asort/asort.h>
-#include <ccan/crypto/shachain/shachain.h>
 #include <ccan/mem/mem.h>
 #include <ccan/tal/str/str.h>
-#include <common/amount.h>
-#include <common/coin_mvt.h>
-#include <common/derive_basepoints.h>
 #include <common/htlc_tx.h>
 #include <common/initial_commit_tx.h>
-#include <common/key_derive.h>
 #include <common/keyset.h>
 #include <common/lease_rates.h>
 #include <common/memleak.h>
@@ -19,16 +13,9 @@
 #include <common/status.h>
 #include <common/subdaemon.h>
 #include <common/type_to_string.h>
-#include <common/utils.h>
-#include <common/version.h>
-#include <common/wallet.h>
-#include <errno.h>
 #include <hsmd/hsmd_wiregen.h>
-#include <inttypes.h>
-#include <lightningd/channel_state.h>
 #include <onchaind/onchain_types.h>
 #include <onchaind/onchaind_wiregen.h>
-#include <stdio.h>
 #include <unistd.h>
 #include <wire/wire_sync.h>
   #include "onchain_types_names_gen.h"
@@ -470,13 +457,17 @@ static bool grind_htlc_tx_fee(struct amount_sat *fee,
 		/* BOLT #3:
 		 *
 		 * The fee for an HTLC-timeout transaction:
-		 *   - MUST BE calculated to match:
+		 *   - If `option_anchors_zero_fee_htlc_tx` applies:
+		 *     1. MUST BE 0.
+		 *   - Otherwise, MUST BE calculated to match:
 		 *     1. Multiply `feerate_per_kw` by 663
 		 *        (666 if `option_anchor_outputs` applies)
 		 *        and divide by 1000 (rounding down).
 		 *
 		 * The fee for an HTLC-success transaction:
-		 *   - MUST BE calculated to match:
+		 *  - If `option_anchors_zero_fee_htlc_tx` applies:
+		 *    1. MUST BE 0.
+		 *  - MUST BE calculated to match:
 		 *     1. Multiply `feerate_per_kw` by 703
 		 *        (706 if `option_anchor_outputs` applies)
 		 *        and divide by 1000 (rounding down).
@@ -517,7 +508,9 @@ static bool set_htlc_timeout_fee(struct bitcoin_tx *tx,
 	/* BOLT #3:
 	 *
 	 * The fee for an HTLC-timeout transaction:
-	 *  - MUST BE calculated to match:
+	 *  - If `option_anchors_zero_fee_htlc_tx` applies:
+	 *    1. MUST BE 0.
+	 *  - Otherwise, MUST BE calculated to match:
 	 *    1. Multiply `feerate_per_kw` by 663 (666 if `option_anchor_outputs`
 	 *       applies) and divide by 1000 (rounding down).
 	 */
@@ -564,6 +557,8 @@ static void set_htlc_success_fee(struct bitcoin_tx *tx,
 	/* BOLT #3:
 	 *
 	 * The fee for an HTLC-success transaction:
+	 * - If `option_anchors_zero_fee_htlc_tx` applies:
+	 *   1. MUST BE 0.
 	 * - MUST BE calculated to match:
 	 *   1. Multiply `feerate_per_kw` by 703 (706 if `option_anchor_outputs`
 	 *      applies) and divide by 1000 (rounding down).
@@ -2162,7 +2157,7 @@ static bool handle_dev_memleak(struct tracked_output **outs, const u8 *msg)
 	memleak_remove_globals(memtable, tal_parent(outs));
 	memleak_remove_region(memtable, outs, tal_bytelen(outs));
 
-	found_leak = dump_memleak(memtable);
+	found_leak = dump_memleak(memtable, memleak_status_broken);
 	wire_sync_write(REQ_FD,
 			take(towire_onchaind_dev_memleak_reply(NULL,
 							      found_leak)));
@@ -2566,7 +2561,7 @@ static u8 *scriptpubkey_to_remote(const tal_t *ctx,
 	 *
 	 * #### `to_remote` Output
 	 *
-	 * If `option_anchor_outputs` applies to the commitment
+	 * If `option_anchors` applies to the commitment
 	 * transaction, the `to_remote` output is encumbered by a one
 	 * block csv lock.
 	 *    <remote_pubkey> OP_CHECKSIGVERIFY 1 OP_CHECKSEQUENCEVERIFY

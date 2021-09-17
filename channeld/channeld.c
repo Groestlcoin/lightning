@@ -10,67 +10,39 @@
  *    reading and writing synchronously we could deadlock if we hit buffer
  *    limits, unlikely as that is.
  */
-#include <bitcoin/chainparams.h>
-#include <bitcoin/privkey.h>
-#include <bitcoin/psbt.h>
-#include <bitcoin/script.h>
-#include <ccan/array_size/array_size.h>
 #include <ccan/asort/asort.h>
 #include <ccan/cast/cast.h>
-#include <ccan/container_of/container_of.h>
-#include <ccan/crypto/hkdf_sha256/hkdf_sha256.h>
-#include <ccan/crypto/shachain/shachain.h>
-#include <ccan/err/err.h>
-#include <ccan/fdpass/fdpass.h>
 #include <ccan/mem/mem.h>
-#include <ccan/take/take.h>
 #include <ccan/tal/str/str.h>
-#include <ccan/time/time.h>
 #include <channeld/channeld_wiregen.h>
-#include <channeld/commit_tx.h>
 #include <channeld/full_channel.h>
 #include <channeld/watchtower.h>
 #include <common/billboard.h>
-#include <common/blinding.h>
-#include <common/bolt12.h>
-#include <common/coin_mvt.h>
 #include <common/crypto_sync.h>
 #include <common/dev_disconnect.h>
 #include <common/ecdh_hsmd.h>
-#include <common/features.h>
-#include <common/gossip_constants.h>
 #include <common/gossip_store.h>
-#include <common/htlc_tx.h>
 #include <common/key_derive.h>
 #include <common/memleak.h>
 #include <common/msg_queue.h>
-#include <common/node_id.h>
 #include <common/onionreply.h>
 #include <common/peer_billboard.h>
 #include <common/peer_failed.h>
 #include <common/ping.h>
 #include <common/private_channel_announcement.h>
-#include <common/psbt_open.h>
 #include <common/read_peer_msg.h>
 #include <common/status.h>
 #include <common/subdaemon.h>
 #include <common/timeout.h>
 #include <common/type_to_string.h>
-#include <common/version.h>
 #include <common/wire_error.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <gossipd/gossip_store_wiregen.h>
 #include <gossipd/gossipd_peerd_wiregen.h>
 #include <hsmd/hsmd_wiregen.h>
-#include <inttypes.h>
-#include <secp256k1.h>
-#include <stdio.h>
 #include <wire/common_wiregen.h>
-#include <wire/onion_wire.h>
 #include <wire/peer_wire.h>
-#include <wire/wire.h>
-#include <wire/wire_io.h>
 #include <wire/wire_sync.h>
 
 /* stdin == requests, 3 == peer, 4 = gossip, 5 = gossip_store, 6 = HSM */
@@ -360,12 +332,6 @@ static bool handle_master_request_later(struct peer *peer, const u8 *msg)
 	return false;
 }
 
-static bool channel_type_eq(const struct channel_type *a,
-			    const struct channel_type *b)
-{
-	return featurebits_eq(a->features, b->features);
-}
-
 static bool match_type(const struct channel_type *desired,
 		       const struct channel_type *current,
 		       struct channel_type **upgradable)
@@ -377,31 +343,28 @@ static bool match_type(const struct channel_type *desired,
 	if (channel_type_eq(desired, current))
 		return true;
 
-	for (size_t i = 0; i < tal_count(upgradable); i++) {
-		if (channel_type_eq(desired, upgradable[i]))
-			return true;
-	}
-
-	return false;
+	return channel_type_eq_any(desired, upgradable);
 }
 
 static void set_channel_type(struct channel *channel,
 			     const struct channel_type *type)
 {
-	const struct channel_type *cur = channel_type(tmpctx, channel);
+	const struct channel_type *cur = channel->type;
 
 	if (channel_type_eq(cur, type))
 		return;
 
 	/* We only allow one upgrade at the moment, so that's it. */
-	assert(!channel->option_static_remotekey);
+	assert(!channel_has(channel, OPT_STATIC_REMOTEKEY));
 	assert(feature_offered(type->features, OPT_STATIC_REMOTEKEY));
 
 	/* Do upgrade, tell master. */
-	channel->option_static_remotekey = true;
+	tal_free(channel->type);
+	channel->type = channel_type_dup(channel, type);
 	status_unusual("Upgraded channel to [%s]",
 		       fmt_featurebits(tmpctx, type->features));
-	wire_sync_write(MASTER_FD, take(towire_channeld_upgraded(NULL, true)));
+	wire_sync_write(MASTER_FD,
+			take(towire_channeld_upgraded(NULL, channel->type)));
 }
 #else /* !EXPERIMENTAL_FEATURES */
 static bool handle_master_request_later(struct peer *peer, const u8 *msg)
@@ -1064,7 +1027,8 @@ static struct bitcoin_signature *calc_commitsigs(const tal_t *ctx,
 	msg = towire_hsmd_sign_remote_commitment_tx(NULL, txs[0],
 						   &peer->channel->funding_pubkey[REMOTE],
 						   &peer->remote_per_commit,
-						   peer->channel->option_static_remotekey);
+						    channel_has(peer->channel,
+								OPT_STATIC_REMOTEKEY));
 
 	msg = hsm_req(tmpctx, take(msg));
 	if (!fromwire_hsmd_sign_tx_reply(msg, commit_sig))
@@ -1104,7 +1068,8 @@ static struct bitcoin_signature *calc_commitsigs(const tal_t *ctx,
 							  txs[i+1]->wtx->inputs[0].index);
 		msg = towire_hsmd_sign_remote_htlc_tx(NULL, txs[i + 1], wscript,
 						     &peer->remote_per_commit,
-						     peer->channel->option_anchor_outputs);
+						      channel_has(peer->channel,
+								  OPT_ANCHOR_OUTPUTS));
 
 		msg = hsm_req(tmpctx, take(msg));
 		if (!fromwire_hsmd_sign_tx_reply(msg, &htlc_sigs[i]))
@@ -1173,7 +1138,7 @@ static struct bitcoin_signature *unraw_sigs(const tal_t *ctx,
 		/* BOLT #3:
 		 * ## HTLC-Timeout and HTLC-Success Transactions
 		 *...
-		 * * if `option_anchor_outputs` applies to this commitment
+		 * * if `option_anchors` applies to this commitment
 		 *   transaction, `SIGHASH_SINGLE|SIGHASH_ANYONECANPAY` is
 		 *   used.
 		 */
@@ -1632,7 +1597,7 @@ static void handle_peer_commit_sig(struct peer *peer, const u8 *msg)
 	/* SIGHASH_ALL is implied. */
 	commit_sig.sighash_type = SIGHASH_ALL;
 	htlc_sigs = unraw_sigs(tmpctx, raw_sigs,
-			       peer->channel->option_anchor_outputs);
+			       channel_has(peer->channel, OPT_ANCHOR_OUTPUTS));
 
 	txs =
 	    channel_txs(tmpctx, &htlc_map, NULL,
@@ -2489,7 +2454,8 @@ static void resend_commitment(struct peer *peer, struct changed_htlc *last)
 /* BOLT #2:
  *
  * A receiving node:
- *  - if `option_static_remotekey` applies to the commitment transaction:
+ *  - if `option_static_remotekey` or `option_anchors` applies to the
+ *    commitment transaction:
  *    - if `next_revocation_number` is greater than expected above, AND
  *    `your_last_per_commitment_secret` is correct for that
  *    `next_revocation_number` minus 1:
@@ -2552,7 +2518,8 @@ static void check_future_dataloss_fields(struct peer *peer,
 /* BOLT #2:
  *
  * A receiving node:
- *  - if `option_static_remotekey` applies to the commitment transaction:
+ *  - if `option_static_remotekey` or `option_anchors` applies to the
+ *    commitment transaction:
  * ...
  *  - if `your_last_per_commitment_secret` does not match the expected values:
  *     - SHOULD fail the channel.
@@ -2708,7 +2675,7 @@ static void peer_reconnect(struct peer *peer,
 
 	/* Both these options give us extra fields to check. */
 	check_extra_fields
-		= dataloss_protect || peer->channel->option_static_remotekey;
+		= dataloss_protect || channel_has(peer->channel, OPT_STATIC_REMOTEKEY);
 
 	/* Our current per-commitment point is the commitment point in the last
 	 * received signed commitment */
@@ -2742,7 +2709,8 @@ static void peer_reconnect(struct peer *peer,
 		 *    to.
 		 *  - MAY not set `upgradable` if it would be empty.
 		 */
-		send_tlvs->current_type = channel_type(send_tlvs, peer->channel);
+		send_tlvs->current_type = tal_dup(send_tlvs, struct channel_type,
+						  peer->channel->type);
 		send_tlvs->upgradable = channel_upgradable_types(send_tlvs,
 								 peer->channel);
 	}
@@ -2764,7 +2732,7 @@ static void peer_reconnect(struct peer *peer,
 	 *     of the next `commitment_signed` it expects to receive.
 	 *   - MUST set `next_revocation_number` to the commitment number
 	 *     of the next `revoke_and_ack` message it expects to receive.
-	 *   - if `option_static_remotekey` applies to the commitment transaction:
+	 *   - if `option_static_remotekey` or `option_anchors` applies to the commitment transaction:
 	 *     - MUST set `my_current_per_commitment_point` to a valid point.
 	 *   - otherwise:
 	 *     - MUST set `my_current_per_commitment_point` to its commitment
@@ -2778,7 +2746,7 @@ static void peer_reconnect(struct peer *peer,
 	 *     - MUST set `your_last_per_commitment_secret` to the last
 	 *       `per_commitment_secret` it received
 	 */
-	if (peer->channel->option_static_remotekey) {
+	if (channel_has(peer->channel, OPT_STATIC_REMOTEKEY)) {
 		msg = towire_channel_reestablish
 			(NULL, &peer->channel_id,
 			 peer->next_index[LOCAL],
@@ -2941,7 +2909,9 @@ got_reestablish:
 		check_future_dataloss_fields(peer,
 					     next_revocation_number,
 					     &last_local_per_commitment_secret,
-					     peer->channel->option_static_remotekey ? NULL :
+					     channel_has(peer->channel,
+							 OPT_STATIC_REMOTEKEY)
+					     ? NULL :
 					     &remote_current_per_commitment_point);
  	} else
  		retransmit_revoke_and_ack = false;
@@ -2989,7 +2959,8 @@ got_reestablish:
 					      next_revocation_number,
 					      next_commitment_number,
 					      &last_local_per_commitment_secret,
-					      peer->channel->option_static_remotekey
+					      channel_has(peer->channel,
+							  OPT_STATIC_REMOTEKEY)
 					      ? NULL
 					      : &remote_current_per_commitment_point);
 
@@ -3496,7 +3467,7 @@ static void handle_dev_memleak(struct peer *peer, const u8 *msg)
 	/* Now delete peer and things it has pointers to. */
 	memleak_remove_region(memtable, peer, tal_bytelen(peer));
 
-	found_leak = dump_memleak(memtable);
+	found_leak = dump_memleak(memtable, memleak_status_broken);
 	wire_sync_write(MASTER_FD,
 			 take(towire_channeld_dev_memleak_reply(NULL,
 							       found_leak)));
@@ -3646,9 +3617,9 @@ static void init_channel(struct peer *peer)
 	struct secret last_remote_per_commit_secret;
 	secp256k1_ecdsa_signature *remote_ann_node_sig;
 	secp256k1_ecdsa_signature *remote_ann_bitcoin_sig;
-	bool option_static_remotekey, option_anchor_outputs;
 	struct penalty_base *pbases;
 	u8 *reestablish_only;
+	struct channel_type *channel_type;
 #if !DEVELOPER
 	bool dev_fail_process_onionpacket; /* Ignored */
 #endif
@@ -3709,8 +3680,7 @@ static void init_channel(struct peer *peer)
 				   &peer->remote_upfront_shutdown_script,
 				   &remote_ann_node_sig,
 				   &remote_ann_bitcoin_sig,
-				   &option_static_remotekey,
-				   &option_anchor_outputs,
+				   &channel_type,
 				   &dev_fast_gossip,
 				   &dev_fail_process_onionpacket,
 				   &pbases,
@@ -3719,7 +3689,8 @@ static void init_channel(struct peer *peer)
 	}
 
 	status_debug("option_static_remotekey = %u, option_anchor_outputs = %u",
-		     option_static_remotekey, option_anchor_outputs);
+		     channel_type_has(channel_type, OPT_STATIC_REMOTEKEY),
+		     channel_type_has(channel_type, OPT_ANCHOR_OUTPUTS));
 
 	/* Keeping an array of pointers is better since it allows us to avoid
 	 * extra allocations later. */
@@ -3749,8 +3720,6 @@ static void init_channel(struct peer *peer)
 		     peer->feerate_min, peer->feerate_max,
 		     type_to_string(tmpctx, struct height_states, blockheight_states),
 		     peer->our_blockheight);
-
-	status_debug("option_static_remotekey = %u", option_static_remotekey);
 
 	if (remote_ann_node_sig && remote_ann_bitcoin_sig) {
 		peer->announcement_node_sigs[REMOTE] = *remote_ann_node_sig;
@@ -3787,8 +3756,9 @@ static void init_channel(struct peer *peer)
 					 &points[LOCAL], &points[REMOTE],
 					 &funding_pubkey[LOCAL],
 					 &funding_pubkey[REMOTE],
-					 option_static_remotekey,
-					 option_anchor_outputs,
+					 take(channel_type),
+					 feature_offered(peer->their_features,
+							 OPT_LARGE_CHANNELS),
 					 opener);
 
 	if (!channel_force_htlcs(peer->channel,

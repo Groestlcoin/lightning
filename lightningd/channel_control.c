@@ -1,37 +1,25 @@
-#include <bitcoin/pubkey.h>
-#include <bitcoin/script.h>
 #include <ccan/cast/cast.h>
 #include <channeld/channeld_wiregen.h>
-#include <common/channel_id.h>
-#include <common/coin_mvt.h>
-#include <common/features.h>
-#include <common/gossip_constants.h>
 #include <common/json_command.h>
 #include <common/json_helpers.h>
-#include <common/jsonrpc_errors.h>
+#include <common/json_tok.h>
 #include <common/memleak.h>
-#include <common/per_peer_state.h>
-#include <common/psbt_open.h>
+#include <common/param.h>
 #include <common/shutdown_scriptpubkey.h>
-#include <common/timeout.h>
-#include <common/tx_roles.h>
-#include <common/utils.h>
+#include <common/type_to_string.h>
 #include <common/wire_error.h>
 #include <errno.h>
-#include <inttypes.h>
+#include <hsmd/capabilities.h>
+#include <lightningd/chaintopology.h>
+#include <lightningd/channel.h>
 #include <lightningd/channel_control.h>
 #include <lightningd/closing_control.h>
 #include <lightningd/coin_mvts.h>
 #include <lightningd/dual_open_control.h>
 #include <lightningd/hsm_control.h>
-#include <lightningd/jsonrpc.h>
-#include <lightningd/lightningd.h>
-#include <lightningd/log.h>
 #include <lightningd/notification.h>
 #include <lightningd/peer_control.h>
-#include <lightningd/subd.h>
 #include <wire/common_wiregen.h>
-#include <wire/wire_sync.h>
 
 static void update_feerates(struct lightningd *ld, struct channel *channel)
 {
@@ -431,14 +419,32 @@ void forget_channel(struct channel *channel, const char *why)
 static void handle_channel_upgrade(struct channel *channel,
 				   const u8 *msg)
 {
-	bool option_static_remotekey;
+	struct channel_type *newtype;
 
-	if (!fromwire_channeld_upgraded(msg, &option_static_remotekey)) {
+	if (!fromwire_channeld_upgraded(msg, msg, &newtype)) {
 		channel_internal_error(channel, "bad handle_channel_upgrade: %s",
 				       tal_hex(tmpctx, msg));
 		return;
 	}
 
+	/* You can currently only upgrade to turn on option_static_remotekey:
+	 * if they somehow thought anything else we need to close channel! */
+	if (channel->static_remotekey_start[LOCAL] != 0x7FFFFFFFFFFFFFFFULL) {
+		channel_internal_error(channel,
+				       "channel_upgrade already static_remotekey? %s",
+				       tal_hex(tmpctx, msg));
+		return;
+	}
+
+	if (!channel_type_eq(newtype, channel_type_static_remotekey(tmpctx))) {
+		channel_internal_error(channel,
+				       "channel_upgrade must be static_remotekey, not %s",
+				       fmt_featurebits(tmpctx, newtype->features));
+		return;
+	}
+
+	tal_free(channel->type);
+	channel->type = channel_type_dup(channel, newtype);
 	channel->static_remotekey_start[LOCAL] = channel->next_index[LOCAL];
 	channel->static_remotekey_start[REMOTE] = channel->next_index[REMOTE];
 	log_debug(channel->log,
@@ -692,10 +698,7 @@ void peer_start_channeld(struct channel *channel,
 				      channel->remote_upfront_shutdown_script,
 				      remote_ann_node_sig,
 				      remote_ann_bitcoin_sig,
-				      /* Set at channel open, even if not
-				       * negotiated now! */
-				      channel->next_index[LOCAL] >= channel->static_remotekey_start[LOCAL],
-				      channel->option_anchor_outputs,
+				      channel->type,
 				      IFDEV(ld->dev_fast_gossip, false),
 				      IFDEV(dev_fail_process_onionpacket, false),
 				      pbases,

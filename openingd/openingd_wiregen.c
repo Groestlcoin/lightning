@@ -65,15 +65,17 @@ bool openingd_wire_is_defined(u16 type)
 
 
 /* WIRE: OPENINGD_INIT */
-u8 *towire_openingd_init(const tal_t *ctx, const struct chainparams *chainparams, const struct feature_set *our_features, const struct channel_config *our_config, u32 max_to_self_delay, struct amount_msat min_effective_htlc_capacity_msat, const struct per_peer_state *pps, const struct basepoints *our_basepoints, const struct pubkey *our_funding_pubkey, u32 minimum_depth, u32 min_feerate, u32 max_feerate, const u8 *lfeatures, bool option_static_remotekey, bool option_anchor_outputs, const struct channel_id *dev_temporary_channel_id, bool dev_fast_gossip)
+u8 *towire_openingd_init(const tal_t *ctx, const struct chainparams *chainparams, const struct feature_set *our_features, const u8 *their_init_features, const struct channel_config *our_config, u32 max_to_self_delay, struct amount_msat min_effective_htlc_capacity_msat, const struct per_peer_state *pps, const struct basepoints *our_basepoints, const struct pubkey *our_funding_pubkey, u32 minimum_depth, u32 min_feerate, u32 max_feerate, const struct channel_id *dev_temporary_channel_id, bool dev_fast_gossip)
 {
-	u16 lfeatures_len = tal_count(lfeatures);
+	u16 their_init_features_len = tal_count(their_init_features);
 	u8 *p = tal_arr(ctx, u8, 0);
 
 	towire_u16(&p, WIRE_OPENINGD_INIT);
 	/* Which network are we configured for? */
 	towire_chainparams(&p, chainparams);
 	towire_feature_set(&p, our_features);
+	towire_u16(&p, their_init_features_len);
+	towire_u8_array(&p, their_init_features, their_init_features_len);
 	/* Base configuration we'll offer (channel reserve will vary with amount) */
 	towire_channel_config(&p, our_config);
 	/* Minimum/maximum configuration values we'll accept */
@@ -86,10 +88,6 @@ u8 *towire_openingd_init(const tal_t *ctx, const struct chainparams *chainparams
 	towire_u32(&p, minimum_depth);
 	towire_u32(&p, min_feerate);
 	towire_u32(&p, max_feerate);
-	towire_u16(&p, lfeatures_len);
-	towire_u8_array(&p, lfeatures, lfeatures_len);
-	towire_bool(&p, option_static_remotekey);
-	towire_bool(&p, option_anchor_outputs);
 	if (!dev_temporary_channel_id)
 		towire_bool(&p, false);
 	else {
@@ -100,9 +98,9 @@ u8 *towire_openingd_init(const tal_t *ctx, const struct chainparams *chainparams
 
 	return memcheck(p, tal_count(p));
 }
-bool fromwire_openingd_init(const tal_t *ctx, const void *p, const struct chainparams **chainparams, struct feature_set **our_features, struct channel_config *our_config, u32 *max_to_self_delay, struct amount_msat *min_effective_htlc_capacity_msat, struct per_peer_state **pps, struct basepoints *our_basepoints, struct pubkey *our_funding_pubkey, u32 *minimum_depth, u32 *min_feerate, u32 *max_feerate, u8 **lfeatures, bool *option_static_remotekey, bool *option_anchor_outputs, struct channel_id **dev_temporary_channel_id, bool *dev_fast_gossip)
+bool fromwire_openingd_init(const tal_t *ctx, const void *p, const struct chainparams **chainparams, struct feature_set **our_features, u8 **their_init_features, struct channel_config *our_config, u32 *max_to_self_delay, struct amount_msat *min_effective_htlc_capacity_msat, struct per_peer_state **pps, struct basepoints *our_basepoints, struct pubkey *our_funding_pubkey, u32 *minimum_depth, u32 *min_feerate, u32 *max_feerate, struct channel_id **dev_temporary_channel_id, bool *dev_fast_gossip)
 {
-	u16 lfeatures_len;
+	u16 their_init_features_len;
 
 	const u8 *cursor = p;
 	size_t plen = tal_count(p);
@@ -112,6 +110,10 @@ bool fromwire_openingd_init(const tal_t *ctx, const void *p, const struct chainp
  	/* Which network are we configured for? */
 	fromwire_chainparams(&cursor, &plen, chainparams);
  	*our_features = fromwire_feature_set(ctx, &cursor, &plen);
+ 	their_init_features_len = fromwire_u16(&cursor, &plen);
+ 	// 2nd case their_init_features
+	*their_init_features = their_init_features_len ? tal_arr(ctx, u8, their_init_features_len) : NULL;
+	fromwire_u8_array(&cursor, &plen, *their_init_features, their_init_features_len);
  	/* Base configuration we'll offer (channel reserve will vary with amount) */
 	fromwire_channel_config(&cursor, &plen, our_config);
  	/* Minimum/maximum configuration values we'll accept */
@@ -124,12 +126,6 @@ bool fromwire_openingd_init(const tal_t *ctx, const void *p, const struct chainp
 	*minimum_depth = fromwire_u32(&cursor, &plen);
  	*min_feerate = fromwire_u32(&cursor, &plen);
  	*max_feerate = fromwire_u32(&cursor, &plen);
- 	lfeatures_len = fromwire_u16(&cursor, &plen);
- 	// 2nd case lfeatures
-	*lfeatures = lfeatures_len ? tal_arr(ctx, u8, lfeatures_len) : NULL;
-	fromwire_u8_array(&cursor, &plen, *lfeatures, lfeatures_len);
- 	*option_static_remotekey = fromwire_bool(&cursor, &plen);
- 	*option_anchor_outputs = fromwire_bool(&cursor, &plen);
  	if (!fromwire_bool(&cursor, &plen))
 		*dev_temporary_channel_id = NULL;
 	else {
@@ -265,7 +261,7 @@ bool fromwire_openingd_got_offer_reply(const tal_t *ctx, const void *p, wirestri
 /* WIRE: OPENINGD_FUNDER_REPLY */
 /* Openingd->master: we've successfully offered channel. */
 /* This gives their sig */
-u8 *towire_openingd_funder_reply(const tal_t *ctx, const struct channel_config *their_config, const struct bitcoin_tx *first_commit, const struct penalty_base *pbase, const struct bitcoin_signature *first_commit_sig, const struct per_peer_state *pps, const struct pubkey *revocation_basepoint, const struct pubkey *payment_basepoint, const struct pubkey *htlc_basepoint, const struct pubkey *delayed_payment_basepoint, const struct pubkey *their_per_commit_point, u32 minimum_depth, const struct pubkey *remote_fundingkey, const struct bitcoin_txid *funding_txid, u16 funding_txout, u32 feerate_per_kw, struct amount_sat our_channel_reserve_satoshis, const u8 *shutdown_scriptpubkey)
+u8 *towire_openingd_funder_reply(const tal_t *ctx, const struct channel_config *their_config, const struct bitcoin_tx *first_commit, const struct penalty_base *pbase, const struct bitcoin_signature *first_commit_sig, const struct per_peer_state *pps, const struct pubkey *revocation_basepoint, const struct pubkey *payment_basepoint, const struct pubkey *htlc_basepoint, const struct pubkey *delayed_payment_basepoint, const struct pubkey *their_per_commit_point, u32 minimum_depth, const struct pubkey *remote_fundingkey, const struct bitcoin_txid *funding_txid, u16 funding_txout, u32 feerate_per_kw, struct amount_sat our_channel_reserve_satoshis, const u8 *shutdown_scriptpubkey, const struct channel_type *channel_type)
 {
 	u16 shutdown_len = tal_count(shutdown_scriptpubkey);
 	u8 *p = tal_arr(ctx, u8, 0);
@@ -294,10 +290,11 @@ u8 *towire_openingd_funder_reply(const tal_t *ctx, const struct channel_config *
 	towire_amount_sat(&p, our_channel_reserve_satoshis);
 	towire_u16(&p, shutdown_len);
 	towire_u8_array(&p, shutdown_scriptpubkey, shutdown_len);
+	towire_channel_type(&p, channel_type);
 
 	return memcheck(p, tal_count(p));
 }
-bool fromwire_openingd_funder_reply(const tal_t *ctx, const void *p, struct channel_config *their_config, struct bitcoin_tx **first_commit, struct penalty_base **pbase, struct bitcoin_signature *first_commit_sig, struct per_peer_state **pps, struct pubkey *revocation_basepoint, struct pubkey *payment_basepoint, struct pubkey *htlc_basepoint, struct pubkey *delayed_payment_basepoint, struct pubkey *their_per_commit_point, u32 *minimum_depth, struct pubkey *remote_fundingkey, struct bitcoin_txid *funding_txid, u16 *funding_txout, u32 *feerate_per_kw, struct amount_sat *our_channel_reserve_satoshis, u8 **shutdown_scriptpubkey)
+bool fromwire_openingd_funder_reply(const tal_t *ctx, const void *p, struct channel_config *their_config, struct bitcoin_tx **first_commit, struct penalty_base **pbase, struct bitcoin_signature *first_commit_sig, struct per_peer_state **pps, struct pubkey *revocation_basepoint, struct pubkey *payment_basepoint, struct pubkey *htlc_basepoint, struct pubkey *delayed_payment_basepoint, struct pubkey *their_per_commit_point, u32 *minimum_depth, struct pubkey *remote_fundingkey, struct bitcoin_txid *funding_txid, u16 *funding_txout, u32 *feerate_per_kw, struct amount_sat *our_channel_reserve_satoshis, u8 **shutdown_scriptpubkey, struct channel_type **channel_type)
 {
 	u16 shutdown_len;
 
@@ -331,6 +328,7 @@ bool fromwire_openingd_funder_reply(const tal_t *ctx, const void *p, struct chan
  	// 2nd case shutdown_scriptpubkey
 	*shutdown_scriptpubkey = shutdown_len ? tal_arr(ctx, u8, shutdown_len) : NULL;
 	fromwire_u8_array(&cursor, &plen, *shutdown_scriptpubkey, shutdown_len);
+ 	*channel_type = fromwire_channel_type(ctx, &cursor, &plen);
 	return cursor != NULL;
 }
 
@@ -373,7 +371,7 @@ bool fromwire_openingd_funder_start(const tal_t *ctx, const void *p, struct amou
 
 /* WIRE: OPENINGD_FUNDER_START_REPLY */
 /* openingd->master: send back output script for 2-of-2 funding output */
-u8 *towire_openingd_funder_start_reply(const tal_t *ctx, const u8 *scriptpubkey, bool upfront_shutdown_negotiated)
+u8 *towire_openingd_funder_start_reply(const tal_t *ctx, const u8 *scriptpubkey, bool upfront_shutdown_negotiated, const struct channel_type *channel_type)
 {
 	u8 script_len = tal_count(scriptpubkey);
 	u8 *p = tal_arr(ctx, u8, 0);
@@ -382,10 +380,11 @@ u8 *towire_openingd_funder_start_reply(const tal_t *ctx, const u8 *scriptpubkey,
 	towire_u8(&p, script_len);
 	towire_u8_array(&p, scriptpubkey, script_len);
 	towire_bool(&p, upfront_shutdown_negotiated);
+	towire_channel_type(&p, channel_type);
 
 	return memcheck(p, tal_count(p));
 }
-bool fromwire_openingd_funder_start_reply(const tal_t *ctx, const void *p, u8 **scriptpubkey, bool *upfront_shutdown_negotiated)
+bool fromwire_openingd_funder_start_reply(const tal_t *ctx, const void *p, u8 **scriptpubkey, bool *upfront_shutdown_negotiated, struct channel_type **channel_type)
 {
 	u8 script_len;
 
@@ -399,6 +398,7 @@ bool fromwire_openingd_funder_start_reply(const tal_t *ctx, const void *p, u8 **
 	*scriptpubkey = script_len ? tal_arr(ctx, u8, script_len) : NULL;
 	fromwire_u8_array(&cursor, &plen, *scriptpubkey, script_len);
  	*upfront_shutdown_negotiated = fromwire_bool(&cursor, &plen);
+ 	*channel_type = fromwire_channel_type(ctx, &cursor, &plen);
 	return cursor != NULL;
 }
 
@@ -406,17 +406,18 @@ bool fromwire_openingd_funder_start_reply(const tal_t *ctx, const void *p, u8 **
 /* master->openingd: complete channel establishment for a funding */
 /* tx that will be paid for by an external wallet */
 /* response to this is a normal `openingd_funder_reply` ?? */
-u8 *towire_openingd_funder_complete(const tal_t *ctx, const struct bitcoin_txid *funding_txid, u16 funding_txout)
+u8 *towire_openingd_funder_complete(const tal_t *ctx, const struct bitcoin_txid *funding_txid, u16 funding_txout, const struct channel_type *channel_type)
 {
 	u8 *p = tal_arr(ctx, u8, 0);
 
 	towire_u16(&p, WIRE_OPENINGD_FUNDER_COMPLETE);
 	towire_bitcoin_txid(&p, funding_txid);
 	towire_u16(&p, funding_txout);
+	towire_channel_type(&p, channel_type);
 
 	return memcheck(p, tal_count(p));
 }
-bool fromwire_openingd_funder_complete(const void *p, struct bitcoin_txid *funding_txid, u16 *funding_txout)
+bool fromwire_openingd_funder_complete(const tal_t *ctx, const void *p, struct bitcoin_txid *funding_txid, u16 *funding_txout, struct channel_type **channel_type)
 {
 	const u8 *cursor = p;
 	size_t plen = tal_count(p);
@@ -425,6 +426,7 @@ bool fromwire_openingd_funder_complete(const void *p, struct bitcoin_txid *fundi
 		return false;
  	fromwire_bitcoin_txid(&cursor, &plen, funding_txid);
  	*funding_txout = fromwire_u16(&cursor, &plen);
+ 	*channel_type = fromwire_channel_type(ctx, &cursor, &plen);
 	return cursor != NULL;
 }
 
@@ -473,7 +475,7 @@ bool fromwire_openingd_funder_failed(const tal_t *ctx, const void *p, wirestring
 /* WIRE: OPENINGD_FUNDEE */
 /* Openingd->master: they offered channel. */
 /* This gives their txid and info */
-u8 *towire_openingd_fundee(const tal_t *ctx, const struct channel_config *their_config, const struct bitcoin_tx *first_commit, const struct penalty_base *pbase, const struct bitcoin_signature *first_commit_sig, const struct per_peer_state *pps, const struct pubkey *revocation_basepoint, const struct pubkey *payment_basepoint, const struct pubkey *htlc_basepoint, const struct pubkey *delayed_payment_basepoint, const struct pubkey *their_per_commit_point, const struct pubkey *remote_fundingkey, const struct bitcoin_txid *funding_txid, u16 funding_txout, struct amount_sat funding_satoshis, struct amount_msat push_msat, u8 channel_flags, u32 feerate_per_kw, const u8 *funding_signed_msg, struct amount_sat our_channel_reserve_satoshis, const u8 *local_shutdown_scriptpubkey, const u8 *remote_shutdown_scriptpubkey)
+u8 *towire_openingd_fundee(const tal_t *ctx, const struct channel_config *their_config, const struct bitcoin_tx *first_commit, const struct penalty_base *pbase, const struct bitcoin_signature *first_commit_sig, const struct per_peer_state *pps, const struct pubkey *revocation_basepoint, const struct pubkey *payment_basepoint, const struct pubkey *htlc_basepoint, const struct pubkey *delayed_payment_basepoint, const struct pubkey *their_per_commit_point, const struct pubkey *remote_fundingkey, const struct bitcoin_txid *funding_txid, u16 funding_txout, struct amount_sat funding_satoshis, struct amount_msat push_msat, u8 channel_flags, u32 feerate_per_kw, const u8 *funding_signed_msg, struct amount_sat our_channel_reserve_satoshis, const u8 *local_shutdown_scriptpubkey, const u8 *remote_shutdown_scriptpubkey, const struct channel_type *channel_type)
 {
 	u16 msglen = tal_count(funding_signed_msg);
 	u16 local_shutdown_len = tal_count(local_shutdown_scriptpubkey);
@@ -511,10 +513,11 @@ u8 *towire_openingd_fundee(const tal_t *ctx, const struct channel_config *their_
 	towire_u8_array(&p, local_shutdown_scriptpubkey, local_shutdown_len);
 	towire_u16(&p, remote_shutdown_len);
 	towire_u8_array(&p, remote_shutdown_scriptpubkey, remote_shutdown_len);
+	towire_channel_type(&p, channel_type);
 
 	return memcheck(p, tal_count(p));
 }
-bool fromwire_openingd_fundee(const tal_t *ctx, const void *p, struct channel_config *their_config, struct bitcoin_tx **first_commit, struct penalty_base **pbase, struct bitcoin_signature *first_commit_sig, struct per_peer_state **pps, struct pubkey *revocation_basepoint, struct pubkey *payment_basepoint, struct pubkey *htlc_basepoint, struct pubkey *delayed_payment_basepoint, struct pubkey *their_per_commit_point, struct pubkey *remote_fundingkey, struct bitcoin_txid *funding_txid, u16 *funding_txout, struct amount_sat *funding_satoshis, struct amount_msat *push_msat, u8 *channel_flags, u32 *feerate_per_kw, u8 **funding_signed_msg, struct amount_sat *our_channel_reserve_satoshis, u8 **local_shutdown_scriptpubkey, u8 **remote_shutdown_scriptpubkey)
+bool fromwire_openingd_fundee(const tal_t *ctx, const void *p, struct channel_config *their_config, struct bitcoin_tx **first_commit, struct penalty_base **pbase, struct bitcoin_signature *first_commit_sig, struct per_peer_state **pps, struct pubkey *revocation_basepoint, struct pubkey *payment_basepoint, struct pubkey *htlc_basepoint, struct pubkey *delayed_payment_basepoint, struct pubkey *their_per_commit_point, struct pubkey *remote_fundingkey, struct bitcoin_txid *funding_txid, u16 *funding_txout, struct amount_sat *funding_satoshis, struct amount_msat *push_msat, u8 *channel_flags, u32 *feerate_per_kw, u8 **funding_signed_msg, struct amount_sat *our_channel_reserve_satoshis, u8 **local_shutdown_scriptpubkey, u8 **remote_shutdown_scriptpubkey, struct channel_type **channel_type)
 {
 	u16 msglen;
 	u16 local_shutdown_len;
@@ -561,6 +564,7 @@ bool fromwire_openingd_fundee(const tal_t *ctx, const void *p, struct channel_co
  	// 2nd case remote_shutdown_scriptpubkey
 	*remote_shutdown_scriptpubkey = remote_shutdown_len ? tal_arr(ctx, u8, remote_shutdown_len) : NULL;
 	fromwire_u8_array(&cursor, &plen, *remote_shutdown_scriptpubkey, remote_shutdown_len);
+ 	*channel_type = fromwire_channel_type(ctx, &cursor, &plen);
 	return cursor != NULL;
 }
 
@@ -604,4 +608,4 @@ bool fromwire_openingd_dev_memleak_reply(const void *p, bool *leak)
  	*leak = fromwire_bool(&cursor, &plen);
 	return cursor != NULL;
 }
-// SHA256STAMP:e01a9f3e8b3c9962c9b35502d3b74977e289e61ebebf28627276e97d06bc4b35
+// SHA256STAMP:728c4fe1f57fe55a1d7669ec138002ae1ffa61813549bddcc5a07a994ea7211f

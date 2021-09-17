@@ -1,4 +1,3 @@
-#include <bitcoin/block.h>
 #include <wire/peer_wire.h>
 
 static bool unknown_type(enum peer_wire t)
