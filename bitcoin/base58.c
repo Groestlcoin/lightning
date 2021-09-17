@@ -20,7 +20,10 @@
 #include <bitcoin/base58.h>
 #include <bitcoin/chainparams.h>
 #include <bitcoin/groestl.h>
+#include <ccan/build_assert/build_assert.h>
+#include <ccan/tal/str/str.h>
 #include <common/utils.h>
+#include <string.h>
 #include <wally_core.h>
 
 bool (*b58_sha256_impl)(void *, const void *, size_t) = NULL;
