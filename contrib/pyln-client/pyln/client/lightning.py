@@ -930,15 +930,17 @@ class LightningRpc(UnixDomainSocketRpc):
         }
         return self.call("listnodes", payload)
 
-    def listpays(self, bolt11=None, payment_hash=None):
+    def listpays(self, bolt11=None, payment_hash=None, status=None):
         """
         Show outgoing payments, regarding {bolt11} or {payment_hash} if set
-        Can only specify one of {bolt11} or {payment_hash}.
+        Can only specify one of {bolt11} or {payment_hash}. It is possible
+        filter the payments by {status}.
         """
         assert not (bolt11 and payment_hash)
         payload = {
             "bolt11": bolt11,
-            "payment_hash": payment_hash
+            "payment_hash": payment_hash,
+            "status": status
         }
         return self.call("listpays", payload)
 
@@ -952,11 +954,12 @@ class LightningRpc(UnixDomainSocketRpc):
         }
         return self.call("listpeers", payload)
 
-    def listsendpays(self, bolt11=None, payment_hash=None):
+    def listsendpays(self, bolt11=None, payment_hash=None, status=None):
         """Show all sendpays results, or only for `bolt11` or `payment_hash`."""
         payload = {
             "bolt11": bolt11,
-            "payment_hash": payment_hash
+            "payment_hash": payment_hash,
+            "status": status
         }
         return self.call("listsendpays", payload)
 
@@ -1149,16 +1152,17 @@ class LightningRpc(UnixDomainSocketRpc):
         }
         return self.call("sendpay", payload)
 
-    def setchannelfee(self, id, base=None, ppm=None):
+    def setchannelfee(self, id, base=None, ppm=None, enforcedelay=None):
         """
         Set routing fees for a channel/peer {id} (or 'all'). {base} is a value in millisatoshi
         that is added as base fee to any routed payment. {ppm} is a value added proportionally
-        per-millionths to any routed payment volume in satoshi.
+        per-millionths to any routed payment volume in satoshi. {enforcedelay} is the number of seconds before enforcing this change.
         """
         payload = {
             "id": id,
             "base": base,
-            "ppm": ppm
+            "ppm": ppm,
+            "enforcedelay": enforcedelay,
         }
         return self.call("setchannelfee", payload)
 

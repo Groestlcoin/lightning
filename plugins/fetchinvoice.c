@@ -20,7 +20,7 @@
 #include <sodium.h>
 
 static struct gossmap *global_gossmap;
-static struct node_id local_id;
+static struct pubkey local_id;
 static bool disable_connect = false;
 static LIST_HEAD(sent_list);
 
@@ -33,8 +33,8 @@ struct sent {
 	struct command *cmd;
 	/* The offer we are trying to get an invoice/payment for. */
 	struct tlv_offer *offer;
-	/* Path to use. */
-	struct node_id *path;
+	/* Path to use (including self) */
+	struct pubkey *path;
 
 	/* The invreq we sent, OR the invoice we sent */
 	struct tlv_invoice_request *invreq;
@@ -541,60 +541,86 @@ static bool can_carry_onionmsg(const struct gossmap *map,
 		|| gossmap_node_get_feature(map, n, 102) != -1;
 }
 
-/* Create path to node which can carry onion messages; if it can't find
- * one, create singleton path and sets @try_connect.  */
-static struct node_id *path_to_node(const tal_t *ctx,
-				    struct gossmap *gossmap,
-				    const struct pubkey32 *node32_id,
-				    bool *try_connect)
-{
-	const struct gossmap_node *dst;
-	struct node_id *nodes, dstid;
+enum nodeid_parity {
+	nodeid_parity_even = SECP256K1_TAG_PUBKEY_EVEN,
+	nodeid_parity_odd = SECP256K1_TAG_PUBKEY_ODD,
+	nodeid_parity_unknown = 1,
+};
 
-	/* FIXME: Use blinded path if avail. */
-	gossmap_guess_node_id(gossmap, node32_id, &dstid);
+static enum nodeid_parity node_parity(const struct gossmap *gossmap,
+				      const struct gossmap_node *node)
+
+{
+	struct node_id id;
+	gossmap_node_get_id(gossmap, node, &id);
+	return id.k[0];
+}
+
+static void node_id_from_pubkey32(struct node_id *nid,
+				  const struct pubkey32 *node32_id,
+				  enum nodeid_parity parity)
+{
+	assert(parity == SECP256K1_TAG_PUBKEY_EVEN
+	       || parity == SECP256K1_TAG_PUBKEY_ODD);
+	nid->k[0] = parity;
+	secp256k1_xonly_pubkey_serialize(secp256k1_ctx, nid->k+1,
+					 &node32_id->pubkey);
+}
+
+/* Create path to node which can carry onion messages (including
+ * self); if it can't find one, returns NULL.  Fills in nodeid_parity
+ * for 33rd nodeid byte. */
+static struct pubkey *path_to_node(const tal_t *ctx,
+				   struct plugin *plugin,
+				   const struct pubkey32 *node32_id,
+				   enum nodeid_parity *parity)
+{
+	struct route_hop *r;
+	const struct dijkstra *dij;
+	const struct gossmap_node *src;
+	const struct gossmap_node *dst;
+	struct node_id dstid, local_nodeid;
+	struct pubkey *nodes;
+	struct gossmap *gossmap = get_gossmap(plugin);
+
+	/* We try both parities. */
+	*parity = nodeid_parity_even;
+	node_id_from_pubkey32(&dstid, node32_id, *parity);
 	dst = gossmap_find_node(gossmap, &dstid);
 	if (!dst) {
-		nodes = tal_arr(ctx, struct node_id, 1);
-		/* We don't know the pubkey y-sign, but sendonionmessage will
-		 * fix it up if we guess wrong. */
-		nodes[0].k[0] = SECP256K1_TAG_PUBKEY_EVEN;
-		secp256k1_xonly_pubkey_serialize(secp256k1_ctx,
-						 nodes[0].k+1,
-						 &node32_id->pubkey);
-		/* Since it's not it gossmap, we don't know how to connect,
-		 * so don't try. */
-		*try_connect = false;
-		return nodes;
-	} else {
-		struct route_hop *r;
-		const struct dijkstra *dij;
-		const struct gossmap_node *src;
-
-		/* If we don't exist in gossip, routing can't happen. */
-		src = gossmap_find_node(gossmap, &local_id);
-		if (!src)
-			goto go_direct_dst;
-
-		dij = dijkstra(tmpctx, gossmap, dst, AMOUNT_MSAT(0), 0,
-			       can_carry_onionmsg, route_score_shorter, NULL);
-
-		r = route_from_dijkstra(tmpctx, gossmap, dij, src, AMOUNT_MSAT(0), 0);
-		if (!r)
-			goto go_direct_dst;
-
-		*try_connect = false;
-		nodes = tal_arr(ctx, struct node_id, tal_count(r));
-		for (size_t i = 0; i < tal_count(r); i++)
-			nodes[i] = r[i].node_id;
-		return nodes;
+		*parity = nodeid_parity_odd;
+		node_id_from_pubkey32(&dstid, node32_id, *parity);
+		dst = gossmap_find_node(gossmap, &dstid);
+		if (!dst) {
+			*parity = nodeid_parity_unknown;
+			return NULL;
+		}
 	}
 
-go_direct_dst:
-	/* Try direct route, maybe it's connected? */
-	nodes = tal_arr(ctx, struct node_id, 1);
-	gossmap_node_get_id(gossmap, dst, &nodes[0]);
-	*try_connect = true;
+	*parity = node_parity(gossmap, dst);
+
+	/* If we don't exist in gossip, routing can't happen. */
+	node_id_from_pubkey(&local_nodeid, &local_id);
+	src = gossmap_find_node(gossmap, &local_nodeid);
+	if (!src)
+		return NULL;
+
+	dij = dijkstra(tmpctx, gossmap, dst, AMOUNT_MSAT(0), 0,
+		       can_carry_onionmsg, route_score_shorter, NULL);
+
+	r = route_from_dijkstra(tmpctx, gossmap, dij, src, AMOUNT_MSAT(0), 0);
+	if (!r)
+		return NULL;
+
+	nodes = tal_arr(ctx, struct pubkey, tal_count(r) + 1);
+	nodes[0] = local_id;
+	for (size_t i = 0; i < tal_count(r); i++) {
+		if (!pubkey_from_node_id(&nodes[i+1], &r[i].node_id)) {
+			plugin_err(plugin, "Could not convert nodeid %s",
+				   type_to_string(tmpctx, struct node_id,
+						  &r[i].node_id));
+		}
+	}
 	return nodes;
 }
 
@@ -615,32 +641,27 @@ static struct command_result *send_message(struct command *cmd,
 	struct out_req *req;
 
 	/* FIXME: Maybe we should allow this? */
-	if (tal_bytelen(sent->path) == 0)
+	if (tal_count(sent->path) == 1)
 		return command_fail(cmd, PAY_ROUTE_NOT_FOUND,
 				    "Refusing to talk to ourselves");
 
-	/* Reverse path is offset by one: we are the final node. */
-	backwards = tal_arr(tmpctx, struct pubkey, tal_count(sent->path));
-	for (size_t i = 0; i < tal_count(sent->path) - 1; i++) {
-		if (!pubkey_from_node_id(&backwards[tal_count(sent->path)-2-i],
-					 &sent->path[i]))
-			abort();
-	}
-	if (!pubkey_from_node_id(&backwards[tal_count(sent->path)-1], &local_id))
-		abort();
+	/* Reverse path is offset by one. */
+	backwards = tal_arr(tmpctx, struct pubkey, tal_count(sent->path) - 1);
+	for (size_t i = 0; i < tal_count(backwards); i++)
+		backwards[tal_count(backwards)-1-i] = sent->path[i];
 
 	/* Ok, now make reply for onion_message */
 	path = make_blindedpath(tmpctx, backwards, &blinding,
 				&sent->reply_blinding);
 
-	req = jsonrpc_request_start(cmd->plugin, cmd, "sendonionmessage",
+	req = jsonrpc_request_start(cmd->plugin, cmd, "sendobsonionmessage",
 				    done,
 				    forward_error,
 				    sent);
 	json_array_start(req->js, "hops");
-	for (size_t i = 0; i < tal_count(sent->path); i++) {
+	for (size_t i = 1; i < tal_count(sent->path); i++) {
 		json_object_start(req->js, NULL);
-		json_add_node_id(req->js, "id", &sent->path[i]);
+		json_add_pubkey(req->js, "id", &sent->path[i]);
 		if (i == tal_count(sent->path) - 1)
 			json_add_hex_talarr(req->js, msgfield, msgval);
 		json_object_end(req->js);
@@ -702,11 +723,68 @@ sendinvreq_after_connect(struct command *cmd,
 			    sendonionmsg_done);
 }
 
+struct connect_attempt {
+	struct node_id node_id;
+	struct command_result *(*cb)(struct command *command,
+				     const char *buf,
+				     const jsmntok_t *result,
+				     struct sent *sent);
+	struct sent *sent;
+};
+
+static struct command_result *connected(struct command *command,
+					const char *buf,
+					const jsmntok_t *result,
+					struct connect_attempt *ca)
+{
+	return ca->cb(command, buf, result, ca->sent);
+}
+
+static struct command_result *connect_failed(struct command *command,
+					     const char *buf,
+					     const jsmntok_t *result,
+					     struct connect_attempt *ca)
+{
+	return command_done_err(command, OFFER_ROUTE_NOT_FOUND,
+				"Failed: could not route, could not connect",
+				NULL);
+}
+
+/* Offers contain only a 32-byte id.  If we can't find the address, we
+ * don't know if it's 02 or 03, so we try both. If we're here, we
+ * failed 02. */
+static struct command_result *try_other_parity(struct command *cmd,
+					       const char *buf,
+					       const jsmntok_t *result,
+					       struct connect_attempt *ca)
+{
+	struct out_req *req;
+
+	/* Flip parity */
+	ca->node_id.k[0] = SECP256K1_TAG_PUBKEY_ODD;
+	/* Path is us -> them, so they're second entry */
+	if (!pubkey_from_node_id(&ca->sent->path[1], &ca->node_id)) {
+		/* Should not happen!
+		 * Pieter Wuille points out:
+		 *   y^2 = x^3 + 7 mod p
+		 *   negating y doesn’t change the left hand side
+		 */
+		return command_done_err(cmd, LIGHTNINGD,
+					"Failed: could not convert inverted pubkey?",
+					NULL);
+	}
+	req = jsonrpc_request_start(cmd->plugin, cmd, "connect", connected,
+				    connect_failed, ca);
+	json_add_node_id(req->js, "id", &ca->node_id);
+	return send_outreq(cmd->plugin, req);
+}
+
 /* We can't find a route, so we're going to try to connect, then just blast it
  * to them. */
 static struct command_result *
 connect_direct(struct command *cmd,
-	       const struct node_id *dst,
+	       const struct pubkey32 *dst,
+	       enum nodeid_parity parity,
 	       struct command_result *(*cb)(struct command *command,
 					    const char *buf,
 					    const jsmntok_t *result,
@@ -714,23 +792,50 @@ connect_direct(struct command *cmd,
 	       struct sent *sent)
 {
 	struct out_req *req;
+	struct connect_attempt *ca = tal(cmd, struct connect_attempt);
+
+	ca->cb = cb;
+	ca->sent = sent;
+
+	if (parity == nodeid_parity_unknown) {
+		plugin_notify_message(cmd, LOG_INFORM,
+				      "Cannot find route, trying connect to 02/03%s directly",
+				      type_to_string(tmpctx, struct pubkey32, dst));
+		/* Try even first. */
+		node_id_from_pubkey32(&ca->node_id, dst, SECP256K1_TAG_PUBKEY_EVEN);
+	} else {
+		plugin_notify_message(cmd, LOG_INFORM,
+				      "Cannot find route, trying connect to %02x%s directly",
+				      parity,
+				      type_to_string(tmpctx, struct pubkey32, dst));
+		node_id_from_pubkey32(&ca->node_id, dst, parity);
+	}
+
+	/* Make a direct path -> dst. */
+	sent->path = tal_arr(sent, struct pubkey, 2);
+	sent->path[0] = local_id;
+	if (!pubkey_from_node_id(&sent->path[1], &ca->node_id)) {
+		/* Should not happen! */
+		return command_done_err(cmd, LIGHTNINGD,
+					"Failed: could not convert to pubkey?",
+					NULL);
+	}
 
 	if (disable_connect) {
+		/* FIXME: This means we will fail if parity is wrong! */
 		plugin_notify_message(cmd, LOG_UNUSUAL,
 				      "Cannot find route, but"
 				      " fetchplugin-noconnect set:"
 				      " trying direct anyway to %s",
-				      type_to_string(tmpctx, struct node_id,
+				      type_to_string(tmpctx, struct pubkey32,
 						     dst));
 		return cb(cmd, NULL, NULL, sent);
 	}
 
-	plugin_notify_message(cmd, LOG_INFORM,
-			      "Cannot find route, trying connect to %s directly",
-			      type_to_string(tmpctx, struct node_id, dst));
-
-	req = jsonrpc_request_start(cmd->plugin, cmd, "connect", cb, cb, sent);
-	json_add_node_id(req->js, "id", dst);
+	req = jsonrpc_request_start(cmd->plugin, cmd, "connect", connected,
+				    parity == nodeid_parity_unknown ?
+				    try_other_parity : connect_failed, ca);
+	json_add_node_id(req->js, "id", &ca->node_id);
 	return send_outreq(cmd->plugin, req);
 }
 
@@ -741,7 +846,7 @@ static struct command_result *invreq_done(struct command *cmd,
 {
 	const jsmntok_t *t;
 	char *fail;
-	bool try_connect;
+	enum nodeid_parity parity;
 
 	/* Get invoice request */
 	t = json_get_member(buf, result, "bolt12");
@@ -834,11 +939,11 @@ static struct command_result *invreq_done(struct command *cmd,
 		}
 	}
 
-	sent->path = path_to_node(sent, get_gossmap(cmd->plugin),
+	sent->path = path_to_node(sent, cmd->plugin,
 				  sent->offer->node_id,
-				  &try_connect);
-	if (try_connect)
-		return connect_direct(cmd, &sent->path[0],
+				  &parity);
+	if (!sent->path)
+		return connect_direct(cmd, sent->offer->node_id, parity,
 				      sendinvreq_after_connect, sent);
 
 	return sendinvreq_after_connect(cmd, NULL, NULL, sent);
@@ -853,7 +958,7 @@ force_payer_secret(struct command *cmd,
 		   const struct secret *payer_secret)
 {
 	struct sha256 merkle, sha;
-	bool try_connect;
+	enum nodeid_parity parity;
 	secp256k1_keypair kp;
 	u8 *msg;
 	const u8 *p;
@@ -894,11 +999,11 @@ force_payer_secret(struct command *cmd,
 				    "Failed to sign with payer_secret");
 	}
 
-	sent->path = path_to_node(sent, get_gossmap(cmd->plugin),
+	sent->path = path_to_node(sent, cmd->plugin,
 				  sent->offer->node_id,
-				  &try_connect);
-	if (try_connect)
-		return connect_direct(cmd, &sent->path[0],
+				  &parity);
+	if (!sent->path)
+		return connect_direct(cmd, sent->offer->node_id, parity,
 				      sendinvreq_after_connect, sent);
 
 	return sendinvreq_after_connect(cmd, NULL, NULL, sent);
@@ -1169,7 +1274,7 @@ static struct command_result *createinvoice_done(struct command *cmd,
 {
 	const jsmntok_t *invtok = json_get_member(buf, result, "bolt12");
 	char *fail;
-	bool try_connect;
+	enum nodeid_parity parity;
 
 	/* Replace invoice with signed one */
 	tal_free(sent->inv);
@@ -1189,11 +1294,11 @@ static struct command_result *createinvoice_done(struct command *cmd,
 				    "Bad createinvoice response %s", fail);
 	}
 
-	sent->path = path_to_node(sent, get_gossmap(cmd->plugin),
+	sent->path = path_to_node(sent, cmd->plugin,
 				  sent->offer->node_id,
-				  &try_connect);
-	if (try_connect)
-		return connect_direct(cmd, &sent->path[0],
+				  &parity);
+	if (!sent->path)
+		return connect_direct(cmd, sent->offer->node_id, parity,
 				      sendinvoice_after_connect, sent);
 
 	return sendinvoice_after_connect(cmd, NULL, NULL, sent);
@@ -1371,9 +1476,13 @@ static struct command_result *json_sendinvoice(struct command *cmd,
 	 *   - MUST set `description` the same as the offer.
 	 */
 	sent->inv->node_id = tal(sent->inv, struct pubkey32);
-	if (!pubkey32_from_node_id(sent->inv->node_id, &local_id))
-		plugin_err(cmd->plugin, "Invalid local_id %s?",
-			   type_to_string(tmpctx, struct node_id, &local_id));
+
+	/* This only fails if pubkey is invalid. */
+	if (!secp256k1_xonly_pubkey_from_pubkey(secp256k1_ctx,
+						&sent->inv->node_id->pubkey,
+						NULL,
+						&local_id.pubkey))
+		abort();
 
 	sent->inv->description
 		= tal_dup_talarr(sent->inv, char, sent->offer->description);
@@ -1529,7 +1638,7 @@ static struct command_result *json_rawrequest(struct command *cmd,
 	u32 *timeout;
 	struct node_id *node_id;
 	struct pubkey32 node_id32;
-	bool try_connect;
+	enum nodeid_parity parity;
 
 	if (!param(cmd, buffer, params,
 		   p_req("invreq", param_invreq, &sent->invreq),
@@ -1549,11 +1658,15 @@ static struct command_result *json_rawrequest(struct command *cmd,
 	sent->cmd = cmd;
 	sent->offer = NULL;
 
-	sent->path = path_to_node(sent, get_gossmap(cmd->plugin),
-				  &node_id32, &try_connect);
-	if (try_connect)
-		return connect_direct(cmd, node_id,
+	sent->path = path_to_node(sent, cmd->plugin,
+				  &node_id32,
+				  &parity);
+	if (!sent->path) {
+		/* We *do* know parity: they gave it to us! */
+		parity = node_id->k[0];
+		return connect_direct(cmd, &node_id32, parity,
 				      sendinvreq_after_connect, sent);
+	}
 
 	return sendinvreq_after_connect(cmd, NULL, NULL, sent);
 }
@@ -1592,7 +1705,7 @@ static const char *init(struct plugin *p, const char *buf UNUSED,
 
 	rpc_scan(p, "getinfo",
 		 take(json_out_obj(NULL, NULL, NULL)),
-		 "{id:%}", JSON_SCAN(json_to_node_id, &local_id));
+		 "{id:%}", JSON_SCAN(json_to_pubkey, &local_id));
 
 	rpc_scan(p, "listconfigs",
 		 take(json_out_obj(NULL, "config", "experimental-offers")),

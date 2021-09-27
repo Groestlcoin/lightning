@@ -3,6 +3,8 @@
 #include "config.h"
 #include <lightningd/htlc_end.h>
 #include <lightningd/htlc_set.h>
+#include <signal.h>
+#include <sys/stat.h>
 #include <wallet/wallet.h>
 
 /* Various adjustable things. */
@@ -106,6 +108,9 @@ struct lightningd {
 
 	/* The public base for our payer_id keys */
 	struct pubkey32 bolt12_base;
+
+	/* The secret we put in onion message paths to know it's ours. */
+	struct secret onion_reply_secret;
 
 	/* Feature set we offer. */
 	struct feature_set *our_features;

@@ -3913,6 +3913,16 @@ def test_offer(node_factory, bitcoind):
     assert 'recurrence: every 600 seconds paywindow -10 to +600 (pay proportional)\n' in output
 
 
+def test_fetchinvoice_3hop(node_factory, bitcoind):
+    l1, l2, l3, l4 = node_factory.line_graph(4, wait_for_announce=True,
+                                             opts={'experimental-offers': None})
+    offer1 = l4.rpc.call('offer', {'amount': '2msat',
+                                   'description': 'simple test'})
+    assert offer1['created'] is True
+
+    l1.rpc.call('fetchinvoice', {'offer': offer1['bolt12']})
+
+
 def test_fetchinvoice(node_factory, bitcoind):
     # We remove the conversion plugin on l3, causing it to get upset.
     l1, l2, l3 = node_factory.line_graph(3, wait_for_announce=True,
@@ -4399,3 +4409,87 @@ def test_pay_low_max_htlcs(node_factory):
     l1.daemon.wait_for_log(
         r'Number of pre-split HTLCs \([0-9]+\) exceeds our HTLC budget \([0-9]+\), skipping pre-splitter'
     )
+
+
+def test_setchannelfee_enforcement_delay(node_factory, bitcoind):
+    # Fees start at 1msat + 1%
+    l1, l2, l3 = node_factory.line_graph(3, wait_for_announce=True,
+                                         opts={'fee-base': 1,
+                                               'fee-per-satoshi': 10000})
+
+    chanid1 = only_one(l1.rpc.getpeer(l2.info['id'])['channels'])['short_channel_id']
+    chanid2 = only_one(l2.rpc.getpeer(l3.info['id'])['channels'])['short_channel_id']
+
+    route = [{'msatoshi': 1011,
+              'id': l2.info['id'],
+              'delay': 20,
+              'channel': chanid1},
+             {'msatoshi': 1000,
+              'id': l3.info['id'],
+              'delay': 10,
+              'channel': chanid2}]
+
+    # This works.
+    inv = l3.rpc.invoice(1000, "test1", "test1")
+    l1.rpc.sendpay(route,
+                   payment_hash=inv['payment_hash'],
+                   payment_secret=inv['payment_secret'])
+    l1.rpc.waitsendpay(inv['payment_hash'])
+
+    # Increase fee immediately; l1 payment rejected.
+    l2.rpc.setchannelfee("all", 2, 10000, 0)
+
+    inv = l3.rpc.invoice(1000, "test2", "test2")
+    l1.rpc.sendpay(route,
+                   payment_hash=inv['payment_hash'],
+                   payment_secret=inv['payment_secret'])
+    with pytest.raises(RpcError, match=r'WIRE_FEE_INSUFFICIENT'):
+        l1.rpc.waitsendpay(inv['payment_hash'])
+
+    # Test increased amount.
+    route[0]['msatoshi'] += 1
+    inv = l3.rpc.invoice(1000, "test3", "test3")
+    l1.rpc.sendpay(route,
+                   payment_hash=inv['payment_hash'],
+                   payment_secret=inv['payment_secret'])
+    l1.rpc.waitsendpay(inv['payment_hash'])
+
+    # Now, give us 30 seconds please.
+    l2.rpc.setchannelfee("all", 3, 10000, 30)
+    inv = l3.rpc.invoice(1000, "test4", "test4")
+    l1.rpc.sendpay(route,
+                   payment_hash=inv['payment_hash'],
+                   payment_secret=inv['payment_secret'])
+    l1.rpc.waitsendpay(inv['payment_hash'])
+    l2.daemon.wait_for_log("Allowing payment using older feerate")
+
+    time.sleep(30)
+    inv = l3.rpc.invoice(1000, "test5", "test5")
+    l1.rpc.sendpay(route,
+                   payment_hash=inv['payment_hash'],
+                   payment_secret=inv['payment_secret'])
+    with pytest.raises(RpcError, match=r'WIRE_FEE_INSUFFICIENT'):
+        l1.rpc.waitsendpay(inv['payment_hash'])
+
+
+def test_listpays_with_filter_by_status(node_factory, bitcoind):
+    """
+    This test check if the filtering by status of the command listpays
+    has some mistakes.
+    """
+
+    # Create the line graph l2 -> l1 with a channel of 10 ** 5 sat!
+    l2, l1 = node_factory.line_graph(2, fundamount=10**5, wait_for_announce=True)
+
+    inv = l1.rpc.invoice(10 ** 5, 'inv', 'inv')
+    l2.rpc.pay(inv['bolt11'])
+
+    wait_for(lambda: l2.rpc.listpays(inv['bolt11'])['pays'][0]['status'] == 'complete')
+
+    # test if the node is still ready
+    payments = l2.rpc.listpays(status='failed')
+
+    assert len(payments['pays']) == 0
+
+    payments = l2.rpc.listpays()
+    assert len(l2.rpc.listpays()['pays']) == 1

@@ -63,12 +63,14 @@ ALL_PROGRAMS += lightningd/lightningd
 LIGHTNINGD_COMMON_OBJS :=			\
 	common/addr.o				\
 	common/amount.o				\
+	common/autodata.o			\
 	common/base32.o				\
 	common/base64.o				\
 	common/bech32.o				\
 	common/bech32_util.o			\
 	common/bigsize.o			\
 	common/bip32.o				\
+	common/blindedpath.o			\
 	common/blinding.o			\
 	common/blockheight_states.o		\
 	common/bolt11.o				\

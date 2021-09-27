@@ -9,6 +9,7 @@
 #include <common/type_to_string.h>
 #include <errno.h>
 #include <plugins/libplugin-pay.h>
+#include <sys/types.h>
 #include <wire/peer_wire.h>
 
 static struct gossmap *global_gossmap;
@@ -1948,7 +1949,7 @@ static void payment_finished(struct payment *p)
 				 * success. */
 				json_add_string(ret, "status", "complete");
 
-			} else if (result.leafstates & ~PAYMENT_FAILED) {
+			} else if (result.leafstates & ~PAYMENT_STEP_FAILED) {
 				/* If there are non-failed leafs we are still trying. */
 				json_add_string(ret, "status", "pending");
 

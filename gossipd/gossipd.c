@@ -380,19 +380,19 @@ static bool handle_local_channel_announcement(struct daemon *daemon,
 	return true;
 }
 
-/* Peer sends onion msg. */
-static u8 *handle_onion_message(struct peer *peer, const u8 *msg)
+/* Peer sends obsolete onion msg. */
+static u8 *handle_obs_onion_message(struct peer *peer, const u8 *msg)
 {
 	enum onion_wire badreason;
 	struct onionpacket *op;
 	struct secret ss, *blinding_ss;
-	struct pubkey *blinding_in;
+	struct pubkey *blinding_in, ephemeral;
 	struct route_step *rs;
 	u8 *onion;
 	const u8 *cursor;
 	size_t max, maxlen;
 	struct tlv_onionmsg_payload *om;
-	struct tlv_onion_message_tlvs *tlvs = tlv_onion_message_tlvs_new(msg);
+	struct tlv_obs_onion_message_tlvs *tlvs = tlv_obs_onion_message_tlvs_new(msg);
 
 	/* Ignore unless explicitly turned on. */
 	if (!feature_offered(peer->daemon->our_features->bits[NODE_ANNOUNCE_FEATURE],
@@ -400,7 +400,7 @@ static u8 *handle_onion_message(struct peer *peer, const u8 *msg)
 		return NULL;
 
 	/* FIXME: ratelimit! */
-	if (!fromwire_onion_message(msg, msg, &onion, tlvs))
+	if (!fromwire_obs_onion_message(msg, msg, &onion, tlvs))
 		return towire_warningfmt(peer, NULL, "Bad onion_message");
 
 	/* We unwrap the onion now. */
@@ -412,6 +412,7 @@ static u8 *handle_onion_message(struct peer *peer, const u8 *msg)
 		return NULL;
 	}
 
+	ephemeral = op->ephemeralkey;
 	if (tlvs->blinding) {
 		struct secret hmac;
 
@@ -430,7 +431,7 @@ static u8 *handle_onion_message(struct peer *peer, const u8 *msg)
 		 * our normal privkey: since hsmd knows only how to ECDH with
 		 * our real key */
 		if (secp256k1_ec_pubkey_tweak_mul(secp256k1_ctx,
-						  &op->ephemeralkey.pubkey,
+						  &ephemeral.pubkey,
 						  hmac.data) != 1) {
 			status_debug("peer %s: onion msg: can't tweak pubkey",
 				     type_to_string(tmpctx, struct node_id, &peer->id));
@@ -441,7 +442,7 @@ static u8 *handle_onion_message(struct peer *peer, const u8 *msg)
 		blinding_in = NULL;
 	}
 
-	ecdh(&op->ephemeralkey, &ss);
+	ecdh(&ephemeral, &ss);
 
 	/* We make sure we can parse onion packet, so we know if shared secret
 	 * is actually valid (this checks hmac). */
@@ -479,9 +480,9 @@ static u8 *handle_onion_message(struct peer *peer, const u8 *msg)
 	}
 
 	/* If we weren't given a blinding factor, tlv can provide one. */
-	if (om->blinding && !blinding_ss) {
+	if (om->obs_blinding && !blinding_ss) {
 		/* E(i) */
-		blinding_in = tal_dup(msg, struct pubkey, om->blinding);
+		blinding_in = tal_dup(msg, struct pubkey, om->obs_blinding);
 		blinding_ss = tal(msg, struct secret);
 
 		ecdh(blinding_in, blinding_ss);
@@ -553,10 +554,10 @@ static u8 *handle_onion_message(struct peer *peer, const u8 *msg)
 		const struct onionmsg_path **path;
 		u8 *omsg;
 
-		if (om->reply_path) {
-			blinding = &om->reply_path->blinding;
+		if (om->obs_reply_path) {
+			blinding = &om->obs_reply_path->blinding;
 			path = cast_const2(const struct onionmsg_path **,
-					   om->reply_path->path);
+					   om->obs_reply_path->path);
 		} else {
 			blinding = NULL;
 			path = NULL;
@@ -566,7 +567,7 @@ static u8 *handle_onion_message(struct peer *peer, const u8 *msg)
 		omsg = tal_arr(tmpctx, u8, 0);
 		towire_tlvstream_raw(&omsg, om->fields);
 		daemon_conn_send(peer->daemon->master,
-				 take(towire_gossipd_got_onionmsg_to_us(NULL,
+				 take(towire_gossipd_got_obs_onionmsg_to_us(NULL,
 							blinding_in,
 							blinding,
 							path,
@@ -576,7 +577,7 @@ static u8 *handle_onion_message(struct peer *peer, const u8 *msg)
 		struct node_id *next_node;
 
 		/* This *MUST* have instructions on where to go next. */
-		if (!om->next_short_channel_id && !om->next_node_id) {
+		if (!om->obs_next_short_channel_id && !om->obs_next_node_id) {
 			status_debug("peer %s: onion msg: no next field in %s",
 				     type_to_string(tmpctx, struct node_id, &peer->id),
 				     tal_hex(tmpctx, rs->raw_payload));
@@ -592,15 +593,15 @@ static u8 *handle_onion_message(struct peer *peer, const u8 *msg)
 		} else
 			next_blinding = NULL;
 
-		if (om->next_node_id) {
+		if (om->obs_next_node_id) {
 			next_node = tal(tmpctx, struct node_id);
-			node_id_from_pubkey(next_node, om->next_node_id);
+			node_id_from_pubkey(next_node, om->obs_next_node_id);
 		} else
 			next_node = NULL;
 
 		daemon_conn_send(peer->daemon->master,
-				 take(towire_gossipd_got_onionmsg_forward(NULL,
-						  om->next_short_channel_id,
+				 take(towire_gossipd_got_obs_onionmsg_forward(NULL,
+						  om->obs_next_short_channel_id,
 						  next_node,
 						  next_blinding,
 						  serialize_onionpacket(tmpctx, rs->next))));
@@ -608,8 +609,15 @@ static u8 *handle_onion_message(struct peer *peer, const u8 *msg)
 	return NULL;
 }
 
-/* We send onion msg. */
-static struct io_plan *onionmsg_req(struct io_conn *conn, struct daemon *daemon,
+/* Peer sends onion msg. */
+static u8 *handle_onion_message(struct peer *peer, const u8 *msg)
+{
+	/* FIXME */
+	return NULL;
+}
+
+/* We send an obsolete onion msg. */
+static struct io_plan *obs_onionmsg_req(struct io_conn *conn, struct daemon *daemon,
 				    const u8 *msg)
 {
 	struct node_id id;
@@ -617,25 +625,47 @@ static struct io_plan *onionmsg_req(struct io_conn *conn, struct daemon *daemon,
 	struct pubkey *blinding;
 	struct peer *peer;
 
-	if (!fromwire_gossipd_send_onionmsg(msg, msg, &id, &onion_routing_packet,
+	if (!fromwire_gossipd_send_obs_onionmsg(msg, msg, &id, &onion_routing_packet,
 					    &blinding))
-		master_badmsg(WIRE_GOSSIPD_SEND_ONIONMSG, msg);
+		master_badmsg(WIRE_GOSSIPD_SEND_OBS_ONIONMSG, msg);
 
 	/* Even if lightningd were to check for valid ids, there's a race
 	 * where it might vanish before we read this command; cleaner to
 	 * handle it here with 'sent' = false. */
 	peer = find_peer(daemon, &id);
 	if (peer) {
-		struct tlv_onion_message_tlvs *tlvs;
+		struct tlv_obs_onion_message_tlvs *tlvs;
 
-		tlvs = tlv_onion_message_tlvs_new(msg);
+		tlvs = tlv_obs_onion_message_tlvs_new(msg);
 		if (blinding)
 			tlvs->blinding = tal_dup(tlvs, struct pubkey, blinding);
 
 		queue_peer_msg(peer,
-			       take(towire_onion_message(NULL,
+			       take(towire_obs_onion_message(NULL,
 							 onion_routing_packet,
 							 tlvs)));
+	}
+	return daemon_conn_read_next(conn, daemon->master);
+}
+
+static struct io_plan *onionmsg_req(struct io_conn *conn, struct daemon *daemon,
+				    const u8 *msg)
+{
+	struct node_id id;
+	u8 *onionmsg;
+	struct pubkey blinding;
+	struct peer *peer;
+
+	if (!fromwire_gossipd_send_onionmsg(msg, msg, &id, &onionmsg, &blinding))
+		master_badmsg(WIRE_GOSSIPD_SEND_ONIONMSG, msg);
+
+	/* Even though lightningd checks for valid ids, there's a race
+	 * where it might vanish before we read this command. */
+	peer = find_peer(daemon, &id);
+	if (peer) {
+		queue_peer_msg(peer,
+			       take(towire_onion_message(NULL,
+							 &blinding, onionmsg)));
 	}
 	return daemon_conn_read_next(conn, daemon->master);
 }
@@ -678,6 +708,9 @@ static struct io_plan *peer_msg_in(struct io_conn *conn,
 		goto handled_relay;
 	case WIRE_PONG:
 		err = handle_pong(peer, msg);
+		goto handled_relay;
+	case WIRE_OBS_ONION_MESSAGE:
+		err = handle_obs_onion_message(peer, msg);
 		goto handled_relay;
 	case WIRE_ONION_MESSAGE:
 		err = handle_onion_message(peer, msg);
@@ -1506,8 +1539,12 @@ static struct io_plan *recv_req(struct io_conn *conn,
 		break;
 #endif /* !DEVELOPER */
 
+	case WIRE_GOSSIPD_SEND_OBS_ONIONMSG:
+		return obs_onionmsg_req(conn, daemon, msg);
+
 	case WIRE_GOSSIPD_SEND_ONIONMSG:
 		return onionmsg_req(conn, daemon, msg);
+
 	/* We send these, we don't receive them */
 	case WIRE_GOSSIPD_PING_REPLY:
 	case WIRE_GOSSIPD_INIT_REPLY:
@@ -1515,8 +1552,9 @@ static struct io_plan *recv_req(struct io_conn *conn,
 	case WIRE_GOSSIPD_GET_TXOUT:
 	case WIRE_GOSSIPD_DEV_MEMLEAK_REPLY:
 	case WIRE_GOSSIPD_DEV_COMPACT_STORE_REPLY:
+	case WIRE_GOSSIPD_GOT_OBS_ONIONMSG_TO_US:
+	case WIRE_GOSSIPD_GOT_OBS_ONIONMSG_FORWARD:
 	case WIRE_GOSSIPD_GOT_ONIONMSG_TO_US:
-	case WIRE_GOSSIPD_GOT_ONIONMSG_FORWARD:
 	case WIRE_GOSSIPD_ADDGOSSIP_REPLY:
 		break;
 	}
