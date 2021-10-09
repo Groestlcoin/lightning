@@ -137,14 +137,14 @@ static void set_recurring_inv_expiry(struct tlv_invoice *inv, u64 last_pay)
 /* We rely on label forms for uniqueness. */
 static void json_add_label(struct json_stream *js,
 			   const struct sha256 *offer_id,
-			   const struct pubkey32 *payer_key,
+			   const struct point32 *payer_key,
 			   const u32 counter)
 {
 	char *label;
 
 	label = tal_fmt(tmpctx, "%s-%s-%u",
 			type_to_string(tmpctx, struct sha256, offer_id),
-			type_to_string(tmpctx, struct pubkey32,
+			type_to_string(tmpctx, struct point32,
 				       payer_key),
 			counter);
 	json_add_string(js, "label", label);
@@ -423,7 +423,7 @@ static struct command_result *check_previous_invoice(struct command *cmd,
  *  - MUST fail the request if `payer_signature` is not correct.
  */
 static bool check_payer_sig(const struct tlv_invoice_request *invreq,
-			    const struct pubkey32 *payer_key,
+			    const struct point32 *payer_key,
 			    const struct bip340sig *sig)
 {
 	struct sha256 merkle, sighash;
@@ -758,9 +758,14 @@ static struct command_result *listoffers_done(struct command *cmd,
 	 *     - MUST specify `chains` the offer is valid for.
 	 */
 	if (!streq(chainparams->network_name, "groestlcoin")) {
-		ir->inv->chains = tal_arr(ir->inv, struct bitcoin_blkid, 1);
-		ir->inv->chains[0] = chainparams->genesis_blockhash;
+		if (deprecated_apis) {
+			ir->inv->chains = tal_arr(ir->inv, struct bitcoin_blkid, 1);
+			ir->inv->chains[0] = chainparams->genesis_blockhash;
+		}
+		ir->inv->chain = tal_dup(ir->inv, struct bitcoin_blkid,
+					 &chainparams->genesis_blockhash);
 	}
+
 	/* BOLT-offers #12:
 	 *   - MUST set `offer_id` to the id of the offer.
 	 */
@@ -774,8 +779,8 @@ static struct command_result *listoffers_done(struct command *cmd,
 				       ->bits[BOLT11_FEATURE]);
 	/* FIXME: Insert paths and payinfo */
 
-	ir->inv->vendor = tal_dup_talarr(ir->inv, char, ir->offer->vendor);
-	ir->inv->node_id = tal_dup(ir->inv, struct pubkey32, ir->offer->node_id);
+	ir->inv->issuer = tal_dup_talarr(ir->inv, char, ir->offer->issuer);
+	ir->inv->node_id = tal_dup(ir->inv, struct point32, ir->offer->node_id);
 	/* BOLT-offers #12:
 	 *  - MUST set (or not set) `quantity` exactly as the invoice_request
 	 *    did.
@@ -786,7 +791,7 @@ static struct command_result *listoffers_done(struct command *cmd,
 	/* BOLT-offers #12:
 	 *  - MUST set `payer_key` exactly as the invoice_request did.
 	 */
-	ir->inv->payer_key = tal_dup(ir->inv, struct pubkey32,
+	ir->inv->payer_key = tal_dup(ir->inv, struct point32,
 				     ir->invreq->payer_key);
 
 	/* BOLT-offers #12:
@@ -883,10 +888,11 @@ struct command_result *handle_invoice_request(struct command *cmd,
 	 *   - MUST fail the request if `chains` does not include (or imply) a
 	 *     supported chain.
 	 */
-	if (!bolt12_chains_match(ir->invreq->chains, chainparams)) {
+	if (!bolt12_chain_matches(ir->invreq->chain, chainparams,
+				  ir->invreq->chains)) {
 		return fail_invreq(cmd, ir,
-				   "Wrong chains %s",
-				   tal_hex(tmpctx, ir->invreq->chains));
+				   "Wrong chain %s",
+				   tal_hex(tmpctx, ir->invreq->chain));
 	}
 
 	/* BOLT-offers #12:

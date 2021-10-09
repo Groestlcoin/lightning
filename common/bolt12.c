@@ -3,6 +3,7 @@
 #include <common/bech32_util.h>
 #include <common/bolt12.h>
 #include <common/bolt12_merkle.h>
+#include <common/configdir.h>
 #include <common/features.h>
 #include <secp256k1_schnorrsig.h>
 #include <time.h>
@@ -46,6 +47,21 @@ bool bolt12_chains_match(const struct bitcoin_blkid *chains,
 	return false;
 }
 
+bool bolt12_chain_matches(const struct bitcoin_blkid *chain,
+			  const struct chainparams *must_be_chain,
+			  const struct bitcoin_blkid *deprecated_chains)
+{
+	/* Obsolete: We used to put an array in here, but we only ever
+	 * used a single value */
+	if (deprecated_apis && !chain)
+		chain = deprecated_chains;
+
+	if (!chain)
+		chain = &chainparams_for_network("bitcoin")->genesis_blockhash;
+
+	return bitcoin_blkid_eq(chain, &must_be_chain->genesis_blockhash);
+}
+
 static char *check_features_and_chain(const tal_t *ctx,
 				      const struct feature_set *our_features,
 				      const struct chainparams *must_be_chain,
@@ -70,7 +86,7 @@ static char *check_features_and_chain(const tal_t *ctx,
 bool bolt12_check_signature(const struct tlv_field *fields,
 			    const char *messagename,
 			    const char *fieldname,
-			    const struct pubkey32 *key,
+			    const struct point32 *key,
 			    const struct bip340sig *sig)
 {
 	struct sha256 m, shash;
@@ -87,7 +103,7 @@ static char *check_signature(const tal_t *ctx,
 			     const struct tlv_field *fields,
 			     const char *messagename,
 			     const char *fieldname,
-			     const struct pubkey32 *node_id,
+			     const struct point32 *node_id,
 			     const struct bip340sig *sig)
 {
 	if (!node_id)
@@ -231,7 +247,9 @@ struct tlv_invoice_request *invrequest_decode(const tal_t *ctx,
 	*fail = check_features_and_chain(ctx,
 					 our_features, must_be_chain,
 					 invrequest->features,
-					 invrequest->chains);
+					 invrequest->chain
+					 ? invrequest->chain
+					 : invrequest->chains);
 	if (*fail)
 		return tal_free(invrequest);
 
@@ -270,7 +288,8 @@ struct tlv_invoice *invoice_decode_nosig(const tal_t *ctx,
 	*fail = check_features_and_chain(ctx,
 					 our_features, must_be_chain,
 					 invoice->features,
-					 invoice->chains);
+					 invoice->chain
+					 ? invoice->chain : invoice->chains);
 	if (*fail)
 		return tal_free(invoice);
 

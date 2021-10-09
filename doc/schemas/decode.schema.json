@@ -40,7 +40,7 @@
 			"minLength": 64
 		    },
 		    "node_id": {
-			"type": "pubkey32",
+			"type": "point32",
 			"description": "x-only public key of the offering node"
 		    },
 		    "signature": {
@@ -275,22 +275,18 @@
 			"minLength": 64
 		    },
 		    "node_id": {
-			"type": "pubkey32",
+			"type": "point32",
 			"description": "x-only public key of the offering node"
 		    },
 		    "signature": {
 			"type": "bip340sig",
 			"description": "BIP-340 signature of the *node_id* on this offer"
 		    },
-		    "chains": {
-			"type": "array",
-			"description": "which blockchains this offer is for (missing implies bitcoin mainnet only)",
-			"items": {
-			    "type": "hex",
-			    "description": "the genesis blockhash",
-			    "maxLength": 64,
-			    "minLength": 64
-			}
+		    "chain": {
+			"type": "hex",
+			"description": "which blockchain this invoice is for (missing implies bitcoin mainnet only)",
+			"maxLength": 64,
+			"minLength": 64
 		    },
 		    "amount_msat": {
 			"type": "msat",
@@ -370,7 +366,7 @@
 			"description": "the UNIX timestamp of the first recurrence period start"
 		    },
 		    "payer_key": {
-			"type": "pubkey32",
+			"type": "point32",
 			"description": "the transient key which identifies the payer"
 		    },
 		    "payer_info": {
@@ -450,7 +446,7 @@
 		    "offer_id": { },
 		    "node_id": { },
 		    "signature": { },
-		    "chains": { },
+		    "chain": { },
 		    "amount_msat": { },
 		    "send_invoice": { },
 		    "refund_for": { },
@@ -551,19 +547,15 @@
 		    "valid": { },
 		    "offer_id": {
 			"type": "hex",
-			"description": "the id of this offer (merkle hash of non-signature fields)",
+			"description": "the id of the offer this is requesting (merkle hash of non-signature fields)",
 			"maxLength": 64,
 			"minLength": 64
 		    },
-		    "chains": {
-			"type": "array",
-			"description": "which blockchains this offer is for (missing implies bitcoin mainnet only)",
-			"items": {
-			    "type": "hex",
-			    "description": "the genesis blockhash",
-			    "maxLength": 64,
-			    "minLength": 64
-			}
+		    "chain": {
+			"type": "hex",
+			"description": "which blockchain this invoice_request is for (missing implies bitcoin mainnet only)",
+			"maxLength": 64,
+			"minLength": 64
 		    },
 		    "amount_msat": {
 			"type": "msat",
@@ -586,7 +578,7 @@
 			"description": "the optional start period for a recurring payment"
 		    },
 		    "payer_key": {
-			"type": "pubkey32",
+			"type": "point32",
 			"description": "the transient key which identifies the payer"
 		    },
 		    "payer_info": {
@@ -620,7 +612,7 @@
 		    "type": { },
 		    "valid": { },
 		    "offer_id": { },
-		    "chains": { },
+		    "chain": { },
 		    "amount_msat": { },
 		    "features": { },
 		    "quantity": { },
