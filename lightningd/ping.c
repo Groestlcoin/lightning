@@ -1,9 +1,11 @@
+#include <channeld/channeld_wiregen.h>
 #include <common/json_command.h>
 #include <common/json_tok.h>
 #include <common/param.h>
-#include <gossipd/gossipd_wiregen.h>
+#include <lightningd/channel.h>
 #include <lightningd/jsonrpc.h>
 #include <lightningd/lightningd.h>
+#include <lightningd/peer_control.h>
 #include <lightningd/ping.h>
 #include <lightningd/subd.h>
 
@@ -45,24 +47,31 @@ static struct ping_command *new_ping_command(const tal_t *ctx,
 	return pc;
 }
 
-void ping_reply(struct subd *subd, const u8 *msg)
+void ping_reply(struct subd *channeld, const u8 *msg)
 {
 	u16 totlen;
-	bool ok, sent = true;
-	struct node_id id;
+	bool sent;
 	struct ping_command *pc;
+	struct channel *c = channeld->channel;
 
-	log_debug(subd->ld->log, "Got ping reply!");
-	ok = fromwire_gossipd_ping_reply(msg, &id, &sent, &totlen);
+	log_debug(channeld->log, "Got ping reply!");
+	pc = find_ping_cmd(channeld->ld, &c->peer->id);
+	if (!pc) {
+		log_broken(channeld->log, "Unexpected ping reply?");
+		return;
+	}
 
-	pc = find_ping_cmd(subd->ld, &id);
-	assert(pc);
-
-	if (!ok)
+	if (!fromwire_channeld_ping_reply(msg, &sent, &totlen)) {
+		log_broken(channeld->log, "Malformed ping reply %s",
+			   tal_hex(tmpctx, msg));
 		was_pending(command_fail(pc->cmd, LIGHTNINGD,
 					 "Bad reply message"));
-	else if (!sent)
-		was_pending(command_fail(pc->cmd, LIGHTNINGD, "Unknown peer"));
+		return;
+	}
+
+	if (!sent)
+		was_pending(command_fail(pc->cmd, LIGHTNINGD,
+					 "Ping already pending"));
 	else {
 		struct json_stream *response = json_stream_success(pc->cmd);
 
@@ -76,9 +85,11 @@ static struct command_result *json_ping(struct command *cmd,
 					const jsmntok_t *obj UNNEEDED,
 					const jsmntok_t *params)
 {
-	u8 *msg;
 	unsigned int *len, *pongbytes;
 	struct node_id *id;
+	struct peer *peer;
+	struct channel *channel;
+	u8 *msg;
 
 	if (!param(cmd, buffer, params,
 		   p_req("id", param_node_id, &id),
@@ -112,12 +123,20 @@ static struct command_result *json_ping(struct command *cmd,
 				    "pongbytes %u > 65535", *pongbytes);
 	}
 
+	peer = peer_by_id(cmd->ld, id);
+	if (!peer)
+		return command_fail(cmd, LIGHTNINGD, "Peer not connected");
+
+	channel = peer_active_channel(peer);
+	if (!channel || !channel->owner || channel->state != CHANNELD_NORMAL)
+		return command_fail(cmd, LIGHTNINGD, "Peer bad state");
+
 	/* parent is cmd, so when we complete cmd, we free this. */
 	new_ping_command(cmd, cmd->ld, id, cmd);
 
-	/* gossipd handles all pinging, even if it's in another daemon. */
-	msg = towire_gossipd_ping(NULL, id, *pongbytes, *len);
-	subd_send_msg(cmd->ld->gossip, take(msg));
+	msg = towire_channeld_ping(NULL, *pongbytes, *len);
+	subd_send_msg(channel->owner, take(msg));
+
 	return command_still_pending(cmd);
 }
 

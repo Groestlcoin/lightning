@@ -66,6 +66,8 @@ struct payment *payment_new(tal_t *ctx, struct command *cmd,
 	p->routetxt = NULL;
 	p->max_htlcs = UINT32_MAX;
 	p->aborterror = NULL;
+	p->on_payment_success = NULL;
+	p->on_payment_failure = NULL;
 
 	/* Copy over the relevant pieces of information. */
 	if (parent != NULL) {
@@ -89,6 +91,7 @@ struct payment *payment_new(tal_t *ctx, struct command *cmd,
 		p->id = parent->id;
 		p->local_id = parent->local_id;
 		p->local_offer_id = parent->local_offer_id;
+		p->groupid = parent->groupid;
 	} else {
 		assert(cmd != NULL);
 		p->partid = 0;
@@ -100,6 +103,7 @@ struct payment *payment_new(tal_t *ctx, struct command *cmd,
 		/* Caller must set this.  */
 		p->local_id = NULL;
 		p->local_offer_id = NULL;
+		p->groupid = 0;
 	}
 
 	/* Initialize all modifier data so we can point to the fields when
@@ -1488,6 +1492,7 @@ static struct command_result *payment_sendonion_success(struct command *cmd,
 				    payment_waitsendpay_finished, p);
 	json_add_sha256(req->js, "payment_hash", p->payment_hash);
 	json_add_num(req->js, "partid", p->partid);
+	json_add_u64(req->js, "groupid", p->groupid);
 	send_outreq(p->plugin, req);
 
 	return command_still_pending(cmd);
@@ -1525,6 +1530,7 @@ static struct command_result *payment_createonion_success(struct command *cmd,
 	json_array_end(req->js);
 
 	json_add_num(req->js, "partid", p->partid);
+	json_add_u64(req->js, "groupid", p->groupid);
 
 	if (p->label)
 		json_add_string(req->js, "label", p->label);
@@ -1865,6 +1871,10 @@ static void payment_finished(struct payment *p)
 			assert(result.leafstates & PAYMENT_STEP_SUCCESS);
 			assert(result.preimage != NULL);
 
+			/* Call any callback we might have registered. */
+			if (p->on_payment_success != NULL)
+				p->on_payment_success(p);
+
 			ret = jsonrpc_stream_success(cmd);
 			json_add_node_id(ret, "destination", p->destination);
 			json_add_sha256(ret, "payment_hash", p->payment_hash);
@@ -1894,6 +1904,7 @@ static void payment_finished(struct payment *p)
 			plugin_notification_end(p->plugin, n);
 
 			if (command_finished(cmd, ret)) {/* Ignore result. */}
+			p->cmd = NULL;
 			return;
 		} else if (p->aborterror != NULL) {
 			/* We set an explicit toplevel error message,
@@ -1905,8 +1916,12 @@ static void payment_finished(struct payment *p)
 			payment_notify_failure(p, p->aborterror);
 
 			if (command_finished(cmd, ret)) {/* Ignore result. */}
+			p->cmd = NULL;
 			return;
 		} else if (result.failure == NULL || result.failure->failcode < NODE) {
+			if (p->on_payment_failure != NULL)
+				p->on_payment_failure(p);
+
 			/* This is failing because we have no more routes to try */
 			msg = tal_fmt(cmd,
 				      "Ran out of routes to try after "
@@ -1920,11 +1935,14 @@ static void payment_finished(struct payment *p)
 			payment_notify_failure(p, msg);
 
 			if (command_finished(cmd, ret)) {/* Ignore result. */}
+			p->cmd = NULL;
 			return;
 
 		}  else {
 			struct payment_result *failure = result.failure;
 			assert(failure!= NULL);
+			if (p->on_payment_failure != NULL)
+				p->on_payment_failure(p);
 			ret = jsonrpc_stream_fail(cmd, failure->code,
 						  failure->message);
 
@@ -1987,6 +2005,7 @@ static void payment_finished(struct payment *p)
 			payment_notify_failure(p, failure->message);
 
 			if (command_finished(cmd, ret)) { /* Ignore result. */}
+			p->cmd = NULL;
 			return;
 		}
 	} else {

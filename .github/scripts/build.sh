@@ -14,11 +14,12 @@ export PYTEST_PAR=${PYTEST_PAR:-10}
 export PYTEST_SENTRY_ALWAYS_REPORT=1
 export SLOW_MACHINE=1
 export TEST_CMD=${TEST_CMD:-"make -j $PYTEST_PAR pytest"}
-export TEST_DB_PROVIDER=${DB:-"sqlite3"}
+export TEST_DB_PROVIDER=${TEST_DB_PROVIDER:-"sqlite3"}
 export TEST_NETWORK=${NETWORK:-"regtest"}
 export TIMEOUT=900
 export VALGRIND=${VALGRIND:-0}
 export FUZZING=${FUZZING:-0}
+export LIGHTNINGD_POSTGRES_NO_VACUUM=1
 
 pip3 install --user -U \
      -r requirements.lock

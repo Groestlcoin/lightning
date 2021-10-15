@@ -251,6 +251,28 @@ static void db_postgres_teardown(struct db *db)
 {
 }
 
+static bool db_postgres_vacuum(struct db *db)
+{
+	PGresult *res;
+
+#if DEVELOPER
+	/* This can use a lot of diskspacem breaking CI! */
+	if (getenv("LIGHTNINGD_POSTGRES_NO_VACUUM")
+	    && streq(getenv("LIGHTNINGD_POSTGRES_NO_VACUUM"), "1"))
+		return true;
+#endif
+
+	res = PQexec(db->conn, "VACUUM FULL;");
+	if (PQresultStatus(res) != PGRES_COMMAND_OK) {
+		db->error = tal_fmt(db, "BEGIN command failed: %s",
+				    PQerrorMessage(db->conn));
+		PQclear(res);
+		return false;
+	}
+	PQclear(res);
+	return true;
+}
+
 struct db_config db_postgres_config = {
     .name = "postgres",
     .queries = db_postgres_queries,
@@ -273,6 +295,7 @@ struct db_config db_postgres_config = {
     .count_changes_fn = db_postgres_count_changes,
     .setup_fn = db_postgres_setup,
     .teardown_fn = db_postgres_teardown,
+    .vacuum_fn = db_postgres_vacuum,
 };
 
 AUTODATA(db_backends, &db_postgres_config);

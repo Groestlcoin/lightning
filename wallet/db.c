@@ -750,6 +750,108 @@ static struct migration dbmigrations[] = {
      NULL},
     {SQL("CREATE INDEX channel_state_changes_channel_id"
 	 " ON channel_state_changes (channel_id);"), NULL},
+    /* We need to switch the unique key to cover the groupid as well,
+     * so we can attempt payments multiple times. */
+    {SQL("ALTER TABLE payments RENAME TO temp_payments;"), NULL},
+    {SQL("CREATE TABLE payments ("
+	 " id BIGSERIAL"
+	 ", timestamp INTEGER"
+	 ", status INTEGER"
+	 ", payment_hash BLOB"
+	 ", destination BLOB"
+	 ", msatoshi BIGINT"
+	 ", payment_preimage BLOB"
+	 ", path_secrets BLOB"
+	 ", route_nodes BLOB"
+	 ", route_channels BLOB"
+	 ", failonionreply BLOB"
+	 ", faildestperm INTEGER"
+	 ", failindex INTEGER"
+	 ", failcode INTEGER"
+	 ", failnode BLOB"
+	 ", failchannel TEXT"
+	 ", failupdate BLOB"
+	 ", msatoshi_sent BIGINT"
+	 ", faildetail TEXT"
+	 ", description TEXT"
+	 ", faildirection INTEGER"
+	 ", bolt11 TEXT"
+	 ", total_msat BIGINT"
+	 ", partid BIGINT"
+	 ", groupid BIGINT NOT NULL DEFAULT 0"
+	 ", local_offer_id BLOB DEFAULT NULL REFERENCES offers(offer_id)"
+	 ", PRIMARY KEY (id)"
+	 ", UNIQUE (payment_hash, partid, groupid))"), NULL},
+    {SQL("INSERT INTO payments ("
+	 "id"
+	 ", timestamp"
+	 ", status"
+	 ", payment_hash"
+	 ", destination"
+	 ", msatoshi"
+	 ", payment_preimage"
+	 ", path_secrets"
+	 ", route_nodes"
+	 ", route_channels"
+	 ", failonionreply"
+	 ", faildestperm"
+	 ", failindex"
+	 ", failcode"
+	 ", failnode"
+	 ", failchannel"
+	 ", failupdate"
+	 ", msatoshi_sent"
+	 ", faildetail"
+	 ", description"
+	 ", faildirection"
+	 ", bolt11"
+	 ", groupid"
+	 ", local_offer_id)"
+	 "SELECT id"
+	 ", timestamp"
+	 ", status"
+	 ", payment_hash"
+	 ", destination"
+	 ", msatoshi"
+	 ", payment_preimage"
+	 ", path_secrets"
+	 ", route_nodes"
+	 ", route_channels"
+	 ", failonionreply"
+	 ", faildestperm"
+	 ", failindex"
+	 ", failcode"
+	 ", failnode"
+	 ", failchannel"
+	 ", failupdate"
+	 ", msatoshi_sent"
+	 ", faildetail"
+	 ", description"
+	 ", faildirection"
+	 ", bolt11"
+	 ", 0"
+	 ", local_offer_id FROM temp_payments;"), NULL},
+    {SQL("DROP TABLE temp_payments;"), NULL},
+    /* HTLCs also need to carry the groupid around so we can
+     * selectively update them. */
+    {SQL("ALTER TABLE channel_htlcs ADD groupid BIGINT;"), NULL},
+    {SQL("ALTER TABLE channel_htlcs ADD COLUMN"
+	 " min_commit_num BIGINT default 0;"), NULL},
+    {SQL("ALTER TABLE channel_htlcs ADD COLUMN"
+	 " max_commit_num BIGINT default NULL;"), NULL},
+    /* Set max_commit_num for dead (RCVD_REMOVE_ACK_REVOCATION or SENT_REMOVE_ACK_REVOCATION) HTLCs based on latest indexes */
+    {SQL("UPDATE channel_htlcs SET max_commit_num ="
+	 " (SELECT GREATEST(next_index_local, next_index_remote)"
+	 "  FROM channels WHERE id=channel_id)"
+	 " WHERE (hstate=9 OR hstate=19);"), NULL},
+    /* Remove unused fields which take much room in db. */
+    {SQL("UPDATE channel_htlcs SET"
+	 " payment_key=NULL,"
+	 " routing_onion=NULL,"
+	 " failuremsg=NULL,"
+	 " shared_secret=NULL,"
+	 " localfailmsg=NULL"
+	 " WHERE (hstate=9 OR hstate=19);"), NULL},
 };
 
 /* Leak tracking. */
@@ -1102,7 +1204,7 @@ static int db_get_version(struct db *db)
 /**
  * db_migrate - Apply all remaining migrations from the current version
  */
-static void db_migrate(struct lightningd *ld, struct db *db,
+static bool db_migrate(struct lightningd *ld, struct db *db,
 		       const struct ext_key *bip32_base)
 {
 	/* Attempt to read the version from the database */
@@ -1152,6 +1254,8 @@ static void db_migrate(struct lightningd *ld, struct db *db,
 		db_exec_prepared_v2(stmt);
 		tal_free(stmt);
 	}
+
+	return current != orig;
 }
 
 u32 db_data_version_get(struct db *db)
@@ -1170,14 +1274,22 @@ struct db *db_setup(const tal_t *ctx, struct lightningd *ld,
 		    const struct ext_key *bip32_base)
 {
 	struct db *db = db_open(ctx, ld->wallet_dsn);
+	bool migrated;
 	db->log = new_log(db, ld->log_book, NULL, "database");
 
 	db_begin_transaction(db);
 
-	db_migrate(ld, db, bip32_base);
+	migrated = db_migrate(ld, db, bip32_base);
 
 	db->data_version = db_data_version_get(db);
 	db_commit_transaction(db);
+
+	/* This needs to be done outside a transaction, apparently.
+	 * It's a good idea to do this every so often, and on db
+	 * upgrade is a reasonable time. */
+	if (migrated && !db->config->vacuum_fn(db))
+		db_fatal("Error vacuuming db: %s", db->error);
+
 	return db;
 }
 
@@ -1358,14 +1470,13 @@ static void fillin_missing_channel_id(struct lightningd *ld, struct db *db,
 	while (db_step(stmt)) {
 		struct db_stmt *update_stmt;
 		size_t id;
-		struct bitcoin_txid funding_txid;
+		struct bitcoin_outpoint funding;
 		struct channel_id cid;
-		u32 outnum;
 
 		id = db_column_u64(stmt, 0);
-		db_column_txid(stmt, 1, &funding_txid);
-		outnum = db_column_int(stmt, 2);
-		derive_channel_id(&cid, &funding_txid, outnum);
+		db_column_txid(stmt, 1, &funding.txid);
+		funding.n = db_column_int(stmt, 2);
+		derive_channel_id(&cid, &funding);
 
 		update_stmt = db_prepare_v2(db, SQL("UPDATE channels"
 						    " SET full_channel_id = ?"

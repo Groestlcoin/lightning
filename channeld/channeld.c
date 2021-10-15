@@ -49,6 +49,15 @@
 #define MASTER_FD STDIN_FILENO
 #define HSM_FD 6
 
+enum pong_expect_type {
+	/* We weren't expecting a ping reply */
+	PONG_UNEXPECTED = 0,
+	/* We were expecting a ping reply due to ping command */
+	PONG_EXPECTED_COMMAND = 1,
+	/* We were expecting a ping reply due to ping timer */
+	PONG_EXPECTED_PROBING = 2,
+};
+
 struct peer {
 	struct per_peer_state *pps;
 	bool funding_locked[NUM_SIDES];
@@ -100,8 +109,11 @@ struct peer {
 	u64 commit_timer_attempts;
 	u32 commit_msec;
 
+	/* Random ping timer, to detect dead connections. */
+	struct oneshot *ping_timer;
+
 	/* Are we expecting a pong? */
-	bool expecting_pong;
+	enum pong_expect_type expecting_pong;
 
 	/* The feerate we want. */
 	u32 desired_feerate;
@@ -156,9 +168,6 @@ struct peer {
 
 	/* Make sure timestamps move forward. */
 	u32 last_update_timestamp;
-
-	/* Make sure peer is live. */
-	struct timeabs last_recv;
 
 	/* Additional confirmations need for local lockin. */
 	u32 depth_togo;
@@ -226,12 +235,12 @@ static struct amount_msat advertized_htlc_max(const struct channel *channel)
 	struct amount_msat lower_bound_msat;
 
 	/* This shouldn't fail */
-	if (!amount_sat_sub(&lower_bound, channel->funding,
+	if (!amount_sat_sub(&lower_bound, channel->funding_sats,
 			    channel->config[REMOTE].channel_reserve)) {
 		status_failed(STATUS_FAIL_INTERNAL_ERROR,
 			      "funding %s - remote reserve %s?",
 			      type_to_string(tmpctx, struct amount_sat,
-					     &channel->funding),
+					     &channel->funding_sats),
 			      type_to_string(tmpctx, struct amount_sat,
 					     &channel->config[REMOTE]
 					     .channel_reserve));
@@ -445,7 +454,8 @@ static void make_channel_local_active(struct peer *peer)
 
 	/* Tell gossipd about local channel. */
 	msg = towire_gossip_store_private_channel(NULL,
-						  peer->channel->funding, ann);
+						  peer->channel->funding_sats,
+						  ann);
  	wire_sync_write(peer->pps->gossip_fd, take(msg));
 
 	/* Tell gossipd and the other side what parameters we expect should
@@ -1087,25 +1097,27 @@ static struct bitcoin_signature *calc_commitsigs(const tal_t *ctx,
 	return htlc_sigs;
 }
 
-/* Have we received something from peer recently? */
-static bool peer_recently_active(struct peer *peer)
+/* Mutual recursion */
+static void send_ping(struct peer *peer);
+
+static void set_ping_timer(struct peer *peer)
 {
-	return time_less(time_between(time_now(), peer->last_recv),
-			 time_from_sec(30));
+	peer->ping_timer = new_reltimer(&peer->timers, peer,
+					time_from_sec(15 + pseudorand(30)),
+					send_ping, peer);
 }
 
-static void maybe_send_ping(struct peer *peer)
+static void send_ping(struct peer *peer)
 {
 	/* Already have a ping in flight? */
-	if (peer->expecting_pong)
-		return;
+	if (peer->expecting_pong != PONG_UNEXPECTED) {
+		status_debug("Last ping unreturned: hanging up");
+		exit(0);
+	}
 
-	if (peer_recently_active(peer))
-		return;
-
-	/* Send a ping to try to elicit a receive. */
 	sync_crypto_write_no_delay(peer->pps, take(make_ping(NULL, 1, 0)));
-	peer->expecting_pong = true;
+	peer->expecting_pong = PONG_EXPECTED_PROBING;
+	set_ping_timer(peer);
 }
 
 /* Peer protocol doesn't want sighash flags. */
@@ -1268,14 +1280,6 @@ static void send_commit(struct peer *peer)
 		return;
 	}
 
-	/* If we haven't received a packet for > 30 seconds, delay. */
-	if (!peer_recently_active(peer)) {
-		/* Mark this as done and try again. */
-		peer->commit_timer = NULL;
-		start_commit_timer(peer);
-		return;
-	}
-
 	/* If we wanted to update fees, do it now. */
 	if (want_fee_update(peer, &feerate_target)) {
 		/* FIXME: We occasionally desynchronize with LND here, so
@@ -1385,9 +1389,6 @@ static void send_commit(struct peer *peer)
 
 static void start_commit_timer(struct peer *peer)
 {
-	/* We should send a ping now if we need a liveness check. */
-	maybe_send_ping(peer);
-
 	/* Already armed? */
 	if (peer->commit_timer)
 		return;
@@ -2147,6 +2148,29 @@ static void handle_unexpected_reestablish(struct peer *peer, const u8 *msg)
 				       &channel_id));
 }
 
+static void handle_ping_reply(struct peer *peer, const u8 *msg)
+{
+	u8 *ignored;
+	size_t i;
+
+	/* We print this out because we asked for pong, so can't spam us... */
+	if (!fromwire_pong(msg, msg, &ignored))
+		status_unusual("Got malformed ping reply %s",
+			       tal_hex(tmpctx, msg));
+
+	/* We print this because dev versions of c-lightning embed
+	 * version here: see check_ping_make_pong! */
+	for (i = 0; i < tal_count(ignored); i++) {
+		if (ignored[i] < ' ' || ignored[i] == 127)
+			break;
+	}
+	status_debug("Got pong %zu bytes (%.*s...)",
+		     tal_count(ignored), (int)i, (char *)ignored);
+	wire_sync_write(MASTER_FD,
+			take(towire_channeld_ping_reply(NULL, true,
+							tal_bytelen(msg))));
+}
+
 static void peer_in(struct peer *peer, const u8 *msg)
 {
 	enum peer_wire type = fromwire_peektype(msg);
@@ -2155,14 +2179,6 @@ static void peer_in(struct peer *peer, const u8 *msg)
 	 * otherwise we can't cancel a channel before it has opened.
 	 */
 	bool soft_error = peer->funding_locked[REMOTE] || peer->funding_locked[LOCAL];
-
-	peer->last_recv = time_now();
-
-	/* Catch our own ping replies. */
-	if (type == WIRE_PONG && peer->expecting_pong) {
-		peer->expecting_pong = false;
-		return;
-	}
 
 	if (channeld_handle_custommsg(msg))
 		return;
@@ -2247,6 +2263,19 @@ static void peer_in(struct peer *peer, const u8 *msg)
 	case WIRE_INIT_RBF:
 	case WIRE_ACK_RBF:
 		break;
+	case WIRE_PONG:
+		switch (peer->expecting_pong) {
+		case PONG_EXPECTED_COMMAND:
+			handle_ping_reply(peer, msg);
+			/* fall thru */
+		case PONG_EXPECTED_PROBING:
+			peer->expecting_pong = PONG_UNEXPECTED;
+			return;
+		case PONG_UNEXPECTED:
+			status_debug("Unexpected pong?");
+			return;
+		}
+		abort();
 
 	case WIRE_CHANNEL_REESTABLISH:
 		handle_unexpected_reestablish(peer, msg);
@@ -2262,7 +2291,6 @@ static void peer_in(struct peer *peer, const u8 *msg)
 	case WIRE_GOSSIP_TIMESTAMP_FILTER:
 	case WIRE_REPLY_SHORT_CHANNEL_IDS_END:
 	case WIRE_PING:
-	case WIRE_PONG:
 	case WIRE_WARNING:
 	case WIRE_ERROR:
 	case WIRE_ONION_MESSAGE:
@@ -3520,6 +3548,57 @@ static void handle_send_error(struct peer *peer, const u8 *msg)
 			take(towire_channeld_send_error_reply(NULL)));
 }
 
+static void handle_send_ping(struct peer *peer, const u8 *msg)
+{
+	u8 *ping;
+	u16 len, num_pong_bytes;
+
+	if (!fromwire_channeld_ping(msg, &num_pong_bytes, &len))
+		master_badmsg(WIRE_CHANNELD_PING, msg);
+
+	/* We're not supposed to send another ping until previous replied */
+	if (peer->expecting_pong != PONG_UNEXPECTED) {
+		wire_sync_write(MASTER_FD,
+				take(towire_channeld_ping_reply(NULL, false, 0)));
+		return;
+	}
+
+	/* It should never ask for an oversize ping. */
+	ping = make_ping(NULL, num_pong_bytes, len);
+	if (tal_count(ping) > 65535)
+		status_failed(STATUS_FAIL_MASTER_IO, "Oversize ping");
+
+	sync_crypto_write_no_delay(peer->pps, take(ping));
+
+	/* Since we're doing this manually, kill and restart timer. */
+	status_debug("sending ping expecting %sresponse",
+		     num_pong_bytes >= 65532 ? "no " : "");
+
+	/* BOLT #1:
+	 *
+	 * A node receiving a `ping` message:
+	 *...
+	 *  - if `num_pong_bytes` is less than 65532:
+	 *    - MUST respond by sending a `pong` message, with `byteslen` equal
+	 *      to `num_pong_bytes`.
+	 *  - otherwise (`num_pong_bytes` is **not** less than 65532):
+	 *    - MUST ignore the `ping`.
+	 */
+	if (num_pong_bytes >= 65532) {
+		wire_sync_write(MASTER_FD,
+				take(towire_channeld_ping_reply(NULL,
+								true, 0)));
+		return;
+	}
+
+	/* We'll respond to lightningd once the pong comes in */
+	peer->expecting_pong = PONG_EXPECTED_COMMAND;
+
+	/* Restart our timed pings now. */
+	tal_free(peer->ping_timer);
+	set_ping_timer(peer);
+}
+
 #if DEVELOPER
 static void handle_dev_reenable_commit(struct peer *peer)
 {
@@ -3618,6 +3697,9 @@ static void req_in(struct peer *peer, const u8 *msg)
 	case WIRE_CHANNELD_SEND_ERROR:
 		handle_send_error(peer, msg);
 		return;
+	case WIRE_CHANNELD_PING:
+		handle_send_ping(peer, msg);
+		return;
 #if DEVELOPER
 	case WIRE_CHANNELD_DEV_REENABLE_COMMIT:
 		handle_dev_reenable_commit(peer);
@@ -3653,6 +3735,7 @@ static void req_in(struct peer *peer, const u8 *msg)
 	case WIRE_CHANNELD_SEND_ERROR_REPLY:
 	case WIRE_CHANNELD_DEV_QUIESCE_REPLY:
 	case WIRE_CHANNELD_UPGRADED:
+	case WIRE_CHANNELD_PING_REPLY:
 		break;
 	}
 
@@ -3673,12 +3756,11 @@ static void req_in(struct peer *peer, const u8 *msg)
 static void init_channel(struct peer *peer)
 {
 	struct basepoints points[NUM_SIDES];
-	struct amount_sat funding;
-	u16 funding_txout;
+	struct amount_sat funding_sats;
 	struct amount_msat local_msat;
 	struct pubkey funding_pubkey[NUM_SIDES];
 	struct channel_config conf[NUM_SIDES];
-	struct bitcoin_txid funding_txid;
+	struct bitcoin_outpoint funding;
 	enum side opener;
 	struct existing_htlc **htlcs;
 	bool reconnected;
@@ -3704,8 +3786,8 @@ static void init_channel(struct peer *peer)
 				   &chainparams,
 				   &peer->our_features,
 				   &peer->channel_id,
-				   &funding_txid, &funding_txout,
 				   &funding,
+				   &funding_sats,
 				   &minimum_depth,
 				   &peer->our_blockheight,
 				   &blockheight_states,
@@ -3817,12 +3899,11 @@ static void init_channel(struct peer *peer)
 				 &peer->next_local_per_commit, NULL);
 
 	peer->channel = new_full_channel(peer, &peer->channel_id,
-					 &funding_txid,
-					 funding_txout,
+					 &funding,
 					 minimum_depth,
 					 take(blockheight_states),
 					 lease_expiry,
-					 funding,
+					 funding_sats,
 					 local_msat,
 					 take(fee_states),
 					 &conf[LOCAL], &conf[REMOTE],
@@ -3890,9 +3971,10 @@ int main(int argc, char *argv[])
 	status_setup_sync(MASTER_FD);
 
 	peer = tal(NULL, struct peer);
-	peer->expecting_pong = false;
+	peer->expecting_pong = PONG_UNEXPECTED;
 	timers_init(&peer->timers, time_mono());
 	peer->commit_timer = NULL;
+	set_ping_timer(peer);
 	peer->have_sigs[LOCAL] = peer->have_sigs[REMOTE] = false;
 	peer->announce_depth_reached = false;
 	peer->channel_local_active = false;
@@ -3900,8 +3982,6 @@ int main(int argc, char *argv[])
 	peer->shutdown_sent[LOCAL] = false;
 	peer->shutdown_wrong_funding = NULL;
 	peer->last_update_timestamp = 0;
-	/* We actually received it in the previous daemon, but near enough */
-	peer->last_recv = time_now();
 	peer->last_empty_commitment = 0;
 #if EXPERIMENTAL_FEATURES
 	peer->stfu = false;
@@ -3962,15 +4042,21 @@ int main(int argc, char *argv[])
 			continue;
 		}
 
+		/* Might not be waiting for anything. */
+		tptr = NULL;
+
 		if (timer_earliest(&peer->timers, &first)) {
 			timeout = timespec_to_timeval(
 				timemono_between(first, now).ts);
 			tptr = &timeout;
-		} else if (time_to_next_gossip(peer->pps, &trel)) {
+		}
+
+		/* If timer to next gossip is sooner, use that instead. */
+		if (time_to_next_gossip(peer->pps, &trel)
+		    && (!tptr || time_less(trel, timeval_to_timerel(*tptr)))) {
 			timeout = timerel_to_timeval(trel);
 			tptr = &timeout;
-		} else
-			tptr = NULL;
+		}
 
 		if (select(nfds, &rfds, NULL, NULL, tptr) < 0) {
 			/* Signals OK, eg. SIGUSR1 */

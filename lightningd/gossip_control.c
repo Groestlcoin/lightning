@@ -14,7 +14,6 @@
 #include <lightningd/hsm_control.h>
 #include <lightningd/jsonrpc.h>
 #include <lightningd/onion_message.h>
-#include <lightningd/ping.h>
 
 static void got_txout(struct bitcoind *bitcoind,
 		      const struct bitcoin_tx_output *output,
@@ -58,7 +57,7 @@ static void got_filteredblock(struct bitcoind *bitcoind,
 	u32 txindex = short_channel_id_txnum(scid);
 	for (size_t i=0; i<tal_count(fb->outpoints); i++) {
 		o = fb->outpoints[i];
-		if (o->txindex == txindex && o->outnum == outnum) {
+		if (o->txindex == txindex && o->outpoint.n == outnum) {
 			fbo = o;
 			break;
 		}
@@ -113,7 +112,6 @@ static unsigned gossip_msg(struct subd *gossip, const u8 *msg, const int *fds)
 	switch (t) {
 	/* These are messages we send, not them. */
 	case WIRE_GOSSIPD_INIT:
-	case WIRE_GOSSIPD_PING:
 	case WIRE_GOSSIPD_GET_STRIPPED_CUPDATE:
 	case WIRE_GOSSIPD_GET_TXOUT_REPLY:
 	case WIRE_GOSSIPD_OUTPOINT_SPENT:
@@ -145,10 +143,6 @@ static unsigned gossip_msg(struct subd *gossip, const u8 *msg, const int *fds)
 	case WIRE_GOSSIPD_GOT_ONIONMSG_TO_US:
 		handle_onionmsg_to_us(gossip->ld, msg);
 		break;
-	case WIRE_GOSSIPD_PING_REPLY:
-		ping_reply(gossip, msg);
-		break;
-
 	case WIRE_GOSSIPD_GET_TXOUT:
 		get_txout(gossip, msg);
 		break;

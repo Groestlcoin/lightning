@@ -4,6 +4,7 @@
 #include <bitcoin/psbt.h>
 #include <bitcoin/script.h>
 #include <ccan/str/hex/hex.h>
+#include <ccan/tal/str/str.h>
 #include <common/type_to_string.h>
 #include <wally_psbt.h>
 #include <wire/wire.h>
@@ -195,15 +196,17 @@ void bitcoin_tx_set_locktime(struct bitcoin_tx *tx, u32 locktime)
 	tx->psbt->tx->locktime = locktime;
 }
 
-int bitcoin_tx_add_input(struct bitcoin_tx *tx, const struct bitcoin_txid *txid,
-			 u32 outnum, u32 sequence, const u8 *scriptSig,
+int bitcoin_tx_add_input(struct bitcoin_tx *tx,
+			 const struct bitcoin_outpoint *outpoint,
+			 u32 sequence, const u8 *scriptSig,
 			 struct amount_sat amount, const u8 *scriptPubkey,
 			 const u8 *input_wscript)
 {
 	int wally_err;
 	int input_num = tx->wtx->num_inputs;
 
-	psbt_append_input(tx->psbt, txid, outnum, sequence, scriptSig,
+	psbt_append_input(tx->psbt, outpoint,
+			  sequence, scriptSig,
 			  input_wscript, NULL);
 
 	if (input_wscript) {
@@ -387,6 +390,7 @@ const u8 *bitcoin_tx_input_get_witness(const tal_t *ctx,
 	return witness_item;
 }
 
+/* FIXME: remove */
 void bitcoin_tx_input_get_txid(const struct bitcoin_tx *tx, int innum,
 			       struct bitcoin_txid *out)
 {
@@ -394,24 +398,40 @@ void bitcoin_tx_input_get_txid(const struct bitcoin_tx *tx, int innum,
 	wally_tx_input_get_txid(&tx->wtx->inputs[innum], out);
 }
 
-void bitcoin_tx_input_set_txid(struct bitcoin_tx *tx, int innum,
-			       const struct bitcoin_txid *txid,
-			       u32 index)
+void bitcoin_tx_input_get_outpoint(const struct bitcoin_tx *tx,
+				   int innum,
+				   struct bitcoin_outpoint *outpoint)
+{
+	assert(innum < tx->wtx->num_inputs);
+	wally_tx_input_get_outpoint(&tx->wtx->inputs[innum], outpoint);
+}
+
+void bitcoin_tx_input_set_outpoint(struct bitcoin_tx *tx, int innum,
+				   const struct bitcoin_outpoint *outpoint)
 {
 	struct wally_tx_input *in;
 	assert(innum < tx->wtx->num_inputs);
 
 	in = &tx->wtx->inputs[innum];
 	BUILD_ASSERT(sizeof(struct bitcoin_txid) == sizeof(in->txhash));
-	memcpy(in->txhash, txid, sizeof(struct bitcoin_txid));
-	in->index = index;
+	memcpy(in->txhash, &outpoint->txid, sizeof(struct bitcoin_txid));
+	in->index = outpoint->n;
 }
 
+/* FIXME: remove */
 void wally_tx_input_get_txid(const struct wally_tx_input *in,
 			     struct bitcoin_txid *txid)
 {
 	BUILD_ASSERT(sizeof(struct bitcoin_txid) == sizeof(in->txhash));
 	memcpy(txid, in->txhash, sizeof(struct bitcoin_txid));
+}
+
+void wally_tx_input_get_outpoint(const struct wally_tx_input *in,
+				 struct bitcoin_outpoint *outpoint)
+{
+	BUILD_ASSERT(sizeof(struct bitcoin_txid) == sizeof(in->txhash));
+	memcpy(&outpoint->txid, in->txhash, sizeof(struct bitcoin_txid));
+	outpoint->n = in->index;
 }
 
 /* BIP144:
@@ -677,6 +697,14 @@ static char *fmt_bitcoin_txid(const tal_t *ctx, const struct bitcoin_txid *txid)
 	return hexstr;
 }
 
+static char *fmt_bitcoin_outpoint(const tal_t *ctx,
+				  const struct bitcoin_outpoint *outpoint)
+{
+	return tal_fmt(ctx, "%s:%u",
+		       fmt_bitcoin_txid(tmpctx, &outpoint->txid),
+		       outpoint->n);
+}
+
 static char *fmt_wally_tx(const tal_t *ctx, const struct wally_tx *tx)
 {
 	u8 *lin = linearize_wtx(ctx, tx);
@@ -687,6 +715,7 @@ static char *fmt_wally_tx(const tal_t *ctx, const struct wally_tx *tx)
 
 REGISTER_TYPE_TO_STRING(bitcoin_tx, fmt_bitcoin_tx);
 REGISTER_TYPE_TO_STRING(bitcoin_txid, fmt_bitcoin_txid);
+REGISTER_TYPE_TO_STRING(bitcoin_outpoint, fmt_bitcoin_outpoint);
 REGISTER_TYPE_TO_STRING(wally_tx, fmt_wally_tx);
 
 void fromwire_bitcoin_txid(const u8 **cursor, size_t *max,
@@ -781,16 +810,15 @@ void towire_bitcoin_tx_output(u8 **pptr, const struct bitcoin_tx_output *output)
 }
 
 bool wally_tx_input_spends(const struct wally_tx_input *input,
-			   const struct bitcoin_txid *txid,
-			   int outnum)
+			   const struct bitcoin_outpoint *outpoint)
 {
 	/* Useful, as tx_part can have some NULL inputs */
 	if (!input)
 		return false;
-	BUILD_ASSERT(sizeof(*txid) == sizeof(input->txhash));
-	if (memcmp(txid, input->txhash, sizeof(*txid)) != 0)
+	BUILD_ASSERT(sizeof(outpoint->txid) == sizeof(input->txhash));
+	if (memcmp(&outpoint->txid, input->txhash, sizeof(outpoint->txid)) != 0)
 		return false;
-	return input->index == outnum;
+	return input->index == outpoint->n;
 }
 
 /* FIXME(cdecker) Make the caller pass in a reference to amount_asset, and
