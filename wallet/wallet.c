@@ -1711,7 +1711,8 @@ static void wallet_channel_config_save(struct wallet *w,
 					"  channel_reserve_satoshis=?,"
 					"  htlc_minimum_msat=?,"
 					"  to_self_delay=?,"
-					"  max_accepted_htlcs=?"
+					"  max_accepted_htlcs=?,"
+					"  max_dust_htlc_exposure_msat=?"
 					" WHERE id=?;"));
 	db_bind_amount_sat(stmt, 0, &cc->dust_limit);
 	db_bind_amount_msat(stmt, 1, &cc->max_htlc_value_in_flight);
@@ -1719,7 +1720,8 @@ static void wallet_channel_config_save(struct wallet *w,
 	db_bind_amount_msat(stmt, 3, &cc->htlc_minimum);
 	db_bind_int(stmt, 4, cc->to_self_delay);
 	db_bind_int(stmt, 5, cc->max_accepted_htlcs);
-	db_bind_u64(stmt, 6, cc->id);
+	db_bind_amount_msat(stmt, 6, &cc->max_dust_htlc_exposure_msat);
+	db_bind_u64(stmt, 7, cc->id);
 	db_exec_prepared_v2(take(stmt));
 }
 
@@ -1731,7 +1733,8 @@ bool wallet_channel_config_load(struct wallet *w, const u64 id,
 	const char *query = SQL(
 	    "SELECT id, dust_limit_satoshis, max_htlc_value_in_flight_msat, "
 	    "channel_reserve_satoshis, htlc_minimum_msat, to_self_delay, "
-	    "max_accepted_htlcs FROM channel_configs WHERE id= ? ;");
+	    "max_accepted_htlcs, max_dust_htlc_exposure_msat"
+	    " FROM channel_configs WHERE id= ? ;");
 	struct db_stmt *stmt = db_prepare_v2(w->db, query);
 	db_bind_u64(stmt, 0, id);
 	db_query_prepared(stmt);
@@ -1746,7 +1749,8 @@ bool wallet_channel_config_load(struct wallet *w, const u64 id,
 	db_column_amount_msat(stmt, col++, &cc->htlc_minimum);
 	cc->to_self_delay = db_column_int(stmt, col++);
 	cc->max_accepted_htlcs = db_column_int(stmt, col++);
-	assert(col == 7);
+	db_column_amount_msat(stmt, col++, &cc->max_dust_htlc_exposure_msat);
+	assert(col == 8);
 	tal_free(stmt);
 	return ok;
 }
@@ -2313,8 +2317,9 @@ void wallet_htlc_save_in(struct wallet *wallet,
 				 " shared_secret,"
 				 " routing_onion,"
 				 " received_time,"
-				 " min_commit_num) VALUES "
-				 "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);"));
+				 " min_commit_num, "
+				 " fail_immediate) VALUES "
+				 "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);"));
 
 	db_bind_u64(stmt, 0, chan->dbid);
 	db_bind_u64(stmt, 1, in->key.id);
@@ -2340,6 +2345,8 @@ void wallet_htlc_save_in(struct wallet *wallet,
 	db_bind_timeabs(stmt, 10, in->received_time);
 	db_bind_u64(stmt, 11, min_unsigned(chan->next_index[LOCAL]-1,
 					   chan->next_index[REMOTE]-1));
+
+	db_bind_int(stmt, 12, in->fail_immediate);
 
 	db_exec_prepared_v2(stmt);
 	in->dbid = db_last_insert_id_v2(take(stmt));
@@ -2551,6 +2558,8 @@ static bool wallet_stmt2htlc_in(struct channel *channel,
 	} else
 		in->we_filled = NULL;
 
+	in->fail_immediate = db_column_int(stmt, 14);
+
 	return ok;
 }
 
@@ -2679,6 +2688,7 @@ bool wallet_htlcs_load_in_for_channel(struct wallet *wallet,
 					     ", shared_secret"
 					     ", received_time"
 					     ", we_filled"
+					     ", fail_immediate"
 					     " FROM channel_htlcs"
 					     " WHERE direction= ?"
 					     " AND channel_id= ?"

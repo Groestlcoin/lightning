@@ -738,7 +738,11 @@ static void handle_peer_add_htlc(struct peer *peer, const u8 *msg)
 #endif
 	add_err = channel_add_htlc(peer->channel, REMOTE, id, amount,
 				   cltv_expiry, &payment_hash,
-				   onion_routing_packet, blinding, &htlc, NULL);
+				   onion_routing_packet, blinding, &htlc, NULL,
+				   /* We don't immediately fail incoming htlcs,
+				    * instead we wait and fail them after
+				    * they've been committed */
+				   false);
 	if (add_err != CHANNEL_ERR_ADD_OK)
 		peer_failed_warn(peer->pps, &peer->channel_id,
 				 "Bad peer_add_htlc: %s",
@@ -1288,6 +1292,28 @@ static void send_commit(struct peer *peer)
 		if (feerate_changes_done(peer->channel->fee_states, false)) {
 			u8 *msg;
 
+			/* BOLT-919 #2:
+			 *
+			 * A sending node:
+			 * - if the `dust_balance_on_counterparty_tx` at the
+			 *   new `dust_buffer_feerate` is superior to
+			 *   `max_dust_htlc_exposure_msat`:
+			 *   - MAY NOT send `update_fee`
+			 *   - MAY fail the channel
+			 * - if the `dust_balance_on_holder_tx` at the
+			 *   new `dust_buffer_feerate` is superior to
+			 *   the `max_dust_htlc_exposure_msat`:
+			 *   - MAY NOT send `update_fee`
+			 *   - MAY fail the channel
+			 */
+			/* Is this feerate update going to push the committed
+			 * htlcs over our allowed dust limits? */
+			if (!htlc_dust_ok(peer->channel, feerate_target, REMOTE)
+			    || !htlc_dust_ok(peer->channel, feerate_target, LOCAL))
+				peer_failed_warn(peer->pps, &peer->channel_id,
+						"Too much dust to update fee (Desired"
+						" feerate update %d)", feerate_target);
+
 			if (!channel_update_feerate(peer->channel, feerate_target))
 				status_failed(STATUS_FAIL_INTERNAL_ERROR,
 					      "Could not afford feerate %u"
@@ -1468,6 +1494,7 @@ static void marshall_htlc_info(const tal_t *ctx,
 				ecdh(a.blinding, &a.blinding_ss);
 			} else
 				a.blinding = NULL;
+			a.fail_immediate = htlc->fail_immediate;
 			tal_arr_expand(added, a);
 		} else if (htlc->state == RCVD_REMOVE_COMMIT) {
 			if (htlc->r) {
@@ -3299,7 +3326,8 @@ static void handle_offer_htlc(struct peer *peer, const u8 *inmsg)
 
 	e = channel_add_htlc(peer->channel, LOCAL, peer->htlc_id,
 			     amount, cltv_expiry, &payment_hash,
-			     onion_routing_packet, take(blinding), NULL, &htlc_fee);
+			     onion_routing_packet, take(blinding), NULL,
+			     &htlc_fee, true);
 	status_debug("Adding HTLC %"PRIu64" amount=%s cltv=%u gave %s",
 		     peer->htlc_id,
 		     type_to_string(tmpctx, struct amount_msat, &amount),
@@ -3353,6 +3381,16 @@ static void handle_offer_htlc(struct peer *peer, const u8 *inmsg)
 	case CHANNEL_ERR_TOO_MANY_HTLCS:
 		failwiremsg = towire_temporary_channel_failure(inmsg, get_local_channel_update(inmsg, peer));
 		failstr = "Too many HTLCs";
+		goto failed;
+	case CHANNEL_ERR_DUST_FAILURE:
+		/* BOLT-919 #2:
+		 * - upon an outgoing HTLC:
+		 *   - if a HTLC's `amount_msat` is inferior the counterparty's...
+		 *   - SHOULD NOT send this HTLC
+		 *   - SHOULD fail this HTLC if it's forwarded
+		 */
+		failwiremsg = towire_temporary_channel_failure(inmsg, get_local_channel_update(inmsg, peer));
+		failstr = "HTLC too dusty, allowed dust limit reached";
 		goto failed;
 	}
 	/* Shouldn't return anything else! */

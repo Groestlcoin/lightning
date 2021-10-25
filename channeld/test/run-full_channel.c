@@ -169,7 +169,7 @@ static const struct htlc **include_htlcs(struct channel *channel, enum side side
 		memset(&preimage, i, sizeof(preimage));
 		sha256(&hash, &preimage, sizeof(preimage));
 		e = channel_add_htlc(channel, sender, i, msatoshi, 500+i, &hash,
-				     dummy_routing, NULL, NULL, NULL);
+				     dummy_routing, NULL, NULL, NULL, true);
 		assert(e == CHANNEL_ERR_ADD_OK);
 		htlcs[i] = channel_get_htlc(channel, sender, i);
 	}
@@ -261,7 +261,7 @@ static void send_and_fulfill_htlc(struct channel *channel,
 	sha256(&rhash, &r, sizeof(r));
 
 	assert(channel_add_htlc(channel, sender, 1337, msatoshi, 900, &rhash,
-				dummy_routing, NULL, NULL, NULL)
+				dummy_routing, NULL, NULL, NULL, true)
 	       == CHANNEL_ERR_ADD_OK);
 
 	changed_htlcs = tal_arr(channel, const struct htlc *, 0);
@@ -410,6 +410,8 @@ int main(int argc, const char *argv[])
 
 	local_config->max_htlc_value_in_flight = AMOUNT_MSAT(-1ULL);
 	remote_config->max_htlc_value_in_flight = AMOUNT_MSAT(-1ULL);
+	local_config->max_dust_htlc_exposure_msat = AMOUNT_MSAT(-1ULL);
+	remote_config->max_dust_htlc_exposure_msat = AMOUNT_MSAT(-1ULL);
 	local_config->channel_reserve = AMOUNT_SAT(0);
 	remote_config->channel_reserve = AMOUNT_SAT(0);
 	local_config->htlc_minimum = AMOUNT_MSAT(0);

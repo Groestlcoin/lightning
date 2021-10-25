@@ -121,6 +121,10 @@
 	    "type": "boolean",
 	    "description": "`experimental-shutdown-wrong-funding` field from config or cmdline, or default"
 	},
+	"experimental-websocket-port": {
+	    "type": "u16",
+	    "description": "`experimental-websocket-port` field from config or cmdline, or default"
+	},
 	"rgb": {
 	    "type": "hex",
 	    "description": "`rgb` field from config or cmdline, or default",
@@ -178,6 +182,10 @@
 	"max-concurrent-htlcs": {
 	    "type": "u32",
 	    "description": "`max-concurrent-htlcs` field from config or cmdline, or default"
+	},
+	"max-dust-htlc-exposure-msat": {
+	    "type": "msat",
+	    "description": "`max-dust-htlc-exposure-mast` field from config or cmdline, or default"
 	},
 	"min-capacity-sat": {
 	    "type": "u64",

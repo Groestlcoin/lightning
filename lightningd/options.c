@@ -10,6 +10,7 @@
 #include <common/features.h>
 #include <common/hsm_encryption.h>
 #include <common/json_command.h>
+#include <common/json_helpers.h>
 #include <common/json_tok.h>
 #include <common/param.h>
 #include <common/type_to_string.h>
@@ -672,6 +673,9 @@ static const struct config testnet_config = {
 	/* Testnet blockspace is free. */
 	.max_concurrent_htlcs = 483,
 
+	/* Max amount of dust allowed per channel (50ksat) */
+	.max_dust_htlc_exposure_msat = AMOUNT_MSAT(50000000),
+
 	/* Be aggressive on testnet. */
 	.cltv_expiry_delta = 6,
 	.cltv_final = 10,
@@ -717,6 +721,9 @@ static const struct config mainnet_config = {
 
 	/* While up to 483 htlcs are possible we do 30 by default (as eclair does) to save blockspace */
 	.max_concurrent_htlcs = 30,
+
+	/* Max amount of dust allowed per channel (50ksat) */
+	.max_dust_htlc_exposure_msat = AMOUNT_MSAT(50000000),
 
 	/* BOLT #2:
 	 *
@@ -846,11 +853,34 @@ static char *opt_start_daemon(struct lightningd *ld)
 	errx(1, "Died with signal %u", WTERMSIG(exitcode));
 }
 
+static char *opt_set_msat(const char *arg, struct amount_msat *amt)
+{
+	if (!parse_amount_msat(amt, arg, strlen(arg)))
+		return tal_fmt(NULL, "Unable to parse millisatoshi '%s'", arg);
+
+	return NULL;
+}
+
 static char *opt_set_wumbo(struct lightningd *ld)
 {
 	feature_set_or(ld->our_features,
 		       take(feature_set_for_feature(NULL,
 						    OPTIONAL_FEATURE(OPT_LARGE_CHANNELS))));
+	return NULL;
+}
+
+static char *opt_set_websocket_port(const char *arg, struct lightningd *ld)
+{
+	u32 port COMPILER_WANTS_INIT("9.3.0 -O2");
+	char *err;
+
+	err = opt_set_u32(arg, &port);
+	if (err)
+		return err;
+
+	ld->websocket_port = port;
+	if (ld->websocket_port != port)
+		return tal_fmt(NULL, "'%s' is out of range", arg);
 	return NULL;
 }
 
@@ -994,6 +1024,9 @@ static void register_opts(struct lightningd *ld)
 	opt_register_arg("--max-concurrent-htlcs", opt_set_u32, opt_show_u32,
 			 &ld->config.max_concurrent_htlcs,
 			 "Number of HTLCs one channel can handle concurrently. Should be between 1 and 483");
+	opt_register_arg("--max-dust-htlc-exposure-msat", opt_set_msat,
+			 NULL, &ld->config.max_dust_htlc_exposure_msat,
+			 "Max HTLC amount that can be trimmed");
 	opt_register_arg("--min-capacity-sat", opt_set_u64, opt_show_u64,
 			 &ld->config.min_capacity_sat,
 			 "Minimum capacity in satoshis for accepting channels");
@@ -1055,6 +1088,11 @@ static void register_opts(struct lightningd *ld)
 			 "--subdaemon=hsmd:remote_signer "
 			 "would use a hypothetical remote signing subdaemon.");
 
+	opt_register_arg("--experimental-websocket-port",
+			 opt_set_websocket_port, NULL,
+			 ld,
+			 "experimental: alternate port for peers to connect"
+			 " using WebSockets (RFC6455)");
 	opt_register_logging(ld);
 	opt_register_version();
 
@@ -1215,7 +1253,7 @@ void handle_early_opts(struct lightningd *ld, int argc, char *argv[])
 	/*~ Move into config dir: this eases path manipulation and also
 	 * gives plugins a good place to store their stuff. */
 	if (chdir(ld->config_netdir) != 0) {
-		log_unusual(ld->log, "Creating configuration directory %s",
+		log_info(ld->log, "Creating configuration directory %s",
 			    ld->config_netdir);
 		/* We assume home dir exists, so only create two. */
 		if (mkdir(ld->config_basedir, 0700) != 0 && errno != EEXIST)
@@ -1467,6 +1505,11 @@ static void add_config(struct lightningd *ld,
 			json_add_opt_disable_plugins(response, ld->plugins);
 		} else if (opt->cb_arg == (void *)opt_force_feerates) {
 			answer = fmt_force_feerates(name0, ld->force_feerates);
+		} else if (opt->cb_arg == (void *)opt_set_websocket_port) {
+			if (ld->websocket_port)
+				json_add_u32(response, name0,
+					     ld->websocket_port);
+			return;
 		} else if (opt->cb_arg == (void *)opt_important_plugin) {
 			/* Do nothing, this is already handled by
 			 * opt_add_plugin.  */
@@ -1475,6 +1518,8 @@ static void add_config(struct lightningd *ld,
 			   || opt->cb_arg == (void *)plugin_opt_flag_set) {
 			/* FIXME: We actually treat it as if they specified
 			 * --plugin for each one, so ignore these */
+		} else if (opt->cb_arg == (void *)opt_set_msat) {
+			json_add_amount_msat_only(response, name0, ld->config.max_dust_htlc_exposure_msat);
 #if EXPERIMENTAL_FEATURES
 		} else if (opt->cb_arg == (void *)opt_set_accept_extra_tlv_types) {
                         /* TODO Actually print the option */

@@ -39,6 +39,7 @@
  * in detail below.
  */
 #include <ccan/array_size/array_size.h>
+#include <ccan/closefrom/closefrom.h>
 #include <ccan/opt/opt.h>
 #include <ccan/pipecmd/pipecmd.h>
 #include <ccan/read_write_all/read_write_all.h>
@@ -216,6 +217,7 @@ static struct lightningd *new_lightningd(const tal_t *ctx)
 	ld->always_use_proxy = false;
 	ld->pure_tor_setup = false;
 	ld->tor_service_password = NULL;
+	ld->websocket_port = 0;
 
 	/*~ This is initialized later, but the plugin loop examines this,
 	 * so set it to NULL explicitly now. */
@@ -849,15 +851,48 @@ int main(int argc, char *argv[])
 	const char *stop_response;
 	struct htlc_in_map *unconnected_htlcs_in;
 	struct ext_key *bip32_base;
-	struct rlimit nofile = {1024, 1024};
 	int sigchld_rfd;
 	int exit_code = 0;
 	char **orig_argv;
 	bool try_reexec;
 
-	/*~ Make sure that we limit ourselves to something reasonable. Modesty
-	 *  is a virtue. */
-	setrlimit(RLIMIT_NOFILE, &nofile);
+	/*~ We fork out new processes very very often; every channel gets its
+	 * own process, for example, and we have `hsmd` and `gossipd` and
+	 * the plugins as well.
+	 * Now, we also keep around several file descriptors (`fd`s), including
+	 * file descriptors to communicate with `hsmd` which is a privileged
+	 * process with access to private keys and is therefore very sensitive.
+	 * Thus, we need to close all file descriptors other than what the
+	 * forked-out new process should have ASAP.
+	 *
+	 * We do this by using the `ccan/closefrom` module, which implements
+	 * an emulation for the `closefrom` syscall on BSD and Solaris.
+	 * This emulation tries to use the fastest facility available on the
+	 * system (`close_range` syscall on Linux 5.9+, snooping through
+	 * `/proc/$PID/fd` on many OSs (but requires procps to be mounted),
+	 * the actual `closefrom` call if available, etc.).
+	 * As a fallback if none of those are available on the system, however,
+	 * it just iterates over the theoretical range of possible file
+	 * descriptors.
+	 *
+	 * On some systems, that theoretical range can be very high, up to
+	 * `INT_MAX` in the worst case.
+	 * If the `closefrom` emulation has to fall back to this loop, it
+	 * can be very slow; fortunately, the emulation will also inform
+	 * us of that via the `closefrom_may_be_slow` function, and also has
+	 * `closefrom_limit` to limit the number of allowed file descriptors
+	 * *IF AND ONLY IF* `closefrom_may_be_slow()` is true.
+	 *
+	 * On systems with a fast `closefrom` then `closefrom_limit` does
+	 * nothing.
+	 *
+	 * Previously we always imposed a limit of 1024 file descriptors
+	 * (because we used to always iterate up to limit instead of using
+	 * some OS facility, because those were non-portable and needed
+	 * code for each OS), until @whitslack went and made >1000 channels
+	 * and hit the 1024 limit.
+	 */
+	closefrom_limit(4096);
 
 	/*~ What happens in strange locales should stay there. */
 	setup_locale();
@@ -1081,6 +1116,22 @@ int main(int argc, char *argv[])
 		 json_escape(tmpctx, (const char *)ld->alias)->s,
 		 tal_hex(tmpctx, ld->rgb), version());
 
+	/*~ If `closefrom_may_be_slow`, we limit ourselves to 4096 file
+	 * descriptors; tell the user about it as that limits the number
+	 * of channels they can have.
+	 * We do not really expect most users to ever reach that many,
+	 * but: https://github.com/ElementsProject/lightning/issues/4868
+	 */
+	if (closefrom_may_be_slow())
+		log_info(ld->log,
+			 "We have self-limited number of open file "
+			 "descriptors to 4096, but that will result in a "
+			 "'Too many open files' error if you ever reach "
+			 ">4000 channels.  Please upgrade your OS kernel "
+			 "(Linux 5.9+, FreeBSD 8.0+), or mount proc or "
+			 "/dev/fd (if running in chroot) if you are "
+			 "approaching that many channels.");
+
 	/*~ This is where we ask connectd to reconnect to any peers who have
 	 * live channels with us, and makes sure we're watching the funding
 	 * tx. */
@@ -1181,15 +1232,11 @@ int main(int argc, char *argv[])
 
 	/* Were we supposed to restart ourselves? */
 	if (try_reexec) {
-		long max_fd;
-
 		/* Give a reasonable chance for the install to finish. */
 		sleep(5);
 
 		/* Close all filedescriptors except stdin/stdout/stderr */
-		max_fd = sysconf(_SC_OPEN_MAX);
-		for (int i = STDERR_FILENO+1; i < max_fd; i++)
-			close(i);
+		closefrom(STDERR_FILENO + 1);
 		execv(orig_argv[0], orig_argv);
 		err(1, "Failed to re-exec ourselves after version change");
 	}

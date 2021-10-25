@@ -8,6 +8,7 @@
 #include <common/random_select.h>
 #include <common/type_to_string.h>
 #include <errno.h>
+#include <math.h>
 #include <plugins/libplugin-pay.h>
 #include <sys/types.h>
 #include <wire/peer_wire.h>
@@ -695,6 +696,48 @@ static bool payment_route_can_carry_even_disabled(const struct gossmap *map,
 	return payment_route_check(map, c, dir, amount, p);
 }
 
+/* Rene Pickhardt:
+ *
+ * Btw the linear term of the Taylor series of -log((c+1-x)/(c+1)) is 1/(c+1)
+ * meaning that another suitable Weight for Dijkstra would be amt/(c+1) +
+ * \mu*fee(amt) which is the linearized version which for small amounts and
+ * suitable value of \mu should be good enough)
+ */
+static u64 capacity_bias(const struct gossmap *map,
+			 const struct gossmap_chan *c,
+			 int dir,
+			 struct amount_msat amount)
+{
+	struct amount_sat capacity;
+	u64 capmsat, amtmsat = amount.millisatoshis; /* Raw: lengthy math */
+
+	/* Can fail in theory if gossmap changed underneath. */
+	if (!gossmap_chan_get_capacity(map, c, &capacity))
+		return 0;
+
+	capmsat = capacity.satoshis * 1000; /* Raw: lengthy math */
+	return -log((capmsat + 1 - amtmsat) / (capmsat + 1));
+}
+
+/* Prioritize costs over distance, but bias to larger channels. */
+static u64 route_score(u32 distance,
+		       struct amount_msat cost,
+		       struct amount_msat risk,
+		       int dir,
+		       const struct gossmap_chan *c)
+{
+	u64 cmsat = cost.millisatoshis; /* Raw: lengthy math */
+	u64 rmsat = risk.millisatoshis; /* Raw: lengthy math */
+	u64 bias = capacity_bias(global_gossmap, c, dir, cost);
+
+	/* Smoothed harmonic mean to avoid division by 0 */
+	u64 costs = (cmsat * rmsat * bias) / (cmsat + rmsat + bias + 1);
+
+	if (costs > 0xFFFFFFFF)
+		costs = 0xFFFFFFFF;
+	return costs;
+}
+
 static struct route_hop *route(const tal_t *ctx,
 			       struct gossmap *gossmap,
 			       const struct gossmap_node *src,
@@ -716,14 +759,14 @@ static struct route_hop *route(const tal_t *ctx,
 
 	can_carry = payment_route_can_carry;
 	dij = dijkstra(tmpctx, gossmap, dst, amount, riskfactor,
-		       can_carry, route_score_cheaper, p);
+		       can_carry, route_score, p);
 	r = route_from_dijkstra(ctx, gossmap, dij, src, amount, final_delay);
 	if (!r) {
 		/* Try using disabled channels too */
 		/* FIXME: is there somewhere we can annotate this for paystatus? */
 		can_carry = payment_route_can_carry_even_disabled;
 		dij = dijkstra(ctx, gossmap, dst, amount, riskfactor,
-			       can_carry, route_score_cheaper, p);
+			       can_carry, route_score, p);
 		r = route_from_dijkstra(ctx, gossmap, dij, src,
 					amount, final_delay);
 		if (!r) {
