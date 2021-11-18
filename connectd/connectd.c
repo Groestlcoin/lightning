@@ -962,7 +962,9 @@ static void try_connect_one_addr(struct connecting *connect)
 		break;
 	case ADDR_INTERNAL_WIREADDR:
 		switch (addr->u.wireaddr.type) {
-		case ADDR_TYPE_TOR_V2:
+		case ADDR_TYPE_TOR_V2_REMOVED:
+			af = -1;
+			break;
 		case ADDR_TYPE_TOR_V3:
 			use_proxy = true;
 			break;
@@ -1154,7 +1156,7 @@ static bool handle_wireaddr_listen(struct daemon *daemon,
 		return false;
 	/* Handle specially by callers. */
 	case ADDR_TYPE_WEBSOCKET:
-	case ADDR_TYPE_TOR_V2:
+	case ADDR_TYPE_TOR_V2_REMOVED:
 	case ADDR_TYPE_TOR_V3:
 		return false;
 		break;
@@ -1231,7 +1233,7 @@ static struct wireaddr_internal *setup_listeners(const tal_t *ctx,
 	struct sockaddr_un addrun;
 	int fd;
 	struct wireaddr_internal *binding;
-	const u8 *blob = NULL;
+	const char *blob = NULL;
 	struct secret random;
 	struct pubkey pb;
 	struct wireaddr *toraddr;
@@ -1660,9 +1662,12 @@ static void add_gossip_addrs(struct wireaddr_internal **addrs,
 
 	/* Wrap each one in a wireaddr_internal and add to addrs. */
 	for (size_t i = 0; i < tal_count(normal_addrs); i++) {
+		/* This is not supported, ignore. */
+		if (normal_addrs[i].type == ADDR_TYPE_TOR_V2_REMOVED)
+			continue;
+
 		/* add TOR addresses in a second loop */
-		if (normal_addrs[i].type == ADDR_TYPE_TOR_V2 ||
-		    normal_addrs[i].type == ADDR_TYPE_TOR_V3)
+		if (normal_addrs[i].type == ADDR_TYPE_TOR_V3)
 			continue;
 		if (wireaddr_int_equals_wireaddr(addrhint, &normal_addrs[i]))
 			continue;
@@ -1673,8 +1678,7 @@ static void add_gossip_addrs(struct wireaddr_internal **addrs,
 	}
 	/* so connectd prefers direct connections if possible. */
 	for (size_t i = 0; i < tal_count(normal_addrs); i++) {
-		if (normal_addrs[i].type != ADDR_TYPE_TOR_V2 &&
-		    normal_addrs[i].type != ADDR_TYPE_TOR_V3)
+		if (normal_addrs[i].type != ADDR_TYPE_TOR_V3)
 			continue;
 		if (wireaddr_int_equals_wireaddr(addrhint, &normal_addrs[i]))
 			continue;

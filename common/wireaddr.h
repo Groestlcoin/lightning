@@ -50,7 +50,7 @@ struct sockaddr_un;
 enum wire_addr_type {
 	ADDR_TYPE_IPV4 = 1,
 	ADDR_TYPE_IPV6 = 2,
-	ADDR_TYPE_TOR_V2 = 3,
+	ADDR_TYPE_TOR_V2_REMOVED = 3,
 	ADDR_TYPE_TOR_V3 = 4,
 	ADDR_TYPE_WEBSOCKET = 6,
 };
@@ -134,8 +134,8 @@ struct wireaddr_internal {
 			struct wireaddr address;
 			/* Tor port to use */
 			u16 port;
-			/* Blob to use to create tor service */
-			u8 blob[TOR_V3_BLOBLEN + 1];
+			/* Nul-terminated blob to use to create tor service */
+			char blob[TOR_V3_BLOBLEN + 1];
 		} torservice;
 		/* ADDR_INTERNAL_FORPROXY */
 		struct unresolved {
@@ -146,6 +146,9 @@ struct wireaddr_internal {
 		char sockname[sizeof(((struct sockaddr_un *)0)->sun_path)];
 	} u;
 };
+
+bool wireaddr_internal_eq(const struct wireaddr_internal *a,
+			  const struct wireaddr_internal *b);
 bool parse_wireaddr_internal(const char *arg, struct wireaddr_internal *addr,
 			     u16 port, bool wildcard_ok, bool dns_ok,
 			     bool unresolved_ok, bool allow_deprecated,

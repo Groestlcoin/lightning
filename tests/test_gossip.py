@@ -27,7 +27,8 @@ with open('config.vars') as configfile:
 def test_gossip_pruning(node_factory, bitcoind):
     """ Create channel and see it being updated in time before pruning
     """
-    l1, l2, l3 = node_factory.get_nodes(3, opts={'dev-fast-gossip-prune': None})
+    l1, l2, l3 = node_factory.get_nodes(3, opts={'dev-fast-gossip-prune': None,
+                                                 'allow_bad_gossip': True})
 
     l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
     l2.rpc.connect(l3.info['id'], 'localhost', l3.port)
@@ -916,11 +917,12 @@ def test_gossip_addresses(node_factory, bitcoind):
     l1 = node_factory.get_node(options={
         'announce-addr': [
             '[::]:3',
+            '[::]',
             '127.0.0.1:2',
+            '127.0.0.1',
             'vww6ybal4bd7szmgncyruucpgfkqahzddi37ktceo3ah7ngmcopnpyyd.onion',
-            '3fyb44wdhnd2ghhl.onion:1234'
+            '4acth47i6kxnvkewtm6q7ib2s3ufpo5sqbsnzjpbi7utijcltosqemad.onion:1234'
         ],
-        'allow-deprecated-apis': True,
     })
     l2 = node_factory.get_node()
     l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
@@ -933,9 +935,11 @@ def test_gossip_addresses(node_factory, bitcoind):
     nodes = l2.rpc.listnodes(l1.info['id'])['nodes']
     assert len(nodes) == 1 and nodes[0]['addresses'] == [
         {'type': 'ipv4', 'address': '127.0.0.1', 'port': 2},
+        {'type': 'ipv4', 'address': '127.0.0.1', 'port': 9735},
         {'type': 'ipv6', 'address': '::', 'port': 3},
-        {'type': 'torv2', 'address': '3fyb44wdhnd2ghhl.onion', 'port': 1234},
-        {'type': 'torv3', 'address': 'vww6ybal4bd7szmgncyruucpgfkqahzddi37ktceo3ah7ngmcopnpyyd.onion', 'port': 9735}
+        {'type': 'ipv6', 'address': '::', 'port': 9735},
+        {'type': 'torv3', 'address': 'vww6ybal4bd7szmgncyruucpgfkqahzddi37ktceo3ah7ngmcopnpyyd.onion', 'port': 9735},
+        {'type': 'torv3', 'address': '4acth47i6kxnvkewtm6q7ib2s3ufpo5sqbsnzjpbi7utijcltosqemad.onion', 'port': 1234},
     ]
 
 

@@ -31,7 +31,7 @@ bool fromwire_wireaddr(const u8 **cursor, size_t *max, struct wireaddr *addr)
 	case ADDR_TYPE_IPV6:
 		addr->addrlen = 16;
 		break;
-	case ADDR_TYPE_TOR_V2:
+	case ADDR_TYPE_TOR_V2_REMOVED:
 		addr->addrlen = TOR_V2_ADDRLEN;
 		break;
 	case ADDR_TYPE_TOR_V3:
@@ -209,7 +209,7 @@ bool wireaddr_is_wildcard(const struct wireaddr *addr)
 	case ADDR_TYPE_IPV6:
 	case ADDR_TYPE_IPV4:
 		return memeqzero(addr->addr, addr->addrlen);
-	case ADDR_TYPE_TOR_V2:
+	case ADDR_TYPE_TOR_V2_REMOVED:
 	case ADDR_TYPE_TOR_V3:
 	case ADDR_TYPE_WEBSOCKET:
 		return false;
@@ -255,7 +255,7 @@ char *fmt_wireaddr_without_port(const tal_t * ctx, const struct wireaddr *a)
 		if (!inet_ntop(AF_INET6, a->addr, addrstr, INET6_ADDRSTRLEN))
 			return "Unprintable-ipv6-address";
 		return tal_fmt(ctx, "[%s]", addrstr);
-	case ADDR_TYPE_TOR_V2:
+	case ADDR_TYPE_TOR_V2_REMOVED:
 	case ADDR_TYPE_TOR_V3:
 		return tal_fmt(ctx, "%s.onion",
 			       b32_encode(tmpctx, a->addr, a->addrlen));
@@ -345,9 +345,7 @@ wireaddr_from_hostname(const tal_t *ctx,
 		u8 *dec = b32_decode(tmpctx, hostname,
 				     strlen(hostname) - strlen(".onion"));
 		tal_resize(&addrs, 1);
-		if (tal_count(dec) == TOR_V2_ADDRLEN) {
-			addrs[0].type = ADDR_TYPE_TOR_V2;
-		} else if (tal_count(dec) == TOR_V3_ADDRLEN) {
+		if (tal_count(dec) == TOR_V3_ADDRLEN) {
 			addrs[0].type = ADDR_TYPE_TOR_V3;
 		} else {
 			if (err_msg)
@@ -456,6 +454,37 @@ finish:
 	return res;
 }
 
+bool wireaddr_internal_eq(const struct wireaddr_internal *a,
+			  const struct wireaddr_internal *b)
+{
+	if (a->itype != b->itype)
+		return false;
+
+	switch (a->itype) {
+	case ADDR_INTERNAL_SOCKNAME:
+		return streq(a->u.sockname, b->u.sockname);
+	case ADDR_INTERNAL_ALLPROTO:
+		return a->u.port == b->u.port;
+	case ADDR_INTERNAL_STATICTOR:
+		if (!memeq(a->u.torservice.blob, sizeof(a->u.torservice.blob),
+			   b->u.torservice.blob, sizeof(b->u.torservice.blob)))
+			return false;
+		/* fall thru */
+	case ADDR_INTERNAL_AUTOTOR:
+		if (!wireaddr_eq(&a->u.torservice.address,
+				 &b->u.torservice.address))
+			return false;
+		return a->u.torservice.port == b->u.torservice.port;
+	case ADDR_INTERNAL_FORPROXY:
+		if (!streq(a->u.unresolved.name, b->u.unresolved.name))
+			return false;
+		return a->u.unresolved.port == b->u.unresolved.port;
+	case ADDR_INTERNAL_WIREADDR:
+		return wireaddr_eq(&a->u.wireaddr, &b->u.wireaddr);
+	}
+	abort();
+}
+
 bool parse_wireaddr_internal(const char *arg, struct wireaddr_internal *addr,
 			     u16 port, bool wildcard_ok, bool dns_ok,
 			     bool unresolved_ok, bool allow_deprecated,
@@ -491,21 +520,18 @@ bool parse_wireaddr_internal(const char *arg, struct wireaddr_internal *addr,
 		char **parts = tal_strsplit(tmpctx, arg, "/", STR_EMPTY_OK);
 
 		for (size_t i = 1; i < tal_count(parts)-1; i++) {
-			if (tal_strreg(tmpctx, parts[i], "torport")) {
+			if (strstarts(parts[i], "torport=")) {
 				char *endp = NULL;
-				char **parts_2 = tal_strsplit(tmpctx, parts[i], "=", STR_EMPTY_OK);
-				if (tal_count(parts_2) == 3) {
-					addr->u.torservice.port = strtol((const char *)parts_2[1], &endp, 10);
-					if (addr->u.torservice.port <= 0 || *endp != '\0') {
-						if (err_msg)
-							*err_msg = "Bad :torport: number";
-						return false;
-					}
-				} else {
+				addr->u.torservice.port = strtol(parts[i]+strlen("torport="), &endp, 10);
+				if (addr->u.torservice.port <= 0 || *endp != '\0') {
 					if (err_msg)
-						*err_msg = "Bad :torport: format";
+						*err_msg = "Bad :torport: number";
 					return false;
 				}
+			} else {
+				if (err_msg)
+					*err_msg = tal_fmt(tmpctx, "unknown tor arg %s", parts[i]);
+				return false;
 			}
 		}
 
@@ -522,47 +548,38 @@ bool parse_wireaddr_internal(const char *arg, struct wireaddr_internal *addr,
 		bool use_magic_blob = true;
 		addr->itype = ADDR_INTERNAL_STATICTOR;
 		addr->u.torservice.port = DEFAULT_PORT;
-		memset(&(addr->u.torservice.blob[0]), 0, sizeof(addr->u.torservice.blob));
+		memset(addr->u.torservice.blob, 0, sizeof(addr->u.torservice.blob));
 
 		/* Format is separated by slash. */
 		char **parts = tal_strsplit(tmpctx, arg, "/", STR_EMPTY_OK);
 		for (size_t i = 1; i < tal_count(parts)-1; i++) {
-			if (tal_strreg(tmpctx, parts[i], "torport")) {
+			if (strstarts(parts[i], "torport=")) {
 				char *endp = NULL;
-				char **parts_eq = tal_strsplit(tmpctx, parts[i], "=", STR_EMPTY_OK);
-				if (tal_count(parts_eq) == 3) {
-					addr->u.torservice.port = strtol((const char *)parts_eq[1], &endp, 10);
-					if (addr->u.torservice.port <= 0 || *endp != '\0') {
-						if (err_msg)
-							*err_msg = "Bad :torport: number";
-						return false;
-					}
-				} else {
+				addr->u.torservice.port = strtol(parts[i]+strlen("torport="), &endp, 10);
+				if (addr->u.torservice.port <= 0 || *endp != '\0') {
 					if (err_msg)
-							*err_msg = "Bad :torport: format";
+						*err_msg = "Bad :torport: number";
 					return false;
 				}
-			}
-			if (tal_strreg(tmpctx, parts[i], "torblob")) {
-				char **parts_eq = tal_strsplit(tmpctx, parts[i], "=", STR_EMPTY_OK);
-				if (tal_count(parts_eq) == 3) {
-					if (strlen((char *)parts_eq[1]) == 0) {
-						if (err_msg)
-							*err_msg = "Blob too short";
-						return false;
-					}
-				strncpy((char *)&(addr->u.torservice.blob[0]),
-					(const char *)parts_eq[1], TOR_V3_BLOBLEN);
-				use_magic_blob = false;
+			} else if (strstarts(parts[i], "torblob=")) {
+				const char *blobdata = parts[i] + strlen("torblob=");
+				if (strlen(blobdata) > TOR_V3_BLOBLEN) {
+					if (err_msg)
+						*err_msg = "torblob too long";
+					return false;
 				}
+				strcpy(addr->u.torservice.blob, blobdata);
+				use_magic_blob = false;
+			} else {
+				if (err_msg)
+					*err_msg = tal_fmt(tmpctx, "unknown tor arg %s", parts[i]);
+				return false;
 			}
 		}
 
 		if (use_magic_blob) {
 			/* when statictor called just with the service address and or port generate the unique onion */
-			strncpy((char *)&(addr->u.torservice.blob[0]),
-				tal_fmt(tmpctx, STATIC_TOR_MAGIC_STRING),
-				strlen(STATIC_TOR_MAGIC_STRING));
+			strcpy(addr->u.torservice.blob, STATIC_TOR_MAGIC_STRING);
 		}
 
 		service_addr = tal_fmt(tmpctx, "%s", parts[0] + strlen("statictor:"));
@@ -591,9 +608,9 @@ bool parse_wireaddr_internal(const char *arg, struct wireaddr_internal *addr,
 	addr->itype = ADDR_INTERNAL_WIREADDR;
 	if (parse_wireaddr(arg, &addr->u.wireaddr, port,
 			   dns_ok ? NULL : &needed_dns, err_msg)) {
-		if (!allow_deprecated && addr->u.wireaddr.type == ADDR_TYPE_TOR_V2) {
+		if (addr->u.wireaddr.type == ADDR_TYPE_TOR_V2_REMOVED) {
 			if (err_msg)
-				*err_msg = "v2 Tor onion services are deprecated";
+				*err_msg = "v2 Tor onion services not supported";
 			return false;
 		}
 
@@ -695,7 +712,7 @@ struct addrinfo *wireaddr_to_addrinfo(const tal_t *ctx,
 		ai->ai_addrlen = sizeof(*sin6);
 		ai->ai_addr = (struct sockaddr *)sin6;
 		return ai;
-	case ADDR_TYPE_TOR_V2:
+	case ADDR_TYPE_TOR_V2_REMOVED:
 	case ADDR_TYPE_TOR_V3:
 	case ADDR_TYPE_WEBSOCKET:
 		break;
@@ -750,7 +767,7 @@ bool all_tor_addresses(const struct wireaddr_internal *wireaddr)
 			case ADDR_TYPE_IPV4:
 			case ADDR_TYPE_IPV6:
 				return false;
-			case ADDR_TYPE_TOR_V2:
+			case ADDR_TYPE_TOR_V2_REMOVED:
 			case ADDR_TYPE_TOR_V3:
 			case ADDR_TYPE_WEBSOCKET:
 				continue;

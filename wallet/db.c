@@ -881,17 +881,42 @@ static void db_stmt_free(struct db_stmt *stmt)
 	if (!stmt->executed)
 		fatal("Freeing an un-executed statement from %s: %s",
 		      stmt->location, stmt->query->query);
+#if DEVELOPER
+	/* If they never got a db_step, we don't track */
+	if (stmt->cols_used) {
+		for (size_t i = 0; i < stmt->query->num_colnames; i++) {
+			if (!stmt->query->colnames[i].sqlname)
+				continue;
+			if (!strset_get(stmt->cols_used,
+					stmt->query->colnames[i].sqlname)) {
+				log_broken(stmt->db->log,
+					   "Never accessed column %s in query %s",
+					   stmt->query->colnames[i].sqlname,
+					   stmt->query->query);
+			}
+		}
+		strset_clear(stmt->cols_used);
+	}
+#endif
 	if (stmt->inner_stmt)
 		stmt->db->config->stmt_free_fn(stmt);
 	assert(stmt->inner_stmt == NULL);
+}
+
+/* Matches the hash function used in devtools/sql-rewrite.py */
+static u32 hash_djb2(const char *str)
+{
+	u32 hash = 5381;
+	for (size_t i = 0; str[i]; i++)
+		hash = ((hash << 5) + hash) ^ str[i];
+	return hash;
 }
 
 struct db_stmt *db_prepare_v2_(const char *location, struct db *db,
 				     const char *query_id)
 {
 	struct db_stmt *stmt = tal(db, struct db_stmt);
-	size_t num_slots;
-	stmt->query = NULL;
+	size_t num_slots, pos;
 
 	/* Normalize query_id paths, because unit tests are compiled with this
 	 * prefix. */
@@ -903,14 +928,16 @@ struct db_stmt *db_prepare_v2_(const char *location, struct db *db,
 			 "transaction: %s", location);
 
 	/* Look up the query by its ID */
-	for (size_t i = 0; i < db->config->num_queries; i++) {
-		if (streq(query_id, db->config->queries[i].name)) {
-			stmt->query = &db->config->queries[i];
+	pos = hash_djb2(query_id) % db->config->query_table_size;
+	for (;;) {
+		if (!db->config->query_table[pos].name)
+			fatal("Could not resolve query %s", query_id);
+		if (streq(query_id, db->config->query_table[pos].name)) {
+			stmt->query = &db->config->query_table[pos];
 			break;
 		}
+		pos = (pos + 1) % db->config->query_table_size;
 	}
-	if (stmt->query == NULL)
-		fatal("Could not resolve query %s", query_id);
 
 	num_slots = stmt->query->placeholders;
 	/* Allocate the slots for placeholders/bindings, zeroed next since
@@ -929,6 +956,10 @@ struct db_stmt *db_prepare_v2_(const char *location, struct db *db,
 
 	list_add(&db->pending_statements, &stmt->list);
 
+#if DEVELOPER
+	stmt->cols_used = NULL;
+#endif /* DEVELOPER */
+
 	return stmt;
 }
 
@@ -937,66 +968,19 @@ struct db_stmt *db_prepare_v2_(const char *location, struct db *db,
 
 bool db_step(struct db_stmt *stmt)
 {
+	bool ret;
+
 	assert(stmt->executed);
-	return stmt->db->config->step_fn(stmt);
-}
+	ret = stmt->db->config->step_fn(stmt);
 
-u64 db_column_u64(struct db_stmt *stmt, int col)
-{
-	if (db_column_is_null(stmt, col)) {
-		log_broken(stmt->db->log, "Accessing a null column %d in query %s", col, stmt->query->query);
-		return 0;
+#if DEVELOPER
+	/* We only track cols_used if we return a result! */
+	if (ret && !stmt->cols_used) {
+		stmt->cols_used = tal(stmt, struct strset);
+		strset_init(stmt->cols_used);
 	}
-	return stmt->db->config->column_u64_fn(stmt, col);
-}
-
-int db_column_int_or_default(struct db_stmt *stmt, int col, int def)
-{
-	if (db_column_is_null(stmt, col))
-		return def;
-	else
-		return db_column_int(stmt, col);
-}
-
-int db_column_int(struct db_stmt *stmt, int col)
-{
-	if (db_column_is_null(stmt, col)) {
-		log_broken(stmt->db->log, "Accessing a null column %d in query %s", col, stmt->query->query);
-		return 0;
-	}
-	return stmt->db->config->column_int_fn(stmt, col);
-}
-
-size_t db_column_bytes(struct db_stmt *stmt, int col)
-{
-	if (db_column_is_null(stmt, col)) {
-		log_broken(stmt->db->log, "Accessing a null column %d in query %s", col, stmt->query->query);
-		return 0;
-	}
-	return stmt->db->config->column_bytes_fn(stmt, col);
-}
-
-int db_column_is_null(struct db_stmt *stmt, int col)
-{
-	return stmt->db->config->column_is_null_fn(stmt, col);
-}
-
-const void *db_column_blob(struct db_stmt *stmt, int col)
-{
-	if (db_column_is_null(stmt, col)) {
-		log_broken(stmt->db->log, "Accessing a null column %d in query %s", col, stmt->query->query);
-		return NULL;
-	}
-	return stmt->db->config->column_blob_fn(stmt, col);
-}
-
-const unsigned char *db_column_text(struct db_stmt *stmt, int col)
-{
-	if (db_column_is_null(stmt, col)) {
-		log_broken(stmt->db->log, "Accessing a null column %d in query %s", col, stmt->query->query);
-		return NULL;
-	}
-	return stmt->db->config->column_text_fn(stmt, col);
+#endif
+	return ret;
 }
 
 size_t db_count_changes(struct db_stmt *stmt)
@@ -1201,7 +1185,7 @@ static int db_get_version(struct db *db)
 	}
 
 	if (db_step(stmt))
-		res = db_column_int(stmt, 0);
+		res = db_col_int(stmt, "version");
 
 	tal_free(stmt);
 	return res;
@@ -1271,7 +1255,7 @@ u32 db_data_version_get(struct db *db)
 	stmt = db_prepare_v2(db, SQL("SELECT intval FROM vars WHERE name = 'data_version'"));
 	db_query_prepared(stmt);
 	db_step(stmt);
-	version = db_column_int(stmt, 0);
+	version = db_col_int(stmt, "intval");
 	tal_free(stmt);
 	return version;
 }
@@ -1309,7 +1293,7 @@ s64 db_get_intvar(struct db *db, char *varname, s64 defval)
 		goto done;
 
 	if (db_step(stmt))
-		res = db_column_int(stmt, 0);
+		res = db_col_int(stmt, "intval");
 
 done:
 	tal_free(stmt);
@@ -1399,23 +1383,23 @@ void fillin_missing_scriptpubkeys(struct lightningd *ld, struct db *db,
 		struct pubkey key;
 		struct db_stmt *update_stmt;
 
-		type = db_column_int(stmt, 0);
-		keyindex = db_column_int(stmt, 1);
-		db_column_txid(stmt, 2, &txid);
-		outnum = db_column_int(stmt, 3);
+		type = db_col_int(stmt, "type");
+		keyindex = db_col_int(stmt, "keyindex");
+		db_col_txid(stmt, "prev_out_tx", &txid);
+		outnum = db_col_int(stmt, "prev_out_index");
 
 		/* This indiciates whether or not we have 'close_info' */
-		if (!db_column_is_null(stmt, 4)) {
+		if (!db_col_is_null(stmt, "channel_id")) {
 			struct pubkey *commitment_point;
 			struct node_id peer_id;
 			u64 channel_id;
 			u8 *msg;
 
-			channel_id = db_column_u64(stmt, 4);
-			db_column_node_id(stmt, 5, &peer_id);
-			if (!db_column_is_null(stmt, 6)) {
+			channel_id = db_col_u64(stmt, "channel_id");
+			db_col_node_id(stmt, "peer_id", &peer_id);
+			if (!db_col_is_null(stmt, "commitment_point")) {
 				commitment_point = tal(stmt, struct pubkey);
-				db_column_pubkey(stmt, 6, commitment_point);
+				db_col_pubkey(stmt, "commitment_point", commitment_point);
 			} else
 				commitment_point = NULL;
 
@@ -1432,6 +1416,8 @@ void fillin_missing_scriptpubkeys(struct lightningd *ld, struct db *db,
 				fatal("HSM gave bad hsm_get_output_scriptpubkey_reply %s",
 				      tal_hex(msg, msg));
 		} else {
+			db_col_ignore(stmt, "peer_id");
+			db_col_ignore(stmt, "commitment_point");
 			/* Build from bip32_base */
 			bip32_pubkey(mc->bip32_base, &key, keyindex);
 			if (type == p2sh_wpkh) {
@@ -1479,9 +1465,9 @@ static void fillin_missing_channel_id(struct lightningd *ld, struct db *db,
 		struct bitcoin_outpoint funding;
 		struct channel_id cid;
 
-		id = db_column_u64(stmt, 0);
-		db_column_txid(stmt, 1, &funding.txid);
-		funding.n = db_column_int(stmt, 2);
+		id = db_col_u64(stmt, "id");
+		db_col_txid(stmt, "funding_tx_id", &funding.txid);
+		funding.n = db_col_int(stmt, "funding_tx_outnum");
 		derive_channel_id(&cid, &funding);
 
 		update_stmt = db_prepare_v2(db, SQL("UPDATE channels"
@@ -1522,8 +1508,8 @@ static void fillin_missing_local_basepoints(struct lightningd *ld,
 		struct basepoints base;
 		struct pubkey funding_pubkey;
 
-		dbid = db_column_u64(stmt, 0);
-		db_column_node_id(stmt, 1, &peer_id);
+		dbid = db_col_u64(stmt, "channels.id");
+		db_col_node_id(stmt, "peers.node_id", &peer_id);
 
 		if (!wire_sync_write(mc->hsm_fd,
 				     towire_hsmd_get_channel_basepoints(
@@ -1619,19 +1605,26 @@ migrate_inflight_last_tx_to_psbt(struct lightningd *ld, struct db *db,
 		u64 cdb_id;
 		u8 *funding_wscript;
 
-		cdb_id = db_column_u64(stmt, 0);
-		last_tx = db_column_tx(stmt, stmt, 3);
+		cdb_id = db_col_u64(stmt, "c.id");
+		last_tx = db_col_tx(stmt, stmt, "inflight.last_tx");
 		assert(last_tx != NULL);
+
+		/* FIXME: This is only needed inside the select? */
+		db_col_ignore(stmt, "inflight.last_tx");
 
 		/* If we've forgotten about the peer_id
 		 * because we closed / forgot the channel,
 		 * we can skip this. */
-		if (db_column_is_null(stmt, 1))
+		if (db_col_is_null(stmt, "p.node_id")) {
+			db_col_ignore(stmt, "inflight.last_sig");
+			db_col_ignore(stmt, "inflight.funding_satoshi");
+			db_col_ignore(stmt, "inflight.funding_tx_id");
 			continue;
-		db_column_node_id(stmt, 1, &peer_id);
-		db_column_amount_sat(stmt, 5, &funding_sat);
-		db_column_pubkey(stmt, 2, &remote_funding_pubkey);
-		db_column_txid(stmt, 6, &funding_txid);
+		}
+		db_col_node_id(stmt, "p.node_id", &peer_id);
+		db_col_amount_sat(stmt, "inflight.funding_satoshi", &funding_sat);
+		db_col_pubkey(stmt, "c.fundingkey_remote", &remote_funding_pubkey);
+		db_col_txid(stmt, "inflight.funding_tx_id", &funding_txid);
 
 		get_channel_basepoints(ld, &peer_id, cdb_id,
 				       &local_basepoints, &local_funding_pubkey);
@@ -1645,7 +1638,7 @@ migrate_inflight_last_tx_to_psbt(struct lightningd *ld, struct db *db,
 					funding_sat);
 		psbt_input_set_witscript(last_tx->psbt, 0, funding_wscript);
 
-		if (!db_column_signature(stmt, 4, &last_sig.s))
+		if (!db_col_signature(stmt, "inflight.last_sig", &last_sig.s))
 			abort();
 
 		last_sig.sighash_type = SIGHASH_ALL;
@@ -1704,18 +1697,23 @@ void migrate_last_tx_to_psbt(struct lightningd *ld, struct db *db,
 		u64 cdb_id;
 		u8 *funding_wscript;
 
-		cdb_id = db_column_u64(stmt, 0);
-		last_tx = db_column_tx(stmt, stmt, 2);
+		cdb_id = db_col_u64(stmt, "c.id");
+		last_tx = db_col_tx(stmt, stmt, "c.last_tx");
 		assert(last_tx != NULL);
 
 		/* If we've forgotten about the peer_id
 		 * because we closed / forgot the channel,
 		 * we can skip this. */
-		if (db_column_is_null(stmt, 1))
+		if (db_col_is_null(stmt, "p.node_id")) {
+			db_col_ignore(stmt, "c.funding_satoshi");
+			db_col_ignore(stmt, "c.fundingkey_remote");
+			db_col_ignore(stmt, "c.last_sig");
 			continue;
-		db_column_node_id(stmt, 1, &peer_id);
-		db_column_amount_sat(stmt, 3, &funding_sat);
-		db_column_pubkey(stmt, 4, &remote_funding_pubkey);
+		}
+
+		db_col_node_id(stmt, "p.node_id", &peer_id);
+		db_col_amount_sat(stmt, "c.funding_satoshi", &funding_sat);
+		db_col_pubkey(stmt, "c.fundingkey_remote", &remote_funding_pubkey);
 
 		get_channel_basepoints(ld, &peer_id, cdb_id,
 				       &local_basepoints, &local_funding_pubkey);
@@ -1737,7 +1735,7 @@ void migrate_last_tx_to_psbt(struct lightningd *ld, struct db *db,
 		}
 
 
-		if (!db_column_signature(stmt, 5, &last_sig.s))
+		if (!db_col_signature(stmt, "c.last_sig", &last_sig.s))
 			abort();
 
 		last_sig.sighash_type = SIGHASH_ALL;
@@ -1950,9 +1948,111 @@ void db_bind_talarr(struct db_stmt *stmt, int col, const u8 *arr)
 		db_bind_blob(stmt, col, arr, tal_bytelen(arr));
 }
 
-void db_column_preimage(struct db_stmt *stmt, int col,
+/* Local helpers once you have column number */
+static bool db_column_is_null(struct db_stmt *stmt, int col)
+{
+	return stmt->db->config->column_is_null_fn(stmt, col);
+}
+
+/* Returns true (and warns) if it's nul */
+static bool db_column_null_warn(struct db_stmt *stmt, const char *colname,
+				int col)
+{
+	if (!db_column_is_null(stmt, col))
+		return false;
+
+	log_broken(stmt->db->log, "Accessing a null column %s/%i in query %s",
+		   colname, col,
+		   stmt->query->query);
+	return true;
+}
+
+static size_t db_column_bytes(struct db_stmt *stmt, int col)
+{
+	if (db_column_is_null(stmt, col))
+		return 0;
+	return stmt->db->config->column_bytes_fn(stmt, col);
+}
+
+static const void *db_column_blob(struct db_stmt *stmt, int col)
+{
+	if (db_column_is_null(stmt, col))
+		return NULL;
+	return stmt->db->config->column_blob_fn(stmt, col);
+}
+
+
+u64 db_col_u64(struct db_stmt *stmt, const char *colname)
+{
+	size_t col = db_query_colnum(stmt, colname);
+
+	if (db_column_null_warn(stmt, colname, col))
+		return 0;
+
+	return stmt->db->config->column_u64_fn(stmt, col);
+}
+
+int db_col_int_or_default(struct db_stmt *stmt, const char *colname, int def)
+{
+	size_t col = db_query_colnum(stmt, colname);
+
+	if (db_column_is_null(stmt, col))
+		return def;
+	else
+		return stmt->db->config->column_int_fn(stmt, col);
+}
+
+int db_col_int(struct db_stmt *stmt, const char *colname)
+{
+	size_t col = db_query_colnum(stmt, colname);
+
+	if (db_column_null_warn(stmt, colname, col))
+		return 0;
+
+	return stmt->db->config->column_int_fn(stmt, col);
+}
+
+size_t db_col_bytes(struct db_stmt *stmt, const char *colname)
+{
+	size_t col = db_query_colnum(stmt, colname);
+
+	if (db_column_null_warn(stmt, colname, col))
+		return 0;
+
+	return stmt->db->config->column_bytes_fn(stmt, col);
+}
+
+int db_col_is_null(struct db_stmt *stmt, const char *colname)
+{
+	return db_column_is_null(stmt, db_query_colnum(stmt, colname));
+}
+
+const void *db_col_blob(struct db_stmt *stmt, const char *colname)
+{
+	size_t col = db_query_colnum(stmt, colname);
+
+	if (db_column_null_warn(stmt, colname, col))
+		return NULL;
+
+	return stmt->db->config->column_blob_fn(stmt, col);
+}
+
+char *db_col_strdup(const tal_t *ctx,
+		    struct db_stmt *stmt,
+		    const char *colname)
+{
+	size_t col = db_query_colnum(stmt, colname);
+
+	if (db_column_null_warn(stmt, colname, col))
+		return NULL;
+
+	return tal_strdup(ctx, (char *)stmt->db->config->column_text_fn(stmt, col));
+}
+
+void db_col_preimage(struct db_stmt *stmt, const char *colname,
 			struct preimage *preimage)
 {
+	size_t col = db_query_colnum(stmt, colname);
 	const u8 *raw;
 	size_t size = sizeof(struct preimage);
 	assert(db_column_bytes(stmt, col) == size);
@@ -1960,56 +2060,70 @@ void db_column_preimage(struct db_stmt *stmt, int col,
 	memcpy(preimage, raw, size);
 }
 
-void db_column_channel_id(struct db_stmt *stmt, int col, struct channel_id *dest)
+void db_col_channel_id(struct db_stmt *stmt, const char *colname, struct channel_id *dest)
 {
+	size_t col = db_query_colnum(stmt, colname);
+
 	assert(db_column_bytes(stmt, col) == sizeof(dest->id));
 	memcpy(dest->id, db_column_blob(stmt, col), sizeof(dest->id));
 }
 
-void db_column_node_id(struct db_stmt *stmt, int col, struct node_id *dest)
+void db_col_node_id(struct db_stmt *stmt, const char *colname, struct node_id *dest)
 {
+	size_t col = db_query_colnum(stmt, colname);
+
 	assert(db_column_bytes(stmt, col) == sizeof(dest->k));
 	memcpy(dest->k, db_column_blob(stmt, col), sizeof(dest->k));
 }
 
-struct node_id *db_column_node_id_arr(const tal_t *ctx, struct db_stmt *stmt,
-				      int col)
+struct node_id *db_col_node_id_arr(const tal_t *ctx, struct db_stmt *stmt,
+				      const char *colname)
 {
+	size_t col = db_query_colnum(stmt, colname);
 	struct node_id *ret;
 	size_t n = db_column_bytes(stmt, col) / sizeof(ret->k);
 	const u8 *arr = db_column_blob(stmt, col);
 	assert(n * sizeof(ret->k) == (size_t)db_column_bytes(stmt, col));
 	ret = tal_arr(ctx, struct node_id, n);
 
+	db_column_null_warn(stmt, colname, col);
 	for (size_t i = 0; i < n; i++)
 		memcpy(ret[i].k, arr + i * sizeof(ret[i].k), sizeof(ret[i].k));
 
 	return ret;
 }
 
-void db_column_pubkey(struct db_stmt *stmt, int pos, struct pubkey *dest)
+void db_col_pubkey(struct db_stmt *stmt,
+		   const char *colname,
+		   struct pubkey *dest)
 {
+	size_t col = db_query_colnum(stmt, colname);
 	bool ok;
-	assert(db_column_bytes(stmt, pos) == PUBKEY_CMPR_LEN);
-	ok = pubkey_from_der(db_column_blob(stmt, pos), PUBKEY_CMPR_LEN, dest);
+	assert(db_column_bytes(stmt, col) == PUBKEY_CMPR_LEN);
+	ok = pubkey_from_der(db_column_blob(stmt, col), PUBKEY_CMPR_LEN, dest);
 	assert(ok);
 }
 
-bool db_column_short_channel_id(struct db_stmt *stmt, int col,
-				struct short_channel_id *dest)
+/* Yes, we put this in as a string.  Past mistakes; do not use! */
+bool db_col_short_channel_id_str(struct db_stmt *stmt, const char *colname,
+				 struct short_channel_id *dest)
 {
+	size_t col = db_query_colnum(stmt, colname);
 	const char *source = db_column_blob(stmt, col);
 	size_t sourcelen = db_column_bytes(stmt, col);
+	db_column_null_warn(stmt, colname, col);
 	return short_channel_id_from_str(source, sourcelen, dest);
 }
 
 struct short_channel_id *
-db_column_short_channel_id_arr(const tal_t *ctx, struct db_stmt *stmt, int col)
+db_col_short_channel_id_arr(const tal_t *ctx, struct db_stmt *stmt, const char *colname)
 {
+	size_t col = db_query_colnum(stmt, colname);
 	const u8 *ser;
 	size_t len;
 	struct short_channel_id *ret;
 
+	db_column_null_warn(stmt, colname, col);
 	ser = db_column_blob(stmt, col);
 	len = db_column_bytes(stmt, col);
 	ret = tal_arr(ctx, struct short_channel_id, 0);
@@ -2023,49 +2137,57 @@ db_column_short_channel_id_arr(const tal_t *ctx, struct db_stmt *stmt, int col)
 	return ret;
 }
 
-bool db_column_signature(struct db_stmt *stmt, int col,
+bool db_col_signature(struct db_stmt *stmt, const char *colname,
 			 secp256k1_ecdsa_signature *sig)
 {
+	size_t col = db_query_colnum(stmt, colname);
 	assert(db_column_bytes(stmt, col) == 64);
 	return secp256k1_ecdsa_signature_parse_compact(
 		   secp256k1_ctx, sig, db_column_blob(stmt, col)) == 1;
 }
 
-struct timeabs db_column_timeabs(struct db_stmt *stmt, int col)
+struct timeabs db_col_timeabs(struct db_stmt *stmt, const char *colname)
 {
 	struct timeabs t;
-	u64 timestamp = db_column_u64(stmt, col);
+	u64 timestamp = db_col_u64(stmt, colname);
 	t.ts.tv_sec = timestamp / NSEC_IN_SEC;
 	t.ts.tv_nsec = timestamp % NSEC_IN_SEC;
 	return t;
 
 }
 
-struct bitcoin_tx *db_column_tx(const tal_t *ctx, struct db_stmt *stmt, int col)
+struct bitcoin_tx *db_col_tx(const tal_t *ctx, struct db_stmt *stmt, const char *colname)
 {
+	size_t col = db_query_colnum(stmt, colname);
 	const u8 *src = db_column_blob(stmt, col);
 	size_t len = db_column_bytes(stmt, col);
+
+	db_column_null_warn(stmt, colname, col);
 	return pull_bitcoin_tx(ctx, &src, &len);
 }
 
-struct wally_psbt *db_column_psbt(const tal_t *ctx, struct db_stmt *stmt, int col)
+struct wally_psbt *db_col_psbt(const tal_t *ctx, struct db_stmt *stmt, const char *colname)
 {
+	size_t col = db_query_colnum(stmt, colname);
 	const u8 *src = db_column_blob(stmt, col);
 	size_t len = db_column_bytes(stmt, col);
+
+	db_column_null_warn(stmt, colname, col);
 	return psbt_from_bytes(ctx, src, len);
 }
 
-struct bitcoin_tx *db_column_psbt_to_tx(const tal_t *ctx, struct db_stmt *stmt, int col)
+struct bitcoin_tx *db_col_psbt_to_tx(const tal_t *ctx, struct db_stmt *stmt, const char *colname)
 {
-	struct wally_psbt *psbt = db_column_psbt(ctx, stmt, col);
+	struct wally_psbt *psbt = db_col_psbt(ctx, stmt, colname);
 	if (!psbt)
 		return NULL;
 	return bitcoin_tx_with_psbt(ctx, psbt);
 }
 
-void *db_column_arr_(const tal_t *ctx, struct db_stmt *stmt, int col,
-			  size_t bytes, const char *label, const char *caller)
+void *db_col_arr_(const tal_t *ctx, struct db_stmt *stmt, const char *colname,
+		  size_t bytes, const char *label, const char *caller)
 {
+	size_t col = db_query_colnum(stmt, colname);
 	size_t sourcelen;
 	void *p;
 
@@ -2075,44 +2197,50 @@ void *db_column_arr_(const tal_t *ctx, struct db_stmt *stmt, int col,
 	sourcelen = db_column_bytes(stmt, col);
 
 	if (sourcelen % bytes != 0)
-		db_fatal("%s: column size %zu not a multiple of %s (%zu)",
-			 caller, sourcelen, label, bytes);
+		db_fatal("%s: %s/%zu column size for %zu not a multiple of %s (%zu)",
+			 caller, colname, col, sourcelen, label, bytes);
 
 	p = tal_arr_label(ctx, char, sourcelen, label);
 	memcpy(p, db_column_blob(stmt, col), sourcelen);
 	return p;
 }
 
-void db_column_amount_msat_or_default(struct db_stmt *stmt, int col,
-				      struct amount_msat *msat,
-				      struct amount_msat def)
+void db_col_amount_msat_or_default(struct db_stmt *stmt,
+				   const char *colname,
+				   struct amount_msat *msat,
+				   struct amount_msat def)
 {
+	size_t col = db_query_colnum(stmt, colname);
+
 	if (db_column_is_null(stmt, col))
 		*msat = def;
 	else
-		msat->millisatoshis = db_column_u64(stmt, col); /* Raw: low level function */
+		msat->millisatoshis = db_col_u64(stmt, colname); /* Raw: low level function */
 }
 
-void db_column_amount_msat(struct db_stmt *stmt, int col,
-			   struct amount_msat *msat)
+void db_col_amount_msat(struct db_stmt *stmt, const char *colname,
+			struct amount_msat *msat)
 {
-	msat->millisatoshis = db_column_u64(stmt, col); /* Raw: low level function */
+	msat->millisatoshis = db_col_u64(stmt, colname); /* Raw: low level function */
 }
 
-void db_column_amount_sat(struct db_stmt *stmt, int col, struct amount_sat *sat)
+void db_col_amount_sat(struct db_stmt *stmt, const char *colname, struct amount_sat *sat)
 {
-	sat->satoshis = db_column_u64(stmt, col); /* Raw: low level function */
+	sat->satoshis = db_col_u64(stmt, colname); /* Raw: low level function */
 }
 
-struct json_escape *db_column_json_escape(const tal_t *ctx,
-					  struct db_stmt *stmt, int col)
+struct json_escape *db_col_json_escape(const tal_t *ctx,
+				       struct db_stmt *stmt, const char *colname)
 {
+	size_t col = db_query_colnum(stmt, colname);
+
 	return json_escape_string_(ctx, db_column_blob(stmt, col),
 				   db_column_bytes(stmt, col));
 }
 
-void db_column_sha256(struct db_stmt *stmt, int col, struct sha256 *sha)
+void db_col_sha256(struct db_stmt *stmt, const char *colname, struct sha256 *sha)
 {
+	size_t col = db_query_colnum(stmt, colname);
 	const u8 *raw;
 	size_t size = sizeof(struct sha256);
 	assert(db_column_bytes(stmt, col) == size);
@@ -2120,9 +2248,10 @@ void db_column_sha256(struct db_stmt *stmt, int col, struct sha256 *sha)
 	memcpy(sha, raw, size);
 }
 
-void db_column_sha256d(struct db_stmt *stmt, int col,
+void db_col_sha256d(struct db_stmt *stmt, const char *colname,
 		       struct sha256_double *shad)
 {
+	size_t col = db_query_colnum(stmt, colname);
 	const u8 *raw;
 	size_t size = sizeof(struct sha256_double);
 	assert(db_column_bytes(stmt, col) == size);
@@ -2130,42 +2259,33 @@ void db_column_sha256d(struct db_stmt *stmt, int col,
 	memcpy(shad, raw, size);
 }
 
-void db_column_secret(struct db_stmt *stmt, int col, struct secret *s)
+void db_col_secret(struct db_stmt *stmt, const char *colname, struct secret *s)
 {
+	size_t col = db_query_colnum(stmt, colname);
 	const u8 *raw;
 	assert(db_column_bytes(stmt, col) == sizeof(struct secret));
 	raw = db_column_blob(stmt, col);
 	memcpy(s, raw, sizeof(struct secret));
 }
 
-struct secret *db_column_secret_arr(const tal_t *ctx, struct db_stmt *stmt,
-				    int col)
+struct secret *db_col_secret_arr(const tal_t *ctx,
+				 struct db_stmt *stmt,
+				 const char *colname)
 {
-	return db_column_arr(ctx, stmt, col, struct secret);
+	return db_col_arr(ctx, stmt, colname, struct secret);
 }
 
-void db_column_txid(struct db_stmt *stmt, int pos, struct bitcoin_txid *t)
+void db_col_txid(struct db_stmt *stmt, const char *colname, struct bitcoin_txid *t)
 {
-	db_column_sha256d(stmt, pos, &t->shad);
+	db_col_sha256d(stmt, colname, &t->shad);
 }
 
-struct onionreply *db_column_onionreply(const tal_t *ctx,
-					struct db_stmt *stmt, int col)
+struct onionreply *db_col_onionreply(const tal_t *ctx,
+					struct db_stmt *stmt, const char *colname)
 {
 	struct onionreply *r = tal(ctx, struct onionreply);
-	r->contents = tal_dup_arr(r, u8,
-				  db_column_blob(stmt, col),
-				  db_column_bytes(stmt, col), 0);
+	r->contents = db_col_arr(ctx, stmt, colname, u8);
 	return r;
-}
-
-u8 *db_column_talarr(const tal_t *ctx, struct db_stmt *stmt, int col)
-{
-	if (db_column_is_null(stmt, col))
-		return NULL;
-	return tal_dup_arr(ctx, u8,
-			   db_column_blob(stmt, col),
-			   db_column_bytes(stmt, col), 0);
 }
 
 bool db_exec_prepared_v2(struct db_stmt *stmt TAKES)
@@ -2223,4 +2343,32 @@ void db_changes_add(struct db_stmt *stmt, const char * expanded)
 const char **db_changes(struct db *db)
 {
 	return db->changes;
+}
+
+size_t db_query_colnum(const struct db_stmt *stmt,
+		       const char *colname)
+{
+	u32 col;
+
+	assert(stmt->query->colnames != NULL);
+
+	col = hash_djb2(colname) % stmt->query->num_colnames;
+	/* Will crash on NULL, which is the Right Thing */
+	while (!streq(stmt->query->colnames[col].sqlname,
+		      colname)) {
+		col = (col + 1) % stmt->query->num_colnames;
+	}
+
+#if DEVELOPER
+	strset_add(stmt->cols_used, colname);
+#endif
+
+	return stmt->query->colnames[col].val;
+}
+
+void db_col_ignore(struct db_stmt *stmt, const char *colname)
+{
+#if DEVELOPER
+	db_query_colnum(stmt, colname);
+#endif
 }
