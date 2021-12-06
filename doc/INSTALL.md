@@ -59,7 +59,7 @@ Clone lightning:
 For development or running tests, get additional dependencies:
 
     sudo apt-get install -y valgrind libpq-dev shellcheck cppcheck \
-      libsecp256k1-dev
+      libsecp256k1-dev jq
     pip3 install --upgrade pip
     pip3 install --user -r requirements.txt
 

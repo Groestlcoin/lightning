@@ -615,7 +615,7 @@ class LightningRpc(UnixDomainSocketRpc):
 
     def dev_pay(self, bolt11, msatoshi=None, label=None, riskfactor=None,
                 maxfeepercent=None, retry_for=None,
-                maxdelay=None, exemptfee=None, use_shadow=True):
+                maxdelay=None, exemptfee=None, use_shadow=True, exclude=[]):
         """
         A developer version of `pay`, with the possibility to deactivate
         shadow routing (used for testing).
@@ -630,6 +630,7 @@ class LightningRpc(UnixDomainSocketRpc):
             "maxdelay": maxdelay,
             "exemptfee": exemptfee,
             "use_shadow": use_shadow,
+            "exclude": exclude,
         }
         return self.call("pay", payload)
 
@@ -988,7 +989,7 @@ class LightningRpc(UnixDomainSocketRpc):
 
     def pay(self, bolt11, msatoshi=None, label=None, riskfactor=None,
             maxfeepercent=None, retry_for=None,
-            maxdelay=None, exemptfee=None):
+            maxdelay=None, exemptfee=None, exclude=[]):
         """
         Send payment specified by {bolt11} with {msatoshi}
         (ignored if {bolt11} has an amount), optional {label}
@@ -1003,6 +1004,7 @@ class LightningRpc(UnixDomainSocketRpc):
             "retry_for": retry_for,
             "maxdelay": maxdelay,
             "exemptfee": exemptfee,
+            "exclude": exclude,
         }
         return self.call("pay", payload)
 

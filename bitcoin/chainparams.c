@@ -1,4 +1,5 @@
-#include "chainparams.h"
+#include "config.h"
+#include <bitcoin/chainparams.h>
 #include <ccan/array_size/array_size.h>
 #include <ccan/tal/str/str.h>
 #include <common/utils.h>
@@ -47,10 +48,10 @@ const struct chainparams networks[] = {
      .bip173_name = "grsrt",
      .bip70_name = "regtest",
      .genesis_blockhash = {{{.u.u8 = {0x36, 0xcd, 0xf2, 0xdc, 0xb7, 0x55, 0x62,
-                                      0x87, 0x28, 0x2a, 0x05, 0xc0, 0x64, 0x01,
-                                      0x23, 0x23, 0xba, 0xe6, 0x63, 0xc1, 0x6e,
-                                      0xd3, 0xcd, 0x98, 0x98, 0xfc, 0x50, 0xbb,
-                                      0xff, 0x00, 0x00, 0x00}}}},
+              0x87, 0x28, 0x2a, 0x05, 0xc0, 0x64, 0x01,
+              0x23, 0x23, 0xba, 0xe6, 0x63, 0xc1, 0x6e,
+              0xd3, 0xcd, 0x98, 0x98, 0xfc, 0x50, 0xbb,
+              0xff, 0x00, 0x00, 0x00}}}},
      .rpc_port = 18443,
      .cli = "groestlcoin-cli",
      .cli_args = "-regtest",
@@ -117,14 +118,6 @@ const struct chainparams *chainparams_for_network(const char *network_name)
 		}
 	}
 	return NULL;
-}
-
-const struct chainparams **chainparams_for_networks(const tal_t *ctx)
-{
-	const struct chainparams **params = tal_arr(ctx, const struct chainparams*, 0);
-	for (size_t i = 0; i < ARRAY_SIZE(networks); i++)
-		tal_arr_expand(&params, &networks[i]);
-	return params;
 }
 
 const struct chainparams *chainparams_by_chainhash(const struct bitcoin_blkid *chain_hash)

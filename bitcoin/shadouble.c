@@ -1,3 +1,4 @@
+#include "config.h"
 #include <bitcoin/shadouble.h>
 #include <bitcoin/groestl.h>
 #include <ccan/mem/mem.h>

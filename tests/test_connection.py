@@ -3550,6 +3550,9 @@ def test_upgrade_statickey_onchaind(node_factory, executor, bitcoind):
     l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
     l1.daemon.wait_for_log('option_static_remotekey enabled at 1/1')
 
+    # Make sure l2 gets REVOKE_AND_ACK from previous.
+    l2.daemon.wait_for_log('peer_out WIRE_REVOKE_AND_ACK')
+
     # Pre-statickey penalty works.
     bitcoind.rpc.sendrawtransaction(tx)
     bitcoind.generate_block(1)
@@ -3756,8 +3759,13 @@ def test_old_feerate(node_factory):
 @pytest.mark.developer("needs --dev-allow-localhost")
 def test_websocket(node_factory):
     ws_port = reserve()
+    port1, port2 = reserve(), reserve()
+    # We need a wildcard to show the websocket bug, but we need a real
+    # address to give us something to announce.
     l1, l2 = node_factory.line_graph(2,
                                      opts=[{'experimental-websocket-port': ws_port,
+                                            'addr': [':' + str(port1),
+                                                     '127.0.0.1: ' + str(port2)],
                                             'dev-allow-localhost': None},
                                            {'dev-allow-localhost': None}],
                                      wait_for_announce=True)
@@ -3811,7 +3819,7 @@ def test_websocket(node_factory):
 
     # Check node_announcement has websocket
     assert (only_one(l2.rpc.listnodes(l1.info['id'])['nodes'])['addresses']
-            == [{'type': 'ipv4', 'address': '127.0.0.1', 'port': l1.port}, {'type': 'websocket', 'port': ws_port}])
+            == [{'type': 'ipv4', 'address': '127.0.0.1', 'port': port2}, {'type': 'websocket', 'port': ws_port}])
 
 
 @pytest.mark.developer("dev-disconnect required")

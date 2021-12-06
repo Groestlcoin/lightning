@@ -3,18 +3,12 @@
 // Copyright (c) 2009-2012 The Bitcoin Developers
 // Distributed under the MIT/X11 software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
-/*
- * Copyright 2012-2014 Luke Dashjr
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the standard MIT license.  See COPYING for more details.
- */
-
-#include "address.h"
-#include "base58.h"
-#include "privkey.h"
-#include "pubkey.h"
-#include "shadouble.h"
+#include "config.h"
+#include <bitcoin/address.h>
+#include <bitcoin/base58.h>
+#include <bitcoin/privkey.h>
+#include <bitcoin/pubkey.h>
+#include <bitcoin/shadouble.h>
 #include <arpa/inet.h>
 #include <assert.h>
 #include <bitcoin/base58.h>
