@@ -91,10 +91,12 @@ bool hsmd_check_client_capabilities(struct hsmd_client *client,
 
 	case WIRE_HSMD_GET_PER_COMMITMENT_POINT:
 	case WIRE_HSMD_CHECK_FUTURE_SECRET:
+	case WIRE_HSMD_READY_CHANNEL:
 		return (client->capabilities & HSM_CAP_COMMITMENT_POINT) != 0;
 
 	case WIRE_HSMD_SIGN_REMOTE_COMMITMENT_TX:
 	case WIRE_HSMD_SIGN_REMOTE_HTLC_TX:
+	case WIRE_HSMD_VALIDATE_REVOCATION:
 		return (client->capabilities & HSM_CAP_SIGN_REMOTE_TX) != 0;
 
 	case WIRE_HSMD_SIGN_MUTUAL_CLOSE_TX:
@@ -104,6 +106,7 @@ bool hsmd_check_client_capabilities(struct hsmd_client *client,
 		return (client->capabilities & HSM_CAP_SIGN_WILL_FUND_OFFER) != 0;
 
 	case WIRE_HSMD_INIT:
+	case WIRE_HSMD_NEW_CHANNEL:
 	case WIRE_HSMD_CLIENT_HSMFD:
 	case WIRE_HSMD_SIGN_WITHDRAWAL:
 	case WIRE_HSMD_SIGN_INVOICE:
@@ -122,12 +125,15 @@ bool hsmd_check_client_capabilities(struct hsmd_client *client,
 	case WIRE_HSMD_CANNOUNCEMENT_SIG_REPLY:
 	case WIRE_HSMD_CUPDATE_SIG_REPLY:
 	case WIRE_HSMD_CLIENT_HSMFD_REPLY:
+	case WIRE_HSMD_NEW_CHANNEL_REPLY:
+	case WIRE_HSMD_READY_CHANNEL_REPLY:
 	case WIRE_HSMD_NODE_ANNOUNCEMENT_SIG_REPLY:
 	case WIRE_HSMD_SIGN_WITHDRAWAL_REPLY:
 	case WIRE_HSMD_SIGN_INVOICE_REPLY:
 	case WIRE_HSMD_INIT_REPLY:
 	case WIRE_HSMSTATUS_CLIENT_BAD_REQUEST:
 	case WIRE_HSMD_SIGN_COMMITMENT_TX_REPLY:
+	case WIRE_HSMD_VALIDATE_REVOCATION_REPLY:
 	case WIRE_HSMD_SIGN_TX_REPLY:
 	case WIRE_HSMD_SIGN_OPTION_WILL_FUND_OFFER_REPLY:
 	case WIRE_HSMD_GET_PER_COMMITMENT_POINT_REPLY:
@@ -275,6 +281,74 @@ static void get_channel_seed(const struct node_id *peer_id, u64 dbid,
 		    input, sizeof(input),
 		    &channel_base, sizeof(channel_base),
 		    info, strlen(info));
+}
+
+/* ~This stub implementation is overriden by fully validating signers
+ * that need to manage per-channel state. */
+static u8 *handle_new_channel(struct hsmd_client *c, const u8 *msg_in)
+{
+	struct node_id peer_id;
+	u64 dbid;
+
+	if (!fromwire_hsmd_new_channel(msg_in, &peer_id, &dbid))
+		return hsmd_status_malformed_request(c, msg_in);
+
+	/* Stub implementation */
+
+	return towire_hsmd_new_channel_reply(NULL);
+}
+
+static bool mem_is_zero(const void *mem, size_t len)
+{
+	size_t i;
+	for (i = 0; i < len; ++i)
+		if (((const unsigned char *)mem)[i])
+			return false;
+	return true;
+}
+
+/* ~This stub implementation is overriden by fully validating signers
+ * that need the unchanging channel parameters. */
+static u8 *handle_ready_channel(struct hsmd_client *c, const u8 *msg_in)
+{
+	bool is_outbound;
+	struct amount_sat channel_value;
+	struct amount_msat push_value;
+	struct bitcoin_txid funding_txid;
+	u16 funding_txout;
+	u16 local_to_self_delay;
+	u8 *local_shutdown_script;
+	u32 *local_shutdown_wallet_index;
+	struct basepoints remote_basepoints;
+	struct pubkey remote_funding_pubkey;
+	u16 remote_to_self_delay;
+	u8 *remote_shutdown_script;
+	struct amount_msat value_msat;
+	struct channel_type *channel_type;
+
+	if (!fromwire_hsmd_ready_channel(tmpctx, msg_in, &is_outbound,
+					&channel_value, &push_value, &funding_txid,
+					&funding_txout, &local_to_self_delay,
+					&local_shutdown_script,
+					&local_shutdown_wallet_index,
+					&remote_basepoints,
+					&remote_funding_pubkey,
+					&remote_to_self_delay,
+					&remote_shutdown_script,
+					&channel_type))
+		return hsmd_status_malformed_request(c, msg_in);
+
+	/* Stub implementation */
+
+	/* Fail fast if any values are uninitialized or obviously wrong. */
+	assert(amount_sat_greater(channel_value, AMOUNT_SAT(0)));
+	assert(amount_sat_to_msat(&value_msat, channel_value));
+	assert(amount_msat_less_eq(push_value, value_msat));
+	assert(!mem_is_zero(&funding_txid, sizeof(funding_txid)));
+	assert(local_to_self_delay > 0);
+	assert(remote_to_self_delay > 0);
+
+	return towire_hsmd_ready_channel_reply(NULL);
 }
 
 /*~ For almost every wallet tx we use the BIP32 seed, but not for onchain
@@ -1258,6 +1332,23 @@ static u8 *handle_sign_commitment_tx(struct hsmd_client *c, const u8 *msg_in)
 	return towire_hsmd_sign_commitment_tx_reply(NULL, &sig);
 }
 
+/* This stub implementation is overriden by fully validating signers
+ * that need to independently verify that the latest state is
+ * commited. */
+static u8 *handle_validate_revocation(struct hsmd_client *c, const u8 *msg_in)
+{
+	u64 revoke_num;
+	struct secret old_secret;
+
+	if (!fromwire_hsmd_validate_revocation(msg_in,
+					       &revoke_num, &old_secret))
+		return hsmd_status_malformed_request(c, msg_in);
+
+	/* Stub implementation, relies on validation in channeld. */
+
+	return towire_hsmd_validate_revocation_reply(NULL);
+}
+
 /*~ This is used when a commitment transaction is onchain, and has an HTLC
  * output paying to us (because we have the preimage); this signs that
  * transaction, which lightningd will broadcast to collect the funds. */
@@ -1393,6 +1484,10 @@ u8 *hsmd_handle_client_message(const tal_t *ctx, struct hsmd_client *client,
 		    "libhsmd",
 		    hsmd_wire_name(t));
 
+	case WIRE_HSMD_NEW_CHANNEL:
+		return handle_new_channel(client, msg);
+	case WIRE_HSMD_READY_CHANNEL:
+		return handle_ready_channel(client, msg);
 	case WIRE_HSMD_GET_OUTPUT_SCRIPTPUBKEY:
 		return handle_get_output_scriptpubkey(client, msg);
 	case WIRE_HSMD_CHECK_FUTURE_SECRET:
@@ -1431,6 +1526,8 @@ u8 *hsmd_handle_client_message(const tal_t *ctx, struct hsmd_client *client,
 		return handle_sign_penalty_to_us(client, msg);
 	case WIRE_HSMD_SIGN_COMMITMENT_TX:
 		return handle_sign_commitment_tx(client, msg);
+	case WIRE_HSMD_VALIDATE_REVOCATION:
+		return handle_validate_revocation(client, msg);
 	case WIRE_HSMD_SIGN_REMOTE_HTLC_TO_US:
 		return handle_sign_remote_htlc_to_us(client, msg);
 	case WIRE_HSMD_SIGN_DELAYED_PAYMENT_TO_US:
@@ -1441,12 +1538,15 @@ u8 *hsmd_handle_client_message(const tal_t *ctx, struct hsmd_client *client,
 	case WIRE_HSMD_CANNOUNCEMENT_SIG_REPLY:
 	case WIRE_HSMD_CUPDATE_SIG_REPLY:
 	case WIRE_HSMD_CLIENT_HSMFD_REPLY:
+	case WIRE_HSMD_NEW_CHANNEL_REPLY:
+	case WIRE_HSMD_READY_CHANNEL_REPLY:
 	case WIRE_HSMD_NODE_ANNOUNCEMENT_SIG_REPLY:
 	case WIRE_HSMD_SIGN_WITHDRAWAL_REPLY:
 	case WIRE_HSMD_SIGN_INVOICE_REPLY:
 	case WIRE_HSMD_INIT_REPLY:
 	case WIRE_HSMSTATUS_CLIENT_BAD_REQUEST:
 	case WIRE_HSMD_SIGN_COMMITMENT_TX_REPLY:
+	case WIRE_HSMD_VALIDATE_REVOCATION_REPLY:
 	case WIRE_HSMD_SIGN_TX_REPLY:
 	case WIRE_HSMD_SIGN_OPTION_WILL_FUND_OFFER_REPLY:
 	case WIRE_HSMD_GET_PER_COMMITMENT_POINT_REPLY:

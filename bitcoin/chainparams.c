@@ -15,7 +15,8 @@
 
 const struct chainparams networks[] = {
     {.network_name = "groestlcoin",
-     .bip173_name = "grs",
+     .onchain_hrp = "grs",
+     .lightning_hrp = "grs",
      .bip70_name = "main",
      .genesis_blockhash = {{{.u.u8 = {0x23, 0x90, 0x63, 0x3b, 0x70, 0xf0, 0x62,
                                       0xcb, 0x3a, 0x3d, 0x68, 0x14, 0xb6, 0x7e,
@@ -45,7 +46,8 @@ const struct chainparams networks[] = {
 			   .bip32_privkey_version = BIP32_VER_MAIN_PRIVATE},
      .is_elements = false},
     {.network_name = "regtest",
-     .bip173_name = "grsrt",
+     .onchain_hrp = "grsrt",
+     .lightning_hrp = "grsrt",
      .bip70_name = "regtest",
      .genesis_blockhash = {{{.u.u8 = {0x36, 0xcd, 0xf2, 0xdc, 0xb7, 0x55, 0x62,
               0x87, 0x28, 0x2a, 0x05, 0xc0, 0x64, 0x01,
@@ -68,7 +70,8 @@ const struct chainparams networks[] = {
 			   .bip32_privkey_version = BIP32_VER_TEST_PRIVATE},
      .is_elements = false},
     {.network_name = "signet",
-     .bip173_name = "sgrs",
+     .onchain_hrp = "tgrs",
+     .lightning_hrp = "sgrs",
      .bip70_name = "signet",
      .genesis_blockhash = {{{.u.u8 = {0xce, 0xbd, 0x8f, 0x6e, 0x69, 0x77, 0x30, 0xb7, 0x4c, 0x70, 0x9c, 0xdd, 0x1e, 0x6a, 0xba, 0xaf, 0x2a, 0xfc, 0x98, 0xbf, 0x4c, 0xff, 0xb2, 0x39, 0xf3, 0xdb, 0x44, 0x27, 0x64, 0x29, 0x00, 0x00}}}},
      .rpc_port = 31441,
@@ -86,7 +89,8 @@ const struct chainparams networks[] = {
      .is_elements = false,
     },
     {.network_name = "testnet",
-     .bip173_name = "tgrs",
+     .onchain_hrp = "tgrs",
+     .lightning_hrp = "tgrs",
      .bip70_name = "test",
      .genesis_blockhash = {{{.u.u8 = {0x36, 0xcd, 0xf2, 0xdc, 0xb7, 0x55, 0x62,
                                       0x87, 0x28, 0x2a, 0x05, 0xc0, 0x64, 0x01,
@@ -130,10 +134,10 @@ const struct chainparams *chainparams_by_chainhash(const struct bitcoin_blkid *c
 	return NULL;
 }
 
-const struct chainparams *chainparams_by_bip173(const char *bip173_name)
+const struct chainparams *chainparams_by_lightning_hrp(const char *lightning_hrp)
 {
 	for (size_t i = 0; i < ARRAY_SIZE(networks); i++) {
-		if (streq(bip173_name, networks[i].bip173_name)) {
+		if (streq(lightning_hrp, networks[i].lightning_hrp)) {
 			return &networks[i];
 		}
 	}
