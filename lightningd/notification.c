@@ -2,6 +2,7 @@
 #include <common/json_helpers.h>
 #include <common/type_to_string.h>
 #include <lightningd/channel.h>
+#include <lightningd/coin_mvts.h>
 #include <lightningd/notification.h>
 
 static struct notification *find_notification_by_topic(const char* topic)
@@ -451,7 +452,9 @@ static void json_mvt_id(struct json_stream *stream, enum mvt_type mvt_type,
 				json_add_sha256(stream, "payment_hash", id->payment_hash);
 			return;
 		case CHANNEL_MVT:
-			json_add_sha256(stream, "payment_hash", id->payment_hash);
+			/* push funding / leases don't have a payment_hash */
+			if (id->payment_hash)
+				json_add_sha256(stream, "payment_hash", id->payment_hash);
 			if (id->part_id)
 				json_add_u64(stream, "part_id", *id->part_id);
 			return;
@@ -465,13 +468,23 @@ static void coin_movement_notification_serialize(struct json_stream *stream,
 	json_object_start(stream, "coin_movement");
 	json_add_num(stream, "version", mvt->version);
 	json_add_node_id(stream, "node_id", mvt->node_id);
-	json_add_u64(stream, "movement_idx", mvt->counter);
 	json_add_string(stream, "type", mvt_type_str(mvt->type));
 	json_add_string(stream, "account_id", mvt->account_id);
 	json_mvt_id(stream, mvt->type, &mvt->id);
 	json_add_amount_msat_only(stream, "credit", mvt->credit);
 	json_add_amount_msat_only(stream, "debit", mvt->debit);
-	json_add_string(stream, "tag", mvt_tag_str(mvt->tag));
+	/* Only chain movements */
+	if (mvt->output_val)
+		json_add_amount_sat_only(stream, "output_value",
+					 *mvt->output_val);
+	if (mvt->fees)
+		json_add_amount_msat_only(stream, "fees",
+					  *mvt->fees);
+
+	json_array_start(stream, "tags");
+	for (size_t i = 0; i < tal_count(mvt->tags); i++)
+		json_add_string(stream, NULL, mvt_tag_str(mvt->tags[i]));
+	json_array_end(stream);
 
 	/* Only chain movements have blockheights. A blockheight
 	 * of 'zero' means we haven't seen this tx confirmed yet. */
@@ -482,7 +495,7 @@ static void coin_movement_notification_serialize(struct json_stream *stream,
 			json_add_null(stream, "blockheight");
 	}
 	json_add_u32(stream, "timestamp", mvt->timestamp);
-	json_add_string(stream, "coin_type", mvt->bip173_name);
+	json_add_string(stream, "coin_type", mvt->hrp_name);
 
 	json_object_end(stream);
 }
@@ -499,6 +512,43 @@ void notify_coin_mvt(struct lightningd *ld,
 	struct jsonrpc_notification *n =
 		jsonrpc_notification_start(NULL, "coin_movement");
 	serialize(n->stream, mvt);
+	jsonrpc_notification_end(n);
+	plugins_notify(ld->plugins, take(n));
+}
+
+static void balance_snapshot_notification_serialize(struct json_stream *stream, struct balance_snapshot *snap)
+{
+	json_object_start(stream, "balance_snapshot");
+	json_add_node_id(stream, "node_id", snap->node_id);
+	json_add_u32(stream, "blockheight", snap->blockheight);
+	json_add_u32(stream, "timestamp", snap->timestamp);
+
+	json_array_start(stream, "accounts");
+	for (size_t i = 0; i < tal_count(snap->accts); i++) {
+		json_object_start(stream, NULL);
+		json_add_string(stream, "account_id",
+				snap->accts[i]->acct_id);
+		json_add_amount_msat_only(stream, "balance",
+					  snap->accts[i]->balance);
+		json_add_string(stream, "coin_type", snap->accts[i]->bip173_name);
+		json_object_end(stream);
+	}
+	json_array_end(stream);
+	json_object_end(stream);
+}
+
+REGISTER_NOTIFICATION(balance_snapshot,
+		      balance_snapshot_notification_serialize);
+
+void notify_balance_snapshot(struct lightningd *ld,
+			     const struct balance_snapshot *snap)
+{
+	void (*serialize)(struct json_stream *,
+			  const struct balance_snapshot *) = balance_snapshot_notification_gen.serialize;
+
+	struct jsonrpc_notification *n =
+		jsonrpc_notification_start(NULL, "balance_snapshot");
+	serialize(n->stream, snap);
 	jsonrpc_notification_end(n);
 	plugins_notify(ld->plugins, take(n));
 }

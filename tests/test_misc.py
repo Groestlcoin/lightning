@@ -10,7 +10,7 @@ from pyln.testing.utils import (
     wait_for, TailableProc, env
 )
 from utils import (
-    check_coin_moves, account_balance, scriptpubkey_addr,
+    account_balance, scriptpubkey_addr
 )
 from ephemeral_port_reserve import reserve
 from utils import EXPERIMENTAL_FEATURES
@@ -316,7 +316,7 @@ def test_htlc_out_timeout(node_factory, bitcoind, executor):
     """Test that we drop onchain if the peer doesn't time out HTLC"""
 
     # HTLC 1->2, 1 fails after it's irrevocably committed, can't reconnect
-    disconnects = ['@WIRE_REVOKE_AND_ACK']
+    disconnects = ['-WIRE_REVOKE_AND_ACK']
     # Feerates identical so we don't get gratuitous commit to update them
     l1 = node_factory.get_node(disconnect=disconnects,
                                options={'dev-no-reconnect': None},
@@ -336,7 +336,7 @@ def test_htlc_out_timeout(node_factory, bitcoind, executor):
     executor.submit(l1.rpc.dev_pay, inv, use_shadow=False)
 
     # l1 will disconnect, and not reconnect.
-    l1.daemon.wait_for_log('dev_disconnect: @WIRE_REVOKE_AND_ACK')
+    l1.daemon.wait_for_log('dev_disconnect: -WIRE_REVOKE_AND_ACK')
 
     # Takes 6 blocks to timeout (cltv-final + 1), but we also give grace period of 1 block.
     # shadow route can add extra blocks!
@@ -622,64 +622,6 @@ def test_withdraw_misc(node_factory, bitcoind, chainparams):
     bitcoind.generate_block(1)
     sync_blockheight(bitcoind, [l1])
     assert account_balance(l1, 'wallet') == 0
-
-    wallet_moves = [
-        {'type': 'chain_mvt', 'credit': 2000000000, 'debit': 0, 'tag': 'deposit'},
-        {'type': 'chain_mvt', 'credit': 2000000000, 'debit': 0, 'tag': 'deposit'},
-        {'type': 'chain_mvt', 'credit': 2000000000, 'debit': 0, 'tag': 'deposit'},
-        {'type': 'chain_mvt', 'credit': 2000000000, 'debit': 0, 'tag': 'deposit'},
-        {'type': 'chain_mvt', 'credit': 2000000000, 'debit': 0, 'tag': 'deposit'},
-        {'type': 'chain_mvt', 'credit': 2000000000, 'debit': 0, 'tag': 'deposit'},
-        {'type': 'chain_mvt', 'credit': 2000000000, 'debit': 0, 'tag': 'deposit'},
-        {'type': 'chain_mvt', 'credit': 2000000000, 'debit': 0, 'tag': 'deposit'},
-        {'type': 'chain_mvt', 'credit': 2000000000, 'debit': 0, 'tag': 'deposit'},
-        {'type': 'chain_mvt', 'credit': 2000000000, 'debit': 0, 'tag': 'deposit'},
-        {'type': 'chain_mvt', 'credit': 0, 'debit': 0, 'tag': 'spend_track'},
-        {'type': 'chain_mvt', 'credit': 0, 'debit': 0, 'tag': 'spend_track'},
-        [
-            {'type': 'chain_mvt', 'credit': 0, 'debit': 2000000000, 'tag': 'withdrawal'},
-            {'type': 'chain_mvt', 'credit': 0, 'debit': 1993760000, 'tag': 'withdrawal'},
-        ],
-        {'type': 'chain_mvt', 'credit': 0, 'debit': 6240000, 'tag': 'chain_fees'},
-        {'type': 'chain_mvt', 'credit': 1993760000, 'debit': 0, 'tag': 'deposit'},
-        {'type': 'chain_mvt', 'credit': 0, 'debit': 0, 'tag': 'spend_track'},
-        {'type': 'chain_mvt', 'credit': 0, 'debit': 0, 'tag': 'spend_track'},
-        [
-            {'type': 'chain_mvt', 'credit': 0, 'debit': 2000000000, 'tag': 'withdrawal'},
-            {'type': 'chain_mvt', 'credit': 0, 'debit': 1993760000, 'tag': 'withdrawal'},
-        ],
-        {'type': 'chain_mvt', 'credit': 0, 'debit': 6240000, 'tag': 'chain_fees'},
-        {'type': 'chain_mvt', 'credit': 1993760000, 'debit': 0, 'tag': 'deposit'},
-        {'type': 'chain_mvt', 'credit': 0, 'debit': 0, 'tag': 'spend_track'},
-        {'type': 'chain_mvt', 'credit': 0, 'debit': 0, 'tag': 'spend_track'},
-        [
-            {'type': 'chain_mvt', 'credit': 0, 'debit': 2000000000, 'tag': 'withdrawal'},
-            {'type': 'chain_mvt', 'credit': 0, 'debit': 1993760000, 'tag': 'withdrawal'},
-        ],
-        {'type': 'chain_mvt', 'credit': 0, 'debit': 6240000, 'tag': 'chain_fees'},
-        {'type': 'chain_mvt', 'credit': 1993760000, 'debit': 0, 'tag': 'deposit'},
-        {'type': 'chain_mvt', 'credit': 0, 'debit': 0, 'tag': 'spend_track'},
-        {'type': 'chain_mvt', 'credit': 0, 'debit': 0, 'tag': 'spend_track'},
-        [
-            {'type': 'chain_mvt', 'credit': 0, 'debit': 1993400000, 'tag': 'withdrawal'},
-            {'type': 'chain_mvt', 'credit': 0, 'debit': 2000000000, 'tag': 'withdrawal'},
-        ],
-        {'type': 'chain_mvt', 'credit': 0, 'debit': 6600000, 'tag': 'chain_fees'},
-        {'type': 'chain_mvt', 'credit': 1993400000, 'debit': 0, 'tag': 'deposit'},
-        {'type': 'chain_mvt', 'credit': 0, 'debit': 0, 'tag': 'spend_track'},
-        {'type': 'chain_mvt', 'credit': 0, 'debit': 0, 'tag': 'spend_track'},
-        {'type': 'chain_mvt', 'credit': 0, 'debit': 0, 'tag': 'spend_track'},
-        {'type': 'chain_mvt', 'credit': 0, 'debit': 0, 'tag': 'spend_track'},
-        {'type': 'chain_mvt', 'credit': 0, 'debit': 0, 'tag': 'spend_track'},
-        {'type': 'chain_mvt', 'credit': 0, 'debit': 0, 'tag': 'spend_track'},
-        {'type': 'chain_mvt', 'credit': 0, 'debit': 11961240000, 'tag': 'withdrawal'},
-        {'type': 'chain_mvt', 'credit': 0, 'debit': 13440000, 'tag': 'chain_fees'},
-        {'type': 'chain_mvt', 'credit': 11961240000, 'debit': 0, 'tag': 'deposit'},
-        {'type': 'chain_mvt', 'credit': 0, 'debit': 0, 'tag': 'spend_track'},
-        {'type': 'chain_mvt', 'credit': 0, 'debit': 11957603000, 'tag': 'withdrawal'},
-        {'type': 'chain_mvt', 'credit': 0, 'debit': 3637000, 'tag': 'chain_fees'},
-    ]
-    check_coin_moves(l1, 'wallet', wallet_moves, chainparams)
 
 
 def test_io_logging(node_factory, executor):

@@ -1230,6 +1230,7 @@ static void update_channel_from_inflight(struct lightningd *ld,
 
 	/* Lease infos ! */
 	channel->lease_expiry = inflight->lease_expiry;
+	channel->push = inflight->lease_fee;
 	tal_free(channel->lease_commit_sig);
 	channel->lease_commit_sig
 		= tal_steal(channel, inflight->lease_commit_sig);
@@ -1365,7 +1366,7 @@ static enum watch_result funding_spent(struct channel *channel,
 
 	wallet_channeltxs_add(channel->peer->ld->wallet, channel,
 			      WIRE_ONCHAIND_INIT, &txid, 0, block->height);
-	return onchaind_funding_spent(channel, tx, block->height, false);
+	return onchaind_funding_spent(channel, tx, block->height);
 }
 
 void channel_watch_wrong_funding(struct lightningd *ld, struct channel *channel)

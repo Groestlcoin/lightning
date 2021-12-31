@@ -697,20 +697,21 @@ i.e. only definitively resolved HTLCs or confirmed bitcoin transactions.
 ```json
 {
 	"coin_movement": {
-		"version":1,
+		"version":2,
 		"node_id":"03a7103a2322b811f7369cbb27fb213d30bbc0b012082fed3cad7e4498da2dc56b",
-		"movement_idx":0,
 		"type":"chain_mvt",
 		"account_id":"wallet",
-		"txid":"0159693d8f3876b4def468b208712c630309381e9d106a9836fa0a9571a28722", // (`chain_mvt` type only, mandatory)
-		"utxo_txid":"0159693d8f3876b4def468b208712c630309381e9d106a9836fa0a9571a28722", // (`chain_mvt` type only, optional)
-		"vout":1, // (`chain_mvt` type only, optional)
+		"txid":"0159693d8f3876b4def468b208712c630309381e9d106a9836fa0a9571a28722", // (`chain_mvt` only, optional)
+		"utxo_txid":"0159693d8f3876b4def468b208712c630309381e9d106a9836fa0a9571a28722", // (`chain_mvt` only)
+		"vout":1, // (`chain_mvt` only)
 		"payment_hash": "xxx", // (either type, optional on `chain_mvt`)
-		"part_id": 0, // (`channel_mvt` type only, mandatory)
+		"part_id": 0, // (`channel_mvt` only, mandatory)
 		"credit":"2000000000msat",
 		"debit":"0msat",
-		"tag":"deposit",
-		"blockheight":102, // (`channel_mvt` type only. may be null)
+		"output_value": "2000000000msat", // ('chain_mvt' only)
+		"fees": "382msat", // ('channel_mvt' only)
+		"tags": ["deposit"],
+		"blockheight":102, // (May be null)
 		"timestamp":1585948198,
 		"coin_type":"bc"
 	}
@@ -722,8 +723,6 @@ notification adheres to.
 
 `node_id` specifies the node issuing the coin movement.
 
-`movement_idx` is an increment-only counter for coin moves emitted by this node.
-
 `type` marks the underlying mechanism which moved these coins. There are two
 'types' of `coin_movements`:
   - `channel_mvt`s, which occur as a result of htlcs being resolved and,
@@ -734,9 +733,8 @@ all channel funds' account are the channel id.
 
 `txid` is the transaction id of the bitcoin transaction that triggered this
 ledger event. `utxo_txid` and `vout` identify the bitcoin output which triggered
-this notification. (`chain_mvt` only) In most cases, the `utxo_txid` will be the
-same as the `txid`, except for `spend_track` notficiations.  Notifications tagged
-`chain_fees` and `journal_entry` do not have a `utxo_txid` as they're not
+this notification. (`chain_mvt` only). Notifications tagged
+`journal_entry` do not have a `utxo_txid` as they're not
 represented in the utxo set.
 
 `payment_hash` is the hash of the preimage used to move this payment. Only
@@ -751,29 +749,88 @@ multiple times. `channel_mvt` only
 `credit` and `debit` are millisatoshi denominated amounts of the fund movement. A
 'credit' is funds deposited into an account; a `debit` is funds withdrawn.
 
+`output_value` is the total value of the on-chain UTXO. Note that for
+channel opens/closes the total output value will not necessarily correspond
+to the amount that's credited/debited.
+
+`fees` is an HTLC annotation for the amount of fees either paid or
+earned. For "invoice" tagged events, the fees are the total fees
+paid to send that payment. The end amount can be found by subtracting
+the total fees from the `debited` amount. For "routed" tagged events,
+both the debit/credit contain fees. Technically routed debits are the
+'fee generating' event, however we include them on routed credits as well.
 
 `tag` is a movement descriptor. Current tags are as follows:
  - `deposit`: funds deposited
  - `withdrawal`: funds withdrawn
- - `chain_fees`: funds paid for onchain fees. `chain_mvt` only
- - `penalty`: funds paid or gained from a penalty tx. `chain_mvt` only
- - `invoice`: funds paid to or recieved from an invoice. `channel_mvt` only
- - `routed`: funds routed through this node. `channel_mvt` only
- - `journal_entry`: a balance reconciliation event, typically triggered
-                    by a penalty tx onchain. `chain_mvt` only
- - `onchain_htlc`: funds moved via an htlc onchain. `chain_mvt` only
- - `pushed`: funds pushed to peer. `channel_mvt` only.
- - `spend_track`:  informational notification about a wallet utxo spend. `chain_mvt` only.
+ - `penalty`: funds paid or gained from a penalty tx.
+ - `invoice`: funds paid to or recieved from an invoice.
+ - `routed`: funds routed through this node.
+ - `pushed`: funds pushed to peer.
+ -  channel_open : channel is opened, initial channel balance
+ -  channel_close: channel is closed, final channel balance
+ -  delayed_to_us : on-chain output to us, spent back into our wallet
+ -  htlc_timeout : on-chain htlc timeout output
+ - htlc_fulfill : on-chian htlc fulfill output
+ - htlc_tx : on-chain htlc tx has happened
+ - to_wallet : output being spent into our wallet
+ - ignored : output is being ignored
+ - anchor : an anchor output
+ - to_them : output intended to peer's wallet
+ - penalized : output we've 'lost' due to a penalty (failed cheat attempt)
+ - stolen : output we've 'lost' due to peer's cheat
+ - to_miner : output we've burned to miner (OP_RETURN)
+ - opener : tags channel_open, we are the channel opener
+ - lease_fee: amount paid as lease fee
+ - leased: tags channel_open, channel contains leased funds
 
-`blockheight` is the block the txid is included in. `chain_mvt` only. In the
-case that an output is considered dust, c-lightning does not track its return to
-our wallet. In those cases, the blockheight will be `null`, as they're recorded
-before confirmation.
+`blockheight` is the block the txid is included in.
 
 The `timestamp` is seconds since Unix epoch of the node's machine time
 at the time lightningd broadcasts the notification.
 
 `coin_type` is the BIP173 name for the coin which moved.
+
+### `balance_snapshot`
+
+Emitted after we've caught up to the chain head on first start. Lists all
+current accounts (`account_id` matches the `account_id` emitted from
+`coin_movement`). Useful for checkpointing account balances.
+
+```json
+{
+    "balance_snapshots": [
+	{
+	    'node_id': '035d2b1192dfba134e10e540875d366ebc8bc353d5aa766b80c090b39c3a5d885d',
+	    'blockheight': 101,
+	    'timestamp': 1639076327,
+	    'accounts': [
+		{
+		    'account_id': 'wallet',
+		    'balance': '0msat',
+		    'coin_type': 'bcrt'
+		}
+	    ]
+	},
+	{
+	    'node_id': '035d2b1192dfba134e10e540875d366ebc8bc353d5aa766b80c090b39c3a5d885d',
+	    'blockheight': 110,
+	    'timestamp': 1639076343,
+	    'accounts': [
+		{
+		    'account_id': 'wallet',
+		    'balance': '995433000msat',
+		    'coin_type': 'bcrt'
+		}, {
+		    'account_id': '5b65c199ee862f49758603a5a29081912c8816a7c0243d1667489d244d3d055f',
+		     'balance': '500000000msat',
+		    'coin_type': 'bcrt'
+		}
+	    ]
+	}
+    ]
+}
+```
 
 ### `openchannel_peer_sigs`
 

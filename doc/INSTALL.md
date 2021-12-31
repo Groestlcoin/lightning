@@ -185,6 +185,7 @@ Configure Python 3.x & get mako:
 
 Build lightning:
 
+    $ pip install -r requirements.txt
     $ ./configure
     $ make
 

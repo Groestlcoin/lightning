@@ -130,46 +130,53 @@ void notify_feerate_change(struct lightningd *ld)
 void channel_record_open(struct channel *channel)
 {
 	struct chain_coin_mvt *mvt;
-	struct amount_msat channel_open_amt;
 	u32 blockheight;
-
-	u8 *ctx = tal(NULL, u8);
+	struct amount_msat start_balance;
+	bool is_pushed = !amount_msat_zero(channel->push);
+	bool is_leased = channel->lease_expiry > 0;
 
 	blockheight = short_channel_id_blocknum(channel->scid);
 
-	/* FIXME: logic here will change for dual funded channels */
-	if (channel->opener == LOCAL) {
-		if (!amount_sat_to_msat(&channel_open_amt,
-					channel->funding_sats))
-			fatal("Unable to convert funding %s to msat",
-			      type_to_string(tmpctx, struct amount_sat,
-					     &channel->funding_sats));
-
-		/* if we pushed sats, we should decrement that
-		 * from the channel balance */
-		if (amount_msat_greater(channel->push, AMOUNT_MSAT(0))) {
-			mvt = new_coin_pushed(ctx,
-					      type_to_string(tmpctx,
-							     struct channel_id,
-							     &channel->cid),
-					      &channel->funding.txid,
-					      blockheight, channel->push);
-			notify_chain_mvt(channel->peer->ld, mvt);
+	/* If funds were pushed, add/sub them from the starting balance */
+	if (is_pushed) {
+		if (channel->opener == LOCAL) {
+			if (!amount_msat_add(&start_balance,
+					    channel->our_msat, channel->push))
+				fatal("Unable to add push_msat (%s) + our_msat (%s)",
+				      type_to_string(tmpctx, struct amount_msat,
+						     &channel->push),
+				      type_to_string(tmpctx, struct amount_msat,
+						     &channel->our_msat));
+		} else {
+			if (!amount_msat_sub(&start_balance,
+					    channel->our_msat, channel->push))
+				fatal("Unable to sub our_msat (%s) - push (%s)",
+				      type_to_string(tmpctx, struct amount_msat,
+						     &channel->our_msat),
+				      type_to_string(tmpctx, struct amount_msat,
+						     &channel->push));
 		}
-	} else {
-		/* we're not the funder, we record our 'opening balance'
-		 * anyway (there's a small chance we were pushed some
-		 * satoshis, otherwise it's zero) */
-		channel_open_amt = channel->our_msat;
-	}
+	} else
+		start_balance = channel->our_msat;
 
-	mvt = new_coin_deposit(ctx,
-			       type_to_string(tmpctx, struct channel_id,
-					      &channel->cid),
-			       &channel->funding,
-			       blockheight, channel_open_amt);
+	mvt = new_coin_channel_open(tmpctx,
+				    &channel->cid,
+				    &channel->funding,
+				    blockheight,
+				    start_balance,
+				    channel->funding_sats,
+				    channel->opener == LOCAL,
+				    is_leased);
+
 	notify_chain_mvt(channel->peer->ld, mvt);
-	tal_free(ctx);
+
+	/* If we pushed sats, *now* record them */
+	if (is_pushed)
+		notify_channel_mvt(channel->peer->ld,
+				   new_coin_channel_push(tmpctx, &channel->cid,
+							 channel->push,
+							 is_leased ? LEASE_FEE : PUSHED,
+							 channel->opener == REMOTE));
 }
 
 static void lockin_complete(struct channel *channel)
@@ -646,68 +653,72 @@ void peer_start_channeld(struct channel *channel,
 	    tmpctx, channel->peer->ld->wallet, channel->dbid);
 
 	initmsg = towire_channeld_init(tmpctx,
-				      chainparams,
- 				      ld->our_features,
-				      &channel->cid,
-				      &channel->funding,
-				      channel->funding_sats,
-				      channel->minimum_depth,
-				      get_block_height(ld->topology),
-				      channel->blockheight_states,
-				      channel->lease_expiry,
-				      &channel->our_config,
-				      &channel->channel_info.their_config,
-				      channel->fee_states,
-				      feerate_min(ld, NULL),
-				      feerate_max(ld, NULL),
-				      try_get_feerate(ld->topology, FEERATE_PENALTY),
-				      &channel->last_sig,
-				      pps,
-				      &channel->channel_info.remote_fundingkey,
-				      &channel->channel_info.theirbase,
-				      &channel->channel_info.remote_per_commit,
-				      &channel->channel_info.old_remote_per_commit,
-				      channel->opener,
-				      channel->feerate_base,
-				      channel->feerate_ppm,
-				      channel->our_msat,
-				      &channel->local_basepoints,
-				      &channel->local_funding_pubkey,
-				      &ld->id,
-				      &channel->peer->id,
-				      cfg->commit_time_ms,
-				      cfg->cltv_expiry_delta,
-				      channel->last_was_revoke,
-				      channel->last_sent_commit,
-				      channel->next_index[LOCAL],
-				      channel->next_index[REMOTE],
-				      num_revocations,
-				      channel->next_htlc_id,
-				      htlcs,
-				      channel->scid != NULL,
-				      channel->remote_funding_locked,
-				      &scid,
-				      reconnected,
+				       chainparams,
+				       ld->our_features,
+				       &channel->cid,
+				       &channel->funding,
+				       channel->funding_sats,
+				       channel->minimum_depth,
+				       get_block_height(ld->topology),
+				       channel->blockheight_states,
+				       channel->lease_expiry,
+				       &channel->our_config,
+				       &channel->channel_info.their_config,
+				       channel->fee_states,
+				       feerate_min(ld, NULL),
+				       feerate_max(ld, NULL),
+				       try_get_feerate(ld->topology, FEERATE_PENALTY),
+				       &channel->last_sig,
+				       pps,
+				       &channel->channel_info.remote_fundingkey,
+				       &channel->channel_info.theirbase,
+				       &channel->channel_info.remote_per_commit,
+				       &channel->channel_info.old_remote_per_commit,
+				       channel->opener,
+				       channel->feerate_base,
+				       channel->feerate_ppm,
+				       channel->our_msat,
+				       &channel->local_basepoints,
+				       &channel->local_funding_pubkey,
+				       &ld->id,
+				       &channel->peer->id,
+				       cfg->commit_time_ms,
+				       cfg->cltv_expiry_delta,
+				       channel->last_was_revoke,
+				       channel->last_sent_commit,
+				       channel->next_index[LOCAL],
+				       channel->next_index[REMOTE],
+				       num_revocations,
+				       channel->next_htlc_id,
+				       htlcs,
+				       channel->scid != NULL,
+				       channel->remote_funding_locked,
+				       &scid,
+				       reconnected,
 				       /* Anything that indicates we are or have
 					* shut down */
-				      channel->state == CHANNELD_SHUTTING_DOWN
+				       channel->state == CHANNELD_SHUTTING_DOWN
 				       || channel->state == CLOSINGD_SIGEXCHANGE
 				       || channel_closed(channel),
-				      channel->shutdown_scriptpubkey[REMOTE] != NULL,
-				      channel->shutdown_scriptpubkey[LOCAL],
-				      channel->channel_flags,
-				      fwd_msg,
-				      reached_announce_depth,
-				      &last_remote_per_commit_secret,
-				      channel->peer->their_features,
-				      channel->remote_upfront_shutdown_script,
-				      remote_ann_node_sig,
-				      remote_ann_bitcoin_sig,
-				      channel->type,
-				      IFDEV(ld->dev_fast_gossip, false),
-				      IFDEV(dev_fail_process_onionpacket, false),
-				      pbases,
-				      reestablish_only);
+				       channel->shutdown_scriptpubkey[REMOTE] != NULL,
+				       channel->shutdown_scriptpubkey[LOCAL],
+				       channel->channel_flags,
+				       fwd_msg,
+				       reached_announce_depth,
+				       &last_remote_per_commit_secret,
+				       channel->peer->their_features,
+				       channel->remote_upfront_shutdown_script,
+				       remote_ann_node_sig,
+				       remote_ann_bitcoin_sig,
+				       channel->type,
+				       IFDEV(ld->dev_fast_gossip, false),
+				       IFDEV(dev_fail_process_onionpacket, false),
+				       IFDEV(ld->dev_disable_commit == -1
+					     ? NULL
+					     : (u32 *)&ld->dev_disable_commit,
+					     NULL),
+				       pbases,
+				       reestablish_only);
 
 	/* We don't expect a response: we are triggered by funding_depth_cb. */
 	subd_send_msg(channel->owner, take(initmsg));

@@ -495,11 +495,8 @@ remote_routing_failure(const tal_t *ctx,
 	routing_failure->failcode = failcode;
 	routing_failure->msg = tal_dup_talarr(routing_failure, u8, failuremsg);
 
-	if (erring_node != NULL)
-		routing_failure->erring_node =
-		    tal_dup(routing_failure, struct node_id, erring_node);
-	else
-		routing_failure->erring_node = NULL;
+	routing_failure->erring_node =
+		tal_dup_or_null(routing_failure, struct node_id, erring_node);
 
 	if (erring_channel != NULL) {
 		routing_failure->erring_channel = tal_dup(
@@ -773,6 +770,7 @@ static bool should_use_tlv(enum route_hop_style style)
 static const u8 *send_onion(const tal_t *ctx, struct lightningd *ld,
 			    const struct onionpacket *packet,
 			    const struct route_hop *first_hop,
+			    const struct amount_msat final_amount,
 			    const struct sha256 *payment_hash,
 			    const struct pubkey *blinding,
 			    u64 partid,
@@ -786,7 +784,8 @@ static const u8 *send_onion(const tal_t *ctx, struct lightningd *ld,
 	base_expiry = get_block_height(ld->topology) + 1;
 	onion = serialize_onionpacket(tmpctx, packet);
 	return send_htlc_out(ctx, channel, first_hop->amount,
-			     base_expiry + first_hop->delay, payment_hash,
+			     base_expiry + first_hop->delay,
+			     final_amount, payment_hash,
 			     blinding, partid, groupid, onion, NULL, hout,
 			     &dont_care_about_channel_update);
 }
@@ -1047,7 +1046,8 @@ send_payment_core(struct lightningd *ld,
 		return command_failed(cmd, data);
 	}
 
-	failmsg = send_onion(tmpctx, ld, packet, first_hop, rhash, NULL, partid,
+	failmsg = send_onion(tmpctx, ld, packet, first_hop, msat,
+			     rhash, NULL, partid,
 			     group, channel, &hout);
 
 	if (failmsg) {
@@ -1078,10 +1078,8 @@ send_payment_core(struct lightningd *ld,
 	payment->payment_hash = *rhash;
 	payment->partid = partid;
 	payment->groupid = group;
-	if (destination)
-		payment->destination = tal_dup(payment, struct node_id, destination);
-	else
-		payment->destination = NULL;
+	payment->destination = tal_dup_or_null(payment, struct node_id,
+					       destination);
 	payment->status = PAYMENT_PENDING;
 	payment->msatoshi = msat;
 	payment->msatoshi_sent = first_hop->amount;
@@ -1089,14 +1087,8 @@ send_payment_core(struct lightningd *ld,
 	payment->timestamp = time_now().ts.tv_sec;
 	payment->payment_preimage = NULL;
 	payment->path_secrets = tal_steal(payment, path_secrets);
-	if (route_nodes)
-		payment->route_nodes = tal_steal(payment, route_nodes);
-	else
-		payment->route_nodes = NULL;
-	if (route_channels)
-		payment->route_channels = tal_steal(payment, route_channels);
-	else
-		payment->route_channels = NULL;
+	payment->route_nodes = tal_steal(payment, route_nodes);
+	payment->route_channels = tal_steal(payment, route_channels);
 	payment->failonion = NULL;
 	if (label != NULL)
 		payment->label = tal_strdup(payment, label);
@@ -1106,10 +1098,8 @@ send_payment_core(struct lightningd *ld,
 		payment->invstring = tal_strdup(payment, invstring);
 	else
 		payment->invstring = NULL;
-	if (local_offer_id)
-		payment->local_offer_id = tal_dup(payment, struct sha256, local_offer_id);
-	else
-		payment->local_offer_id = NULL;
+	payment->local_offer_id = tal_dup_or_null(payment, struct sha256,
+						  local_offer_id);
 
 	/* We write this into db when HTLC is actually sent. */
 	wallet_payment_setup(ld->wallet, payment);
@@ -1211,7 +1201,8 @@ send_payment(struct lightningd *ld,
 		 n_hops, type_to_string(tmpctx, struct amount_msat, &msat));
 	packet = create_onionpacket(tmpctx, path, ROUTING_INFO_SIZE, &path_secrets);
 	return send_payment_core(ld, cmd, rhash, partid, group, &route[0],
-				 msat, total_msat, label, invstring,
+				 msat, total_msat,
+				 label, invstring,
 				 packet, &ids[n_hops - 1], ids,
 				 channels, path_secrets, local_offer_id);
 }

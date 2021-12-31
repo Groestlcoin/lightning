@@ -198,7 +198,6 @@ static void destroy_routing_state(struct routing_state *rstate)
 
 	/* Free up our htables */
 	pending_cannouncement_map_clear(&rstate->pending_cannouncements);
-	local_chan_map_clear(&rstate->local_chan_map);
 }
 
 /* We don't check this when loading from the gossip_store: that would break
@@ -226,7 +225,6 @@ static void memleak_help_routing_tables(struct htable *memtable,
 	memleak_remove_htable(memtable, &rstate->nodes->raw);
 	memleak_remove_htable(memtable, &rstate->pending_node_map->raw);
 	memleak_remove_htable(memtable, &rstate->pending_cannouncements.raw);
-	memleak_remove_htable(memtable, &rstate->local_chan_map.raw);
 	memleak_remove_uintmap(memtable, &rstate->unupdated_chanmap);
 
 	for (n = node_map_first(rstate->nodes, &nit);
@@ -295,7 +293,6 @@ struct routing_state *new_routing_state(const tal_t *ctx,
 
 	uintmap_init(&rstate->chanmap);
 	uintmap_init(&rstate->unupdated_chanmap);
-	local_chan_map_init(&rstate->local_chan_map);
 	rstate->num_txout_failures = 0;
 	uintmap_init(&rstate->txout_failures);
 	uintmap_init(&rstate->txout_failures_old);
@@ -524,36 +521,6 @@ static void bad_gossip_order(const u8 *msg,
 			  details);
 }
 
-static void destroy_local_chan(struct local_chan *local_chan,
-			       struct routing_state *rstate)
-{
-	if (!local_chan_map_del(&rstate->local_chan_map, local_chan))
-		abort();
-}
-
-static void maybe_add_local_chan(struct routing_state *rstate,
-				 struct chan *chan)
-{
-	int direction;
-	struct local_chan *local_chan;
-
-	if (node_id_eq(&chan->nodes[0]->id, &rstate->local_id))
-		direction = 0;
-	else if (node_id_eq(&chan->nodes[1]->id, &rstate->local_id))
-		direction = 1;
-	else
-		return;
-
-	local_chan = tal(chan, struct local_chan);
-	local_chan->chan = chan;
-	local_chan->direction = direction;
-	local_chan->local_disabled = false;
-	local_chan->channel_update_timer = NULL;
-
-	local_chan_map_add(&rstate->local_chan_map, local_chan);
-	tal_add_destructor2(local_chan, destroy_local_chan, rstate);
-}
-
 struct chan *new_chan(struct routing_state *rstate,
 		      const struct short_channel_id *scid,
 		      const struct node_id *id1,
@@ -595,8 +562,6 @@ struct chan *new_chan(struct routing_state *rstate,
 
 	uintmap_add(&rstate->chanmap, scid->u64, chan);
 
-	/* Initialize shadow structure if it's local */
-	maybe_add_local_chan(rstate, chan);
 	return chan;
 }
 
@@ -795,13 +760,6 @@ static void destroy_pending_cannouncement(struct pending_cannouncement *pending,
 	pending_cannouncement_map_del(&rstate->pending_cannouncements, pending);
 }
 
-static bool is_local_channel(const struct routing_state *rstate,
-			     const struct chan *chan)
-{
-	return node_id_eq(&chan->nodes[0]->id, &rstate->local_id)
-		|| node_id_eq(&chan->nodes[1]->id, &rstate->local_id);
-}
-
 static void add_channel_announce_to_broadcast(struct routing_state *rstate,
 					      struct chan *chan,
 					      const u8 *channel_announce,
@@ -809,7 +767,7 @@ static void add_channel_announce_to_broadcast(struct routing_state *rstate,
 					      u32 index)
 {
 	u8 *addendum = towire_gossip_store_channel_amount(tmpctx, chan->sat);
-	bool is_local = is_local_channel(rstate, chan);
+	bool is_local = local_direction(rstate, chan, NULL);
 
 	chan->bcast.timestamp = timestamp;
 	/* 0, unless we're loading from store */
@@ -1381,7 +1339,7 @@ bool routing_add_channel_update(struct routing_state *rstate,
 	} else if (!is_chan_public(chan)) {
 		/* For private channels, we get updates without an announce: don't
 		 * broadcast them!  But save local ones to store anyway. */
-		assert(is_local_channel(rstate, chan));
+		assert(local_direction(rstate, chan, NULL));
 		/* Don't save if we're loading from store */
 		if (!index) {
 			hc->bcast.index
@@ -1399,7 +1357,7 @@ bool routing_add_channel_update(struct routing_state *rstate,
 		hc->bcast.index
 			= gossip_store_add(rstate->gs, update,
 					   hc->bcast.timestamp,
-					   is_local_channel(rstate, chan),
+					   local_direction(rstate, chan, NULL),
 					   NULL);
 		if (hc->bcast.timestamp > rstate->last_timestamp
 		    && hc->bcast.timestamp < time_now().ts.tv_sec)

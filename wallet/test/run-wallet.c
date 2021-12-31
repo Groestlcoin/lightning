@@ -138,13 +138,12 @@ bool fromwire_custommsg_in(const tal_t *ctx UNNEEDED, const void *p UNNEEDED, u8
 /* Generated stub for fromwire_gossipd_get_stripped_cupdate_reply */
 bool fromwire_gossipd_get_stripped_cupdate_reply(const tal_t *ctx UNNEEDED, const void *p UNNEEDED, u8 **stripped_update UNNEEDED)
 { fprintf(stderr, "fromwire_gossipd_get_stripped_cupdate_reply called!\n"); abort(); }
-u8 *towire_hsmd_new_channel(const tal_t *ctx UNNEEDED, const struct node_id *id UNNEEDED, u64 dbid UNNEEDED)
-{ fprintf(stderr, "towire_hsmd_new_channel called!\n"); abort(); }
-bool fromwire_hsmd_new_channel_reply(const void *p UNNEEDED)
-{ fprintf(stderr, "fromwire_hsmd_new_channel_reply called!\n"); abort(); }
 /* Generated stub for fromwire_hsmd_get_output_scriptpubkey_reply */
 bool fromwire_hsmd_get_output_scriptpubkey_reply(const tal_t *ctx UNNEEDED, const void *p UNNEEDED, u8 **script UNNEEDED)
 { fprintf(stderr, "fromwire_hsmd_get_output_scriptpubkey_reply called!\n"); abort(); }
+/* Generated stub for fromwire_hsmd_new_channel_reply */
+bool fromwire_hsmd_new_channel_reply(const void *p UNNEEDED)
+{ fprintf(stderr, "fromwire_hsmd_new_channel_reply called!\n"); abort(); }
 /* Generated stub for fromwire_hsmd_sign_commitment_tx_reply */
 bool fromwire_hsmd_sign_commitment_tx_reply(const void *p UNNEEDED, struct bitcoin_signature *sig UNNEEDED)
 { fprintf(stderr, "fromwire_hsmd_sign_commitment_tx_reply called!\n"); abort(); }
@@ -441,13 +440,14 @@ struct channel_coin_mvt *new_channel_mvt_routed_hout(const tal_t *ctx UNNEEDED,
 						     struct htlc_out *hout UNNEEDED,
 						     struct channel *channel UNNEEDED)
 { fprintf(stderr, "new_channel_mvt_routed_hout called!\n"); abort(); }
-/* Generated stub for new_coin_deposit_sat */
-struct chain_coin_mvt *new_coin_deposit_sat(const tal_t *ctx UNNEEDED,
-					    const char *account_name UNNEEDED,
-					    const struct bitcoin_outpoint *outpoint UNNEEDED,
-					    u32 blockheight UNNEEDED,
-					    struct amount_sat amount UNNEEDED)
-{ fprintf(stderr, "new_coin_deposit_sat called!\n"); abort(); }
+/* Generated stub for new_coin_wallet_deposit */
+struct chain_coin_mvt *new_coin_wallet_deposit(const tal_t *ctx UNNEEDED,
+					       const struct bitcoin_outpoint *outpoint UNNEEDED,
+					       u32 blockheight UNNEEDED,
+					       struct amount_sat amount UNNEEDED,
+					       enum mvt_tag tag)
+
+{ fprintf(stderr, "new_coin_wallet_deposit called!\n"); abort(); }
 /* Generated stub for notify_chain_mvt */
 void notify_chain_mvt(struct lightningd *ld UNNEEDED, const struct chain_coin_mvt *mvt UNNEEDED)
 { fprintf(stderr, "notify_chain_mvt called!\n"); abort(); }
@@ -492,8 +492,7 @@ void notify_forward_event(struct lightningd *ld UNNEEDED,
 /* Generated stub for onchaind_funding_spent */
 enum watch_result onchaind_funding_spent(struct channel *channel UNNEEDED,
 					 const struct bitcoin_tx *tx UNNEEDED,
-					 u32 blockheight UNNEEDED,
-					 bool is_replay UNNEEDED)
+					 u32 blockheight UNNEEDED)
 { fprintf(stderr, "onchaind_funding_spent called!\n"); abort(); }
 /* Generated stub for onion_decode */
 struct onion_payload *onion_decode(const tal_t *ctx UNNEEDED,
@@ -655,7 +654,7 @@ u8 *serialize_onionpacket(
 	const struct onionpacket *packet UNNEEDED)
 { fprintf(stderr, "serialize_onionpacket called!\n"); abort(); }
 /* Generated stub for subd_release_channel */
-void subd_release_channel(struct subd *owner UNNEEDED, void *channel UNNEEDED)
+void subd_release_channel(struct subd *owner UNNEEDED, const void *channel UNNEEDED)
 { fprintf(stderr, "subd_release_channel called!\n"); abort(); }
 /* Generated stub for subd_req_ */
 void subd_req_(const tal_t *ctx UNNEEDED,
@@ -751,6 +750,9 @@ u8 *towire_gossipd_get_stripped_cupdate(const tal_t *ctx UNNEEDED, const struct 
 /* Generated stub for towire_hsmd_get_output_scriptpubkey */
 u8 *towire_hsmd_get_output_scriptpubkey(const tal_t *ctx UNNEEDED, u64 channel_id UNNEEDED, const struct node_id *peer_id UNNEEDED, const struct pubkey *commitment_point UNNEEDED)
 { fprintf(stderr, "towire_hsmd_get_output_scriptpubkey called!\n"); abort(); }
+/* Generated stub for towire_hsmd_new_channel */
+u8 *towire_hsmd_new_channel(const tal_t *ctx UNNEEDED, const struct node_id *id UNNEEDED, u64 dbid UNNEEDED)
+{ fprintf(stderr, "towire_hsmd_new_channel called!\n"); abort(); }
 /* Generated stub for towire_hsmd_sign_commitment_tx */
 u8 *towire_hsmd_sign_commitment_tx(const tal_t *ctx UNNEEDED, const struct node_id *peer_id UNNEEDED, u64 channel_dbid UNNEEDED, const struct bitcoin_tx *tx UNNEEDED, const struct pubkey *remote_funding_key UNNEEDED)
 { fprintf(stderr, "towire_hsmd_sign_commitment_tx called!\n"); abort(); }
@@ -770,7 +772,7 @@ u8 *towire_invalid_realm(const tal_t *ctx UNNEEDED)
 u8 *towire_onchaind_dev_memleak(const tal_t *ctx UNNEEDED)
 { fprintf(stderr, "towire_onchaind_dev_memleak called!\n"); abort(); }
 /* Generated stub for towire_onchaind_known_preimage */
-u8 *towire_onchaind_known_preimage(const tal_t *ctx UNNEEDED, const struct preimage *preimage UNNEEDED, bool is_replay UNNEEDED)
+u8 *towire_onchaind_known_preimage(const tal_t *ctx UNNEEDED, const struct preimage *preimage UNNEEDED)
 { fprintf(stderr, "towire_onchaind_known_preimage called!\n"); abort(); }
 /* Generated stub for towire_permanent_channel_failure */
 u8 *towire_permanent_channel_failure(const tal_t *ctx UNNEEDED)
@@ -1615,7 +1617,8 @@ static bool test_channel_inflight_crud(struct lightningd *ld, const tal_t *ctx)
 				funding_psbt,
 				last_tx,
 				sig,
-				1, lease_commit_sig, 2, 4, 22);
+				1, lease_commit_sig, 2, 4, 22,
+				AMOUNT_MSAT(10));
 
 	/* do inflights get correctly added to the channel? */
 	wallet_inflight_add(w, inflight);
@@ -1637,7 +1640,8 @@ static bool test_channel_inflight_crud(struct lightningd *ld, const tal_t *ctx)
 				funding_psbt,
 				last_tx,
 				sig,
-				0, NULL, 0, 0, 0);
+				0, NULL, 0, 0, 0,
+				AMOUNT_MSAT(0));
 	wallet_inflight_add(w, inflight);
 	CHECK_MSG(c2 = wallet_channel_load(w, chan->dbid),
 		  tal_fmt(w, "Load from DB"));

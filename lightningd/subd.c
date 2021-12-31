@@ -241,7 +241,7 @@ static int subd(const char *path, const char *name,
 			goto child_errno_fail;
 
 		/* Make (fairly!) sure all other fds are closed. */
-		closefrom(tal_count(fds) + 1);
+		closefrom(tal_count(fds));
 
 		num_args = 0;
 		args[num_args++] = tal_strdup(NULL, path);
@@ -753,10 +753,7 @@ static struct subd *new_subd(struct lightningd *ld,
 	list_head_init(&sd->reqs);
 	sd->channel = channel;
 	sd->rcvd_version = false;
-	if (node_id)
-		sd->node_id = tal_dup(sd, struct node_id, node_id);
-	else
-		sd->node_id = NULL;
+	sd->node_id = tal_dup_or_null(sd, struct node_id, node_id);
 
 	/* conn actually owns daemon: we die when it does. */
 	sd->conn = io_new_conn(ld, msg_fd, msg_setup, sd);
@@ -888,7 +885,7 @@ struct subd *subd_shutdown(struct subd *sd, unsigned int seconds)
 	return tal_free(sd);
 }
 
-void subd_release_channel(struct subd *owner, void *channel)
+void subd_release_channel(struct subd *owner, const void *channel)
 {
 	/* If owner is a per-peer-daemon, and not already freeing itself... */
 	if (owner->channel) {

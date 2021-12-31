@@ -133,6 +133,7 @@ static struct lightningd *new_lightningd(const tal_t *ctx)
 	ld->dev_max_funding_unconfirmed = 2016;
 	ld->dev_ignore_modern_onion = false;
 	ld->dev_ignore_obsolete_onion = false;
+	ld->dev_disable_commit = -1;
 #endif
 
 	/*~ These are CCAN lists: an embedded double-linked list.  It's not
@@ -170,7 +171,7 @@ static struct lightningd *new_lightningd(const tal_t *ctx)
 	 * in limbo until we get all the parts, or we time them out. */
 	htlc_set_map_init(&ld->htlc_sets);
 
-	/*~ We have a multi-entry log-book infrastructure: we define a 100MB log
+	/*~ We have a multi-entry log-book infrastructure: we define a 10MB log
 	 * book to hold all the entries (and trims as necessary), and multiple
 	 * log objects which each can write into it, each with a unique
 	 * prefix. */
@@ -999,10 +1000,6 @@ int main(int argc, char *argv[])
 	 * bitcoin wallet (though it's that too).  It also stores channel
 	 * states, invoices, payments, blocks and bitcoin transactions. */
 	ld->wallet = wallet_new(ld, ld->timers, bip32_base);
-
-	/*~ We keep track of how many 'coin moves' we've ever made.
-	 * Initialize the starting value from the database here. */
-	coin_mvts_init_count(ld);
 
 	/*~ We keep a filter of scriptpubkeys we're interested in. */
 	ld->owned_txfilter = txfilter_new(ld);
