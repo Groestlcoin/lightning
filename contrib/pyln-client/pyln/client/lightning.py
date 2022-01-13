@@ -229,7 +229,7 @@ class UnixSocket(object):
     def connect(self) -> None:
         try:
             self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            self.sock.connect(self.path)
+            self.sock.connect(str(self.path))
         except OSError as e:
             self.close()
 
