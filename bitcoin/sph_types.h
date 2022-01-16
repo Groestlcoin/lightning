@@ -59,7 +59,7 @@
 #define SPH_BIG_ENDIAN 1
 #define SPH_SPARCV9_GCC defined SPH_SPARCV9_GCC
 #define SPH_AMD64_GCC defined SPH_AMD64_GCC
-#define SPH_I386_GCC defined SPH_SPH_I386_GCC
+#define SPH_I386_GCC defined SPH_I386_GCC
 #define SPH_NO_ASM 1
 #define SPH_SMALL_FOOTPRINT 1
 #define SPH_64_TRUE 1

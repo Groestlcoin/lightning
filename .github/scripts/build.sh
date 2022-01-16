@@ -2,18 +2,14 @@
 
 echo "Running in $(pwd)"
 export ARCH=${ARCH:-64}
-export BOLTDIR=lightning-rfc
 export CC=${COMPILER:-gcc}
 export COMPAT=${COMPAT:-1}
 export TEST_CHECK_DBSTMTS=${TEST_CHECK_DBSTMTS:-0}
 export DEVELOPER=${DEVELOPER:-1}
 export EXPERIMENTAL_FEATURES=${EXPERIMENTAL_FEATURES:-0}
 export PATH=$CWD/dependencies/bin:"$HOME"/.local/bin:"$PATH"
-export PYTEST_OPTS="--maxfail=5 --suppress-no-test-exit-code ${PYTEST_OPTS}"
-export PYTEST_PAR=${PYTEST_PAR:-10}
-export PYTEST_SENTRY_ALWAYS_REPORT=1
 export SLOW_MACHINE=1
-export TEST_CMD=${TEST_CMD:-"make -j $PYTEST_PAR pytest"}
+export TEST_CMD=${TEST_CMD:-"make -j 4"}
 export TEST_DB_PROVIDER=${TEST_DB_PROVIDER:-"sqlite3"}
 export TEST_NETWORK=${NETWORK:-"regtest"}
 export TIMEOUT=900
@@ -24,12 +20,6 @@ export LIGHTNINGD_POSTGRES_NO_VACUUM=1
 pip3 install --user -U \
      -r requirements.lock
 
-timeout 60 pip3 install --user \
-     --use-feature=in-tree-build \
-     ./contrib/pyln-client \
-     ./contrib/pyln-proto \
-     ./contrib/pyln-testing
-
 # Install utilities that aren't dependencies, but make
 # running tests easier/feasible on CI (and pytest which
 # keeps breaking the rerunfailures plugin).
@@ -37,25 +27,7 @@ pip3 install --user \
      blinker \
      flake8 \
      flaky \
-     mako \
-     pytest-sentry \
-     pytest-test-groups==1.0.3 \
-     pytest-custom-exit-code==0.3.0 \
-     pytest-timeout \
-     pytest-json-report
-
-git clone https://github.com/lightningnetwork/lightning-rfc.git ../lightning-rfc
-git submodule update --init --recursive
-
-./configure CC="$CC"
-cat config.vars
-
-cat << EOF > pytest.ini
-[pytest]
-addopts=-p no:logging --color=yes --timeout=1800 --timeout-method=thread --test-group-random-seed=42 --force-flaky --no-success-flaky-report --max-runs=3 --junitxml=report.xml --json-report --json-report-file=report.json --json-report-indent=2
-markers =
-    slow_test: marks tests as slow (deselect with '-m "not slow_test"')
-EOF
+     mako
 
 if [ "$TARGET_HOST" == "arm-linux-gnueabihf" ] || [ "$TARGET_HOST" == "aarch64-linux-gnu" ]
 then
@@ -107,10 +79,8 @@ then
     rm -rf gmp-6.1.2
 
     ./configure CC="$TARGET_HOST-gcc" --enable-static
-
-    make -j32 CC="$TARGET_HOST-gcc" > /dev/null
+    make -j4 CC="$TARGET_HOST-gcc" > /dev/null
 else
-    eatmydata make -j32
-    # shellcheck disable=SC2086
-    eatmydata $TEST_CMD
+    ./configure
+    eatmydata make -j4
 fi
