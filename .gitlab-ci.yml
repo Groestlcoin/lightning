@@ -10,7 +10,7 @@ build:
       curl -s -H "Authorization: token $GITHUB_STATUS_TOKEN"
       -X POST
       --data '{"state": "pending", "description": "Gitlab-CI is building the commit", "context": "gitlab-ci"}'
-      https://api.github.com/repos/ElementsProject/lightning/statuses/$CI_BUILD_REF || true
+      https://api.github.com/repos/Groestlcoin/lightning/statuses/$CI_BUILD_REF || true
   script:
     - make
     - make -j 12 check
@@ -35,4 +35,4 @@ update-status-success:
   when: on_success
   script:
     - >-
-      curl -s -H "Authorization: token $GITHUB_STATUS_TOKEN" -X POST --data '{"state": "success", "description": "Gitlab-CI build succeeded.", "context": "gitlab-ci"}' https://api.github.com/repos/ElementsProject/lightning/statuses/$CI_BUILD_REF || true
+      curl -s -H "Authorization: token $GITHUB_STATUS_TOKEN" -X POST --data '{"state": "success", "description": "Gitlab-CI build succeeded.", "context": "gitlab-ci"}' https://api.github.com/repos/Groestlcoin/lightning/statuses/$CI_BUILD_REF || true
