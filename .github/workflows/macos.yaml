@@ -73,7 +73,8 @@ jobs:
           path: |
             lightningd/lightningd
             cli/lightning-cli
-          if-no-files-found: ignore
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Download artifacts
         uses: actions/download-artifact@v2
