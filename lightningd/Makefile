@@ -29,6 +29,7 @@ LIGHTNINGD_SRC :=				\
 	lightningd/options.c			\
 	lightningd/pay.c			\
 	lightningd/peer_control.c		\
+	lightningd/peer_fd.c			\
 	lightningd/peer_htlcs.c			\
 	lightningd/ping.c			\
 	lightningd/plugin.c			\
@@ -81,7 +82,6 @@ LIGHTNINGD_COMMON_OBJS :=			\
 	common/channel_type.o			\
 	common/coin_mvt.o			\
 	common/configdir.o			\
-	common/crypto_state.o			\
 	common/daemon.o				\
 	common/derive_basepoints.o		\
 	common/ecdh_hsmd.o			\

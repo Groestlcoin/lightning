@@ -11,7 +11,7 @@
 #include <common/wireaddr.h>
 #include <wallet/wallet.h>
 
-struct per_peer_state;
+struct peer_fd;
 struct wally_psbt;
 
 struct peer {
@@ -65,13 +65,13 @@ struct peer *peer_from_json(struct lightningd *ld,
 			    const jsmntok_t *peeridtok);
 
 void peer_connected(struct lightningd *ld, const u8 *msg,
-		    int peer_fd, int gossip_fd, int gossip_store_fd);
+		    int peer_fd, int gossip_fd);
 
 /* Could be configurable. */
 #define OUR_CHANNEL_FLAGS CHANNEL_FLAGS_ANNOUNCE_CHANNEL
 
 void channel_errmsg(struct channel *channel,
-		    struct per_peer_state *pps,
+		    struct peer_fd *peer_fd,
 		    const struct channel_id *channel_id,
 		    const char *desc,
 		    bool warning,

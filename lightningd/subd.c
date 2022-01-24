@@ -14,6 +14,7 @@
 #include <fcntl.h>
 #include <lightningd/lightningd.h>
 #include <lightningd/log_status.h>
+#include <lightningd/peer_fd.h>
 #include <lightningd/subd.h>
 #include <sys/socket.h>
 #include <sys/wait.h>
@@ -188,7 +189,7 @@ static void close_taken_fds(va_list *ap)
 /* We use sockets, not pipes, because fds are bidir. */
 static int subd(const char *path, const char *name,
 		const char *debug_subdaemon,
-		int *msgfd, int dev_disconnect_fd,
+		int *msgfd,
 		bool io_logging,
 		va_list *ap)
 {
@@ -212,7 +213,7 @@ static int subd(const char *path, const char *name,
 
 	if (childpid == 0) {
 		size_t num_args;
-		char *args[] = { NULL, NULL, NULL, NULL, NULL };
+		char *args[] = { NULL, NULL, NULL, NULL };
 		int **fds = tal_arr(tmpctx, int *, 3);
 		int stdoutfd = STDOUT_FILENO, stderrfd = STDERR_FILENO;
 
@@ -230,10 +231,6 @@ static int subd(const char *path, const char *name,
 			tal_arr_expand(&fds, fd);
 		}
 
-		/* If we have a dev_disconnect_fd, add it after. */
-		if (dev_disconnect_fd != -1)
-			tal_arr_expand(&fds, &dev_disconnect_fd);
-
 		/* Finally, the fd to report exec errors on */
 		tal_arr_expand(&fds, &execfail[1]);
 
@@ -248,8 +245,6 @@ static int subd(const char *path, const char *name,
 		if (io_logging)
 			args[num_args++] = "--log-io";
 #if DEVELOPER
-		if (dev_disconnect_fd != -1)
-			args[num_args++] = tal_fmt(NULL, "--dev-disconnect=%i", dev_disconnect_fd);
 		if (debug_subdaemon && strends(name, debug_subdaemon))
 			args[num_args++] = "--debugger";
 #endif
@@ -410,25 +405,25 @@ static bool log_status_fail(struct subd *sd, const u8 *msg)
 	return true;
 }
 
-static bool handle_peer_error(struct subd *sd, const u8 *msg, int fds[3])
+static bool handle_peer_error(struct subd *sd, const u8 *msg, int fds[2])
 {
 	void *channel = sd->channel;
 	struct channel_id channel_id;
 	char *desc;
-	struct per_peer_state *pps;
+	struct peer_fd *peer_fd;
 	u8 *err_for_them;
 	bool warning;
 
 	if (!fromwire_status_peer_error(msg, msg,
 					&channel_id, &desc, &warning,
-					&pps, &err_for_them))
+					&err_for_them))
 		return false;
 
-	per_peer_state_set_fds_arr(pps, fds);
+	peer_fd = new_peer_fd_arr(msg, fds);
 
 	/* Don't free sd; we may be about to free channel. */
 	sd->channel = NULL;
-	sd->errcb(channel, pps, &channel_id, desc, warning, err_for_them);
+	sd->errcb(channel, peer_fd, &channel_id, desc, warning, err_for_them);
 	return true;
 }
 
@@ -529,11 +524,11 @@ static struct io_plan *sd_msg_read(struct io_conn *conn, struct subd *sd)
 	if (sd->channel) {
 		switch ((enum peer_status_wire)type) {
 		case WIRE_STATUS_PEER_ERROR:
-			/* We expect 3 fds after this */
+			/* We expect 2 fds after this */
 			if (!sd->fds_in) {
 				/* Don't free msg_in: we go around again. */
 				tal_steal(sd, sd->msg_in);
-				plan = sd_collect_fds(conn, sd, 3);
+				plan = sd_collect_fds(conn, sd, 2);
 				goto out;
 			}
 			if (!handle_peer_error(sd, sd->msg_in, sd->fds_in))
@@ -662,7 +657,7 @@ static struct io_plan *msg_send_next(struct io_conn *conn, struct subd *sd)
 	if (!msg)
 		return msg_queue_wait(conn, sd->outq, msg_send_next, sd);
 
-	fd = msg_extract_fd(msg);
+	fd = msg_extract_fd(sd->outq, msg);
 	if (fd >= 0) {
 		tal_free(msg);
 		return io_send_fd(conn, fd, true, msg_send_next, sd);
@@ -687,7 +682,7 @@ static struct subd *new_subd(struct lightningd *ld,
 			     unsigned int (*msgcb)(struct subd *,
 						   const u8 *, const int *fds),
 			     void (*errcb)(void *channel,
-					   struct per_peer_state *pps,
+					   struct peer_fd *peer_fd,
 					   const struct channel_id *channel_id,
 					   const char *desc,
 					   bool warning,
@@ -700,7 +695,6 @@ static struct subd *new_subd(struct lightningd *ld,
 	struct subd *sd = tal(ld, struct subd);
 	int msg_fd;
 	const char *debug_subd = NULL;
-	int disconnect_fd = -1;
 	const char *shortname;
 
 	assert(name != NULL);
@@ -720,13 +714,12 @@ static struct subd *new_subd(struct lightningd *ld,
 
 #if DEVELOPER
 	debug_subd = ld->dev_debug_subprocess;
-	disconnect_fd = ld->dev_disconnect_fd;
 #endif /* DEVELOPER */
 
 	const char *path = subdaemon_path(tmpctx, ld, name);
 
 	sd->pid = subd(path, name, debug_subd,
-		       &msg_fd, disconnect_fd,
+		       &msg_fd,
 		       /* We only turn on subdaemon io logging if we're going
 			* to print it: too stressful otherwise! */
 		       log_print_level(sd->log) < LOG_DBG,
@@ -748,7 +741,7 @@ static struct subd *new_subd(struct lightningd *ld,
 	sd->errcb = errcb;
 	sd->billboardcb = billboardcb;
 	sd->fds_in = NULL;
-	sd->outq = msg_queue_new(sd);
+	sd->outq = msg_queue_new(sd, true);
 	tal_add_destructor(sd, destroy_subd);
 	list_head_init(&sd->reqs);
 	sd->channel = channel;
@@ -796,7 +789,7 @@ struct subd *new_channel_subd_(struct lightningd *ld,
 			       unsigned int (*msgcb)(struct subd *, const u8 *,
 						     const int *fds),
 			       void (*errcb)(void *channel,
-					     struct per_peer_state *pps,
+					     struct peer_fd *peer_fd,
 					     const struct channel_id *channel_id,
 					     const char *desc,
 					     bool warning,

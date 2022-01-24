@@ -21,7 +21,6 @@ DEVTOOLS_COMMON_OBJS :=				\
 	common/bolt11.o				\
 	common/blockheight_states.o		\
 	common/channel_id.o			\
-	common/crypto_state.o			\
 	common/decode_array.o			\
 	common/features.o			\
 	common/fee_states.o			\
@@ -70,7 +69,7 @@ devtools/onion: $(DEVTOOLS_COMMON_OBJS) $(JSMN_OBJS) $(CCAN_OBJS) $(BITCOIN_OBJS
 
 devtools/blindedpath: $(DEVTOOLS_COMMON_OBJS) $(JSMN_OBJS) $(CCAN_OBJS) common/blinding.o $(BITCOIN_OBJS) wire/fromwire.o wire/towire.o devtools/blindedpath.o common/onion.o common/onionreply.o common/sphinx.o
 
-devtools/gossipwith: $(DEVTOOLS_COMMON_OBJS) $(JSMN_OBJS) $(CCAN_OBJS) $(BITCOIN_OBJS) wire/fromwire.o wire/towire.o wire/peer$(EXP)_wiregen.o devtools/gossipwith.o common/cryptomsg.o common/cryptomsg.o common/crypto_sync.o
+devtools/gossipwith: $(DEVTOOLS_COMMON_OBJS) $(JSMN_OBJS) $(CCAN_OBJS) $(BITCOIN_OBJS) wire/fromwire.o wire/towire.o wire/peer$(EXP)_wiregen.o devtools/gossipwith.o common/cryptomsg.o common/cryptomsg.o
 
 $(DEVTOOLS_OBJS) $(DEVTOOLS_TOOL_OBJS): wire/wire.h
 

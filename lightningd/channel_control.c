@@ -20,6 +20,7 @@
 #include <lightningd/hsm_control.h>
 #include <lightningd/notification.h>
 #include <lightningd/peer_control.h>
+#include <lightningd/peer_fd.h>
 #include <lightningd/ping.h>
 #include <wire/common_wiregen.h>
 
@@ -355,17 +356,17 @@ static void peer_start_closingd_after_shutdown(struct channel *channel,
 					       const u8 *msg,
 					       const int *fds)
 {
-	struct per_peer_state *pps;
+	struct peer_fd *peer_fd;
 
-	if (!fromwire_channeld_shutdown_complete(tmpctx, msg, &pps)) {
+	if (!fromwire_channeld_shutdown_complete(msg)) {
 		channel_internal_error(channel, "bad shutdown_complete: %s",
 				       tal_hex(msg, msg));
 		return;
 	}
-	per_peer_state_set_fds_arr(pps, fds);
+	peer_fd = new_peer_fd_arr(msg, fds);
 
 	/* This sets channel->owner, closes down channeld. */
-	peer_start_closingd(channel, pps);
+	peer_start_closingd(channel, peer_fd);
 
 	/* We might have reconnected, so already be here. */
 	if (!channel_closed(channel)
@@ -489,9 +490,9 @@ static unsigned channel_msg(struct subd *sd, const u8 *msg, const int *fds)
 		peer_got_shutdown(sd->channel, msg);
 		break;
 	case WIRE_CHANNELD_SHUTDOWN_COMPLETE:
-		/* We expect 3 fds. */
+		/* We expect 2 fds. */
 		if (!fds)
-			return 3;
+			return 2;
 		peer_start_closingd_after_shutdown(sd->channel, msg, fds);
 		break;
 	case WIRE_CHANNELD_FAIL_FALLEN_BEHIND:
@@ -549,7 +550,7 @@ static unsigned channel_msg(struct subd *sd, const u8 *msg, const int *fds)
 }
 
 void peer_start_channeld(struct channel *channel,
-			 struct per_peer_state *pps,
+			 struct peer_fd *peer_fd,
 			 const u8 *fwd_msg,
 			 bool reconnected,
 			 const u8 *reestablish_only)
@@ -584,9 +585,8 @@ void peer_start_channeld(struct channel *channel,
 					   channel_msg,
 					   channel_errmsg,
 					   channel_set_billboard,
-					   take(&pps->peer_fd),
-					   take(&pps->gossip_fd),
-					   take(&pps->gossip_store_fd),
+					   take(&peer_fd->fd),
+					   take(&peer_fd->gossip_fd),
 					   take(&hsmfd), NULL));
 
 	if (!channel->owner) {
@@ -669,7 +669,6 @@ void peer_start_channeld(struct channel *channel,
 				       feerate_max(ld, NULL),
 				       try_get_feerate(ld->topology, FEERATE_PENALTY),
 				       &channel->last_sig,
-				       pps,
 				       &channel->channel_info.remote_fundingkey,
 				       &channel->channel_info.theirbase,
 				       &channel->channel_info.remote_per_commit,

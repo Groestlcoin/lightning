@@ -2,7 +2,6 @@
 #include <common/cryptomsg.h>
 #include <common/features.h>
 #include <common/node_id.h>
-#include <common/per_peer_state.h>
 #include <common/wireaddr.h>
 
 msgtype,connectd_init,2000
@@ -21,6 +20,9 @@ msgdata,connectd_init,use_v3_autotor,bool,
 msgdata,connectd_init,timeout_secs,u32,
 msgdata,connectd_init,websocket_helper,wirestring,
 msgdata,connectd_init,websocket_port,u16,
+msgdata,connectd_init,dev_fast_gossip,bool,
+# If this is set, then fd 5 is dev_disconnect_fd.
+msgdata,connectd_init,dev_disconnect,bool,
 
 # Connectd->master, here are the addresses I bound, can announce.
 msgtype,connectd_init_reply,2100
@@ -45,6 +47,8 @@ msgdata,connectd_reconnected,id,node_id,
 msgtype,connectd_connect_to_peer,2001
 msgdata,connectd_connect_to_peer,id,node_id,
 msgdata,connectd_connect_to_peer,seconds_waited,u32,
+msgdata,connectd_connect_to_peer,len,u32,
+msgdata,connectd_connect_to_peer,addrs,wireaddr,len
 msgdata,connectd_connect_to_peer,addrhint,?wireaddr_internal,
 
 # Connectd->master: connect failed.
@@ -60,7 +64,6 @@ msgtype,connectd_peer_connected,2002
 msgdata,connectd_peer_connected,id,node_id,
 msgdata,connectd_peer_connected,addr,wireaddr_internal,
 msgdata,connectd_peer_connected,incoming,bool,
-msgdata,connectd_peer_connected,pps,per_peer_state,
 msgdata,connectd_peer_connected,flen,u16,
 msgdata,connectd_peer_connected,features,u8,flen
 
@@ -71,7 +74,6 @@ msgdata,connectd_peer_disconnected,id,node_id,
 # master -> connectd: give message to peer and disconnect.  Three fds: peer, gossip and gossip_store
 msgtype,connectd_peer_final_msg,2003
 msgdata,connectd_peer_final_msg,id,node_id,
-msgdata,connectd_peer_final_msg,pps,per_peer_state,
 msgdata,connectd_peer_final_msg,len,u16,
 msgdata,connectd_peer_final_msg,msg,u8,len
 

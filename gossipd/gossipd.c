@@ -831,37 +831,21 @@ static struct io_plan *connectd_new_peer(struct io_conn *conn,
 	struct peer *peer = tal(conn, struct peer);
 	struct node *node;
 	int fds[2];
-	int gossip_store_fd;
-	struct gossip_state *gs;
 
 	if (!fromwire_gossipd_new_peer(msg, &peer->id,
-				      &peer->gossip_queries_feature,
-				      &peer->initial_routing_sync_feature)) {
+				      &peer->gossip_queries_feature)) {
 		status_broken("Bad new_peer msg from connectd: %s",
 			      tal_hex(tmpctx, msg));
 		return io_close(conn);
-	}
-
-	gossip_store_fd = gossip_store_readonly_fd(daemon->rstate->gs);;
-	if (gossip_store_fd < 0) {
-		status_broken("Failed to get readonly store fd: %s",
-			      strerror(errno));
-		daemon_conn_send(daemon->connectd,
-				 take(towire_gossipd_new_peer_reply(NULL,
-								   false,
-								   NULL)));
-		goto done;
 	}
 
 	/* This can happen: we handle it gracefully, returning a `failed` msg. */
 	if (socketpair(AF_LOCAL, SOCK_STREAM, 0, fds) != 0) {
 		status_broken("Failed to create socketpair: %s",
 			      strerror(errno));
-		close(gossip_store_fd);
 		daemon_conn_send(daemon->connectd,
 				 take(towire_gossipd_new_peer_reply(NULL,
-								   false,
-								   NULL)));
+								    false)));
 		goto done;
 	}
 
@@ -898,52 +882,19 @@ static struct io_plan *connectd_new_peer(struct io_conn *conn,
 	/* This sends the initial timestamp filter. */
 	seeker_setup_peer_gossip(daemon->seeker, peer);
 
-	/* BOLT #7:
-	 *
-	 * A node:
-	 *   - if the `gossip_queries` feature is negotiated:
-	 * 	- MUST NOT relay any gossip messages it did not generate itself,
-	 *        unless explicitly requested.
-	 */
-	if (peer->gossip_queries_feature) {
-		gs = NULL;
-	} else {
-		/* BOLT #7:
-		 *
-		 * - upon receiving an `init` message with the
-		 *   `initial_routing_sync` flag set to 1:
-		 *   - SHOULD send gossip messages for all known channels and
-		 *    nodes, as if they were just received.
-		 * - if the `initial_routing_sync` flag is set to 0, OR if the
-		 *   initial sync was completed:
-		 *   - SHOULD resume normal operation, as specified in the
-		 *     following [Rebroadcasting](#rebroadcasting) section.
-		 */
-		gs = tal(tmpctx, struct gossip_state);
-		gs->timestamp_min = 0;
-		gs->timestamp_max = UINT32_MAX;
-
-		/* If they don't want initial sync, start at end of store */
-		if (!peer->initial_routing_sync_feature)
-			lseek(gossip_store_fd, 0, SEEK_END);
-
-		gs->next_gossip = time_mono();
-	}
-
 	/* Reply with success, and the new fd and gossip_state. */
 	daemon_conn_send(daemon->connectd,
-			 take(towire_gossipd_new_peer_reply(NULL, true, gs)));
+			 take(towire_gossipd_new_peer_reply(NULL, true)));
 	daemon_conn_send_fd(daemon->connectd, fds[1]);
-	daemon_conn_send_fd(daemon->connectd, gossip_store_fd);
 
 done:
 	return daemon_conn_read_next(conn, daemon->connectd);
 }
 
-/*~ connectd can also ask us if we know any addresses for a given id. */
-static struct io_plan *connectd_get_address(struct io_conn *conn,
-					    struct daemon *daemon,
-					    const u8 *msg)
+/*~ lightningd asks us if we know any addresses for a given id. */
+static struct io_plan *handle_get_address(struct io_conn *conn,
+					  struct daemon *daemon,
+					  const u8 *msg)
 {
 	struct node_id id;
 	u8 rgb_color[3];
@@ -952,20 +903,17 @@ static struct io_plan *connectd_get_address(struct io_conn *conn,
 	struct wireaddr *addrs;
 	struct lease_rates *rates;
 
-	if (!fromwire_gossipd_get_addrs(msg, &id)) {
-		status_broken("Bad gossipd_get_addrs msg from connectd: %s",
-			      tal_hex(tmpctx, msg));
-		return io_close(conn);
-	}
+	if (!fromwire_gossipd_get_addrs(msg, &id))
+		master_badmsg(WIRE_GOSSIPD_GET_ADDRS, msg);
 
 	if (!get_node_announcement_by_id(tmpctx, daemon, &id,
 					 rgb_color, alias, &features, &addrs,
 					 &rates))
 		addrs = NULL;
 
-	daemon_conn_send(daemon->connectd,
+	daemon_conn_send(daemon->master,
 			 take(towire_gossipd_get_addrs_reply(NULL, addrs)));
-	return daemon_conn_read_next(conn, daemon->connectd);
+	return daemon_conn_read_next(conn, daemon->master);
 }
 
 /*~ connectd's input handler is very simple. */
@@ -979,12 +927,8 @@ static struct io_plan *connectd_req(struct io_conn *conn,
 	case WIRE_GOSSIPD_NEW_PEER:
 		return connectd_new_peer(conn, daemon, msg);
 
-	case WIRE_GOSSIPD_GET_ADDRS:
-		return connectd_get_address(conn, daemon, msg);
-
 	/* We send these, don't receive them. */
 	case WIRE_GOSSIPD_NEW_PEER_REPLY:
-	case WIRE_GOSSIPD_GET_ADDRS_REPLY:
 		break;
 	}
 
@@ -1178,6 +1122,9 @@ static void new_blockheight(struct daemon *daemon, const u8 *msg)
 		tal_arr_remove(&daemon->deferred_txouts, i);
 		i--;
 	}
+
+	daemon_conn_send(daemon->master,
+			 take(towire_gossipd_new_blockheight_reply(NULL)));
 }
 
 #if DEVELOPER
@@ -1462,6 +1409,9 @@ static struct io_plan *recv_req(struct io_conn *conn,
 		handle_new_lease_rates(daemon, msg);
 		goto done;
 
+	case WIRE_GOSSIPD_GET_ADDRS:
+		return handle_get_address(conn, daemon, msg);
+
 #if DEVELOPER
 	case WIRE_GOSSIPD_DEV_SET_MAX_SCIDS_ENCODE_SIZE:
 		dev_set_max_scids_encode_size(daemon, msg);
@@ -1499,6 +1449,8 @@ static struct io_plan *recv_req(struct io_conn *conn,
 	case WIRE_GOSSIPD_DEV_COMPACT_STORE_REPLY:
 	case WIRE_GOSSIPD_GOT_ONIONMSG_TO_US:
 	case WIRE_GOSSIPD_ADDGOSSIP_REPLY:
+	case WIRE_GOSSIPD_NEW_BLOCKHEIGHT_REPLY:
+	case WIRE_GOSSIPD_GET_ADDRS_REPLY:
 		break;
 	}
 

@@ -10,18 +10,18 @@
 #include "config.h"
 #include <ccan/array_size/array_size.h>
 #include <ccan/asort/asort.h>
-#include <ccan/crypto/siphash24/siphash24.h>
 #include <ccan/fdpass/fdpass.h>
-#include <ccan/htable/htable_type.h>
 #include <ccan/noerr/noerr.h>
 #include <ccan/tal/str/str.h>
 #include <common/bech32.h>
 #include <common/bech32_util.h>
 #include <common/daemon_conn.h>
+#include <common/dev_disconnect.h>
 #include <common/ecdh_hsmd.h>
+#include <common/gossip_rcvd_filter.h>
+#include <common/gossip_store.h>
 #include <common/jsonrpc_errors.h>
 #include <common/memleak.h>
-#include <common/pseudorand.h>
 #include <common/status.h>
 #include <common/subdaemon.h>
 #include <common/timeout.h>
@@ -31,6 +31,7 @@
 #include <connectd/connectd_gossipd_wiregen.h>
 #include <connectd/connectd_wiregen.h>
 #include <connectd/handshake.h>
+#include <connectd/multiplex.h>
 #include <connectd/netaddress.h>
 #include <connectd/peer_exchange_initmsg.h>
 #include <connectd/tor.h>
@@ -58,89 +59,6 @@
 #define MAX_CONNECT_ATTEMPTS 10
 #define INITIAL_WAIT_SECONDS	1
 #define MAX_WAIT_SECONDS	300
-
-/*~ We keep a hash table (ccan/htable) of public keys, which tells us what
- * peers are already connected.  The HTABLE_DEFINE_TYPE() macro needs a
- * keyof() function to extract the key.  For this simple use case, that's the
- * identity function: */
-static const struct node_id *node_id_keyof(const struct node_id *pc)
-{
-	return pc;
-}
-
-/*~ We also need to define a hashing function. siphash24 is a fast yet
- * cryptographic hash in ccan/crypto/siphash24; we might be able to get away
- * with a slightly faster hash with fewer guarantees, but it's good hygiene to
- * use this unless it's a proven bottleneck.  siphash_seed() is a function in
- * common/pseudorand which sets up a seed for our hashing; it's different
- * every time the program is run. */
-static size_t node_id_hash(const struct node_id *id)
-{
-	return siphash24(siphash_seed(), id->k, sizeof(id->k));
-}
-
-/*~ This defines 'struct node_set' which contains 'struct node_id' pointers. */
-HTABLE_DEFINE_TYPE(struct node_id,
-		   node_id_keyof,
-		   node_id_hash,
-		   node_id_eq,
-		   node_set);
-
-/*~ This is the global state, like `struct lightningd *ld` in lightningd. */
-struct daemon {
-	/* Who am I? */
-	struct node_id id;
-
-	/* pubkey equivalent. */
-	struct pubkey mykey;
-
-	/* Base for timeout timers, and how long to wait for init msg */
-	struct timers timers;
-	u32 timeout_secs;
-
-	/* Peers that we've handed to `lightningd`, which it hasn't told us
-	 * have disconnected. */
-	struct node_set peers;
-
-	/* Peers we are trying to reach */
-	struct list_head connecting;
-
-	/* Connection to main daemon. */
-	struct daemon_conn *master;
-
-	/* Allow localhost to be considered "public": DEVELOPER-only option,
-	 * but for simplicity we don't #if DEVELOPER-wrap it here. */
-	bool dev_allow_localhost;
-
-	/* We support use of a SOCKS5 proxy (e.g. Tor) */
-	struct addrinfo *proxyaddr;
-
-	/* They can tell us we must use proxy even for non-Tor addresses. */
-	bool always_use_proxy;
-
-	/* There are DNS seeds we can use to look up node addresses as a last
-	 * resort, but doing so leaks our address so can be disabled. */
-	bool use_dns;
-
-	/* The address that the broken response returns instead of
-	 * NXDOMAIN. NULL if we have not detected a broken resolver. */
-	struct sockaddr *broken_resolver_response;
-
-	/* File descriptors to listen on once we're activated. */
-	struct listen_fd *listen_fds;
-
-	/* Allow to define the default behavior of tor services calls*/
-	bool use_v3_autotor;
-
-	/* Our features, as lightningd told us */
-	struct feature_set *our_features;
-
-	/* Subdaemon to proxy websocket requests. */
-	char *websocket_helper;
-
-	/* If non-zero, port to listen for websocket connections. */
-	u16 websocket_port;
-};
 
 /* Peers we're trying to reach: we iterate through addrs until we succeed
  * or fail. */
@@ -300,12 +218,11 @@ static void peer_connected_in(struct daemon *daemon,
  * 'features' is a field in the `init` message, indicating properties of the
  * node.
  */
-static bool get_gossipfds(struct daemon *daemon,
-			  const struct node_id *id,
-			  const u8 *their_features,
-			  struct per_peer_state *pps)
+static int get_gossipfd(struct daemon *daemon,
+			const struct node_id *id,
+			const u8 *their_features)
 {
-	bool gossip_queries_feature, initial_routing_sync, success;
+	bool gossip_queries_feature, success;
 	u8 *msg;
 
 	/*~ The way features generally work is that both sides need to offer it;
@@ -314,23 +231,16 @@ static bool get_gossipfds(struct daemon *daemon,
 		= feature_negotiated(daemon->our_features, their_features,
 				     OPT_GOSSIP_QUERIES);
 
-	/*~ `initial_routing_sync` is supported by every node, since it was in
-	 * the initial lightning specification: it means the peer wants the
-	 * backlog of existing gossip. */
-	initial_routing_sync
-		= feature_offered(their_features, OPT_INITIAL_ROUTING_SYNC);
-
 	/*~ We do this communication sync, since gossipd is our friend and
 	 * it's easier.  If gossipd fails, we fail. */
-	msg = towire_gossipd_new_peer(NULL, id, gossip_queries_feature,
-				     initial_routing_sync);
+	msg = towire_gossipd_new_peer(NULL, id, gossip_queries_feature);
 	if (!wire_sync_write(GOSSIPCTL_FD, take(msg)))
 		status_failed(STATUS_FAIL_INTERNAL_ERROR,
 			      "Failed writing to gossipctl: %s",
 			      strerror(errno));
 
 	msg = wire_sync_read(tmpctx, GOSSIPCTL_FD);
-	if (!fromwire_gossipd_new_peer_reply(pps, msg, &success, &pps->gs))
+	if (!fromwire_gossipd_new_peer_reply(msg, &success))
 		status_failed(STATUS_FAIL_INTERNAL_ERROR,
 			      "Failed parsing msg gossipctl: %s",
 			      tal_hex(tmpctx, msg));
@@ -340,14 +250,13 @@ static bool get_gossipfds(struct daemon *daemon,
 	if (!success) {
 		status_broken("Gossipd did not give us an fd: losing peer %s",
 			      type_to_string(tmpctx, struct node_id, id));
-		return false;
+		return -1;
 	}
 
-	/* Otherwise, the next thing in the socket will be the file descriptors
+	/* Otherwise, the next thing in the socket will be the file descriptor
 	 * for the per-peer daemon. */
-	pps->gossip_fd = fdpass_recv(GOSSIPCTL_FD);
-	pps->gossip_store_fd = fdpass_recv(GOSSIPCTL_FD);
-	return true;
+	return fdpass_recv(GOSSIPCTL_FD);
+
 }
 
 /*~ This is an ad-hoc marshalling structure where we store arguments so we
@@ -414,12 +323,60 @@ static struct io_plan *peer_reconnected(struct io_conn *conn,
 	/*~ ccan/io supports waiting on an address: in this case, the key in
 	 * the peer set.  When someone calls `io_wake()` on that address, it
 	 * will call retry_peer_connected above. */
-	return io_wait(conn, node_set_get(&daemon->peers, id),
+	return io_wait(conn, peer_htable_get(&daemon->peers, id),
 			/*~ The notleak() wrapper is a DEVELOPER-mode hack so
 			 * that our memory leak detection doesn't consider 'pr'
 			 * (which is not referenced from our code) to be a
 			 * memory leak. */
 		       retry_peer_connected, notleak(pr));
+}
+
+/*~ When we free a peer, we remove it from the daemon's hashtable */
+static void destroy_peer(struct peer *peer, struct daemon *daemon)
+{
+	peer_htable_del(&daemon->peers, peer);
+}
+
+/*~ This is where we create a new peer. */
+static struct peer *new_peer(struct daemon *daemon,
+			     const struct node_id *id,
+			     const struct crypto_state *cs,
+			     const u8 *their_features,
+			     struct io_conn *conn STEALS,
+			     int *fd_for_subd)
+{
+	struct peer *peer = tal(daemon, struct peer);
+
+	peer->daemon = daemon;
+	peer->id = *id;
+	peer->cs = *cs;
+	peer->final_msg = NULL;
+	peer->subd_in = NULL;
+	peer->peer_in = NULL;
+	peer->sent_to_peer = NULL;
+	peer->urgent = false;
+	peer->told_to_close = false;
+	peer->peer_outq = msg_queue_new(peer, false);
+	peer->subd_outq = msg_queue_new(peer, false);
+
+#if DEVELOPER
+	peer->dev_writes_enabled = NULL;
+	peer->dev_read_enabled = true;
+#endif
+
+	peer->to_peer = conn;
+
+	/* Aim for connection to shuffle data back and forth: sets up
+	 * peer->to_subd */
+	if (!multiplex_subd_setup(peer, fd_for_subd))
+		return tal_free(peer);
+
+	/* Now we own it */
+	tal_steal(peer, peer->to_peer);
+	peer_htable_add(&daemon->peers, peer);
+	tal_add_destructor2(peer, destroy_peer, daemon);
+
+	return peer;
 }
 
 /*~ Note the lack of static: this is called by peer_exchange_initmsg.c once the
@@ -433,11 +390,13 @@ struct io_plan *peer_connected(struct io_conn *conn,
 			       bool incoming)
 {
 	u8 *msg;
-	struct per_peer_state *pps;
+	struct peer *peer;
 	int unsup;
 	size_t depender, missing;
+	int subd_fd, gossip_fd;
 
-	if (node_set_get(&daemon->peers, id))
+	peer = peer_htable_get(&daemon->peers, id);
+	if (peer)
 		return peer_reconnected(conn, daemon, id, addr, cs,
 					their_features, incoming);
 
@@ -487,35 +446,34 @@ struct io_plan *peer_connected(struct io_conn *conn,
 			      conn, find_connecting(daemon, id)->conn);
 
 	/* This contains the per-peer state info; gossipd fills in pps->gs */
-	pps = new_per_peer_state(tmpctx, cs);
+	peer = new_peer(daemon, id, cs, their_features, conn, &subd_fd);
+	/* Only takes over conn if it succeeds. */
+	if (!peer)
+		return io_close(conn);
 
 	/* If gossipd can't give us a file descriptor, we give up connecting. */
-	if (!get_gossipfds(daemon, id, their_features, pps))
-		return io_close(conn);
+	gossip_fd = get_gossipfd(daemon, id, their_features);
+	if (gossip_fd < 0) {
+		close(subd_fd);
+		return tal_free(peer);
+	}
+
+	/* Get ready for streaming gossip from the store */
+	setup_peer_gossip_store(peer, daemon->our_features, their_features);
 
 	/* Create message to tell master peer has connected. */
 	msg = towire_connectd_peer_connected(NULL, id, addr, incoming,
-					     pps, their_features);
+					     their_features);
 
 	/*~ daemon_conn is a message queue for inter-daemon communication: we
 	 * queue up the `connect_peer_connected` message to tell lightningd
 	 * we have connected, and give the peer and gossip fds. */
 	daemon_conn_send(daemon->master, take(msg));
-	/* io_conn_fd() extracts the fd from ccan/io's io_conn */
-	daemon_conn_send_fd(daemon->master, io_conn_fd(conn));
-	daemon_conn_send_fd(daemon->master, pps->gossip_fd);
-	daemon_conn_send_fd(daemon->master, pps->gossip_store_fd);
+	daemon_conn_send_fd(daemon->master, subd_fd);
+	daemon_conn_send_fd(daemon->master, gossip_fd);
 
-	/* Don't try to close these on freeing. */
-	pps->gossip_store_fd = pps->gossip_fd = -1;
-
-	/*~ Finally, we add it to the set of pubkeys: tal_dup will handle
-	 * take() args for us, by simply tal_steal()ing it. */
-	node_set_add(&daemon->peers, tal_dup(daemon, struct node_id, id));
-
-	/*~ We want to free the connection, but not close the fd (which is
-	 * queued to go to lightningd), so use this variation on io_close: */
-	return io_close_taken_fd(conn);
+	/*~ Now we set up this connection to read/write from subd */
+	return multiplex_peer_setup(conn, peer);
 }
 
 /*~ handshake.c's handles setting up the crypto state once we get a connection
@@ -525,13 +483,14 @@ static struct io_plan *handshake_in_success(struct io_conn *conn,
 					    const struct pubkey *id_key,
 					    const struct wireaddr_internal *addr,
 					    struct crypto_state *cs,
+					    struct oneshot *timeout,
 					    struct daemon *daemon)
 {
 	struct node_id id;
 	node_id_from_pubkey(&id, id_key);
 	status_peer_debug(&id, "Connect IN");
 	return peer_exchange_initmsg(conn, daemon, daemon->our_features,
-				     cs, &id, addr, true);
+				     cs, &id, addr, timeout, true);
 }
 
 /*~ If the timer goes off, we simply free everything, which hangs up. */
@@ -591,11 +550,12 @@ static struct io_plan *conn_in(struct io_conn *conn,
 			       struct conn_in *conn_in_arg)
 {
 	struct daemon *daemon = conn_in_arg->daemon;
+	struct oneshot *timeout;
 
-	/* If they don't complete handshake in reasonable time, hang up */
-	notleak(new_reltimer(&daemon->timers, conn,
-			     time_from_sec(daemon->timeout_secs),
-			     conn_timeout, conn));
+	/* If they don't complete handshake in reasonable time, we hang up */
+	timeout = new_reltimer(&daemon->timers, conn,
+			       time_from_sec(daemon->timeout_secs),
+			       conn_timeout, conn);
 
 	/*~ The crypto handshake differs depending on whether you received or
 	 * initiated the socket connection, so there are two entry points.
@@ -603,7 +563,7 @@ static struct io_plan *conn_in(struct io_conn *conn,
 	 * code from thinking `conn` (which we don't keep a pointer to) is
 	 * leaked */
 	return responder_handshake(notleak(conn), &daemon->mykey,
-				   &conn_in_arg->addr,
+				   &conn_in_arg->addr, timeout,
 				   handshake_in_success, daemon);
 }
 
@@ -723,6 +683,7 @@ static struct io_plan *handshake_out_success(struct io_conn *conn,
 					     const struct pubkey *key,
 					     const struct wireaddr_internal *addr,
 					     struct crypto_state *cs,
+					     struct oneshot *timeout,
 					     struct connecting *connect)
 {
 	struct node_id id;
@@ -732,12 +693,13 @@ static struct io_plan *handshake_out_success(struct io_conn *conn,
 	status_peer_debug(&id, "Connect OUT");
 	return peer_exchange_initmsg(conn, connect->daemon,
 				     connect->daemon->our_features,
-				     cs, &id, addr, false);
+				     cs, &id, addr, timeout, false);
 }
 
 struct io_plan *connection_out(struct io_conn *conn, struct connecting *connect)
 {
 	struct pubkey outkey;
+	struct oneshot *timeout;
 
 	/* This shouldn't happen: lightningd should not give invalid ids! */
 	if (!pubkey_from_node_id(&outkey, &connect->id)) {
@@ -748,15 +710,15 @@ struct io_plan *connection_out(struct io_conn *conn, struct connecting *connect)
 	}
 
 	/* If they don't complete handshake in reasonable time, hang up */
-	notleak(new_reltimer(&connect->daemon->timers, conn,
-			     time_from_sec(connect->daemon->timeout_secs),
-			     conn_timeout, conn));
+	timeout = new_reltimer(&connect->daemon->timers, conn,
+			       time_from_sec(connect->daemon->timeout_secs),
+			       conn_timeout, conn);
 	status_peer_debug(&connect->id, "Connected out, starting crypto");
 
 	connect->connstate = "Cryptographic handshake";
 	return initiator_handshake(conn, &connect->daemon->mykey, &outkey,
 				   &connect->addrs[connect->addrnum],
-				   handshake_out_success, connect);
+				   timeout, handshake_out_success, connect);
 }
 
 /*~ When we've exhausted all addresses without success, we come here.
@@ -1545,6 +1507,8 @@ static void connect_init(struct daemon *daemon, const u8 *msg)
 	enum addr_listen_announce *proposed_listen_announce;
 	struct wireaddr *announcable;
 	char *tor_password;
+	bool dev_fast_gossip;
+	bool dev_disconnect;
 
 	/* Fields which require allocation are allocated off daemon */
 	if (!fromwire_connectd_init(
@@ -1560,11 +1524,18 @@ static void connect_init(struct daemon *daemon, const u8 *msg)
 		&daemon->use_v3_autotor,
 		&daemon->timeout_secs,
 		&daemon->websocket_helper,
-		&daemon->websocket_port)) {
+		&daemon->websocket_port,
+		&dev_fast_gossip,
+		&dev_disconnect)) {
 		/* This is a helper which prints the type expected and the actual
 		 * message, then exits (it should never be called!). */
 		master_badmsg(WIRE_CONNECTD_INIT, msg);
 	}
+
+#if DEVELOPER
+	/*~ Clearly mark this as a developer-only flag! */
+	daemon->dev_fast_gossip = dev_fast_gossip;
+#endif
 
 	if (!pubkey_from_node_id(&daemon->mykey, &daemon->id))
 		status_failed(STATUS_FAIL_INTERNAL_ERROR,
@@ -1604,6 +1575,10 @@ static void connect_init(struct daemon *daemon, const u8 *msg)
 			 take(towire_connectd_init_reply(NULL,
 							   binding,
 							   announcable)));
+#if DEVELOPER
+	if (dev_disconnect)
+		dev_disconnect_init(5);
+#endif
 }
 
 /*~ lightningd tells us to go! */
@@ -1703,37 +1678,19 @@ static void add_seed_addrs(struct wireaddr_internal **addrs,
 	}
 }
 
-static bool wireaddr_int_equals_wireaddr(struct wireaddr_internal *addr_a,
-					 struct wireaddr *addr_b)
+static bool wireaddr_int_equals_wireaddr(const struct wireaddr_internal *addr_a,
+					 const struct wireaddr *addr_b)
 {
 	if (!addr_a || !addr_b)
 		return false;
 	return wireaddr_eq(&addr_a->u.wireaddr, addr_b);
 }
 
-/*~ This asks gossipd for any addresses advertized by the node. */
+/*~ Orders the addresses which lightningd gave us. */
 static void add_gossip_addrs(struct wireaddr_internal **addrs,
-			     const struct node_id *id,
-			     struct wireaddr_internal *addrhint)
+			     const struct wireaddr *normal_addrs,
+			     const struct wireaddr_internal *addrhint)
 {
-	u8 *msg;
-	struct wireaddr *normal_addrs;
-
-	/* For simplicity, we do this synchronous. */
-	msg = towire_gossipd_get_addrs(NULL, id);
-	if (!wire_sync_write(GOSSIPCTL_FD, take(msg)))
-		status_failed(STATUS_FAIL_INTERNAL_ERROR,
-			      "Failed writing to gossipctl: %s",
-			      strerror(errno));
-
-	/* This returns 'struct wireaddr's since that's what's supported by
-	 * the BOLT #7 protocol. */
-	msg = wire_sync_read(tmpctx, GOSSIPCTL_FD);
-	if (!fromwire_gossipd_get_addrs_reply(tmpctx, msg, &normal_addrs))
-		status_failed(STATUS_FAIL_INTERNAL_ERROR,
-			      "Failed parsing get_addrs_reply gossipctl: %s",
-			      tal_hex(tmpctx, msg));
-
 	/* Wrap each one in a wireaddr_internal and add to addrs. */
 	for (size_t i = 0; i < tal_count(normal_addrs); i++) {
 		/* This is not supported, ignore. */
@@ -1770,15 +1727,23 @@ static void add_gossip_addrs(struct wireaddr_internal **addrs,
 static void try_connect_peer(struct daemon *daemon,
 			     const struct node_id *id,
 			     u32 seconds_waited,
-			     struct wireaddr_internal *addrhint)
+			     struct wireaddr *gossip_addrs,
+			     struct wireaddr_internal *addrhint STEALS)
 {
 	struct wireaddr_internal *addrs;
 	bool use_proxy = daemon->always_use_proxy;
 	struct connecting *connect;
+	struct peer *existing;
 
-	/* Already done?  May happen with timer. */
-	if (node_set_get(&daemon->peers, id))
-		return;
+	/* Already existing? */
+	existing = peer_htable_get(&daemon->peers, id);
+	if (existing) {
+		/* If it's exiting now, we've raced: reconnect after */
+		if (existing->to_subd
+		    && existing->to_peer
+		    && !existing->told_to_close)
+			return;
+	}
 
 	/* If we're trying to connect it right now, that's OK. */
 	if ((connect = find_connecting(daemon, id))) {
@@ -1801,7 +1766,7 @@ static void try_connect_peer(struct daemon *daemon,
 	if (addrhint)
 		tal_arr_expand(&addrs, *addrhint);
 
-	add_gossip_addrs(&addrs, id, addrhint);
+	add_gossip_addrs(&addrs, gossip_addrs, addrhint);
 
 	if (tal_count(addrs) == 0) {
 		/* Don't resolve via DNS seed if we're supposed to use proxy. */
@@ -1849,7 +1814,8 @@ static void try_connect_peer(struct daemon *daemon,
 	tal_add_destructor(connect, destroy_connecting);
 
 	/* Now we kick it off by recursively trying connect->addrs[connect->addrnum] */
-	try_connect_one_addr(connect);
+	if (!existing)
+		try_connect_one_addr(connect);
 }
 
 /* lightningd tells us to connect to a peer by id, with optional addr hint. */
@@ -1858,35 +1824,54 @@ static void connect_to_peer(struct daemon *daemon, const u8 *msg)
 	struct node_id id;
 	u32 seconds_waited;
 	struct wireaddr_internal *addrhint;
+	struct wireaddr *addrs;
 
 	if (!fromwire_connectd_connect_to_peer(tmpctx, msg,
-						 &id, &seconds_waited,
-						 &addrhint))
+					       &id, &seconds_waited,
+					       &addrs, &addrhint))
 		master_badmsg(WIRE_CONNECTD_CONNECT_TO_PEER, msg);
 
-	try_connect_peer(daemon, &id, seconds_waited, addrhint);
+	try_connect_peer(daemon, &id, seconds_waited, addrs, addrhint);
+}
+
+void peer_conn_closed(struct peer *peer)
+{
+	struct connecting *connect = find_connecting(peer->daemon, &peer->id);
+
+	/* These should be closed already! */
+	assert(!peer->to_subd);
+	assert(!peer->to_peer);
+	assert(peer->told_to_close);
+
+	/* Wake up in case there's a reconnecting peer waiting in io_wait. */
+	io_wake(peer);
+
+	/* Note: deleting from a htable (a-la node_set_del) does not free it:
+	 * htable doesn't assume it's a tal object at all.  That's why we have
+	 * a destructor attached to peer (called destroy_peer by
+	 * convention). */
+	tal_free(peer);
+
+	/* If we wanted to connect to it, but found it was exiting, try again */
+	if (connect)
+		try_connect_one_addr(connect);
 }
 
 /* A peer is gone: clean things up. */
 static void cleanup_dead_peer(struct daemon *daemon, const struct node_id *id)
 {
-	struct node_id *node;
+	struct peer *peer;
 
 	/* We should stay in sync with lightningd at all times. */
-	node = node_set_get(&daemon->peers, id);
-	if (!node)
+	peer = peer_htable_get(&daemon->peers, id);
+	if (!peer)
 		status_failed(STATUS_FAIL_INTERNAL_ERROR,
 			      "peer_disconnected unknown peer: %s",
 			      type_to_string(tmpctx, struct node_id, id));
-	node_set_del(&daemon->peers, node);
 	status_peer_debug(id, "disconnect");
 
-	/* Wake up in case there's a reconnecting peer waiting in io_wait. */
-	io_wake(node);
-
-	/* Note: deleting from a htable (a-la node_set_del) does not free it:
-	 * htable doesn't assume it's a tal object at all. */
-	tal_free(node);
+	/* When it's finished, it will call peer_conn_closed() */
+	close_peer_conn(peer);
 }
 
 /* lightningd tells us a peer has disconnected. */
@@ -1900,61 +1885,36 @@ static void peer_disconnected(struct daemon *daemon, const u8 *msg)
 	cleanup_dead_peer(daemon, &id);
 }
 
-/* lightningd tells us to send a final (usually error) message to peer, then
- * disconnect. */
-struct final_msg_data {
-	struct daemon *daemon;
-	struct node_id id;
-};
-
-static void destroy_final_msg_data(struct final_msg_data *f)
-{
-	cleanup_dead_peer(f->daemon, &f->id);
-}
-
-static struct io_plan *send_final_msg(struct io_conn *conn, u8 *msg)
-{
-	return io_write(conn, msg, tal_bytelen(msg), io_close_cb, NULL);
-}
-
 /* lightningd tells us to send a msg and disconnect. */
 static void peer_final_msg(struct io_conn *conn,
 			   struct daemon *daemon, const u8 *msg)
 {
-	struct per_peer_state *pps;
-	struct final_msg_data *f = tal(NULL, struct final_msg_data);
+	struct peer *peer;
+	struct node_id id;
 	u8 *finalmsg;
-	int fds[3];
 
-	f->daemon = daemon;
-	/* pps is allocated off f, so fds are closed when f freed. */
-	if (!fromwire_connectd_peer_final_msg(f, msg, &f->id, &pps, &finalmsg))
+	if (!fromwire_connectd_peer_final_msg(tmpctx, msg, &id, &finalmsg))
 		master_badmsg(WIRE_CONNECTD_PEER_FINAL_MSG, msg);
 
-	/* When f is freed, we want to mark node as dead. */
-	tal_add_destructor(f, destroy_final_msg_data);
-
-	/* Get the fds for this peer. */
+	/* Get the peer_fd and gossip_fd for this peer: we don't need them. */
 	io_fd_block(io_conn_fd(conn), true);
-	for (size_t i = 0; i < ARRAY_SIZE(fds); i++) {
-		fds[i] = fdpass_recv(io_conn_fd(conn));
-		if (fds[i] == -1)
+	for (size_t i = 0; i < 2; i++) {
+		int fd = fdpass_recv(io_conn_fd(conn));
+		if (fd == -1)
 			status_failed(STATUS_FAIL_MASTER_IO,
 				      "Getting fd %zu after peer_final_msg: %s",
 				      i, strerror(errno));
+		close(fd);
 	}
 	io_fd_block(io_conn_fd(conn), false);
 
-	/* We put peer fd into conn, but pps needs to free the rest */
-	per_peer_state_set_fds(pps, -1, fds[1], fds[2]);
-
-	/* Log and encrypt message for peer. */
-	status_peer_io(LOG_IO_OUT, &f->id, finalmsg);
-	finalmsg = cryptomsg_encrypt_msg(f, &pps->cs, take(finalmsg));
-
-	/* Organize io loop to write out that message, it will free f
-	 * once closed */
-	tal_steal(io_new_conn(daemon, fds[0], send_final_msg, finalmsg), f);
+	/* This can happen if peer hung up on us. */
+	peer = peer_htable_get(&daemon->peers, &id);
+	if (peer) {
+		/* Log message for peer. */
+		status_peer_io(LOG_IO_OUT, &id, finalmsg);
+		multiplex_final_msg(peer, take(finalmsg));
+	}
 }
 
 #if DEVELOPER
@@ -1967,6 +1927,7 @@ static void dev_connect_memleak(struct daemon *daemon, const u8 *msg)
 
 	/* Now delete daemon and those which it has pointers to. */
 	memleak_remove_region(memtable, daemon, sizeof(daemon));
+	memleak_remove_htable(memtable, &daemon->peers.raw);
 
 	found_leak = dump_memleak(memtable, memleak_status_broken);
 	daemon_conn_send(daemon->master,
@@ -2060,11 +2021,13 @@ int main(int argc, char *argv[])
 
 	/* Allocate and set up our simple top-level structure. */
 	daemon = tal(NULL, struct daemon);
-	node_set_init(&daemon->peers);
+	peer_htable_init(&daemon->peers);
 	memleak_add_helper(daemon, memleak_daemon_cb);
 	list_head_init(&daemon->connecting);
 	daemon->listen_fds = tal_arr(daemon, struct listen_fd, 0);
 	timers_init(&daemon->timers, time_mono());
+	daemon->gossip_store_fd = -1;
+
 	/* stdin == control */
 	daemon->master = daemon_conn_new(daemon, STDIN_FILENO, recv_req, NULL,
 					 daemon);

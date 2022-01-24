@@ -2135,7 +2135,8 @@ def test_channel_receivable(node_factory, bitcoind):
     assert l2.rpc.listpeers()['peers'][0]['channels'][0]['receivable_msat'] == Millisatoshi(0)
     l1.rpc.waitsendpay(payment_hash, TIMEOUT)
 
-    # Make sure l2 thinks it's all over.
+    # Make sure both think it's all over.
+    wait_for(lambda: len(l1.rpc.listpeers()['peers'][0]['channels'][0]['htlcs']) == 0)
     wait_for(lambda: len(l2.rpc.listpeers()['peers'][0]['channels'][0]['htlcs']) == 0)
     # Now, reverse should work similarly.
     inv = l1.rpc.invoice('any', 'inv', 'for testing')
@@ -4143,7 +4144,8 @@ def test_offer(node_factory, bitcoind):
 def test_fetchinvoice_3hop(node_factory, bitcoind):
     l1, l2, l3, l4 = node_factory.line_graph(4, wait_for_announce=True,
                                              opts={'experimental-offers': None,
-                                                   'may_reconnect': True})
+                                                   'may_reconnect': True,
+                                                   'dev-no-reconnect': None})
     offer1 = l4.rpc.call('offer', {'amount': '2msat',
                                    'description': 'simple test'})
     assert offer1['created'] is True
@@ -4794,7 +4796,8 @@ def test_sendpay_grouping(node_factory, bitcoind):
     invoices = l3.rpc.listinvoices()['invoices']
     assert(len(invoices) == 1)
     assert(invoices[0]['status'] == 'unpaid')
-    l3.connect(l2)
+    # Will reconnect automatically
+    wait_for(lambda: only_one(l3.rpc.listpeers()['peers'])['connected'] is True)
     scid = l3.rpc.listpeers()['peers'][0]['channels'][0]['short_channel_id']
     wait_for(lambda: [c['active'] for c in l1.rpc.listchannels(scid)['channels']] == [True, True])
     l1.rpc.pay(inv, msatoshi='420000msat')

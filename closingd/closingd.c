@@ -6,12 +6,12 @@
 #include <closingd/closingd_wiregen.h>
 #include <common/close_tx.h>
 #include <common/closing_fee.h>
-#include <common/crypto_sync.h>
 #include <common/derive_basepoints.h>
 #include <common/htlc.h>
 #include <common/memleak.h>
 #include <common/peer_billboard.h>
 #include <common/peer_failed.h>
+#include <common/peer_io.h>
 #include <common/per_peer_state.h>
 #include <common/read_peer_msg.h>
 #include <common/socket_close.h>
@@ -31,9 +31,9 @@
 #include <wire/peer_wire.h>
 #include <wire/wire_sync.h>
 
-/* stdin == requests, 3 == peer, 4 = gossip, 5 = gossip_store, 6 = hsmd */
+/* stdin == requests, 3 == peer, 4 = gossip, 5 = hsmd */
 #define REQ_FD STDIN_FILENO
-#define HSM_FD 6
+#define HSM_FD 5
 
 static void notify(enum log_level level, const char *fmt, ...)
 {
@@ -214,7 +214,7 @@ static void send_offer(struct per_peer_state *pps,
 	msg = towire_closing_signed(NULL, channel_id, fee_to_offer, &our_sig.s,
 				    close_tlvs);
 
-	sync_crypto_write(pps, take(msg));
+	peer_write(pps, take(msg));
 }
 
 static void tell_master_their_offer(const struct bitcoin_signature *their_sig,
@@ -897,7 +897,6 @@ int main(int argc, char *argv[])
 	msg = wire_sync_read(tmpctx, REQ_FD);
 	if (!fromwire_closingd_init(ctx, msg,
 				    &chainparams,
-				    &pps,
 				    &channel_id,
 				    &funding,
 				    &funding_sats,
@@ -914,12 +913,12 @@ int main(int argc, char *argv[])
 				    &fee_negotiation_step,
 				    &fee_negotiation_step_unit,
 				    &use_quickclose,
-				    &dev_fast_gossip,
 				    &wrong_funding))
 		master_badmsg(WIRE_CLOSINGD_INIT, msg);
 
-	/* stdin == requests, 3 == peer, 4 = gossip, 5 = gossip_store, 6 = hsmd */
-	per_peer_state_set_fds(notleak(pps), 3, 4, 5);
+	/* stdin == requests, 3 == peer, 4 = gossip, 5 = hsmd */
+	pps = notleak(new_per_peer_state(ctx));
+	per_peer_state_set_fds(pps, 3, 4);
 
 	funding_wscript = bitcoin_redeem_2of2(ctx,
 					      &funding_pubkey[LOCAL],

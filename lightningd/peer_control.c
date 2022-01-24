@@ -25,7 +25,6 @@
 #include <common/jsonrpc_errors.h>
 #include <common/key_derive.h>
 #include <common/param.h>
-#include <common/per_peer_state.h>
 #include <common/shutdown_scriptpubkey.h>
 #include <common/status.h>
 #include <common/timeout.h>
@@ -57,6 +56,7 @@
 #include <lightningd/opening_control.h>
 #include <lightningd/options.h>
 #include <lightningd/peer_control.h>
+#include <lightningd/peer_fd.h>
 #include <lightningd/peer_htlcs.h>
 #include <lightningd/plugin_hook.h>
 #include <lightningd/subd.h>
@@ -281,7 +281,7 @@ void drop_to_chain(struct lightningd *ld, struct channel *channel,
 }
 
 void channel_errmsg(struct channel *channel,
-		    struct per_peer_state *pps,
+		    struct peer_fd *peer_fd,
 		    const struct channel_id *channel_id UNUSED,
 		    const char *desc,
 		    bool warning,
@@ -299,8 +299,8 @@ void channel_errmsg(struct channel *channel,
 		return;
 	}
 
-	/* No per_peer_state means a subd crash or disconnection. */
-	if (!pps) {
+	/* No peer_fd means a subd crash or disconnection. */
+	if (!peer_fd) {
 		/* If the channel is unsaved, we forget it */
 		channel_fail_reconnect(channel, "%s: %s",
 				       channel->owner->name, desc);
@@ -931,7 +931,7 @@ struct peer_connected_hook_payload {
 	struct wireaddr_internal addr;
 	bool incoming;
 	struct peer *peer;
-	struct per_peer_state *pps;
+	struct peer_fd *peer_fd;
 	u8 *error;
 };
 
@@ -1011,7 +1011,7 @@ static void peer_connected_hook_final(struct peer_connected_hook_payload *payloa
 			assert(!channel->owner);
 			channel->peer->addr = addr;
 			channel->peer->connected_incoming = payload->incoming;
-			peer_restart_dualopend(peer, payload->pps, channel);
+			peer_restart_dualopend(peer, payload->peer_fd, channel);
 			return;
 		case CHANNELD_AWAITING_LOCKIN:
 		case CHANNELD_NORMAL:
@@ -1020,7 +1020,7 @@ static void peer_connected_hook_final(struct peer_connected_hook_payload *payloa
 			assert(!channel->owner);
 			channel->peer->addr = addr;
 			channel->peer->connected_incoming = payload->incoming;
-			peer_start_channeld(channel, payload->pps, NULL, true,
+			peer_start_channeld(channel, payload->peer_fd, NULL, true,
 					    NULL);
 			return;
 		}
@@ -1039,11 +1039,11 @@ static void peer_connected_hook_final(struct peer_connected_hook_payload *payloa
 			       || channel->state == AWAITING_UNILATERAL);
 			channel->peer->addr = addr;
 			channel->peer->connected_incoming = payload->incoming;
-			peer_restart_dualopend(peer, payload->pps, channel);
+			peer_restart_dualopend(peer, payload->peer_fd, channel);
 		} else
-			peer_start_dualopend(peer, payload->pps);
+			peer_start_dualopend(peer, payload->peer_fd);
 	} else
-		peer_start_openingd(peer, payload->pps);
+		peer_start_openingd(peer, payload->peer_fd);
 	return;
 
 send_error:
@@ -1052,15 +1052,11 @@ send_error:
 	/* Get connectd to send error and close. */
 	subd_send_msg(ld->connectd,
 		      take(towire_connectd_peer_final_msg(NULL, &peer->id,
-							  payload->pps, error)));
-	subd_send_fd(ld->connectd, payload->pps->peer_fd);
-	subd_send_fd(ld->connectd, payload->pps->gossip_fd);
-	subd_send_fd(ld->connectd, payload->pps->gossip_store_fd);
+							  error)));
+	subd_send_fd(ld->connectd, payload->peer_fd->fd);
+	subd_send_fd(ld->connectd, payload->peer_fd->gossip_fd);
 	/* Don't close those fds! */
-	payload->pps->peer_fd
-		= payload->pps->gossip_fd
-		= payload->pps->gossip_store_fd
-		= -1;
+	payload->peer_fd->fd = payload->peer_fd->gossip_fd = -1;
 }
 
 static bool
@@ -1117,7 +1113,7 @@ REGISTER_PLUGIN_HOOK(peer_connected,
 /* Connectd tells us a peer has connected: it never hands us duplicates, since
  * it holds them until we say peer_died. */
 void peer_connected(struct lightningd *ld, const u8 *msg,
-		    int peer_fd, int gossip_fd, int gossip_store_fd)
+		    int peer_fd, int gossip_fd)
 {
 	struct node_id id;
 	u8 *their_features;
@@ -1130,13 +1126,11 @@ void peer_connected(struct lightningd *ld, const u8 *msg,
 	if (!fromwire_connectd_peer_connected(hook_payload, msg,
 					      &id, &hook_payload->addr,
 					      &hook_payload->incoming,
-					      &hook_payload->pps,
 					      &their_features))
 		fatal("Connectd gave bad CONNECT_PEER_CONNECTED message %s",
 		      tal_hex(msg, msg));
 
-	per_peer_state_set_fds(hook_payload->pps,
-			       peer_fd, gossip_fd, gossip_store_fd);
+	hook_payload->peer_fd = new_peer_fd(hook_payload, peer_fd, gossip_fd);
 
 	/* If we're already dealing with this peer, hand off to correct
 	 * subdaemon.  Otherwise, we'll hand to openingd to wait there. */
@@ -1533,7 +1527,6 @@ command_find_channel(struct command *cmd,
 
 static void activate_peer(struct peer *peer, u32 delay)
 {
-	u8 *msg;
 	struct channel *channel;
 	struct channel_inflight *inflight;
 	struct lightningd *ld = peer->ld;
@@ -1541,28 +1534,8 @@ static void activate_peer(struct peer *peer, u32 delay)
 	/* We can only have one active channel: make sure connectd
 	 * knows to try reconnecting. */
 	channel = peer_active_channel(peer);
-	if (channel && ld->reconnect) {
-		if (delay > 0) {
-			channel_set_billboard(channel, false,
-					      tal_fmt(tmpctx,
-						      "Will attempt reconnect "
-						      "in %u seconds",
-						      delay));
-			delay_then_reconnect(channel, delay,
-					     peer->connected_incoming
-					     ? NULL
-					     : &peer->addr);
-		} else {
-			msg = towire_connectd_connect_to_peer(NULL,
-							      &peer->id, 0,
-							      peer->connected_incoming
-							      ? NULL
-							      : &peer->addr);
-			subd_send_msg(ld->connectd, take(msg));
-			channel_set_billboard(channel, false,
-					      "Attempting to reconnect");
-		}
-	}
+	if (channel)
+		try_reconnect(channel, delay, &peer->addr);
 
 	list_for_each(&peer->channels, channel, list) {
 		if (channel_unsaved(channel))
@@ -1749,7 +1722,7 @@ static struct command_result *json_getinfo(struct command *cmd,
         json_array_end(response);
     }
     json_add_string(response, "version", version());
-    json_add_num(response, "blockheight", get_block_height(cmd->ld->topology));
+    json_add_num(response, "blockheight", cmd->ld->blockheight);
     json_add_string(response, "network", chainparams->network_name);
     json_add_amount_msat_compat(response,
 				wallet_total_forward_fees(cmd->ld->wallet),

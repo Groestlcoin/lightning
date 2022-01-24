@@ -2,6 +2,7 @@
 #include <bitcoin/chainparams.h>
 #include <ccan/io/io.h>
 #include <common/dev_disconnect.h>
+#include <common/memleak.h>
 #include <common/status.h>
 #include <common/wire_error.h>
 #include <connectd/connectd.h>
@@ -151,6 +152,7 @@ struct io_plan *peer_exchange_initmsg(struct io_conn *conn,
 				      const struct crypto_state *cs,
 				      const struct node_id *id,
 				      const struct wireaddr_internal *addr,
+				      struct oneshot *timeout,
 				      bool incoming)
 {
 	/* If conn is closed, forget peer */
@@ -163,6 +165,9 @@ struct io_plan *peer_exchange_initmsg(struct io_conn *conn,
 	peer->addr = *addr;
 	peer->cs = *cs;
 	peer->incoming = incoming;
+
+	/* Attach timer to early peer, so it gets freed with it. */
+	notleak(tal_steal(peer, timeout));
 
 	/* BOLT #1:
 	 *
@@ -203,7 +208,7 @@ struct io_plan *peer_exchange_initmsg(struct io_conn *conn,
 
 	next = read_init;
 #if DEVELOPER
-	switch (dev_disconnect(WIRE_INIT)) {
+	switch (dev_disconnect(&peer->id, WIRE_INIT)) {
 	case DEV_DISCONNECT_BEFORE:
 		dev_sabotage_fd(io_conn_fd(conn), true);
 		break;
@@ -211,7 +216,8 @@ struct io_plan *peer_exchange_initmsg(struct io_conn *conn,
 		next = peer_write_postclose;
 		break;
 	case DEV_DISCONNECT_BLACKHOLE:
-		dev_blackhole_fd(io_conn_fd(conn));
+		status_failed(STATUS_FAIL_INTERNAL_ERROR,
+			      "Blackhole not supported during handshake");
 		break;
 	case DEV_DISCONNECT_NORMAL:
 		break;

@@ -97,10 +97,6 @@ static bool is_lightningd(const struct client *client)
 	return client == dbid_zero_clients[0];
 }
 
-/* FIXME: This is used by debug.c.  Doesn't apply to us, but lets us link. */
-extern void dev_disconnect_init(int fd);
-void dev_disconnect_init(int fd UNUSED) { }
-
 /* Pre-declare this, due to mutual recursion */
 static struct io_plan *handle_client(struct io_conn *conn, struct client *c);
 
@@ -617,6 +613,9 @@ void hsmd_status_failed(enum status_failreason reason, const char *fmt, ...)
 static struct io_plan *handle_client(struct io_conn *conn, struct client *c)
 {
 	enum hsmd_wire t = fromwire_peektype(c->msg_in);
+
+	if (!is_lightningd(c))
+		status_peer_debug(&c->id, "Got %s", hsmd_wire_name(t));
 
 	/* Before we do anything else, is this client allowed to do
 	 * what he asks for? */
