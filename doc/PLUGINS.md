@@ -701,6 +701,7 @@ i.e. only definitively resolved HTLCs or confirmed bitcoin transactions.
 		"node_id":"03a7103a2322b811f7369cbb27fb213d30bbc0b012082fed3cad7e4498da2dc56b",
 		"type":"chain_mvt",
 		"account_id":"wallet",
+		"originating_account": "wallet", // (`chain_mvt` only, optional)
 		"txid":"0159693d8f3876b4def468b208712c630309381e9d106a9836fa0a9571a28722", // (`chain_mvt` only, optional)
 		"utxo_txid":"0159693d8f3876b4def468b208712c630309381e9d106a9836fa0a9571a28722", // (`chain_mvt` only)
 		"vout":1, // (`chain_mvt` only)
@@ -730,6 +731,9 @@ notification adheres to.
 
 `account_id` is the name of this account. The node's wallet is named 'wallet',
 all channel funds' account are the channel id.
+
+`originating_account` is the account that this movement originated from.
+*Only* tagged on external events (deposits/withdrawals to an external party).
 
 `txid` is the transaction id of the bitcoin transaction that triggered this
 ledger event. `utxo_txid` and `vout` identify the bitcoin output which triggered
@@ -767,24 +771,26 @@ both the debit/credit contain fees. Technically routed debits are the
  - `invoice`: funds paid to or recieved from an invoice.
  - `routed`: funds routed through this node.
  - `pushed`: funds pushed to peer.
- -  channel_open : channel is opened, initial channel balance
- -  channel_close: channel is closed, final channel balance
- -  delayed_to_us : on-chain output to us, spent back into our wallet
- -  htlc_timeout : on-chain htlc timeout output
- - htlc_fulfill : on-chian htlc fulfill output
- - htlc_tx : on-chain htlc tx has happened
- - to_wallet : output being spent into our wallet
- - ignored : output is being ignored
- - anchor : an anchor output
- - to_them : output intended to peer's wallet
- - penalized : output we've 'lost' due to a penalty (failed cheat attempt)
- - stolen : output we've 'lost' due to peer's cheat
- - to_miner : output we've burned to miner (OP_RETURN)
- - opener : tags channel_open, we are the channel opener
- - lease_fee: amount paid as lease fee
- - leased: tags channel_open, channel contains leased funds
+ - `channel_open` : channel is opened, initial channel balance
+ - `channel_close`: channel is closed, final channel balance
+ - `delayed_to_us`: on-chain output to us, spent back into our wallet
+ - `htlc_timeout`: on-chain htlc timeout output
+ - `htlc_fulfill`: on-chian htlc fulfill output
+ - `htlc_tx`: on-chain htlc tx has happened
+ - `to_wallet`: output being spent into our wallet
+ - `ignored`: output is being ignored
+ - `anchor`: an anchor output
+ - `to_them`: output intended to peer's wallet
+ - `penalized`: output we've 'lost' due to a penalty (failed cheat attempt)
+ - `stolen`: output we've 'lost' due to peer's cheat
+ - `to_miner`: output we've burned to miner (OP_RETURN)
+ - `opener`: tags channel_open, we are the channel opener
+ - `lease_fee`: amount paid as lease fee
+ - `leased`: tags channel_open, channel contains leased funds
 
-`blockheight` is the block the txid is included in.
+`blockheight` is the block the txid is included in. `channel_mvt`s will be null,
+so will the blockheight for withdrawals to external parties (we issue these events
+when we send the tx containing them, before they're included in the chain).
 
 The `timestamp` is seconds since Unix epoch of the node's machine time
 at the time lightningd broadcasts the notification.

@@ -1,6 +1,5 @@
 #include "config.h"
 #include <assert.h>
-#include <bitcoin/chainparams.h>
 #include <bitcoin/psbt.h>
 #include <bitcoin/script.h>
 #include <ccan/str/hex/hex.h>
@@ -163,7 +162,7 @@ static int elements_tx_add_fee_output(struct bitcoin_tx *tx)
 	int pos;
 
 	/* If we aren't using elements, we don't add explicit fee outputs */
-	if (!chainparams->is_elements || amount_sat_eq(fee, AMOUNT_SAT(0)))
+	if (!chainparams->is_elements)
 		return -1;
 
 	/* Try to find any existing fee output */
@@ -457,7 +456,21 @@ size_t wally_tx_weight(const struct wally_tx *wtx)
 
 size_t bitcoin_tx_weight(const struct bitcoin_tx *tx)
 {
-	return wally_tx_weight(tx->wtx);
+	size_t extra;
+	size_t num_witnesses;
+
+	/* If we don't have witnesses *yet*, libwally doesn't encode
+	 * in BIP 141 style, omitting the flag and marker bytes */
+	wally_tx_get_witness_count(tx->wtx, &num_witnesses);
+	if (num_witnesses == 0) {
+		if (chainparams->is_elements)
+			extra = 7;
+		else
+			extra = 2;
+	} else
+		extra = 0;
+
+	return extra + wally_tx_weight(tx->wtx);
 }
 
 void wally_txid(const struct wally_tx *wtx, struct bitcoin_txid *txid)
@@ -871,6 +884,16 @@ size_t bitcoin_tx_simple_input_weight(bool p2sh)
 {
 	return bitcoin_tx_input_weight(p2sh,
 				       bitcoin_tx_simple_input_witness_weight());
+}
+
+size_t bitcoin_tx_2of2_input_witness_weight(void)
+{
+	/* witness[0] = ""
+	 * witness[1] = sig
+	 * witness[2] = sig
+	 * witness[3] = 2 key key 2 CHECKMULTISIG
+	 */
+	return 1 + (1 + 0) + (1 + 72) + (1 + 72) + (1 + 1 + 33 + 33 + 1 + 1);
 }
 
 struct amount_sat change_amount(struct amount_sat excess, u32 feerate_perkw,
