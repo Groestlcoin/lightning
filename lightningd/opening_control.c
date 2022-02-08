@@ -28,7 +28,6 @@
 #include <lightningd/subd.h>
 #include <openingd/openingd_wiregen.h>
 #include <wally_psbt.h>
-#include <wire/common_wiregen.h>
 
 void json_add_uncommitted_channel(struct json_stream *response,
 				  const struct uncommitted_channel *uc)
@@ -839,8 +838,8 @@ static unsigned int openingd_msg(struct subd *openingd,
 			tal_free(openingd);
 			return 0;
 		}
-		if (tal_count(fds) != 2)
-			return 2;
+		if (tal_count(fds) != 1)
+			return 1;
 		opening_funder_finished(openingd, msg, fds, uc->fc);
 		return 0;
 	case WIRE_OPENINGD_FUNDER_START_REPLY:
@@ -863,8 +862,8 @@ static unsigned int openingd_msg(struct subd *openingd,
 		return 0;
 
 	case WIRE_OPENINGD_FUNDEE:
-		if (tal_count(fds) != 2)
-			return 2;
+		if (tal_count(fds) != 1)
+			return 1;
 		opening_fundee_finished(openingd, msg, fds, uc);
 		return 0;
 
@@ -873,8 +872,8 @@ static unsigned int openingd_msg(struct subd *openingd,
 		return 0;
 
 	case WIRE_OPENINGD_GOT_REESTABLISH:
-		if (tal_count(fds) != 2)
-			return 2;
+		if (tal_count(fds) != 1)
+			return 1;
 		opening_got_reestablish(openingd, msg, fds, uc);
 		return 0;
 
@@ -887,15 +886,6 @@ static unsigned int openingd_msg(struct subd *openingd,
 	case WIRE_OPENINGD_DEV_MEMLEAK:
 	/* Replies never get here */
 	case WIRE_OPENINGD_DEV_MEMLEAK_REPLY:
-		break;
-	}
-
-	switch ((enum common_wire)t) {
-	case WIRE_CUSTOMMSG_IN:
-		handle_custommsg_in(openingd->ld, openingd->node_id, msg);
-		return 0;
-	/* We send these. */
-	case WIRE_CUSTOMMSG_OUT:
 		break;
 	}
 
@@ -929,7 +919,6 @@ void peer_start_openingd(struct peer *peer, struct peer_fd *peer_fd)
 					opend_channel_errmsg,
 					opend_channel_set_billboard,
 					take(&peer_fd->fd),
-					take(&peer_fd->gossip_fd),
 					take(&hsmfd), NULL);
 	if (!uc->open_daemon) {
 		uncommitted_channel_disconnect(uc, LOG_BROKEN,

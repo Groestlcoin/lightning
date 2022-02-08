@@ -13,14 +13,12 @@
 #include "config.h"
 #include <ccan/cast/cast.h>
 #include <ccan/tal/str/str.h>
-#include <common/blindedpath.h>
-#include <common/blinding.h>
 #include <common/daemon_conn.h>
 #include <common/ecdh_hsmd.h>
 #include <common/lease_rates.h>
 #include <common/memleak.h>
+#include <common/private_channel_announcement.h>
 #include <common/pseudorand.h>
-#include <common/sphinx.h>
 #include <common/status.h>
 #include <common/subdaemon.h>
 #include <common/timeout.h>
@@ -91,12 +89,6 @@ static void destroy_peer(struct peer *peer)
 	node = get_node(peer->daemon->rstate, &peer->id);
 	if (node)
 		peer_disable_channels(peer->daemon, node);
-
-	/* This is tricky: our lifetime is tied to the daemon_conn; it's our
-	 * parent, so we are freed if it is, but we need to free it if we're
-	 * freed manually.  tal_free() treats this as a noop if it's already
-	 * being freed */
-	tal_free(peer->dc);
 }
 
 /* Search for a peer. */
@@ -117,11 +109,15 @@ void peer_supplied_good_gossip(struct peer *peer, size_t amount)
 		peer->gossip_counter += amount;
 }
 
-/* Queue a gossip message for the peer: the subdaemon on the other end simply
- * forwards it to the peer. */
+/* Queue a gossip message for the peer: connectd simply forwards it to
+ * the peer. */
 void queue_peer_msg(struct peer *peer, const u8 *msg TAKES)
 {
-	daemon_conn_send(peer->dc, msg);
+	u8 *outermsg = towire_gossipd_send_gossip(NULL, &peer->id, msg);
+	daemon_conn_send(peer->daemon->connectd, take(outermsg));
+
+	if (taken(msg))
+		tal_free(msg);
 }
 
 /*~ We have a helper for messages from the store. */
@@ -277,65 +273,6 @@ static u8 *handle_channel_update_msg(struct peer *peer, const u8 *msg)
 	return NULL;
 }
 
-/*~ This is when channeld asks us for a channel_update for a local channel.
- * It does that to fill in the error field when lightningd fails an HTLC and
- * sets the UPDATE bit in the error type.  lightningd is too important to
- * fetch this itself, so channeld does it (channeld has to talk to us for
- * other things anyway, so why not?). */
-static bool handle_get_local_channel_update(struct peer *peer, const u8 *msg)
-{
-	struct short_channel_id scid;
-	struct chan *chan;
-	const u8 *update;
-	struct routing_state *rstate = peer->daemon->rstate;
-	int direction;
-
-	if (!fromwire_gossipd_get_update(msg, &scid)) {
-		status_broken("peer %s sent bad gossip_get_update %s",
-			      type_to_string(tmpctx, struct node_id, &peer->id),
-			      tal_hex(tmpctx, msg));
-		return false;
-	}
-
-	/* It's possible that the channel has just closed (though v. unlikely) */
-	chan = get_channel(rstate, &scid);
-	if (!chan) {
-		status_unusual("peer %s scid %s: unknown channel",
-			       type_to_string(tmpctx, struct node_id, &peer->id),
-			       type_to_string(tmpctx, struct short_channel_id,
-					      &scid));
-		update = NULL;
-		goto out;
-	}
-
-	/* Since we're going to send it out, make sure it's up-to-date. */
-	local_channel_update_latest(peer->daemon, chan);
-
-	if (!local_direction(rstate, chan, &direction)) {
-		status_peer_broken(&peer->id, "Chan %s is not local?",
-				   type_to_string(tmpctx, struct short_channel_id,
-						  &scid));
-		update = NULL;
-		goto out;
-	}
-
- 	/* It's possible this is zero, if we've never sent a channel_update
-	 * for that channel. */
-	if (!is_halfchan_defined(&chan->half[direction]))
-		update = NULL;
-	else
-		update = gossip_store_get(tmpctx, rstate->gs,
-					  chan->half[direction].bcast.index);
-out:
-	status_peer_debug(&peer->id, "schanid %s: %s update",
-			  type_to_string(tmpctx, struct short_channel_id, &scid),
-			  update ? "got" : "no");
-
-	msg = towire_gossipd_get_update_reply(NULL, update);
-	daemon_conn_send(peer->dc, take(msg));
-	return true;
-}
-
 static u8 *handle_node_announce(struct peer *peer, const u8 *msg)
 {
 	bool was_unknown = false;
@@ -348,393 +285,192 @@ static u8 *handle_node_announce(struct peer *peer, const u8 *msg)
 	return err;
 }
 
-static bool handle_local_channel_announcement(struct daemon *daemon,
-					      struct peer *peer,
-					      const u8 *msg)
+static void handle_local_channel_announcement(struct daemon *daemon, const u8 *msg)
 {
 	u8 *cannouncement;
 	const u8 *err;
+	struct node_id id;
+	struct peer *peer;
 
 	if (!fromwire_gossipd_local_channel_announcement(msg, msg,
-							 &cannouncement)) {
-		status_broken("peer %s bad local_channel_announcement %s",
-			      type_to_string(tmpctx, struct node_id, &peer->id),
-			      tal_hex(tmpctx, msg));
-		return false;
-	}
+							 &id,
+							 &cannouncement))
+		master_badmsg(WIRE_GOSSIPD_LOCAL_CHANNEL_ANNOUNCEMENT, msg);
+
+	/* We treat it OK even if peer has disconnected since (unlikely though!) */
+	peer = find_peer(daemon, &id);
+	if (!peer)
+		status_broken("Unknown peer %s for local_channel_announcement",
+			      type_to_string(tmpctx, struct node_id, &id));
 
 	err = handle_channel_announcement_msg(daemon, peer, cannouncement);
 	if (err) {
 		status_broken("peer %s invalid local_channel_announcement %s (%s)",
-			      type_to_string(tmpctx, struct node_id, &peer->id),
+			      type_to_string(tmpctx, struct node_id, &id),
 			      tal_hex(tmpctx, msg),
 			      tal_hex(tmpctx, err));
-		return false;
 	}
-
-	return true;
 }
 
-/* Peer sends obsolete onion msg. */
-static u8 *handle_obs2_onion_message(struct peer *peer, const u8 *msg)
-{
-	enum onion_wire badreason;
-	struct onionpacket *op;
-	struct pubkey blinding, ephemeral;
-	struct route_step *rs;
-	u8 *onion;
-	struct tlv_obs2_onionmsg_payload *om;
-	struct secret ss, onion_ss;
-	const u8 *cursor;
-	size_t max, maxlen;
 
-	/* Ignore unless explicitly turned on. */
-	if (!feature_offered(peer->daemon->our_features->bits[NODE_ANNOUNCE_FEATURE],
-			     OPT_ONION_MESSAGES))
-		return NULL;
-
-	/* FIXME: ratelimit! */
-	if (!fromwire_obs2_onion_message(msg, msg, &blinding, &onion))
-		return towire_warningfmt(peer, NULL, "Bad onion_message");
-
-	/* We unwrap the onion now. */
-	op = parse_onionpacket(tmpctx, onion, tal_bytelen(onion), &badreason);
-	if (!op) {
-		status_peer_debug(&peer->id, "onion msg: can't parse onionpacket: %s",
-				  onion_wire_name(badreason));
-		return NULL;
-	}
-
-	ephemeral = op->ephemeralkey;
-	if (!unblind_onion(&blinding, ecdh, &ephemeral, &ss)) {
-		status_peer_debug(&peer->id, "onion msg: can't unblind onionpacket");
-		return NULL;
-	}
-
-	/* Now get onion shared secret and parse it. */
-	ecdh(&ephemeral, &onion_ss);
-	rs = process_onionpacket(tmpctx, op, &onion_ss, NULL, 0, false);
-	if (!rs) {
-		status_peer_debug(&peer->id,
-				  "onion msg: can't process onionpacket ss=%s",
-				  type_to_string(tmpctx, struct secret, &onion_ss));
-		return NULL;
-	}
-
-	/* The raw payload is prepended with length in the modern onion. */
-	cursor = rs->raw_payload;
-	max = tal_bytelen(rs->raw_payload);
-	maxlen = fromwire_bigsize(&cursor, &max);
-	if (!cursor) {
-		status_peer_debug(&peer->id, "onion msg: Invalid hop payload %s",
-				  tal_hex(tmpctx, rs->raw_payload));
-		return NULL;
-	}
-	if (maxlen > max) {
-		status_peer_debug(&peer->id, "onion msg: overlong hop payload %s",
-				  tal_hex(tmpctx, rs->raw_payload));
-		return NULL;
-	}
-
-	om = tlv_obs2_onionmsg_payload_new(msg);
-	if (!fromwire_obs2_onionmsg_payload(&cursor, &maxlen, om)) {
-		status_peer_debug(&peer->id, "onion msg: invalid onionmsg_payload %s",
-				  tal_hex(tmpctx, rs->raw_payload));
-		return NULL;
-	}
-
-	if (rs->nextcase == ONION_END) {
-		struct pubkey *reply_blinding, *first_node_id, me, alias;
-		const struct onionmsg_path **reply_path;
-		struct secret *self_id;
-		u8 *omsg;
-
-		if (!pubkey_from_node_id(&me, &peer->daemon->id)) {
-			status_broken("Failed to convert own id");
-			return NULL;
-		}
-
-		/* Final enctlv is actually optional */
-		if (!om->enctlv) {
-			alias = me;
-			self_id = NULL;
-		} else if (!decrypt_obs2_final_enctlv(tmpctx, &blinding, &ss,
-						      om->enctlv, &me, &alias,
-						      &self_id)) {
-			status_peer_debug(&peer->id,
-					  "onion msg: failed to decrypt enctlv"
-					  " %s", tal_hex(tmpctx, om->enctlv));
-			return NULL;
-		}
-
-		if (om->reply_path) {
-			first_node_id = &om->reply_path->first_node_id;
-			reply_blinding = &om->reply_path->blinding;
-			reply_path = cast_const2(const struct onionmsg_path **,
-						 om->reply_path->path);
-		} else {
-			first_node_id = NULL;
-			reply_blinding = NULL;
-			reply_path = NULL;
-		}
-
-		/* We re-marshall here by policy, before handing to lightningd */
-		omsg = tal_arr(tmpctx, u8, 0);
-		towire_tlvstream_raw(&omsg, om->fields);
-		daemon_conn_send(peer->daemon->master,
-				 take(towire_gossipd_got_onionmsg_to_us(NULL,
-							true, /* obs2 */
-							&alias, self_id,
-							reply_blinding,
-							first_node_id,
-							reply_path,
-							omsg)));
-	} else {
-		struct pubkey next_node, next_blinding;
-		struct peer *next_peer;
-		struct node_id next_node_id;
-
-		/* This fails as expected if no enctlv. */
-		if (!decrypt_obs2_enctlv(&blinding, &ss, om->enctlv, &next_node,
-					 &next_blinding)) {
-			status_peer_debug(&peer->id,
-					  "onion msg: invalid enctlv %s",
-					  tal_hex(tmpctx, om->enctlv));
-			return NULL;
-		}
-
-		/* Even though lightningd checks for valid ids, there's a race
-		 * where it might vanish before we read this command. */
-		node_id_from_pubkey(&next_node_id, &next_node);
-		next_peer = find_peer(peer->daemon, &next_node_id);
-		if (!next_peer) {
-			status_peer_debug(&peer->id,
-					  "onion msg: unknown next peer %s",
-					  type_to_string(tmpctx,
-							 struct pubkey,
-							 &next_node));
-			return NULL;
-		}
-		queue_peer_msg(next_peer,
-			       take(towire_obs2_onion_message(NULL,
-							      &next_blinding,
-							      serialize_onionpacket(tmpctx, rs->next))));
-	}
-
-	return NULL;
-}
-
-static void onionmsg_req(struct daemon *daemon, const u8 *msg)
+/* channeld (via lightningd) tells us about (as-yet?) unannounce channel.
+ * It needs us to put it in gossip_store. */
+static void handle_local_private_channel(struct daemon *daemon, const u8 *msg)
 {
 	struct node_id id;
-	u8 *onionmsg;
-	struct pubkey blinding;
+	struct amount_sat capacity;
+	u8 *features;
+	struct short_channel_id scid;
+	const u8 *cannounce;
+
+	if (!fromwire_gossipd_local_private_channel(msg, msg,
+						    &id, &capacity, &scid,
+						    &features))
+		master_badmsg(WIRE_GOSSIPD_LOCAL_PRIVATE_CHANNEL, msg);
+
+	cannounce = private_channel_announcement(tmpctx,
+						 &scid,
+						 &daemon->id,
+						 &id,
+						 features);
+
+	if (!routing_add_private_channel(daemon->rstate, &id, capacity,
+					 cannounce, 0)) {
+		status_peer_broken(&id, "bad add_private_channel %s",
+				   tal_hex(tmpctx, cannounce));
+	}
+}
+
+/*~ This is where connectd tells us about a new peer we might want to
+ *  gossip with. */
+static void connectd_new_peer(struct daemon *daemon, const u8 *msg)
+{
+	struct peer *peer = tal(daemon, struct peer);
+	struct node *node;
+
+	if (!fromwire_gossipd_new_peer(msg, &peer->id,
+				      &peer->gossip_queries_feature)) {
+		status_failed(STATUS_FAIL_INTERNAL_ERROR,
+			      "Bad new_peer msg from connectd: %s",
+			      tal_hex(tmpctx, msg));
+	}
+
+	if (find_peer(daemon, &peer->id)) {
+		status_broken("Peer %s already here?",
+			      type_to_string(tmpctx, struct node_id, &peer->id));
+		tal_free(find_peer(daemon, &peer->id));
+	}
+
+	/* Populate the rest of the peer info. */
+	peer->daemon = daemon;
+	peer->gossip_counter = 0;
+	peer->scid_queries = NULL;
+	peer->scid_query_idx = 0;
+	peer->scid_query_nodes = NULL;
+	peer->scid_query_nodes_idx = 0;
+	peer->scid_query_outstanding = false;
+	peer->range_replies = NULL;
+	peer->query_channel_range_cb = NULL;
+
+	/* We keep a list so we can find peer by id */
+	list_add_tail(&peer->daemon->peers, &peer->list);
+	tal_add_destructor(peer, destroy_peer);
+
+	node = get_node(daemon->rstate, &peer->id);
+	if (node)
+		peer_enable_channels(daemon, node);
+
+	/* This sends the initial timestamp filter. */
+	seeker_setup_peer_gossip(daemon->seeker, peer);
+}
+
+static void connectd_peer_gone(struct daemon *daemon, const u8 *msg)
+{
+	struct node_id id;
 	struct peer *peer;
-	bool obs2;
 
-	if (!fromwire_gossipd_send_onionmsg(msg, msg, &obs2, &id, &onionmsg, &blinding))
-		master_badmsg(WIRE_GOSSIPD_SEND_ONIONMSG, msg);
+	if (!fromwire_gossipd_peer_gone(msg, &id)) {
+		status_failed(STATUS_FAIL_INTERNAL_ERROR,
+			      "Bad peer_gone msg from connectd: %s",
+			      tal_hex(tmpctx, msg));
+	}
 
-	/* Even though lightningd checks for valid ids, there's a race
-	 * where it might vanish before we read this command. */
 	peer = find_peer(daemon, &id);
-	if (peer) {
-		u8 *omsg;
-		if (obs2)
-			omsg = towire_obs2_onion_message(NULL, &blinding, onionmsg);
-		else
-			omsg = towire_onion_message(NULL, &blinding, onionmsg);
-		queue_peer_msg(peer, take(omsg));
-	}
+	if (!peer)
+		status_broken("Peer %s already gone?",
+			      type_to_string(tmpctx, struct node_id, &id));
+	tal_free(peer);
 }
 
-/* Peer sends an onion msg. */
-static u8 *handle_onion_message(struct peer *peer, const u8 *msg)
+/*~ lightningd asks us if we know any addresses for a given id. */
+static struct io_plan *handle_get_address(struct io_conn *conn,
+					  struct daemon *daemon,
+					  const u8 *msg)
 {
-	enum onion_wire badreason;
-	struct onionpacket *op;
-	struct pubkey blinding, ephemeral;
-	struct route_step *rs;
-	u8 *onion;
-	struct tlv_onionmsg_payload *om;
-	struct secret ss, onion_ss;
-	const u8 *cursor;
-	size_t max, maxlen;
+	struct node_id id;
+	u8 rgb_color[3];
+	u8 alias[32];
+	u8 *features;
+	struct wireaddr *addrs;
+	struct lease_rates *rates;
 
-	/* Ignore unless explicitly turned on. */
-	if (!feature_offered(peer->daemon->our_features->bits[NODE_ANNOUNCE_FEATURE],
-			     OPT_ONION_MESSAGES))
-		return NULL;
+	if (!fromwire_gossipd_get_addrs(msg, &id))
+		master_badmsg(WIRE_GOSSIPD_GET_ADDRS, msg);
 
-	/* FIXME: ratelimit! */
-	if (!fromwire_onion_message(msg, msg, &blinding, &onion))
-		return towire_warningfmt(peer, NULL, "Bad onion_message");
+	if (!get_node_announcement_by_id(tmpctx, daemon, &id,
+					 rgb_color, alias, &features, &addrs,
+					 &rates))
+		addrs = NULL;
 
-	/* We unwrap the onion now. */
-	op = parse_onionpacket(tmpctx, onion, tal_bytelen(onion), &badreason);
-	if (!op) {
-		status_peer_debug(&peer->id, "onion msg: can't parse onionpacket: %s",
-				  onion_wire_name(badreason));
-		return NULL;
-	}
-
-	ephemeral = op->ephemeralkey;
-	if (!unblind_onion(&blinding, ecdh, &ephemeral, &ss)) {
-		status_peer_debug(&peer->id, "onion msg: can't unblind onionpacket");
-		return NULL;
-	}
-
-	/* Now get onion shared secret and parse it. */
-	ecdh(&ephemeral, &onion_ss);
-	rs = process_onionpacket(tmpctx, op, &onion_ss, NULL, 0, false);
-	if (!rs) {
-		status_peer_debug(&peer->id,
-				  "onion msg: can't process onionpacket ss=%s",
-				  type_to_string(tmpctx, struct secret, &onion_ss));
-		return NULL;
-	}
-
-	/* The raw payload is prepended with length in the modern onion. */
-	cursor = rs->raw_payload;
-	max = tal_bytelen(rs->raw_payload);
-	maxlen = fromwire_bigsize(&cursor, &max);
-	if (!cursor) {
-		status_peer_debug(&peer->id, "onion msg: Invalid hop payload %s",
-				  tal_hex(tmpctx, rs->raw_payload));
-		return NULL;
-	}
-	if (maxlen > max) {
-		status_peer_debug(&peer->id, "onion msg: overlong hop payload %s",
-				  tal_hex(tmpctx, rs->raw_payload));
-		return NULL;
-	}
-
-	om = tlv_onionmsg_payload_new(msg);
-	if (!fromwire_onionmsg_payload(&cursor, &maxlen, om)) {
-		status_peer_debug(&peer->id, "onion msg: invalid onionmsg_payload %s",
-				  tal_hex(tmpctx, rs->raw_payload));
-		return NULL;
-	}
-
-	if (rs->nextcase == ONION_END) {
-		struct pubkey *reply_blinding, *first_node_id, me, alias;
-		const struct onionmsg_path **reply_path;
-		struct secret *self_id;
-		u8 *omsg;
-
-		if (!pubkey_from_node_id(&me, &peer->daemon->id)) {
-			status_broken("Failed to convert own id");
-			return NULL;
-		}
-
-		/* Final enctlv is actually optional */
-		if (!om->encrypted_data_tlv) {
-			alias = me;
-			self_id = NULL;
-		} else if (!decrypt_final_enctlv(tmpctx, &blinding, &ss,
-						 om->encrypted_data_tlv, &me, &alias,
-						 &self_id)) {
-			status_peer_debug(&peer->id,
-					  "onion msg: failed to decrypt enctlv"
-					  " %s", tal_hex(tmpctx, om->encrypted_data_tlv));
-			return NULL;
-		}
-
-		if (om->reply_path) {
-			first_node_id = &om->reply_path->first_node_id;
-			reply_blinding = &om->reply_path->blinding;
-			reply_path = cast_const2(const struct onionmsg_path **,
-						 om->reply_path->path);
-		} else {
-			first_node_id = NULL;
-			reply_blinding = NULL;
-			reply_path = NULL;
-		}
-
-		/* We re-marshall here by policy, before handing to lightningd */
-		omsg = tal_arr(tmpctx, u8, 0);
-		towire_tlvstream_raw(&omsg, om->fields);
-		daemon_conn_send(peer->daemon->master,
-				 take(towire_gossipd_got_onionmsg_to_us(NULL,
-							false, /* !obs2 */
-							&alias, self_id,
-							reply_blinding,
-							first_node_id,
-							reply_path,
-							omsg)));
-	} else {
-		struct pubkey next_node, next_blinding;
-		struct peer *next_peer;
-		struct node_id next_node_id;
-
-		/* This fails as expected if no enctlv. */
-		if (!decrypt_enctlv(&blinding, &ss, om->encrypted_data_tlv, &next_node,
-					 &next_blinding)) {
-			status_peer_debug(&peer->id,
-					  "onion msg: invalid enctlv %s",
-					  tal_hex(tmpctx, om->encrypted_data_tlv));
-			return NULL;
-		}
-
-		/* FIXME: Handle short_channel_id! */
-		node_id_from_pubkey(&next_node_id, &next_node);
-		next_peer = find_peer(peer->daemon, &next_node_id);
-		if (!next_peer) {
-			status_peer_debug(&peer->id,
-					  "onion msg: unknown next peer %s",
-					  type_to_string(tmpctx,
-							 struct pubkey,
-							 &next_node));
-			return NULL;
-		}
-		queue_peer_msg(next_peer,
-			       take(towire_onion_message(NULL,
-							 &next_blinding,
-							 serialize_onionpacket(tmpctx, rs->next))));
-	}
-
-	return NULL;
+	daemon_conn_send(daemon->master,
+			 take(towire_gossipd_get_addrs_reply(NULL, addrs)));
+	return daemon_conn_read_next(conn, daemon->master);
 }
 
-/*~ This is where the per-peer daemons send us messages.  It's either forwarded
- * gossip, or a request for information.  We deliberately use non-overlapping
- * message types so we can distinguish them. */
-static struct io_plan *peer_msg_in(struct io_conn *conn,
-				    const u8 *msg,
-				    struct peer *peer)
+static void handle_recv_gossip(struct daemon *daemon, const u8 *outermsg)
 {
+	struct node_id id;
+	u8 *msg;
 	const u8 *err;
-	bool ok;
+	struct peer *peer;
+
+	if (!fromwire_gossipd_recv_gossip(outermsg, outermsg, &id, &msg)) {
+		status_failed(STATUS_FAIL_INTERNAL_ERROR,
+			      "Bad gossipd_recv_gossip msg from connectd: %s",
+			      tal_hex(tmpctx, outermsg));
+	}
+
+	peer = find_peer(daemon, &id);
+	if (!peer) {
+		status_broken("connectd sent gossip msg %s from unknown peer %s",
+			      peer_wire_name(fromwire_peektype(msg)),
+			      type_to_string(tmpctx, struct node_id, &id));
+		return;
+	}
 
 	/* These are messages relayed from peer */
 	switch ((enum peer_wire)fromwire_peektype(msg)) {
 	case WIRE_CHANNEL_ANNOUNCEMENT:
 		err = handle_channel_announcement_msg(peer->daemon, peer, msg);
-		goto handled_relay;
+		goto handled_msg;
 	case WIRE_CHANNEL_UPDATE:
 		err = handle_channel_update_msg(peer, msg);
-		goto handled_relay;
+		goto handled_msg;
 	case WIRE_NODE_ANNOUNCEMENT:
 		err = handle_node_announce(peer, msg);
-		goto handled_relay;
+		goto handled_msg;
 	case WIRE_QUERY_CHANNEL_RANGE:
 		err = handle_query_channel_range(peer, msg);
-		goto handled_relay;
+		goto handled_msg;
 	case WIRE_REPLY_CHANNEL_RANGE:
 		err = handle_reply_channel_range(peer, msg);
-		goto handled_relay;
+		goto handled_msg;
 	case WIRE_QUERY_SHORT_CHANNEL_IDS:
 		err = handle_query_short_channel_ids(peer, msg);
-		goto handled_relay;
+		goto handled_msg;
 	case WIRE_REPLY_SHORT_CHANNEL_IDS_END:
 		err = handle_reply_short_channel_ids_end(peer, msg);
-		goto handled_relay;
-	case WIRE_OBS2_ONION_MESSAGE:
-		err = handle_obs2_onion_message(peer, msg);
-		goto handled_relay;
-	case WIRE_ONION_MESSAGE:
-		err = handle_onion_message(peer, msg);
-		goto handled_relay;
+		goto handled_msg;
 
 	/* These are non-gossip messages (!is_msg_for_gossipd()) */
 	case WIRE_WARNING:
@@ -770,151 +506,22 @@ static struct io_plan *peer_msg_in(struct io_conn *conn,
 	case WIRE_ACCEPT_CHANNEL2:
 	case WIRE_INIT_RBF:
 	case WIRE_ACK_RBF:
+	case WIRE_OBS2_ONION_MESSAGE:
+	case WIRE_ONION_MESSAGE:
 #if EXPERIMENTAL_FEATURES
 	case WIRE_STFU:
 #endif
-		status_broken("peer %s: relayed unexpected msg of type %s",
-			      type_to_string(tmpctx, struct node_id, &peer->id),
-			      peer_wire_name(fromwire_peektype(msg)));
-		return io_close(conn);
-	}
-
-	/* Must be a gossipd_peerd_wire_type asking us to do something. */
-	switch ((enum gossipd_peerd_wire)fromwire_peektype(msg)) {
-	case WIRE_GOSSIPD_GET_UPDATE:
-		ok = handle_get_local_channel_update(peer, msg);
-		goto handled_cmd;
-	case WIRE_GOSSIPD_LOCAL_CHANNEL_UPDATE:
-		ok = handle_local_channel_update(peer->daemon, &peer->id, msg);
-		goto handled_cmd;
-	case WIRE_GOSSIPD_LOCAL_CHANNEL_ANNOUNCEMENT:
-		ok = handle_local_channel_announcement(peer->daemon, peer, msg);
-		goto handled_cmd;
-
-	/* These are the ones we send, not them */
-	case WIRE_GOSSIPD_GET_UPDATE_REPLY:
 		break;
 	}
 
-	if (fromwire_peektype(msg) == WIRE_GOSSIP_STORE_PRIVATE_CHANNEL) {
-		ok = routing_add_private_channel(peer->daemon->rstate, peer,
-						 msg, 0);
-		goto handled_cmd;
-	}
+	status_failed(STATUS_FAIL_INTERNAL_ERROR,
+		      "connectd sent unexpected gossip msg %s for peer %s",
+		      peer_wire_name(fromwire_peektype(msg)),
+		      type_to_string(tmpctx, struct node_id, &peer->id));
 
-	/* Anything else should not have been sent to us: close on it */
-	status_peer_broken(&peer->id, "unexpected cmd of type %i %s",
-			   fromwire_peektype(msg),
-			   gossipd_peerd_wire_name(fromwire_peektype(msg)));
-	return io_close(conn);
-
-	/* Commands should always be OK. */
-handled_cmd:
-	if (!ok)
-		return io_close(conn);
-	goto done;
-
-	/* Forwarded messages may be bad, so we have error which the per-peer
-	 * daemon will forward to the peer. */
-handled_relay:
+handled_msg:
 	if (err)
 		queue_peer_msg(peer, take(err));
-done:
-	return daemon_conn_read_next(conn, peer->dc);
-}
-
-/*~ This is where connectd tells us about a new peer, and we hand back an fd for
- * it to send us messages via peer_msg_in above */
-static struct io_plan *connectd_new_peer(struct io_conn *conn,
-					 struct daemon *daemon,
-					 const u8 *msg)
-{
-	struct peer *peer = tal(conn, struct peer);
-	struct node *node;
-	int fds[2];
-
-	if (!fromwire_gossipd_new_peer(msg, &peer->id,
-				      &peer->gossip_queries_feature)) {
-		status_broken("Bad new_peer msg from connectd: %s",
-			      tal_hex(tmpctx, msg));
-		return io_close(conn);
-	}
-
-	/* This can happen: we handle it gracefully, returning a `failed` msg. */
-	if (socketpair(AF_LOCAL, SOCK_STREAM, 0, fds) != 0) {
-		status_broken("Failed to create socketpair: %s",
-			      strerror(errno));
-		daemon_conn_send(daemon->connectd,
-				 take(towire_gossipd_new_peer_reply(NULL,
-								    false)));
-		goto done;
-	}
-
-	/* We might not have noticed old peer is dead; kill it now. */
-	tal_free(find_peer(daemon, &peer->id));
-
-	/* Populate the rest of the peer info. */
-	peer->daemon = daemon;
-	peer->gossip_counter = 0;
-	peer->scid_queries = NULL;
-	peer->scid_query_idx = 0;
-	peer->scid_query_nodes = NULL;
-	peer->scid_query_nodes_idx = 0;
-	peer->scid_query_outstanding = false;
-	peer->range_replies = NULL;
-	peer->query_channel_range_cb = NULL;
-
-	/* We keep a list so we can find peer by id */
-	list_add_tail(&peer->daemon->peers, &peer->list);
-	tal_add_destructor(peer, destroy_peer);
-
-	/* This is the new connection: calls maybe_send_query_responses when
-	 * nothing else to send. */
-	peer->dc = daemon_conn_new(daemon, fds[0],
-				   peer_msg_in,
-				   maybe_send_query_responses, peer);
-	/* Free peer if conn closed (destroy_peer closes conn if peer freed) */
-	tal_steal(peer->dc, peer);
-
-	node = get_node(daemon->rstate, &peer->id);
-	if (node)
-		peer_enable_channels(daemon, node);
-
-	/* This sends the initial timestamp filter. */
-	seeker_setup_peer_gossip(daemon->seeker, peer);
-
-	/* Reply with success, and the new fd and gossip_state. */
-	daemon_conn_send(daemon->connectd,
-			 take(towire_gossipd_new_peer_reply(NULL, true)));
-	daemon_conn_send_fd(daemon->connectd, fds[1]);
-
-done:
-	return daemon_conn_read_next(conn, daemon->connectd);
-}
-
-/*~ lightningd asks us if we know any addresses for a given id. */
-static struct io_plan *handle_get_address(struct io_conn *conn,
-					  struct daemon *daemon,
-					  const u8 *msg)
-{
-	struct node_id id;
-	u8 rgb_color[3];
-	u8 alias[32];
-	u8 *features;
-	struct wireaddr *addrs;
-	struct lease_rates *rates;
-
-	if (!fromwire_gossipd_get_addrs(msg, &id))
-		master_badmsg(WIRE_GOSSIPD_GET_ADDRS, msg);
-
-	if (!get_node_announcement_by_id(tmpctx, daemon, &id,
-					 rgb_color, alias, &features, &addrs,
-					 &rates))
-		addrs = NULL;
-
-	daemon_conn_send(daemon->master,
-			 take(towire_gossipd_get_addrs_reply(NULL, addrs)));
-	return daemon_conn_read_next(conn, daemon->master);
 }
 
 /*~ connectd's input handler is very simple. */
@@ -925,17 +532,28 @@ static struct io_plan *connectd_req(struct io_conn *conn,
 	enum connectd_gossipd_wire t = fromwire_peektype(msg);
 
 	switch (t) {
+	case WIRE_GOSSIPD_RECV_GOSSIP:
+		handle_recv_gossip(daemon, msg);
+		goto handled;
+
 	case WIRE_GOSSIPD_NEW_PEER:
-		return connectd_new_peer(conn, daemon, msg);
+		connectd_new_peer(daemon, msg);
+		goto handled;
+
+	case WIRE_GOSSIPD_PEER_GONE:
+		connectd_peer_gone(daemon, msg);
+		goto handled;
 
 	/* We send these, don't receive them. */
-	case WIRE_GOSSIPD_NEW_PEER_REPLY:
+	case WIRE_GOSSIPD_SEND_GOSSIP:
 		break;
 	}
 
-	status_broken("Bad msg from connectd: %s",
-		      tal_hex(tmpctx, msg));
-	return io_close(conn);
+	status_failed(STATUS_FAIL_INTERNAL_ERROR,
+		      "Bad msg from connectd2: %s", tal_hex(tmpctx, msg));
+
+handled:
+	return daemon_conn_read_next(conn, daemon->connectd);
 }
 
 /* BOLT #7:
@@ -1093,9 +711,10 @@ static void gossip_init(struct daemon *daemon, const u8 *msg)
 	/* Fire up the seeker! */
 	daemon->seeker = new_seeker(daemon);
 
-	/* connectd is already started, and uses this fd to ask us things. */
+	/* connectd is already started, and uses this fd to feed/recv gossip. */
 	daemon->connectd = daemon_conn_new(daemon, CONNECTD_FD,
-					   connectd_req, NULL, daemon);
+					   connectd_req,
+					   maybe_send_query_responses, daemon);
 
 	/* OK, we are ready. */
 	daemon_conn_send(daemon->master,
@@ -1176,56 +795,6 @@ static void dev_gossip_set_time(struct daemon *daemon, const u8 *msg)
 	daemon->rstate->gossip_time->ts.tv_nsec = 0;
 }
 #endif /* DEVELOPER */
-
-/*~ lightningd: so, get me the latest update for this local channel,
- *  so I can include it in an error message. */
-static void get_stripped_cupdate(struct daemon *daemon, const u8 *msg)
-{
-	struct short_channel_id scid;
-	struct chan *chan;
-	const u8 *stripped_update;
-
-	if (!fromwire_gossipd_get_stripped_cupdate(msg, &scid))
-		master_badmsg(WIRE_GOSSIPD_GET_STRIPPED_CUPDATE, msg);
-
-	chan = get_channel(daemon->rstate, &scid);
-	if (!chan) {
-		status_debug("Failed to resolve local channel %s",
-			     type_to_string(tmpctx, struct short_channel_id, &scid));
-		stripped_update = NULL;
-	} else {
-		int direction;
-		const struct half_chan *hc;
-
-		if (!local_direction(daemon->rstate, chan, &direction)) {
-			status_broken("%s is a non-local channel!",
-				      type_to_string(tmpctx,
-						     struct short_channel_id,
-						     &scid));
-			stripped_update = NULL;
-			goto out;
-		}
-
-		/* Since we're going to use it, make sure it's up-to-date. */
-		local_channel_update_latest(daemon, chan);
-
-		hc = &chan->half[direction];
-		if (is_halfchan_defined(hc)) {
-			const u8 *update;
-
-			update = gossip_store_get(tmpctx, daemon->rstate->gs,
-						  hc->bcast.index);
-			stripped_update = tal_dup_arr(tmpctx, u8, update + 2,
-						      tal_count(update) - 2, 0);
-		} else
-			stripped_update = NULL;
-	}
-
-out:
-	daemon_conn_send(daemon->master,
-			 take(towire_gossipd_get_stripped_cupdate_reply(NULL,
-							   stripped_update)));
-}
 
 /*~ We queue incoming channel_announcement pending confirmation from lightningd
  * that it really is an unspent output.  Here's its reply. */
@@ -1382,10 +951,6 @@ static struct io_plan *recv_req(struct io_conn *conn,
 		gossip_init(daemon, msg);
 		goto done;
 
-	case WIRE_GOSSIPD_GET_STRIPPED_CUPDATE:
-		get_stripped_cupdate(daemon, msg);
-		goto done;
-
 	case WIRE_GOSSIPD_GET_TXOUT_REPLY:
 		handle_txout_reply(daemon, msg);
 		goto done;
@@ -1413,6 +978,21 @@ static struct io_plan *recv_req(struct io_conn *conn,
 	case WIRE_GOSSIPD_GET_ADDRS:
 		return handle_get_address(conn, daemon, msg);
 
+	case WIRE_GOSSIPD_USED_LOCAL_CHANNEL_UPDATE:
+		handle_used_local_channel_update(daemon, msg);
+		goto done;
+
+	case WIRE_GOSSIPD_LOCAL_CHANNEL_UPDATE:
+		handle_local_channel_update(daemon, msg);
+		goto done;
+
+	case WIRE_GOSSIPD_LOCAL_CHANNEL_ANNOUNCEMENT:
+		handle_local_channel_announcement(daemon, msg);
+		goto done;
+
+	case WIRE_GOSSIPD_LOCAL_PRIVATE_CHANNEL:
+		handle_local_private_channel(daemon, msg);
+		goto done;
 #if DEVELOPER
 	case WIRE_GOSSIPD_DEV_SET_MAX_SCIDS_ENCODE_SIZE:
 		dev_set_max_scids_encode_size(daemon, msg);
@@ -1438,20 +1018,15 @@ static struct io_plan *recv_req(struct io_conn *conn,
 		break;
 #endif /* !DEVELOPER */
 
-	case WIRE_GOSSIPD_SEND_ONIONMSG:
-		onionmsg_req(daemon, msg);
-		goto done;
-
 	/* We send these, we don't receive them */
 	case WIRE_GOSSIPD_INIT_REPLY:
-	case WIRE_GOSSIPD_GET_STRIPPED_CUPDATE_REPLY:
 	case WIRE_GOSSIPD_GET_TXOUT:
 	case WIRE_GOSSIPD_DEV_MEMLEAK_REPLY:
 	case WIRE_GOSSIPD_DEV_COMPACT_STORE_REPLY:
-	case WIRE_GOSSIPD_GOT_ONIONMSG_TO_US:
 	case WIRE_GOSSIPD_ADDGOSSIP_REPLY:
 	case WIRE_GOSSIPD_NEW_BLOCKHEIGHT_REPLY:
 	case WIRE_GOSSIPD_GET_ADDRS_REPLY:
+	case WIRE_GOSSIPD_GOT_LOCAL_CHANNEL_UPDATE:
 		break;
 	}
 

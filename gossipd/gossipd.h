@@ -9,6 +9,7 @@
 #define HSM_FD 3
 /* connectd asks us for help finding nodes, and gossip fds for new peers */
 #define CONNECTD_FD 4
+#define CONNECTD2_FD 5
 
 struct chan;
 struct channel_update_timestamps;
@@ -107,9 +108,6 @@ struct peer {
 	void (*query_channel_range_cb)(struct peer *peer,
 				       u32 first_blocknum, u32 number_of_blocks,
 				       const struct range_query_reply *replies);
-
-	/* The daemon_conn used to queue messages to/from the peer. */
-	struct daemon_conn *dc;
 };
 
 /* Search for a peer. */

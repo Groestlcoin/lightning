@@ -31,7 +31,6 @@ LIGHTNINGD_SRC :=				\
 	lightningd/peer_control.c		\
 	lightningd/peer_fd.c			\
 	lightningd/peer_htlcs.c			\
-	lightningd/ping.c			\
 	lightningd/plugin.c			\
 	lightningd/plugin_control.c		\
 	lightningd/plugin_hook.c		\
@@ -42,6 +41,7 @@ LIGHTNINGD_SRC :=				\
 
 LIGHTNINGD_SRC_NOHDR :=				\
 	lightningd/datastore.c			\
+	lightningd/ping.c			\
 	lightningd/offer.c			\
 	lightningd/signmessage.c
 
@@ -132,9 +132,9 @@ LIGHTNINGD_COMMON_OBJS :=			\
 include wallet/Makefile
 
 # All together in one convenient var
-LIGHTNINGD_HEADERS = $(LIGHTNINGD_HEADERS_NOGEN) $(LIGHTNINGD_HEADERS_GEN) $(WALLET_LIB_HEADERS)
+LIGHTNINGD_HEADERS = $(LIGHTNINGD_HEADERS_NOGEN) $(LIGHTNINGD_HEADERS_GEN) $(WALLET_HDRS)
 
-$(LIGHTNINGD_OBJS): $(LIGHTNINGD_HEADERS) $(WALLET_HDRS)
+$(LIGHTNINGD_OBJS): $(LIGHTNINGD_HEADERS)
 
 # Only the plugin component needs to depend on this header.
 lightningd/plugin.o: plugins/list_of_builtin_plugins_gen.h

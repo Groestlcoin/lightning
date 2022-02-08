@@ -237,6 +237,9 @@ struct channel {
 	u32 lease_chan_max_msat;
 	/* Lease commited max part per thousandth channel fee (ppm * 1000) */
 	u16 lease_chan_max_ppt;
+
+	/* Latest channel_update, for use in error messages. */
+	u8 *channel_update;
 };
 
 /* For v2 opens, a channel that has not yet been committed/saved to disk */
@@ -470,5 +473,7 @@ void channel_set_billboard(struct channel *channel, bool perm,
 
 struct htlc_in *channel_has_htlc_in(struct channel *channel);
 struct htlc_out *channel_has_htlc_out(struct channel *channel);
+
+const u8 *get_channel_update(struct channel *channel);
 
 #endif /* LIGHTNING_LIGHTNINGD_CHANNEL_H */

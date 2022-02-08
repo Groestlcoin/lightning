@@ -26,13 +26,12 @@
 #include <inttypes.h>
 #include <stdio.h>
 #include <unistd.h>
-#include <wire/common_wiregen.h>
 #include <wire/peer_wire.h>
 #include <wire/wire_sync.h>
 
-/* stdin == requests, 3 == peer, 4 = gossip, 5 = hsmd */
+/* stdin == requests, 3 == peer, 4 = hsmd */
 #define REQ_FD STDIN_FILENO
-#define HSM_FD 5
+#define HSM_FD 4
 
 static void notify(enum log_level level, const char *fmt, ...)
 {
@@ -118,24 +117,10 @@ static u8 *closing_read_peer_msg(const tal_t *ctx,
 {
 	for (;;) {
 		u8 *msg;
-		bool from_gossipd;
 
 		clean_tmpctx();
-		msg = peer_or_gossip_sync_read(ctx, pps, &from_gossipd);
-		if (from_gossipd) {
-			handle_gossip_msg(pps, take(msg));
-			continue;
-		}
-		/* Handle custommsgs */
-		enum peer_wire type = fromwire_peektype(msg);
-		if (type % 2 == 1 && !peer_wire_is_defined(type)) {
-			/* The message is not part of the messages we know
-			 * how to handle. Assume is custommsg, forward it
-			 * to master. */
-			wire_sync_write(REQ_FD, take(towire_custommsg_in(NULL, msg)));
-			continue;
-		}
-		if (!handle_peer_gossip_or_error(pps, channel_id, msg))
+		msg = peer_read(ctx, pps);
+		if (!handle_peer_error(pps, channel_id, msg))
 			return msg;
 	}
 }
@@ -902,9 +887,9 @@ int main(int argc, char *argv[])
 				    &wrong_funding))
 		master_badmsg(WIRE_CLOSINGD_INIT, msg);
 
-	/* stdin == requests, 3 == peer, 4 = gossip, 5 = hsmd */
+	/* stdin == requests, 3 == peer, 4 = hsmd */
 	pps = notleak(new_per_peer_state(ctx));
-	per_peer_state_set_fds(pps, 3, 4);
+	per_peer_state_set_fd(pps, 3);
 
 	funding_wscript = bitcoin_redeem_2of2(ctx,
 					      &funding_pubkey[LOCAL],

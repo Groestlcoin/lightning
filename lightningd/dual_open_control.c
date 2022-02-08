@@ -22,6 +22,7 @@
 #include <lightningd/channel_control.h>
 #include <lightningd/closing_control.h>
 #include <lightningd/dual_open_control.h>
+#include <lightningd/gossip_control.h>
 #include <lightningd/hsm_control.h>
 #include <lightningd/json.h>
 #include <lightningd/notification.h>
@@ -30,7 +31,6 @@
 #include <lightningd/peer_fd.h>
 #include <lightningd/plugin_hook.h>
 #include <openingd/dualopend_wiregen.h>
-#include <wire/common_wiregen.h>
 
 struct commit_rcvd {
 	struct channel *channel;
@@ -1366,6 +1366,24 @@ static void handle_channel_closed(struct subd *dualopend,
 			  CLOSINGD_SIGEXCHANGE,
 			  REASON_UNKNOWN,
 			  "Start closingd");
+}
+
+static void handle_local_private_channel(struct subd *dualopend,
+					 const u8 *msg)
+{
+	struct amount_sat capacity;
+	u8 *features;
+
+	if (!fromwire_dualopend_local_private_channel(msg, msg, &capacity,
+						      &features)) {
+		channel_internal_error(dualopend->channel,
+				       "bad dualopend_local_private_channel %s",
+				       tal_hex(msg, msg));
+		return;
+	}
+
+	tell_gossipd_local_private_channel(dualopend->ld, dualopend->channel,
+					   capacity, features);
 }
 
 struct channel_send {
@@ -2976,22 +2994,24 @@ static unsigned int dual_opend_msg(struct subd *dualopend,
 			handle_dry_run_finished(dualopend, msg);
 			return 0;
 		case WIRE_DUALOPEND_CHANNEL_LOCKED:
-			if (tal_count(fds) != 2)
-				return 2;
+			if (tal_count(fds) != 1)
+				return 1;
 			handle_channel_locked(dualopend, fds, msg);
 			return 0;
 		case WIRE_DUALOPEND_GOT_SHUTDOWN:
 			handle_peer_wants_to_close(dualopend, msg);
 			return 0;
 		case WIRE_DUALOPEND_SHUTDOWN_COMPLETE:
-			if (tal_count(fds) != 2)
-				return 2;
+			if (tal_count(fds) != 1)
+				return 1;
 			handle_channel_closed(dualopend, fds, msg);
 			return 0;
 		case WIRE_DUALOPEND_FAIL_FALLEN_BEHIND:
 			channel_fail_fallen_behind(dualopend, msg);
 			return 0;
-
+		case WIRE_DUALOPEND_LOCAL_PRIVATE_CHANNEL:
+			handle_local_private_channel(dualopend, msg);
+			return 0;
 		/* Messages we send */
 		case WIRE_DUALOPEND_INIT:
 		case WIRE_DUALOPEND_REINIT:
@@ -3007,15 +3027,6 @@ static unsigned int dual_opend_msg(struct subd *dualopend,
 		case WIRE_DUALOPEND_SEND_SHUTDOWN:
 		case WIRE_DUALOPEND_DEPTH_REACHED:
 			break;
-	}
-
-	switch ((enum common_wire)t) {
-	case WIRE_CUSTOMMSG_IN:
-		handle_custommsg_in(dualopend->ld, dualopend->node_id, msg);
-		return 0;
-	/* We send these. */
-	case WIRE_CUSTOMMSG_OUT:
-		break;
 	}
 
 	log_broken(dualopend->log, "Unexpected msg %s: %s",
@@ -3219,7 +3230,6 @@ static void start_fresh_dualopend(struct peer *peer,
 					  channel_errmsg,
 					  channel_set_billboard,
 					  take(&peer_fd->fd),
-					  take(&peer_fd->gossip_fd),
 					  take(&hsmfd), NULL);
 
 	if (!channel->owner) {
@@ -3286,7 +3296,6 @@ void peer_restart_dualopend(struct peer *peer,
 					   channel_errmsg,
 					   channel_set_billboard,
 					   take(&peer_fd->fd),
-					   take(&peer_fd->gossip_fd),
 					   take(&hsmfd), NULL));
 	if (!channel->owner) {
 		log_broken(channel->log, "Could not subdaemon channel: %s",

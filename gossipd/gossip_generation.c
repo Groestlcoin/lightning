@@ -3,6 +3,7 @@
 #include "config.h"
 #include <ccan/cast/cast.h>
 #include <ccan/mem/mem.h>
+#include <common/daemon_conn.h>
 #include <common/features.h>
 #include <common/memleak.h>
 #include <common/status.h>
@@ -14,7 +15,7 @@
 #include <gossipd/gossip_store.h>
 #include <gossipd/gossip_store_wiregen.h>
 #include <gossipd/gossipd.h>
-#include <gossipd/gossipd_peerd_wiregen.h>
+#include <gossipd/gossipd_wiregen.h>
 #include <hsmd/hsmd_wiregen.h>
 #include <wire/wire_sync.h>
 
@@ -418,6 +419,11 @@ static u8 *sign_and_timestamp_update(const tal_t *ctx,
 	if (taken(unsigned_update))
 		tal_free(unsigned_update);
 
+	/* Tell lightningd about this immediately (even if we're not actually
+	 * applying it now) */
+	msg = towire_gossipd_got_local_channel_update(NULL, &chan->scid, update);
+	daemon_conn_send(daemon->master, take(msg));
+
 	return update;
 }
 
@@ -591,7 +597,7 @@ static void defer_update(struct daemon *daemon,
 }
 
 /* If there is a pending update for this local channel, apply immediately. */
-bool local_channel_update_latest(struct daemon *daemon, struct chan *chan)
+static bool local_channel_update_latest(struct daemon *daemon, struct chan *chan)
 {
 	struct deferred_update *du;
 
@@ -688,11 +694,10 @@ void refresh_local_channel(struct daemon *daemon,
 	sign_timestamp_and_apply_update(daemon, chan, direction, take(update));
 }
 
-/* channeld asks us to update the local channel. */
-bool handle_local_channel_update(struct daemon *daemon,
-				 const struct node_id *src,
-				 const u8 *msg)
+/* channeld (via lightningd) asks us to update the local channel. */
+void handle_local_channel_update(struct daemon *daemon, const u8 *msg)
 {
+	struct node_id id;
 	struct short_channel_id scid;
 	bool disable;
 	u16 cltv_expiry_delta;
@@ -703,10 +708,8 @@ bool handle_local_channel_update(struct daemon *daemon,
 	u8 *unsigned_update;
 	const struct half_chan *hc;
 
-	/* FIXME: We should get scid from lightningd when setting up the
-	 * connection, so no per-peer daemon can mess with channels other than
-	 * its own! */
 	if (!fromwire_gossipd_local_channel_update(msg,
+						   &id,
 						   &scid,
 						   &disable,
 						   &cltv_expiry_delta,
@@ -714,26 +717,24 @@ bool handle_local_channel_update(struct daemon *daemon,
 						   &fee_base_msat,
 						   &fee_proportional_millionths,
 						   &htlc_maximum)) {
-		status_peer_broken(src, "bad local_channel_update %s",
-				   tal_hex(tmpctx, msg));
-		return false;
+		master_badmsg(WIRE_GOSSIPD_LOCAL_CHANNEL_UPDATE, msg);
 	}
 
 	chan = get_channel(daemon->rstate, &scid);
 	/* Can theoretically happen if channel just closed. */
 	if (!chan) {
-		status_peer_debug(src, "local_channel_update for unknown %s",
+		status_peer_debug(&id, "local_channel_update for unknown %s",
 				  type_to_string(tmpctx, struct short_channel_id,
 						 &scid));
-		return true;
+		return;
 	}
 
 	if (!local_direction(daemon->rstate, chan, &direction)) {
-		status_peer_broken(src, "bad local_channel_update chan %s",
+		status_peer_broken(&id, "bad local_channel_update chan %s",
 				   type_to_string(tmpctx,
 						  struct short_channel_id,
 						  &scid));
-		return false;
+		return;
 	}
 
 	unsigned_update = create_unsigned_update(tmpctx, &scid, direction,
@@ -747,23 +748,22 @@ bool handle_local_channel_update(struct daemon *daemon,
 	/* Ignore duplicates. */
 	if (is_halfchan_defined(hc)
 	    && !cupdate_different(daemon->rstate->gs, hc, unsigned_update))
-		return true;
+		return;
 
 	/* Too early?  Defer (don't worry if it's unannounced). */
-	if (hc && is_chan_public(chan)) {
+	if (is_halfchan_defined(hc) && is_chan_public(chan)) {
 		u32 now = time_now().ts.tv_sec;
 		u32 next_time = hc->bcast.timestamp
 			+ GOSSIP_MIN_INTERVAL(daemon->rstate->dev_fast_gossip);
 		if (now < next_time) {
 			defer_update(daemon, next_time - now,
 				     chan, direction, take(unsigned_update));
-			return true;
+			return;
 		}
 	}
 
 	sign_timestamp_and_apply_update(daemon, chan, direction,
 					take(unsigned_update));
-	return true;
 }
 
 /* Take update, set/unset disabled flag (and update timestamp).
@@ -802,6 +802,32 @@ void local_disable_chan(struct daemon *daemon, const struct chan *chan, int dire
 	/* This is deferred indefinitely (flushed if needed though) */
 	set_disable_flag(update, true);
 	defer_update(daemon, 0xFFFFFFFF, chan, direction, take(update));
+}
+
+/* lightningd tells us it used the local channel update. */
+void handle_used_local_channel_update(struct daemon *daemon, const u8 *msg)
+{
+	struct short_channel_id scid;
+	struct chan *chan;
+
+	if (!fromwire_gossipd_used_local_channel_update(msg, &scid))
+		master_badmsg(WIRE_GOSSIPD_USED_LOCAL_CHANNEL_UPDATE, msg);
+
+	chan = get_channel(daemon->rstate, &scid);
+	/* Might have closed in meantime, but v unlikely! */
+	if (!chan) {
+		status_broken("used_local_channel_update on unknown %s",
+			      type_to_string(tmpctx, struct short_channel_id,
+					     &scid));
+		return;
+	}
+
+	/* This whole idea is racy: they might have used a *previous* update.
+	 * But that's OK: the notification is an optimization to avoid
+	 * broadcasting updates we never use (route flapping).  In this case,
+	 * we might broadcast a more recent update than the one we sent to a
+	 * peer. */
+	local_channel_update_latest(daemon, chan);
 }
 
 void local_enable_chan(struct daemon *daemon, const struct chan *chan, int direction)

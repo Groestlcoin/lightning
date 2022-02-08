@@ -18,7 +18,6 @@
 #include <lightningd/subd.h>
 #include <sys/socket.h>
 #include <sys/wait.h>
-#include <wire/common_wiregen.h>
 #include <wire/wire_io.h>
 
 void maybe_subd_child(struct lightningd *ld, int childpid, int wstatus)
@@ -415,7 +414,7 @@ static bool log_status_fail(struct subd *sd, const u8 *msg)
 	return true;
 }
 
-static bool handle_peer_error(struct subd *sd, const u8 *msg, int fds[2])
+static bool handle_peer_error(struct subd *sd, const u8 *msg, int fds[1])
 {
 	void *channel = sd->channel;
 	struct channel_id channel_id;
@@ -534,11 +533,11 @@ static struct io_plan *sd_msg_read(struct io_conn *conn, struct subd *sd)
 	if (sd->channel) {
 		switch ((enum peer_status_wire)type) {
 		case WIRE_STATUS_PEER_ERROR:
-			/* We expect 2 fds after this */
+			/* We expect 1 fd after this */
 			if (!sd->fds_in) {
 				/* Don't free msg_in: we go around again. */
 				tal_steal(sd, sd->msg_in);
-				plan = sd_collect_fds(conn, sd, 2);
+				plan = sd_collect_fds(conn, sd, 1);
 				goto out;
 			}
 			if (!handle_peer_error(sd, sd->msg_in, sd->fds_in))
@@ -831,8 +830,7 @@ void subd_send_msg(struct subd *sd, const u8 *msg_out)
 	u16 type = fromwire_peektype(msg_out);
 	/* FIXME: We should use unique upper bits for each daemon, then
 	 * have generate-wire.py add them, just assert here. */
-	assert(!strstarts(common_wire_name(type), "INVALID") ||
-	       !strstarts(sd->msgname(type), "INVALID"));
+	assert(!strstarts(sd->msgname(type), "INVALID"));
 	msg_enqueue(sd->outq, msg_out);
 }
 
@@ -895,6 +893,20 @@ struct subd *subd_shutdown(struct subd *sd, unsigned int seconds)
 	sd->must_not_exit = false;
 	destroy_subd(sd);
 	return tal_free(sd);
+}
+
+void subd_shutdown_remaining(struct lightningd *ld)
+{
+	struct subd *subd;
+
+	/* We give them a second to finish exiting, before we kill
+	 * them in destroy_subd() */
+	sleep(1);
+
+	while ((subd = list_top(&ld->subds, struct subd, list)) != NULL) {
+		/* Destructor removes from list */
+		io_close(subd->conn);
+	}
 }
 
 void subd_release_channel(struct subd *owner, const void *channel)

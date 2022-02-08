@@ -33,6 +33,7 @@
 #include <connectd/handshake.h>
 #include <connectd/multiplex.h>
 #include <connectd/netaddress.h>
+#include <connectd/onion_message.h>
 #include <connectd/peer_exchange_initmsg.h>
 #include <connectd/tor.h>
 #include <connectd/tor_autoservice.h>
@@ -208,57 +209,6 @@ static void peer_connected_in(struct daemon *daemon,
 	tal_free(connect);
 }
 
-/*~ Every per-peer daemon needs a connection to the gossip daemon; this allows
- * it to forward gossip to/from the peer.  The gossip daemon needs to know a
- * few of the features of the peer and its id (for reporting).
- *
- * Every peer also has read-only access to the gossip_store, which is handed
- * out by gossipd too, and also a "gossip_state" indicating where we're up to.
- *
- * 'features' is a field in the `init` message, indicating properties of the
- * node.
- */
-static int get_gossipfd(struct daemon *daemon,
-			const struct node_id *id,
-			const u8 *their_features)
-{
-	bool gossip_queries_feature, success;
-	u8 *msg;
-
-	/*~ The way features generally work is that both sides need to offer it;
-	 * we always offer `gossip_queries`, but this check is explicit. */
-	gossip_queries_feature
-		= feature_negotiated(daemon->our_features, their_features,
-				     OPT_GOSSIP_QUERIES);
-
-	/*~ We do this communication sync, since gossipd is our friend and
-	 * it's easier.  If gossipd fails, we fail. */
-	msg = towire_gossipd_new_peer(NULL, id, gossip_queries_feature);
-	if (!wire_sync_write(GOSSIPCTL_FD, take(msg)))
-		status_failed(STATUS_FAIL_INTERNAL_ERROR,
-			      "Failed writing to gossipctl: %s",
-			      strerror(errno));
-
-	msg = wire_sync_read(tmpctx, GOSSIPCTL_FD);
-	if (!fromwire_gossipd_new_peer_reply(msg, &success))
-		status_failed(STATUS_FAIL_INTERNAL_ERROR,
-			      "Failed parsing msg gossipctl: %s",
-			      tal_hex(tmpctx, msg));
-
-	/* Gossipd might run out of file descriptors, so it tells us, and we
-	 * give up on connecting this peer. */
-	if (!success) {
-		status_broken("Gossipd did not give us an fd: losing peer %s",
-			      type_to_string(tmpctx, struct node_id, id));
-		return -1;
-	}
-
-	/* Otherwise, the next thing in the socket will be the file descriptor
-	 * for the per-peer daemon. */
-	return fdpass_recv(GOSSIPCTL_FD);
-
-}
-
 /*~ This is an ad-hoc marshalling structure where we store arguments so we
  * can call peer_connected again. */
 struct peer_reconnected {
@@ -393,7 +343,8 @@ struct io_plan *peer_connected(struct io_conn *conn,
 	struct peer *peer;
 	int unsup;
 	size_t depender, missing;
-	int subd_fd, gossip_fd;
+	int subd_fd;
+	bool option_gossip_queries;
 
 	peer = peer_htable_get(&daemon->peers, id);
 	if (peer)
@@ -451,12 +402,12 @@ struct io_plan *peer_connected(struct io_conn *conn,
 	if (!peer)
 		return io_close(conn);
 
-	/* If gossipd can't give us a file descriptor, we give up connecting. */
-	gossip_fd = get_gossipfd(daemon, id, their_features);
-	if (gossip_fd < 0) {
-		close(subd_fd);
-		return tal_free(peer);
-	}
+	/* Tell gossipd it can ask query this new peer for gossip */
+	option_gossip_queries = feature_negotiated(daemon->our_features,
+						   their_features,
+						   OPT_GOSSIP_QUERIES);
+	msg = towire_gossipd_new_peer(NULL, id, option_gossip_queries);
+	daemon_conn_send(daemon->gossipd, take(msg));
 
 	/* Get ready for streaming gossip from the store */
 	setup_peer_gossip_store(peer, daemon->our_features, their_features);
@@ -467,10 +418,9 @@ struct io_plan *peer_connected(struct io_conn *conn,
 
 	/*~ daemon_conn is a message queue for inter-daemon communication: we
 	 * queue up the `connect_peer_connected` message to tell lightningd
-	 * we have connected, and give the peer and gossip fds. */
+	 * we have connected, and give the peer fd. */
 	daemon_conn_send(daemon->master, take(msg));
 	daemon_conn_send_fd(daemon->master, subd_fd);
-	daemon_conn_send_fd(daemon->master, gossip_fd);
 
 	/*~ Now we set up this connection to read/write from subd */
 	return multiplex_peer_setup(conn, peer);
@@ -1843,6 +1793,10 @@ void peer_conn_closed(struct peer *peer)
 	assert(!peer->to_peer);
 	assert(peer->told_to_close);
 
+	/* Tell gossipd to stop asking this peer gossip queries */
+	daemon_conn_send(peer->daemon->gossipd,
+			 take(towire_gossipd_peer_gone(NULL, &peer->id)));
+
 	/* Wake up in case there's a reconnecting peer waiting in io_wait. */
 	io_wake(peer);
 
@@ -1895,18 +1849,6 @@ static void peer_final_msg(struct io_conn *conn,
 
 	if (!fromwire_connectd_peer_final_msg(tmpctx, msg, &id, &finalmsg))
 		master_badmsg(WIRE_CONNECTD_PEER_FINAL_MSG, msg);
-
-	/* Get the peer_fd and gossip_fd for this peer: we don't need them. */
-	io_fd_block(io_conn_fd(conn), true);
-	for (size_t i = 0; i < 2; i++) {
-		int fd = fdpass_recv(io_conn_fd(conn));
-		if (fd == -1)
-			status_failed(STATUS_FAIL_MASTER_IO,
-				      "Getting fd %zu after peer_final_msg: %s",
-				      i, strerror(errno));
-		close(fd);
-	}
-	io_fd_block(io_conn_fd(conn), false);
 
 	/* This can happen if peer hung up on us. */
 	peer = peer_htable_get(&daemon->peers, &id);
@@ -1965,6 +1907,18 @@ static struct io_plan *recv_req(struct io_conn *conn,
 		peer_final_msg(conn, daemon, msg);
 		goto out;
 
+	case WIRE_CONNECTD_PING:
+		send_manual_ping(daemon, msg);
+		goto out;
+
+	case WIRE_CONNECTD_SEND_ONIONMSG:
+		onionmsg_req(daemon, msg);
+		goto out;
+
+	case WIRE_CONNECTD_CUSTOMMSG_OUT:
+		send_custommsg(daemon, msg);
+		goto out;
+
 	case WIRE_CONNECTD_DEV_MEMLEAK:
 #if DEVELOPER
 		dev_connect_memleak(daemon, msg);
@@ -1977,6 +1931,9 @@ static struct io_plan *recv_req(struct io_conn *conn,
 	case WIRE_CONNECTD_RECONNECTED:
 	case WIRE_CONNECTD_CONNECT_FAILED:
 	case WIRE_CONNECTD_DEV_MEMLEAK_REPLY:
+	case WIRE_CONNECTD_PING_REPLY:
+	case WIRE_CONNECTD_GOT_ONIONMSG_TO_US:
+	case WIRE_CONNECTD_CUSTOMMSG_IN:
 		break;
 	}
 
@@ -1999,6 +1956,26 @@ static void master_gone(struct daemon_conn *master UNUSED)
 {
 	/* Can't tell master, it's gone. */
 	exit(2);
+}
+
+/*~ gossipd sends us gossip to send to the peers. */
+static struct io_plan *recv_gossip(struct io_conn *conn,
+				   const u8 *msg,
+				   struct daemon *daemon)
+{
+	struct node_id dst;
+	u8 *gossip_msg;
+	struct peer *peer;
+
+	if (!fromwire_gossipd_send_gossip(msg, msg, &dst, &gossip_msg))
+		status_failed(STATUS_FAIL_GOSSIP_IO, "Unknown msg %i",
+			      fromwire_peektype(msg));
+
+	peer = peer_htable_get(&daemon->peers, &dst);
+	if (peer)
+		inject_peer_msg(peer, take(gossip_msg));
+
+	return daemon_conn_read_next(conn, daemon->gossipd);
 }
 
 /*~ This is a hook used by the memleak code (if DEVELOPER=1): it can't see
@@ -2036,6 +2013,11 @@ int main(int argc, char *argv[])
 	/* This tells the status_* subsystem to use this connection to send
 	 * our status_ and failed messages. */
 	status_setup_async(daemon->master);
+
+	/* This streams gossip to and from gossipd */
+	daemon->gossipd = daemon_conn_new(daemon, GOSSIPCTL_FD,
+					  recv_gossip, NULL,
+					  daemon);
 
 	/* Set up ecdh() function so it uses our HSM fd, and calls
 	 * status_failed on error. */

@@ -17,12 +17,11 @@
 #include <lightningd/closing_control.h>
 #include <lightningd/coin_mvts.h>
 #include <lightningd/dual_open_control.h>
+#include <lightningd/gossip_control.h>
 #include <lightningd/hsm_control.h>
 #include <lightningd/notification.h>
 #include <lightningd/peer_control.h>
 #include <lightningd/peer_fd.h>
-#include <lightningd/ping.h>
-#include <wire/common_wiregen.h>
 
 static void update_feerates(struct lightningd *ld, struct channel *channel)
 {
@@ -412,6 +411,23 @@ static void handle_error_channel(struct channel *channel,
 	forget(channel);
 }
 
+static void handle_local_private_channel(struct channel *channel, const u8 *msg)
+{
+	struct amount_sat capacity;
+	u8 *features;
+
+	if (!fromwire_channeld_local_private_channel(msg, msg, &capacity,
+						     &features)) {
+		channel_internal_error(channel,
+				       "bad channeld_local_private_channel %s",
+				       tal_hex(channel, msg));
+		return;
+	}
+
+	tell_gossipd_local_private_channel(channel->peer->ld, channel,
+					   capacity, features);
+}
+
 static void forget_channel(struct channel *channel, const char *why)
 {
 	channel->error = towire_errorfmt(channel, &channel->cid, "%s", why);
@@ -490,9 +506,9 @@ static unsigned channel_msg(struct subd *sd, const u8 *msg, const int *fds)
 		peer_got_shutdown(sd->channel, msg);
 		break;
 	case WIRE_CHANNELD_SHUTDOWN_COMPLETE:
-		/* We expect 2 fds. */
+		/* We expect 1 fd. */
 		if (!fds)
-			return 2;
+			return 1;
 		peer_start_closingd_after_shutdown(sd->channel, msg, fds);
 		break;
 	case WIRE_CHANNELD_FAIL_FALLEN_BEHIND:
@@ -501,8 +517,18 @@ static unsigned channel_msg(struct subd *sd, const u8 *msg, const int *fds)
 	case WIRE_CHANNELD_SEND_ERROR_REPLY:
 		handle_error_channel(sd->channel, msg);
 		break;
-	case WIRE_CHANNELD_PING_REPLY:
-		ping_reply(sd, msg);
+	case WIRE_CHANNELD_USED_CHANNEL_UPDATE:
+		/* This tells gossipd we used it. */
+		get_channel_update(sd->channel);
+		break;
+	case WIRE_CHANNELD_LOCAL_CHANNEL_UPDATE:
+		tell_gossipd_local_channel_update(sd->ld, sd->channel, msg);
+		break;
+	case WIRE_CHANNELD_LOCAL_CHANNEL_ANNOUNCEMENT:
+		tell_gossipd_local_channel_announce(sd->ld, sd->channel, msg);
+		break;
+	case WIRE_CHANNELD_LOCAL_PRIVATE_CHANNEL:
+		handle_local_private_channel(sd->channel, msg);
 		break;
 #if EXPERIMENTAL_FEATURES
 	case WIRE_CHANNELD_UPGRADED:
@@ -525,6 +551,7 @@ static unsigned channel_msg(struct subd *sd, const u8 *msg, const int *fds)
 	case WIRE_CHANNELD_FEERATES:
 	case WIRE_CHANNELD_BLOCKHEIGHT:
 	case WIRE_CHANNELD_SPECIFIC_FEERATES:
+	case WIRE_CHANNELD_CHANNEL_UPDATE:
 	case WIRE_CHANNELD_DEV_MEMLEAK:
 	case WIRE_CHANNELD_DEV_QUIESCE:
 		/* Replies go to requests. */
@@ -533,16 +560,6 @@ static unsigned channel_msg(struct subd *sd, const u8 *msg, const int *fds)
 	case WIRE_CHANNELD_DEV_MEMLEAK_REPLY:
 	case WIRE_CHANNELD_SEND_ERROR:
 	case WIRE_CHANNELD_DEV_QUIESCE_REPLY:
-	case WIRE_CHANNELD_PING:
-		break;
-	}
-
-	switch ((enum common_wire)t) {
-	case WIRE_CUSTOMMSG_IN:
-		handle_custommsg_in(sd->ld, sd->node_id, msg);
-		break;
-	/* We send these. */
-	case WIRE_CUSTOMMSG_OUT:
 		break;
 	}
 
@@ -586,7 +603,6 @@ void peer_start_channeld(struct channel *channel,
 					   channel_errmsg,
 					   channel_set_billboard,
 					   take(&peer_fd->fd),
-					   take(&peer_fd->gossip_fd),
 					   take(&hsmfd), NULL));
 
 	if (!channel->owner) {
@@ -717,7 +733,8 @@ void peer_start_channeld(struct channel *channel,
 					     : (u32 *)&ld->dev_disable_commit,
 					     NULL),
 				       pbases,
-				       reestablish_only);
+				       reestablish_only,
+				       channel->channel_update);
 
 	/* We don't expect a response: we are triggered by funding_depth_cb. */
 	subd_send_msg(channel->owner, take(initmsg));
@@ -1006,6 +1023,20 @@ struct command_result *cancel_channel_before_broadcast(struct command *cmd,
 			   /* Freed by callback */
 			   tal_steal(NULL, cc));
 	return command_still_pending(cmd);
+}
+
+void channel_replace_update(struct channel *channel, u8 *update TAKES)
+{
+	tal_free(channel->channel_update);
+	channel->channel_update = tal_dup_talarr(channel, u8, update);
+
+	/* Keep channeld up-to-date */
+	if (!channel->owner || !streq(channel->owner->name, "channeld"))
+		return;
+
+	subd_send_msg(channel->owner,
+		      take(towire_channeld_channel_update(NULL,
+							  channel->channel_update)));
 }
 
 #if DEVELOPER

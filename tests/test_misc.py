@@ -7,7 +7,7 @@ from pyln.client import RpcError
 from threading import Event
 from pyln.testing.utils import (
     DEVELOPER, TIMEOUT, VALGRIND, DEPRECATED_APIS, sync_blockheight, only_one,
-    wait_for, TailableProc, env
+    wait_for, TailableProc, env, mine_funding_to_announce
 )
 from utils import (
     account_balance, scriptpubkey_addr, check_coin_moves
@@ -1091,7 +1091,9 @@ def test_funding_reorg_private(node_factory, bitcoind):
     # Rescan to detect reorg at restart and may_reconnect so channeld
     # will restart.  Reorg can cause bad gossip msg.
     opts = {'funding-confirms': 2, 'rescan': 10, 'may_reconnect': True,
-            'allow_bad_gossip': True}
+            'allow_bad_gossip': True,
+            # gossipd send lightning update for original channel.
+            'allow_broken_log': True}
     l1, l2 = node_factory.line_graph(2, fundchannel=False, opts=opts)
     l1.fundwallet(10000000)
     sync_blockheight(bitcoind, [l1])                # height 102
@@ -2176,8 +2178,8 @@ def test_sendcustommsg(node_factory):
     # This should work since the peer is currently owned by `channeld`
     l2.rpc.sendcustommsg(l1.info['id'], msg)
     l2.daemon.wait_for_log(
-        r'{peer_id}-{owner}-chan#[0-9]: \[OUT\] {msg}'.format(
-            owner='channeld', msg=msg, peer_id=l1.info['id']
+        r'{peer_id}-{owner}: \[OUT\] {msg}'.format(
+            owner='connectd', msg=msg, peer_id=l1.info['id']
         )
     )
     l1.daemon.wait_for_log(r'\[IN\] {}'.format(msg))
@@ -2191,8 +2193,8 @@ def test_sendcustommsg(node_factory):
     # This should work since the peer is currently owned by `openingd`
     l2.rpc.sendcustommsg(l4.info['id'], msg)
     l2.daemon.wait_for_log(
-        r'{peer_id}-{owner}-chan#[0-9]: \[OUT\] {msg}'.format(
-            owner='openingd', msg=msg, peer_id=l4.info['id']
+        r'{peer_id}-{owner}: \[OUT\] {msg}'.format(
+            owner='connectd', msg=msg, peer_id=l4.info['id']
         )
     )
     l4.daemon.wait_for_log(r'\[IN\] {}'.format(msg))
@@ -2289,7 +2291,7 @@ def test_listforwards(node_factory, bitcoind):
     c24, _ = l2.fundchannel(l4, 10**5)
 
     # Wait until channels are active
-    bitcoind.generate_block(5)
+    mine_funding_to_announce(bitcoind, [l1, l2, l3, l4])
     l1.wait_channel_active(c23)
 
     # successful payments

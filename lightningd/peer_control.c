@@ -65,7 +65,6 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <wally_bip32.h>
-#include <wire/common_wiregen.h>
 #include <wire/onion_wire.h>
 #include <wire/wire_sync.h>
 
@@ -656,6 +655,7 @@ static void json_add_channel(struct lightningd *ld,
 	json_add_string(response, "channel_id",
 			type_to_string(tmpctx, struct channel_id, &channel->cid));
 	json_add_txid(response, "funding_txid", &channel->funding.txid);
+	json_add_num(response, "funding_outnum", channel->funding.n);
 
 	if (!list_empty(&channel->inflights)) {
 		struct channel_inflight *initial, *inflight;
@@ -1053,10 +1053,7 @@ send_error:
 	subd_send_msg(ld->connectd,
 		      take(towire_connectd_peer_final_msg(NULL, &peer->id,
 							  error)));
-	subd_send_fd(ld->connectd, payload->peer_fd->fd);
-	subd_send_fd(ld->connectd, payload->peer_fd->gossip_fd);
-	/* Don't close those fds! */
-	payload->peer_fd->fd = payload->peer_fd->gossip_fd = -1;
+	tal_free(payload->peer_fd);
 }
 
 static bool
@@ -1112,8 +1109,7 @@ REGISTER_PLUGIN_HOOK(peer_connected,
 
 /* Connectd tells us a peer has connected: it never hands us duplicates, since
  * it holds them until we say peer_died. */
-void peer_connected(struct lightningd *ld, const u8 *msg,
-		    int peer_fd, int gossip_fd)
+void peer_connected(struct lightningd *ld, const u8 *msg, int peer_fd)
 {
 	struct node_id id;
 	u8 *their_features;
@@ -1130,7 +1126,7 @@ void peer_connected(struct lightningd *ld, const u8 *msg,
 		fatal("Connectd gave bad CONNECT_PEER_CONNECTED message %s",
 		      tal_hex(msg, msg));
 
-	hook_payload->peer_fd = new_peer_fd(hook_payload, peer_fd, gossip_fd);
+	hook_payload->peer_fd = new_peer_fd(hook_payload, peer_fd);
 
 	/* If we're already dealing with this peer, hand off to correct
 	 * subdaemon.  Otherwise, we'll hand to openingd to wait there. */
@@ -1214,7 +1210,7 @@ static bool check_funding_tx(const struct bitcoin_tx *tx,
 
 static void update_channel_from_inflight(struct lightningd *ld,
 					 struct channel *channel,
-					 struct channel_inflight *inflight)
+					 const struct channel_inflight *inflight)
 {
 	struct wally_psbt *psbt_copy;
 
@@ -1227,7 +1223,7 @@ static void update_channel_from_inflight(struct lightningd *ld,
 	channel->push = inflight->lease_fee;
 	tal_free(channel->lease_commit_sig);
 	channel->lease_commit_sig
-		= tal_steal(channel, inflight->lease_commit_sig);
+		= tal_dup_or_null(channel, secp256k1_ecdsa_signature, inflight->lease_commit_sig);
 	channel->lease_chan_max_msat = inflight->lease_chan_max_msat;
 	channel->lease_chan_max_ppt = inflight->lease_chan_max_ppt;
 
@@ -2403,167 +2399,4 @@ void peer_dev_memleak(struct command *cmd)
 {
 	peer_memleak_req_next(cmd, NULL);
 }
-
 #endif /* DEVELOPER */
-
-struct custommsg_payload {
-	struct node_id peer_id;
-	const u8 *msg;
-};
-
-static bool custommsg_cb(struct custommsg_payload *payload,
-			 const char *buffer, const jsmntok_t *toks)
-{
-	const jsmntok_t *t_res;
-
-	if (!toks || !buffer)
-		return true;
-
-	t_res = json_get_member(buffer, toks, "result");
-
-	/* fail */
-	if (!t_res || !json_tok_streq(buffer, t_res, "continue"))
-		fatal("Plugin returned an invalid response to the "
-		      "custommsg hook: %s", buffer);
-
-	/* call next hook */
-	return true;
-}
-
-static void custommsg_final(struct custommsg_payload *payload STEALS)
-{
-	tal_steal(tmpctx, payload);
-}
-
-static void custommsg_payload_serialize(struct custommsg_payload *payload,
-					struct json_stream *stream,
-					struct plugin *plugin)
-{
-	json_add_hex_talarr(stream, "payload", payload->msg);
-	json_add_node_id(stream, "peer_id", &payload->peer_id);
-}
-
-REGISTER_PLUGIN_HOOK(custommsg,
-		     custommsg_cb,
-		     custommsg_final,
-		     custommsg_payload_serialize,
-		     struct custommsg_payload *);
-
-void handle_custommsg_in(struct lightningd *ld, const struct node_id *peer_id,
-			 const u8 *msg)
-{
-	struct custommsg_payload *p = tal(NULL, struct custommsg_payload);
-	u8 *custommsg;
-
-	if (!fromwire_custommsg_in(NULL, msg, &custommsg)) {
-		log_broken(ld->log, "Malformed custommsg from peer %s: %s",
-			   type_to_string(tmpctx, struct node_id, peer_id),
-			   tal_hex(tmpctx, msg));
-		return;
-	}
-
-	p->peer_id = *peer_id;
-	p->msg = tal_steal(p, custommsg);
-	plugin_hook_call_custommsg(ld, p);
-}
-
-static struct command_result *json_sendcustommsg(struct command *cmd,
-						 const char *buffer,
-						 const jsmntok_t *obj UNNEEDED,
-						 const jsmntok_t *params)
-{
-	struct json_stream *response;
-	struct node_id *dest;
-	struct peer *peer;
-	struct subd *owner;
-	u8 *msg;
-	int type;
-
-	if (!param(cmd, buffer, params,
-		   p_req("node_id", param_node_id, &dest),
-		   p_req("msg", param_bin_from_hex, &msg),
-		   NULL))
-		return command_param_failed();
-
-	type = fromwire_peektype(msg);
-	if (peer_wire_is_defined(type)) {
-		return command_fail(
-		    cmd, JSONRPC2_INVALID_REQUEST,
-		    "Cannot send messages of type %d (%s). It is not possible "
-		    "to send messages that have a type managed internally "
-		    "since that might cause issues with the internal state "
-		    "tracking.",
-		    type, peer_wire_name(type));
-	}
-
-	if (type % 2 == 0) {
-		return command_fail(
-		    cmd, JSONRPC2_INVALID_REQUEST,
-		    "Cannot send even-typed %d custom message. Currently "
-		    "custom messages are limited to odd-numbered message "
-		    "types, as even-numbered types might result in "
-		    "disconnections.",
-		    type);
-	}
-
-	peer = peer_by_id(cmd->ld, dest);
-	if (!peer) {
-		return command_fail(cmd, JSONRPC2_INVALID_REQUEST,
-				    "No such peer: %s",
-				    type_to_string(cmd, struct node_id, dest));
-	}
-
-	owner = peer_get_owning_subd(peer);
-	if (owner == NULL) {
-		return command_fail(cmd, JSONRPC2_INVALID_REQUEST,
-				    "Peer is not connected: %s",
-				    type_to_string(cmd, struct node_id, dest));
-	}
-
-	/* Only a couple of subdaemons have the ability to send custom
-	 * messages. We whitelist those, and error if the current owner is not
-	 * in the whitelist. The reason is that some subdaemons do not handle
-	 * spontaneous messages from the master well (I'm looking at you
-	 * `closingd`...). */
-	if (!streq(owner->name, "channeld") &&
-	    !streq(owner->name, "openingd")) {
-		return command_fail(cmd, JSONRPC2_INVALID_REQUEST,
-				    "Peer is currently owned by %s which does "
-				    "not support injecting custom messages.",
-				    owner->name);
-	}
-
-	subd_send_msg(owner, take(towire_custommsg_out(cmd, msg)));
-
-	response = json_stream_success(cmd);
-	json_add_string(response, "status",
-			tal_fmt(cmd,
-				"Message sent to subdaemon %s for delivery",
-				owner->name));
-
-	return command_success(cmd, response);
-}
-
-static const struct json_command sendcustommsg_command = {
-    "sendcustommsg",
-    "utility",
-    json_sendcustommsg,
-    "Send a custom message to the peer with the given {node_id}",
-    .verbose = "sendcustommsg node_id hexcustommsg",
-};
-
-AUTODATA(json_command, &sendcustommsg_command);
-
-#ifdef COMPAT_V0100
-#ifdef DEVELOPER
-static const struct json_command dev_sendcustommsg_command = {
-    "dev-sendcustommsg",
-    "utility",
-    json_sendcustommsg,
-    "Send a custom message to the peer with the given {node_id}",
-    .verbose = "dev-sendcustommsg node_id hexcustommsg",
-};
-
-AUTODATA(json_command, &dev_sendcustommsg_command);
-#endif  /* DEVELOPER */
-#endif /* COMPAT_V0100 */

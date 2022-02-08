@@ -42,12 +42,11 @@
 #include <openingd/common.h>
 #include <openingd/dualopend_wiregen.h>
 #include <unistd.h>
-#include <wire/common_wiregen.h>
 #include <wire/wire_sync.h>
 
-/* stdin == lightningd, 3 == peer, 4 == gossipd, 5 = hsmd */
+/* stdin == lightningd, 3 == peer, 4 = hsmd */
 #define REQ_FD STDIN_FILENO
-#define HSM_FD 5
+#define HSM_FD 4
 
 /* tx_add_input, tx_add_output, tx_rm_input, tx_rm_output */
 #define NUM_TX_MSGS (TX_RM_OUTPUT + 1)
@@ -897,17 +896,6 @@ static void dualopend_dev_memleak(struct state *state)
 }
 #endif /* DEVELOPER */
 
-/* We were told to send a custommsg to the peer by `lightningd`. All the
- * verification is done on the side of `lightningd` so we should be good to
- * just forward it here. */
-static void dualopend_send_custommsg(struct state *state, const u8 *msg)
-{
-	u8 *inner;
-	if (!fromwire_custommsg_out(tmpctx, msg, &inner))
-		master_badmsg(WIRE_CUSTOMMSG_OUT, msg);
-	peer_write(state->pps, take(inner));
-}
-
 static u8 *psbt_to_tx_sigs_msg(const tal_t *ctx,
 			       struct state *state,
 			       const struct wally_psbt *psbt)
@@ -1176,7 +1164,6 @@ static u8 *opening_negotiate_msg(const tal_t *ctx, struct state *state)
 	 * form, but we use it in a very limited way. */
 	for (;;) {
 		u8 *msg;
-		bool from_gossipd;
 		char *err;
 		bool warning;
 		struct channel_id actual;
@@ -1187,20 +1174,7 @@ static u8 *opening_negotiate_msg(const tal_t *ctx, struct state *state)
 		clean_tmpctx();
 
 		/* This helper routine polls both the peer and gossipd. */
-		msg = peer_or_gossip_sync_read(ctx, state->pps, &from_gossipd);
-
-		/* Use standard helper for gossip msgs (forwards, if it's an
-		 * error, exits). */
-		if (from_gossipd) {
-			handle_gossip_msg(state->pps, take(msg));
-			continue;
-		}
-
-		/* Some messages go straight to gossipd. */
-		if (is_msg_for_gossipd(msg)) {
-			wire_sync_write(state->pps->gossip_fd, take(msg));
-			continue;
-		}
+		msg = peer_read(ctx, state->pps);
 
 		/* BOLT #1:
 		 *
@@ -3396,6 +3370,38 @@ static void send_funding_locked(struct state *state)
 	billboard_update(state);
 }
 
+/* FIXME: Maybe cache this? */
+static struct amount_sat channel_size(struct state *state)
+{
+	u32 funding_outnum;
+	const u8 *funding_wscript =
+		bitcoin_redeem_2of2(tmpctx,
+				    &state->our_funding_pubkey,
+				    &state->their_funding_pubkey);
+
+	if (!find_txout(state->tx_state->psbt,
+			scriptpubkey_p2wsh(tmpctx, funding_wscript),
+			&funding_outnum)) {
+		open_err_fatal(state, "Cannot fund txout");
+	}
+
+	return psbt_output_get_amount(state->tx_state->psbt, funding_outnum);
+}
+
+static void tell_gossipd_new_channel(struct state *state)
+{
+	u8 *msg;
+	const u8 *annfeatures = get_agreed_channelfeatures(tmpctx,
+							   state->our_features,
+							   state->their_features);
+
+	/* Tell lightningd about local channel. */
+	msg = towire_dualopend_local_private_channel(NULL,
+						     channel_size(state),
+						     annfeatures);
+ 	wire_sync_write(REQ_FD, take(msg));
+}
+
 static u8 *handle_funding_depth(struct state *state, u8 *msg)
 {
 	u32 depth;
@@ -3410,41 +3416,14 @@ static u8 *handle_funding_depth(struct state *state, u8 *msg)
 	/* We check this before we arrive here, but for sanity */
 	assert(state->minimum_depth <= depth);
 
+	/* Tell gossipd the new channel exists before we tell peer. */
+	tell_gossipd_new_channel(state);
+
 	send_funding_locked(state);
 	if (state->funding_locked[REMOTE])
 		return towire_dualopend_channel_locked(state);
 
 	return NULL;
-}
-
-/*~ If we see the gossip_fd readable, we read a whole message.  Sure, we might
- * block, but we trust gossipd. */
-static void handle_gossip_in(struct state *state)
-{
-	u8 *msg = wire_sync_read(NULL, state->pps->gossip_fd);
-
-	if (!msg)
-		status_failed(STATUS_FAIL_GOSSIP_IO,
-			      "Reading gossip: %s", strerror(errno));
-
-	handle_gossip_msg(state->pps, take(msg));
-}
-
-/* Try to handle a custommsg Returns true if it was a custom message and has
- * been handled, false if the message was not handled.
- */
-static bool dualopend_handle_custommsg(const u8 *msg)
-{
-	enum peer_wire type = fromwire_peektype(msg);
-	if (type % 2 == 1 && !peer_wire_is_defined(type)) {
-		/* The message is not part of the messages we know how to
-		 * handle. Assuming this is a custommsg, we just forward it to the
-		 * master. */
-		wire_sync_write(REQ_FD, take(towire_custommsg_in(NULL, msg)));
-		return true;
-	} else {
-		return false;
-	}
 }
 
 /* BOLT #2:
@@ -3547,10 +3526,9 @@ static void do_reconnect_dance(struct state *state)
 	do {
 		clean_tmpctx();
 		msg = peer_read(tmpctx, state->pps);
-	} while (dualopend_handle_custommsg(msg)
-		 || handle_peer_gossip_or_error(state->pps,
-						&state->channel_id,
-						msg));
+	} while (handle_peer_error(state->pps,
+				   &state->channel_id,
+				   msg));
 
 	if (!fromwire_channel_reestablish
 			(msg, &cid,
@@ -3665,18 +3643,9 @@ static u8 *handle_master_in(struct state *state)
 	case WIRE_DUALOPEND_FAIL_FALLEN_BEHIND:
 	case WIRE_DUALOPEND_DRY_RUN:
 	case WIRE_DUALOPEND_VALIDATE_LEASE:
+	case WIRE_DUALOPEND_LOCAL_PRIVATE_CHANNEL:
 		break;
 	}
-
-	/* Now handle common messages. */
-	switch ((enum common_wire)t) {
-	case WIRE_CUSTOMMSG_OUT:
-		dualopend_send_custommsg(state, msg);
-	/* We send these. */
-	case WIRE_CUSTOMMSG_IN:
-		break;
-	}
-
 	status_failed(STATUS_FAIL_MASTER_IO,
 		      "Unknown msg %s", tal_hex(tmpctx, msg));
 }
@@ -3754,19 +3723,8 @@ static u8 *handle_peer_in(struct state *state)
 		break;
 	}
 
-	/* Handle custommsgs */
-	enum peer_wire type = fromwire_peektype(msg);
-	if (type % 2 == 1 && !peer_wire_is_defined(type)) {
-		/* The message is not part of the messages we know how to
-		 * handle. Assuming this is a custommsg, we just
-		 * forward it to master. */
-		wire_sync_write(REQ_FD, take(towire_custommsg_in(NULL, msg)));
-		return NULL;
-	}
-
-	/* Handles standard cases, and legal unknown ones. */
-	if (handle_peer_gossip_or_error(state->pps,
-					&state->channel_id, msg))
+	/* Handles errors. */
+	if (handle_peer_error(state->pps, &state->channel_id, msg))
 		return NULL;
 
 	peer_write(state->pps,
@@ -3789,7 +3747,7 @@ int main(int argc, char *argv[])
 {
 	common_setup(argv[0]);
 
-	struct pollfd pollfd[3];
+	struct pollfd pollfd[2];
 	struct state *state = tal(NULL, struct state);
 	struct secret *none;
 	struct fee_states *fee_states;
@@ -3915,9 +3873,9 @@ int main(int argc, char *argv[])
 
 
 
-	/* 3 == peer, 4 == gossipd, 5 = hsmd */
+	/* 3 == peer, 4 = hsmd */
 	state->pps = new_per_peer_state(state);
-	per_peer_state_set_fds(state->pps, 3, 4);
+	per_peer_state_set_fd(state->pps, 3);
 
 	/*~ We need an initial per-commitment point whether we're funding or
 	 * they are, and lightningd has reserved a unique dbid for us already,
@@ -3941,10 +3899,8 @@ int main(int argc, char *argv[])
 	/*~ We manually run a little poll() loop here.  With only three fds */
 	pollfd[0].fd = REQ_FD;
 	pollfd[0].events = POLLIN;
-	pollfd[1].fd = state->pps->gossip_fd;
+	pollfd[1].fd = state->pps->peer_fd;
 	pollfd[1].events = POLLIN;
-	pollfd[2].fd = state->pps->peer_fd;
-	pollfd[2].events = POLLIN;
 
 	/* Do reconnect, if need be */
 	if (state->channel) {
@@ -3960,7 +3916,7 @@ int main(int argc, char *argv[])
 		/*~ If we get a signal which aborts the poll() call, valgrind
 		 * complains about revents being uninitialized.  I'm not sure
 		 * that's correct, but it's easy to be sure. */
-		pollfd[0].revents = pollfd[1].revents = pollfd[2].revents = 0;
+		pollfd[0].revents = pollfd[1].revents = 0;
 
 		poll(pollfd, ARRAY_SIZE(pollfd), -1);
 		/* Subtle: handle_master_in can do its own poll loop, so
@@ -3969,11 +3925,8 @@ int main(int argc, char *argv[])
 		if (pollfd[0].revents & POLLIN)
 			msg = handle_master_in(state);
 		/* Second priority: messages from peer. */
-		else if (pollfd[2].revents & POLLIN)
-			msg = handle_peer_in(state);
-		/* Last priority: chit-chat from gossipd. */
 		else if (pollfd[1].revents & POLLIN)
-			handle_gossip_in(state);
+			msg = handle_peer_in(state);
 
 		/* If we've shutdown, we're done */
 		if (shutdown_complete(state))

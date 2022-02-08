@@ -239,7 +239,7 @@ struct chain_coin_mvt *new_onchain_htlc_withdraw(const tal_t *ctx,
 				      outpoint, payment_hash,
 				      blockheight,
 				      take(new_tag_arr(NULL, HTLC_FULFILL)),
-				      amount, false);
+				      amount, true);
 }
 
 struct chain_coin_mvt *new_coin_external_spend(const tal_t *ctx,
@@ -293,20 +293,6 @@ struct chain_coin_mvt *new_coin_wallet_withdraw(const tal_t *ctx,
 	return new_chain_coin_mvt_sat(ctx, WALLET, spend_txid,
 				      outpoint, NULL,
 				      blockheight, take(new_tag_arr(NULL, tag)),
-				      amount, false);
-}
-
-struct chain_coin_mvt *new_coin_penalty_sat(const tal_t *ctx,
-					    const char *account_name,
-					    const struct bitcoin_txid *txid,
-					    const struct bitcoin_outpoint *outpoint,
-					    u32 blockheight,
-					    struct amount_sat amount)
-{
-	return new_chain_coin_mvt_sat(ctx, account_name,
-				      txid, outpoint, NULL,
-				      blockheight,
-				      take(new_tag_arr(NULL, PENALTY)),
 				      amount, false);
 }
 

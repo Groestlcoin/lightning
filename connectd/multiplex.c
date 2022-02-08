@@ -6,6 +6,7 @@
 #include <bitcoin/chainparams.h>
 #include <ccan/io/io.h>
 #include <common/cryptomsg.h>
+#include <common/daemon_conn.h>
 #include <common/dev_disconnect.h>
 #include <common/features.h>
 #include <common/gossip_constants.h>
@@ -13,12 +14,16 @@
 #include <common/gossip_store.h>
 #include <common/memleak.h>
 #include <common/per_peer_state.h>
+#include <common/ping.h>
 #include <common/status.h>
 #include <common/timeout.h>
 #include <common/utils.h>
 #include <common/wire_error.h>
 #include <connectd/connectd.h>
+#include <connectd/connectd_gossipd_wiregen.h>
+#include <connectd/connectd_wiregen.h>
 #include <connectd/multiplex.h>
+#include <connectd/onion_message.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <netinet/in.h>
@@ -29,9 +34,11 @@
 #include <wire/peer_wire.h>
 #include <wire/wire.h>
 #include <wire/wire_io.h>
+#include <wire/wire_sync.h>
 
-void queue_peer_msg(struct peer *peer, const u8 *msg TAKES)
+void inject_peer_msg(struct peer *peer, const u8 *msg TAKES)
 {
+	status_peer_io(LOG_IO_OUT, &peer->id, msg);
 	msg_enqueue(peer->peer_outq, msg);
 }
 
@@ -334,20 +341,125 @@ again:
 	return NULL;
 }
 
-/* We only handle gossip_timestamp_filter for now */
-static bool handle_message_locally(struct peer *peer, const u8 *msg)
+/* Mutual recursion */
+static void send_ping(struct peer *peer);
+
+static void set_ping_timer(struct peer *peer)
+{
+	peer->ping_timer = new_reltimer(&peer->daemon->timers, peer,
+					time_from_sec(15 + pseudorand(30)),
+					send_ping, peer);
+}
+
+static void send_ping(struct peer *peer)
+{
+	/* Already have a ping in flight? */
+	if (peer->expecting_pong != PONG_UNEXPECTED) {
+		status_peer_debug(&peer->id, "Last ping unreturned: hanging up");
+		if (peer->to_peer)
+			io_close(peer->to_peer);
+		return;
+	}
+
+	inject_peer_msg(peer, take(make_ping(NULL, 1, 0)));
+	peer->expecting_pong = PONG_EXPECTED_PROBING;
+	set_ping_timer(peer);
+}
+
+void send_custommsg(struct daemon *daemon, const u8 *msg)
+{
+	struct node_id id;
+	u8 *custommsg;
+	struct peer *peer;
+
+	if (!fromwire_connectd_custommsg_out(tmpctx, msg, &id, &custommsg))
+		master_badmsg(WIRE_CONNECTD_CUSTOMMSG_OUT, msg);
+
+	/* Races can happen: this might be gone by now. */
+	peer = peer_htable_get(&daemon->peers, &id);
+	if (peer)
+		inject_peer_msg(peer, take(custommsg));
+}
+
+static void handle_ping_in(struct peer *peer, const u8 *msg)
+{
+	u8 *pong;
+
+	/* gossipd doesn't log IO, so we log it here. */
+	status_peer_io(LOG_IO_IN, &peer->id, msg);
+
+	if (!check_ping_make_pong(NULL, msg, &pong)) {
+		send_warning(peer, "Invalid ping %s", tal_hex(msg, msg));
+		return;
+	}
+
+	if (pong)
+		inject_peer_msg(peer, take(pong));
+}
+
+static void handle_ping_reply(struct peer *peer, const u8 *msg)
+{
+	u8 *ignored;
+	size_t i;
+
+	/* We print this out because we asked for pong, so can't spam us... */
+	if (!fromwire_pong(msg, msg, &ignored))
+		status_peer_unusual(&peer->id, "Got malformed ping reply %s",
+				    tal_hex(tmpctx, msg));
+
+	/* We print this because dev versions of c-lightning embed
+	 * version here: see check_ping_make_pong! */
+	for (i = 0; i < tal_count(ignored); i++) {
+		if (ignored[i] < ' ' || ignored[i] == 127)
+			break;
+	}
+	status_debug("Got pong %zu bytes (%.*s...)",
+		     tal_count(ignored), (int)i, (char *)ignored);
+	daemon_conn_send(peer->daemon->master,
+			 take(towire_connectd_ping_reply(NULL, true,
+							 tal_bytelen(msg))));
+}
+
+static void handle_pong_in(struct peer *peer, const u8 *msg)
+{
+	/* gossipd doesn't log IO, so we log it here. */
+	status_peer_io(LOG_IO_IN, &peer->id, msg);
+
+	switch (peer->expecting_pong) {
+	case PONG_EXPECTED_COMMAND:
+		handle_ping_reply(peer, msg);
+		/* fall thru */
+	case PONG_EXPECTED_PROBING:
+		peer->expecting_pong = PONG_UNEXPECTED;
+		return;
+	case PONG_UNEXPECTED:
+		status_debug("Unexpected pong?");
+		return;
+	}
+	abort();
+}
+
+/* Forward to gossipd */
+static void handle_gossip_in(struct peer *peer, const u8 *msg)
+{
+	u8 *gmsg = towire_gossipd_recv_gossip(NULL, &peer->id, msg);
+
+	/* gossipd doesn't log IO, so we log it here. */
+	status_peer_io(LOG_IO_IN, &peer->id, msg);
+	daemon_conn_send(peer->daemon->gossipd, take(gmsg));
+}
+
+static void handle_gossip_timetamp_filter_in(struct peer *peer, const u8 *msg)
 {
 	struct bitcoin_blkid chain_hash;
 	u32 first_timestamp, timestamp_range;
 
-	/* We remember these so we don't rexmit them */
-	if (is_msg_gossip_broadcast(msg))
-		gossip_rcvd_filter_add(peer->gs.grf, msg);
-
 	if (!fromwire_gossip_timestamp_filter(msg, &chain_hash,
 					      &first_timestamp,
 					      &timestamp_range)) {
-		return false;
+		send_warning(peer, "gossip_timestamp_filter invalid: %s",
+			     tal_hex(tmpctx, msg));
+		return;
 	}
 
 	/* gossipd doesn't log IO, so we log it here. */
@@ -356,7 +468,7 @@ static bool handle_message_locally(struct peer *peer, const u8 *msg)
 	if (!bitcoin_blkid_eq(&chainparams->genesis_blockhash, &chain_hash)) {
 		send_warning(peer, "gossip_timestamp_filter for bad chain: %s",
 			     tal_hex(tmpctx, msg));
-		return true;
+		return;
 	}
 
 	peer->gs.timestamp_min = first_timestamp;
@@ -373,8 +485,63 @@ static bool handle_message_locally(struct peer *peer, const u8 *msg)
 	/* We send immediately the first time, after that we wait. */
 	if (!peer->gs.gossip_timer)
 		wake_gossip(peer);
+}
 
-	return true;
+static bool handle_custommsg(struct daemon *daemon,
+			     struct peer *peer,
+			     const u8 *msg)
+{
+	enum peer_wire type = fromwire_peektype(msg);
+	if (type % 2 == 1 && !peer_wire_is_defined(type)) {
+		/* The message is not part of the messages we know how to
+		 * handle. Assuming this is a custommsg, we just forward it to the
+		 * master. */
+		status_peer_io(LOG_IO_IN, &peer->id, msg);
+		daemon_conn_send(daemon->master,
+				 take(towire_connectd_custommsg_in(NULL,
+								   &peer->id,
+								   msg)));
+		return true;
+	} else {
+		return false;
+	}
+}
+
+/* We handle pings and gossip messages. */
+static bool handle_message_locally(struct peer *peer, const u8 *msg)
+{
+	enum peer_wire type = fromwire_peektype(msg);
+
+	/* We remember these so we don't rexmit them */
+	if (is_msg_gossip_broadcast(msg))
+		gossip_rcvd_filter_add(peer->gs.grf, msg);
+
+	if (type == WIRE_GOSSIP_TIMESTAMP_FILTER) {
+		handle_gossip_timetamp_filter_in(peer, msg);
+		return true;
+	} else if (type == WIRE_PING) {
+		handle_ping_in(peer, msg);
+		return true;
+	} else if (type == WIRE_PONG) {
+		handle_pong_in(peer, msg);
+		return true;
+	} else if (type == WIRE_OBS2_ONION_MESSAGE) {
+		handle_obs2_onion_message(peer->daemon, peer, msg);
+		return true;
+	} else if (type == WIRE_ONION_MESSAGE) {
+		handle_onion_message(peer->daemon, peer, msg);
+		return true;
+	} else if (handle_custommsg(peer->daemon, peer, msg)) {
+		return true;
+	}
+
+	/* Do we want to divert to gossipd? */
+	if (is_msg_for_gossipd(msg)) {
+		handle_gossip_in(peer, msg);
+		return true;
+	}
+
+	return false;
 }
 
 static void close_timeout(struct peer *peer)
@@ -453,7 +620,7 @@ static struct io_plan *read_from_subd_done(struct io_conn *subd_conn,
 					   struct peer *peer)
 {
 	/* Tell them to encrypt & write. */
-	queue_peer_msg(peer, take(peer->subd_in));
+	msg_enqueue(peer->peer_outq, take(peer->subd_in));
 	peer->subd_in = NULL;
 
 	/* Wait for them to wake us */
@@ -650,6 +817,10 @@ struct io_plan *multiplex_peer_setup(struct io_conn *peer_conn,
 	 * lightningd to tell us to close with the peer */
 	tal_add_destructor2(peer_conn, destroy_peer_conn, peer);
 
+	/* Start keepalives */
+	peer->expecting_pong = PONG_UNEXPECTED;
+	set_ping_timer(peer);
+
 	return io_duplex(peer_conn,
 			 read_hdr_from_peer(peer_conn, peer),
 			 write_to_peer(peer_conn, peer));
@@ -661,4 +832,66 @@ void multiplex_final_msg(struct peer *peer, const u8 *final_msg TAKES)
 	peer->final_msg = tal_dup_talarr(peer, u8, final_msg);
 	if (!peer->to_subd)
 		io_wake(peer->peer_outq);
+}
+
+/* Lightningd says to send a ping */
+void send_manual_ping(struct daemon *daemon, const u8 *msg)
+{
+	u8 *ping;
+	struct node_id id;
+	u16 len, num_pong_bytes;
+	struct peer *peer;
+
+	if (!fromwire_connectd_ping(msg, &id, &num_pong_bytes, &len))
+		master_badmsg(WIRE_CONNECTD_PING, msg);
+
+	peer = peer_htable_get(&daemon->peers, &id);
+	if (!peer) {
+		daemon_conn_send(daemon->master,
+				 take(towire_connectd_ping_reply(NULL,
+								 false, 0)));
+		return;
+	}
+
+	/* We're not supposed to send another ping until previous replied */
+	if (peer->expecting_pong != PONG_UNEXPECTED) {
+		daemon_conn_send(daemon->master,
+				 take(towire_connectd_ping_reply(NULL,
+								 false, 0)));
+		return;
+	}
+
+	/* It should never ask for an oversize ping. */
+	ping = make_ping(NULL, num_pong_bytes, len);
+	if (tal_count(ping) > 65535)
+		status_failed(STATUS_FAIL_MASTER_IO, "Oversize ping");
+
+	inject_peer_msg(peer, take(ping));
+
+	status_debug("sending ping expecting %sresponse",
+		     num_pong_bytes >= 65532 ? "no " : "");
+
+	/* BOLT #1:
+	 *
+	 * A node receiving a `ping` message:
+	 *...
+	 *  - if `num_pong_bytes` is less than 65532:
+	 *    - MUST respond by sending a `pong` message, with `byteslen` equal
+	 *      to `num_pong_bytes`.
+	 *  - otherwise (`num_pong_bytes` is **not** less than 65532):
+	 *    - MUST ignore the `ping`.
+	 */
+	if (num_pong_bytes >= 65532) {
+		daemon_conn_send(daemon->master,
+				 take(towire_connectd_ping_reply(NULL,
+								 true, 0)));
+		return;
+	}
+
+	/* We'll respond to lightningd once the pong comes in */
+	peer->expecting_pong = PONG_EXPECTED_COMMAND;
+
+	/* Since we're doing this manually, kill and restart timer. */
+	tal_free(peer->ping_timer);
+	set_ping_timer(peer);
 }

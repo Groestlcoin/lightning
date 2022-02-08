@@ -8,7 +8,7 @@ from pyln.proto.onion import TlvPayload
 from pyln.testing.utils import EXPERIMENTAL_DUAL_FUND, FUNDAMOUNT
 from utils import (
     DEVELOPER, wait_for, only_one, sync_blockheight, TIMEOUT,
-    EXPERIMENTAL_FEATURES, env, VALGRIND
+    EXPERIMENTAL_FEATURES, env, VALGRIND, mine_funding_to_announce
 )
 import copy
 import os
@@ -182,7 +182,7 @@ def test_pay_exclude_node(node_factory, bitcoind):
     scid14, _ = l1.fundchannel(l4, 10**6, wait_for_active=False)
     scid45, _ = l4.fundchannel(l5, 10**6, wait_for_active=False)
     scid53, _ = l5.fundchannel(l3, 10**6, wait_for_active=False)
-    bitcoind.generate_block(5)
+    mine_funding_to_announce(bitcoind, [l1, l2, l3, l4, l5])
 
     l1.daemon.wait_for_logs([r'update for channel {}/0 now ACTIVE'
                              .format(scid14),
@@ -307,7 +307,7 @@ def test_pay_get_error_with_update(node_factory):
     # channel_update, and it should patch it to include a type prefix. The
     # prefix 0x0102 should be in the channel_update, but not in the
     # onionreply (negation of 0x0102 in the RE)
-    l1.daemon.wait_for_log(r'Extracted channel_update 0102.*from onionreply 10070088[0-9a-fA-F]{88}')
+    l1.daemon.wait_for_log(r'Extracted channel_update 0102.*from onionreply 1007008a[0-9a-fA-F]{276}$')
 
     # And now monitor for l1 to apply the channel_update we just extracted
     wait_for(lambda: not l1.is_channel_active(chanid2))
@@ -933,7 +933,7 @@ def test_forward_different_fees_and_cltv(node_factory, bitcoind):
 
     c1, _ = l1.fundchannel(l2, 10**6)
     c2, _ = l2.fundchannel(l3, 10**6)
-    bitcoind.generate_block(5)
+    mine_funding_to_announce(bitcoind, [l1, l2, l3])
 
     # Make sure l1 has seen announce for all channels.
     l1.wait_channel_active(c1)
@@ -1040,7 +1040,7 @@ def test_forward_pad_fees_and_cltv(node_factory, bitcoind):
 
     c1, _ = l1.fundchannel(l2, 10**6)
     c2, _ = l2.fundchannel(l3, 10**6)
-    bitcoind.generate_block(5)
+    mine_funding_to_announce(bitcoind, [l1, l2, l3])
 
     # Make sure l1 has seen announce for all channels.
     l1.wait_channel_active(c1)
@@ -1086,9 +1086,7 @@ def test_forward_stats(node_factory, bitcoind):
     l2.openchannel(l4, 10**6, wait_for_announce=False)
     l2.openchannel(l5, 10**6, wait_for_announce=False)
 
-    bitcoind.generate_block(1)
-    sync_blockheight(bitcoind, [l1, l2, l3, l4, l5])
-    bitcoind.generate_block(5)
+    mine_funding_to_announce(bitcoind, [l1, l2, l3, l4, l5])
 
     wait_for(lambda: len(l1.rpc.listchannels()['channels']) == 8)
 
@@ -1215,7 +1213,7 @@ def test_forward_local_failed_stats(node_factory, bitcoind, executor):
     l6.fundchannel(l1, 10**6)
 
     # Make sure routes finalized.
-    bitcoind.generate_block(5)
+    mine_funding_to_announce(bitcoind, [l1, l2, l3, l4, l5, l6])
     l1.wait_channel_active(c23)
     l1.wait_channel_active(c24)
     l1.wait_channel_active(c25)
@@ -1498,7 +1496,7 @@ def test_pay_retry(node_factory, bitcoind, executor, chainparams):
     scid35, _ = l3.fundchannel(l5, 10**6, wait_for_active=False)
 
     # Make sure l1 sees all 7 channels
-    bitcoind.generate_block(5)
+    mine_funding_to_announce(bitcoind, [l1, l2, l3, l4, l5])
     wait_for(lambda: len(l1.rpc.listchannels()['channels']) == 14)
 
     # Exhaust shortcut channels one at a time, to force retries.
@@ -1544,7 +1542,9 @@ def test_pay_retry(node_factory, bitcoind, executor, chainparams):
 def test_pay_routeboost(node_factory, bitcoind, compat):
     """Make sure we can use routeboost information. """
     # l1->l2->l3--private-->l4
-    l1, l2 = node_factory.line_graph(2, announce_channels=True, wait_for_announce=True)
+    # Note: l1 gets upset because it extracts update for private channel.
+    l1, l2 = node_factory.line_graph(2, announce_channels=True, wait_for_announce=True,
+                                     opts=[{'allow_bad_gossip': True}, {}])
     l3, l4, l5 = node_factory.line_graph(3, announce_channels=False, wait_for_announce=False)
 
     # This should a "could not find a route" because that's true.
@@ -1557,7 +1557,7 @@ def test_pay_routeboost(node_factory, bitcoind, compat):
     scidl2l3, _ = l2.fundchannel(l3, 10**6)
 
     # Make sure l1 knows about the 2->3 channel.
-    bitcoind.generate_block(5)
+    mine_funding_to_announce(bitcoind, [l1, l2, l3, l4, l5])
     l1.daemon.wait_for_logs([r'update for channel {}/0 now ACTIVE'
                              .format(scidl2l3),
                              r'update for channel {}/1 now ACTIVE'
@@ -1824,8 +1824,7 @@ def test_setchannelfee_state(node_factory, bitcoind):
     # cid = result['channels'][0]['channel_id']
 
     # test routing correct new fees once routing is established
-    bitcoind.generate_block(6)
-    sync_blockheight(bitcoind, [l0, l1, l2])
+    mine_funding_to_announce(bitcoind, [l0, l1, l2])
 
     l0.wait_for_route(l2)
     inv = l2.rpc.invoice(100000, 'test_setchannelfee_state', 'desc')['bolt11']
@@ -2389,7 +2388,7 @@ def test_tlv_or_legacy(node_factory, bitcoind):
     l3.daemon.wait_for_log("Got onion.*'type': 'tlv'")
 
     # We need 5 more blocks to announce l1->l2 channel.
-    bitcoind.generate_block(5)
+    mine_funding_to_announce(bitcoind, [l1, l2, l3])
 
     # Make sure l1 knows about l2
     wait_for(lambda: 'alias' in l1.rpc.listnodes(l2.info['id'])['nodes'][0])
@@ -2622,7 +2621,7 @@ def test_partial_payment(node_factory, bitcoind, executor):
     scid24, _ = l2.fundchannel(l4, 100000)
     l3.rpc.connect(l4.info['id'], 'localhost', l4.port)
     scid34, _ = l3.fundchannel(l4, 100000)
-    bitcoind.generate_block(5)
+    mine_funding_to_announce(bitcoind, [l1, l2, l3, l4])
 
     # Wait until l1 knows about all channels.
     wait_for(lambda: len(l1.rpc.listchannels()['channels']) == 8)
@@ -3427,7 +3426,17 @@ def test_mpp_adaptive(node_factory, bitcoind):
     assert(c12['spendable_msat'].millisatoshis < amt)
     assert(c34['spendable_msat'].millisatoshis < amt)
 
-    bitcoind.generate_block(5)
+    # Make sure all HTLCs entirely resolved before we mine more blocks!
+    def all_htlcs(n):
+        htlcs = []
+        for p in n.rpc.listpeers()['peers']:
+            for c in p['channels']:
+                htlcs += c['htlcs']
+        return htlcs
+
+    wait_for(lambda: all([all_htlcs(n) == [] for n in [l1, l2, l3, l4]]))
+
+    mine_funding_to_announce(bitcoind, [l1, l2, l3, l4])
     wait_for(lambda: len(l1.rpc.listchannels()['channels']) == 8)
 
     inv = l4.rpc.invoice(
@@ -3522,8 +3531,7 @@ def test_mpp_presplit_routehint_conflict(node_factory, bitcoind):
     l2.rpc.connect(l3.info['id'], 'localhost', l3.port)
     l2.fundchannel(l3, 10**7, announce_channel=False)
 
-    bitcoind.generate_block(6)
-    sync_blockheight(bitcoind, [l1, l2, l3])
+    mine_funding_to_announce(bitcoind, [l1, l2, l3])
 
     # Wait for l3 to learn about l1->l2, otherwise it will think
     # l2 is a deadend and not add it to the routehint.
@@ -3688,8 +3696,7 @@ def test_mpp_waitblockheight_routehint_conflict(node_factory, bitcoind, executor
     l2.rpc.connect(l3.info['id'], 'localhost', l3.port)
     l2.fundchannel(l3, 10**7, announce_channel=False)
 
-    bitcoind.generate_block(6)
-    sync_blockheight(bitcoind, [l1, l2, l3])
+    mine_funding_to_announce(bitcoind, [l1, l2, l3])
 
     # Wait for l3 to learn about l1->l2, otherwise it will think
     # l2 is a deadend and not add it to the routehint.
@@ -3811,8 +3818,7 @@ def test_mpp_interference_2(node_factory, bitcoind, executor):
     l3.fundchannel(l6, int((unit * 6).to_satoshi()), announce_channel=False)
 
     # Now wait for the buyers to learn the entire public network.
-    bitcoind.generate_block(5)
-    sync_blockheight(bitcoind, [l1, l2, l3, l4, l5, l6, l7])
+    mine_funding_to_announce(bitcoind, [l1, l2, l3, l4, l5, l6, l7])
     for channel in public_network:
         wait_for(lambda: len(l2.rpc.listchannels(channel)['channels']) == 2)
         wait_for(lambda: len(l3.rpc.listchannels(channel)['channels']) == 2)
@@ -3914,8 +3920,7 @@ def test_mpp_overload_payee(node_factory, bitcoind):
                       l5.fundbalancedchannel(l6, amt)]
 
     # Ensure l1 knows the entire public network.
-    bitcoind.generate_block(5)
-    sync_blockheight(bitcoind, [l1, l2, l3, l4, l5, l6])
+    mine_funding_to_announce(bitcoind, [l1, l2, l3, l4, l5, l6])
     for c in public_network:
         wait_for(lambda: len(l1.rpc.listchannels(c)['channels']) >= 2)
 

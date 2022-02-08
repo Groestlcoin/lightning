@@ -38,7 +38,6 @@
 #include <lightningd/peer_fd.h>
 #include <lightningd/subd.h>
 #include <openingd/dualopend_wiregen.h>
-#include <wire/common_wiregen.h>
 
 struct close_command {
 	/* Inside struct lightningd close_commands. */
@@ -339,20 +338,10 @@ static unsigned closing_msg(struct subd *sd, const u8 *msg, const int *fds UNUSE
 		break;
 	}
 
-	switch ((enum common_wire)t) {
-	case WIRE_CUSTOMMSG_IN:
-		handle_custommsg_in(sd->ld, sd->node_id, msg);
-		break;
-	/* We send these. */
-	case WIRE_CUSTOMMSG_OUT:
-		break;
-	}
-
 	return 0;
 }
 
-void peer_start_closingd(struct channel *channel,
-			 struct peer_fd *peer_fd)
+void peer_start_closingd(struct channel *channel, struct peer_fd *peer_fd)
 {
 	u8 *initmsg;
 	u32 min_feerate, feerate, *max_feerate;
@@ -382,7 +371,6 @@ void peer_start_closingd(struct channel *channel,
 					   channel_errmsg,
 					   channel_set_billboard,
 					   take(&peer_fd->fd),
-					   take(&peer_fd->gossip_fd),
 					   take(&hsmfd),
 					   NULL));
 

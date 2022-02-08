@@ -526,6 +526,13 @@ static void shutdown_subdaemons(struct lightningd *ld)
 	/*~ The three "global" daemons, which we shutdown explicitly: we
 	 * give them 10 seconds to exit gracefully before killing them.  */
 	ld->connectd = subd_shutdown(ld->connectd, 10);
+	ld->gossip = subd_shutdown(ld->gossip, 10);
+	ld->hsm = subd_shutdown(ld->hsm, 10);
+
+	/*~ Closing the hsmd means all other subdaemons should be exiting;
+	 * deal with that cleanly before we start freeing internal
+	 * structures. */
+	subd_shutdown_remaining(ld);
 
 	/* Now we free all the HTLCs */
 	free_htlcs(ld, NULL);
@@ -557,11 +564,6 @@ static void shutdown_subdaemons(struct lightningd *ld)
 		/* Removes itself from list as we free it */
 		tal_free(p);
 	}
-
-	/*~ Now they're all dead, we can stop gossipd: doing it before HTLCs is
-	 * problematic because local_fail_in_htlc_needs_update() asks gossipd */
-	ld->gossip = subd_shutdown(ld->gossip, 10);
-	ld->hsm = subd_shutdown(ld->hsm, 10);
 
 	/*~ Commit the transaction.  Note that the db is actually
 	 * single-threaded, so commits never fail and we don't need
@@ -1027,11 +1029,6 @@ int main(int argc, char *argv[])
 	 * socket pair, and gives us the other */
 	connectd_gossipd_fd = connectd_init(ld);
 
- 	/*~ The gossip daemon looks after the routing gossip;
-	 *  channel_announcement, channel_update, node_announcement and gossip
-	 *  queries. */
-	gossip_init(ld, connectd_gossipd_fd);
-
 	/*~ We do every database operation within a transaction; usually this
 	 * is covered by the infrastructure (eg. opening a transaction before
 	 * handling a message or expiring a timer), but for startup we do this
@@ -1077,6 +1074,12 @@ int main(int argc, char *argv[])
 	 *  know the blockheight. */
 	unconnected_htlcs_in = load_channels_from_wallet(ld);
 	db_commit_transaction(ld->wallet->db);
+
+ 	/*~ The gossip daemon looks after the routing gossip;
+	 *  channel_announcement, channel_update, node_announcement and gossip
+	 *  queries.   It also hands us the latest channel_updates for our
+	 *  channels. */
+	gossip_init(ld, connectd_gossipd_fd);
 
 	/*~ Create RPC socket: now lightning-cli can send us JSON RPC commands
 	 *  over a UNIX domain socket specified by `ld->rpc_filename`. */

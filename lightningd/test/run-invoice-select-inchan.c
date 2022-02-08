@@ -437,7 +437,7 @@ struct height_states *new_height_states(const tal_t *ctx UNNEEDED,
 					const u32 *blockheight UNNEEDED)
 { fprintf(stderr, "new_height_states called!\n"); abort(); }
 /* Generated stub for new_peer_fd */
-struct peer_fd *new_peer_fd(const tal_t *ctx UNNEEDED, int peer_fd UNNEEDED, int gossip_fd UNNEEDED)
+struct peer_fd *new_peer_fd(const tal_t *ctx UNNEEDED, int peer_fd UNNEEDED)
 { fprintf(stderr, "new_peer_fd called!\n"); abort(); }
 /* Generated stub for new_reltimer_ */
 struct oneshot *new_reltimer_(struct timers *timers UNNEEDED,
@@ -482,11 +482,6 @@ struct command_result *param_array(struct command *cmd UNNEEDED, const char *nam
 				   const char *buffer UNNEEDED, const jsmntok_t *tok UNNEEDED,
 				   const jsmntok_t **arr UNNEEDED)
 { fprintf(stderr, "param_array called!\n"); abort(); }
-/* Generated stub for param_bin_from_hex */
-struct command_result *param_bin_from_hex(struct command *cmd UNNEEDED, const char *name UNNEEDED,
-					  const char *buffer UNNEEDED, const jsmntok_t *tok UNNEEDED,
-					  u8 **bin UNNEEDED)
-{ fprintf(stderr, "param_bin_from_hex called!\n"); abort(); }
 /* Generated stub for param_bool */
 struct command_result *param_bool(struct command *cmd UNNEEDED, const char *name UNNEEDED,
 				  const char *buffer UNNEEDED, const jsmntok_t *tok UNNEEDED,
@@ -560,9 +555,6 @@ struct command_result *param_u64(struct command *cmd UNNEEDED, const char *name 
 /* Generated stub for peer_active_channel */
 struct channel *peer_active_channel(struct peer *peer UNNEEDED)
 { fprintf(stderr, "peer_active_channel called!\n"); abort(); }
-/* Generated stub for peer_get_owning_subd */
-struct subd *peer_get_owning_subd(struct peer *peer UNNEEDED)
-{ fprintf(stderr, "peer_get_owning_subd called!\n"); abort(); }
 /* Generated stub for peer_memleak_done */
 void peer_memleak_done(struct command *cmd UNNEEDED, struct subd *leaker UNNEEDED)
 { fprintf(stderr, "peer_memleak_done called!\n"); abort(); }
@@ -611,9 +603,6 @@ void subd_req_(const tal_t *ctx UNNEEDED,
 	       void (*replycb)(struct subd * UNNEEDED, const u8 * UNNEEDED, const int * UNNEEDED, void *) UNNEEDED,
 	       void *replycb_data UNNEEDED)
 { fprintf(stderr, "subd_req_ called!\n"); abort(); }
-/* Generated stub for subd_send_fd */
-void subd_send_fd(struct subd *sd UNNEEDED, int fd UNNEEDED)
-{ fprintf(stderr, "subd_send_fd called!\n"); abort(); }
 /* Generated stub for subd_send_msg */
 void subd_send_msg(struct subd *sd UNNEEDED, const u8 *msg_out UNNEEDED)
 { fprintf(stderr, "subd_send_msg called!\n"); abort(); }

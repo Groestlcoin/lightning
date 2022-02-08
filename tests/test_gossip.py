@@ -5,7 +5,8 @@ from fixtures import TEST_NETWORK
 from pyln.client import RpcError, Millisatoshi
 from utils import (
     DEVELOPER, wait_for, TIMEOUT, only_one, sync_blockheight,
-    expected_node_features, COMPAT, EXPERIMENTAL_FEATURES
+    expected_node_features, COMPAT, EXPERIMENTAL_FEATURES,
+    mine_funding_to_announce
 )
 
 import json
@@ -37,7 +38,7 @@ def test_gossip_pruning(node_factory, bitcoind):
     scid1, _ = l1.fundchannel(l2, 10**6)
     scid2, _ = l2.fundchannel(l3, 10**6)
 
-    bitcoind.generate_block(6)
+    mine_funding_to_announce(bitcoind, [l1, l2, l3])
 
     # Channels should be activated locally
     wait_for(lambda: [c['active'] for c in l1.rpc.listchannels()['channels']] == [True] * 4)
@@ -201,7 +202,7 @@ def test_announce_and_connect_via_dns(node_factory, bitcoind):
     l3.rpc.connect(l2.info['id'], 'localhost', l2.port)
     l4.rpc.connect(l2.info['id'], 'localhost', l2.port)
     scid, _ = l1.fundchannel(l2, 10**6)
-    bitcoind.generate_block(5)
+    mine_funding_to_announce(bitcoind, [l1, l2, l3])
 
     # wait until l3 and l4 see l1 via gossip with announced addresses
     wait_for(lambda: len(l3.rpc.listnodes(l1.info['id'])['nodes']) == 1)
@@ -252,7 +253,7 @@ def test_gossip_timestamp_filter(node_factory, bitcoind, chainparams):
 
     # Make a public channel.
     chan12, _ = l1.fundchannel(l2, 10**5)
-    bitcoind.generate_block(5)
+    mine_funding_to_announce(bitcoind, [l1, l2, l3, l4])
 
     l3.wait_for_channel_updates([chan12])
     after_12 = int(time.time())
@@ -271,7 +272,7 @@ def test_gossip_timestamp_filter(node_factory, bitcoind, chainparams):
     msgs = l4.query_gossip('gossip_timestamp_filter',
                            genesis_blockhash,
                            '0', '0xFFFFFFFF',
-                           filters=['0109'])
+                           filters=['0109', '0012'])
 
     # 0x0100 = channel_announcement
     # 0x0102 = channel_update
@@ -284,7 +285,7 @@ def test_gossip_timestamp_filter(node_factory, bitcoind, chainparams):
     msgs = l4.query_gossip('gossip_timestamp_filter',
                            genesis_blockhash,
                            '0', before_anything - backdate,
-                           filters=['0109'])
+                           filters=['0109', '0012'])
     assert msgs == []
 
     # Now choose range which will only give first update.
@@ -292,7 +293,7 @@ def test_gossip_timestamp_filter(node_factory, bitcoind, chainparams):
                            genesis_blockhash,
                            before_anything - backdate,
                            after_12 - before_anything + 1,
-                           filters=['0109'])
+                           filters=['0109', '0012'])
 
     # 0x0100 = channel_announcement
     # 0x0102 = channel_update
@@ -306,7 +307,7 @@ def test_gossip_timestamp_filter(node_factory, bitcoind, chainparams):
                            genesis_blockhash,
                            after_12 - backdate,
                            after_23 - after_12 + 1,
-                           filters=['0109'])
+                           filters=['0109', '0012'])
 
     # 0x0100 = channel_announcement
     # 0x0102 = channel_update
@@ -334,7 +335,7 @@ def test_connect_by_gossip(node_factory, bitcoind):
 
     # Nodes are gossiped only if they have channels
     chanid, _ = l2.fundchannel(l3, 10**6)
-    bitcoind.generate_block(5)
+    mine_funding_to_announce(bitcoind, [l1, l2, l3])
 
     # Let channel reach announcement depth
     l2.wait_channel_active(chanid)
@@ -442,7 +443,7 @@ def test_gossip_jsonrpc(node_factory):
 
 
 @pytest.mark.developer("Too slow without --dev-fast-gossip")
-def test_gossip_badsig(node_factory):
+def test_gossip_badsig(node_factory, bitcoind):
     """Make sure node announcement signatures are ok.
 
     This is a smoke test to see if signatures fail. This used to be the case
@@ -460,7 +461,7 @@ def test_gossip_badsig(node_factory):
     l2.fundchannel(l3, 10**6)
 
     # Wait for route propagation.
-    l1.bitcoin.generate_block(5)
+    mine_funding_to_announce(bitcoind, [l1, l2, l3])
     l1.daemon.wait_for_log('Received node_announcement for node {}'
                            .format(l3.info['id']))
     assert not l1.daemon.is_in_log('signature verification failed')
@@ -517,7 +518,7 @@ def test_gossip_persistence(node_factory, bitcoind):
     scid23, _ = l2.fundchannel(l3, 10**6)
 
     # Make channels public, except for l3 -> l4, which is kept local-only for now
-    bitcoind.generate_block(5)
+    mine_funding_to_announce(bitcoind, [l1, l2, l3, l4])
     scid34, _ = l3.fundchannel(l4, 10**6)
     bitcoind.generate_block(1)
 
@@ -596,32 +597,47 @@ def test_routing_gossip_reconnect(node_factory):
         wait_for(lambda: len(n.rpc.listchannels()['channels']) == 4)
 
 
-@pytest.mark.developer("needs DEVELOPER=1")
-def test_gossip_no_empty_announcements(node_factory, bitcoind):
+@pytest.mark.developer("needs fast gossip, dev-no-reconnect")
+def test_gossip_no_empty_announcements(node_factory, bitcoind, chainparams):
     # Need full IO logging so we can see gossip
-    # l3 sends CHANNEL_ANNOUNCEMENT to l2, but not CHANNEL_UDPATE.
-    l1, l2, l3, l4 = node_factory.line_graph(4, opts=[{'log-level': 'io'},
-                                                      {'log-level': 'io'},
-                                                      # Writes to l4 first, then l2
-                                                      {'disconnect': ['+WIRE_CHANNEL_ANNOUNCEMENT*2'],
+    # l2 sends CHANNEL_ANNOUNCEMENT to l1, but not CHANNEL_UDPATE.
+    l1, l2, l3, l4 = node_factory.line_graph(4, opts=[{'log-level': 'io',
+                                                       'dev-no-reconnect': None},
+                                                      {'log-level': 'io',
+                                                       'disconnect': ['+WIRE_CHANNEL_ANNOUNCEMENT'],
                                                        'may_reconnect': True},
+                                                      {'may_reconnect': True},
                                                       {'may_reconnect': True}],
                                              fundchannel=False)
 
-    # Make an announced-but-not-updated channel.
     l3.fundchannel(l4, 10**5)
-    bitcoind.generate_block(5)
+    mine_funding_to_announce(bitcoind, [l1, l2, l3, l4])
 
-    # 0x0100 = channel_announcement, which goes to l2 before l3 dies.
-    l2.daemon.wait_for_log(r'\[IN\] 0100')
+    # l2 sends CHANNEL_ANNOUNCEMENT to l1, then disconnects/
+    l2.daemon.wait_for_log('dev_disconnect')
+    l1.daemon.wait_for_log(r'\[IN\] 0100')
 
-    # But it never goes to l1, as there's no channel_update.
+    # l1 won't relay it (make sure it has time to digest though)
     time.sleep(2)
-    assert not l1.daemon.is_in_log(r'\[IN\] 0100')
-    assert len(l1.rpc.listchannels()['channels']) == 0
+    assert l1.rpc.listchannels()['channels'] == []
+    encoded = subprocess.run(['devtools/mkencoded', '--scids', '00'],
+                             check=True,
+                             timeout=TIMEOUT,
+                             stdout=subprocess.PIPE).stdout.strip().decode()
+    assert l1.query_gossip('query_channel_range',
+                           chainparams['chain_hash'],
+                           0, 1000000,
+                           filters=['0109', '0012']) == ['0108'
+                                                         # blockhash
+                                                         + chainparams['chain_hash']
+                                                         # first_blocknum, number_of_blocks, complete
+                                                         + format(0, '08x') + format(1000000, '08x') + '01'
+                                                         # encoded_short_ids
+                                                         + format(len(encoded) // 2, '04x')
+                                                         + encoded]
 
     # If we reconnect, gossip will now flow.
-    l3.rpc.connect(l2.info['id'], 'localhost', l2.port)
+    l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
     wait_for(lambda: len(l1.rpc.listchannels()['channels']) == 2)
 
 
@@ -629,20 +645,16 @@ def test_gossip_no_empty_announcements(node_factory, bitcoind):
 def test_routing_gossip(node_factory, bitcoind):
     nodes = node_factory.get_nodes(5)
 
-    sync_blockheight(bitcoind, nodes)
     for i in range(len(nodes) - 1):
         src, dst = nodes[i], nodes[i + 1]
         src.rpc.connect(dst.info['id'], 'localhost', dst.port)
         src.openchannel(dst, 25000, confirm=False, wait_for_announce=False)
-        sync_blockheight(bitcoind, nodes)
 
-    # Avoid "bad gossip" caused by future announcements (a node below
-    # confirmation height receiving and ignoring the announcement,
-    # thus marking followup messages as bad).
-    sync_blockheight(bitcoind, nodes)
+    # openchannel calls fundwallet which mines a block; so first channel
+    # is 4 deep, last is unconfirmed.
 
     # Allow announce messages.
-    bitcoind.generate_block(6)
+    mine_funding_to_announce(bitcoind, nodes, num_blocks=6, wait_for_mempool=1)
 
     # Deep check that all channels are in there
     comb = []
@@ -676,17 +688,15 @@ def test_gossip_query_channel_range(node_factory, bitcoind, chainparams):
     l2.fundwallet(10**6)
 
     num_tx = len(bitcoind.rpc.getrawmempool())
+    # We want these one block apart.
     l1.rpc.fundchannel(l2.info['id'], 10**5)['tx']
-    wait_for(lambda: len(bitcoind.rpc.getrawmempool()) == num_tx + 1)
-    bitcoind.generate_block(1)
-
-    num_tx = len(bitcoind.rpc.getrawmempool())
+    bitcoind.generate_block(wait_for_mempool=num_tx + 1)
+    sync_blockheight(bitcoind, [l1, l2, l3, l4])
     l2.rpc.fundchannel(l3.info['id'], 10**5)['tx']
-    wait_for(lambda: len(bitcoind.rpc.getrawmempool()) == num_tx + 1)
-    bitcoind.generate_block(1)
-
     # Get them both to gossip depth.
-    bitcoind.generate_block(5)
+    mine_funding_to_announce(bitcoind, [l1, l2, l3, l4],
+                             num_blocks=6,
+                             wait_for_mempool=1)
 
     # Make sure l2 has received all the gossip.
     l2.daemon.wait_for_logs(['Received node_announcement for node ' + l1.info['id'],
@@ -703,7 +713,7 @@ def test_gossip_query_channel_range(node_factory, bitcoind, chainparams):
     msgs = l2.query_gossip('query_channel_range',
                            chainparams['chain_hash'],
                            0, 1000000,
-                           filters=['0109'])
+                           filters=['0109', '0012'])
     encoded = subprocess.run(['devtools/mkencoded', '--scids', '00', scid12, scid23],
                              check=True,
                              timeout=TIMEOUT,
@@ -722,7 +732,7 @@ def test_gossip_query_channel_range(node_factory, bitcoind, chainparams):
     msgs = l2.query_gossip('query_channel_range',
                            genesis_blockhash,
                            0, block12,
-                           filters=['0109'])
+                           filters=['0109', '0012'])
     # reply_channel_range == 264
     assert msgs == ['0108'
                     # blockhash
@@ -736,7 +746,7 @@ def test_gossip_query_channel_range(node_factory, bitcoind, chainparams):
     msgs = l2.query_gossip('query_channel_range',
                            genesis_blockhash,
                            0, block12 + 1,
-                           filters=['0109'])
+                           filters=['0109', '0012'])
     encoded = subprocess.run(['devtools/mkencoded', '--scids', '00', scid12],
                              check=True,
                              timeout=TIMEOUT,
@@ -755,7 +765,7 @@ def test_gossip_query_channel_range(node_factory, bitcoind, chainparams):
     msgs = l2.query_gossip('query_channel_range',
                            genesis_blockhash,
                            0, block23,
-                           filters=['0109'])
+                           filters=['0109', '0012'])
     encoded = subprocess.run(['devtools/mkencoded', '--scids', '00', scid12],
                              check=True,
                              timeout=TIMEOUT,
@@ -774,7 +784,7 @@ def test_gossip_query_channel_range(node_factory, bitcoind, chainparams):
     msgs = l2.query_gossip('query_channel_range',
                            genesis_blockhash,
                            block12, block23 - block12 + 1,
-                           filters=['0109'])
+                           filters=['0109', '0012'])
     encoded = subprocess.run(['devtools/mkencoded', '--scids', '00', scid12, scid23],
                              check=True,
                              timeout=TIMEOUT,
@@ -793,7 +803,7 @@ def test_gossip_query_channel_range(node_factory, bitcoind, chainparams):
     msgs = l2.query_gossip('query_channel_range',
                            genesis_blockhash,
                            block23, 1,
-                           filters=['0109'])
+                           filters=['0109', '0012'])
     encoded = subprocess.run(['devtools/mkencoded', '--scids', '00', scid23],
                              check=True,
                              timeout=TIMEOUT,
@@ -812,7 +822,7 @@ def test_gossip_query_channel_range(node_factory, bitcoind, chainparams):
     msgs = l2.query_gossip('query_channel_range',
                            genesis_blockhash,
                            block23 + 1, 1000000,
-                           filters=['0109'])
+                           filters=['0109', '0012'])
     # reply_channel_range == 264
     assert msgs == ['0108'
                     # blockhash
@@ -829,7 +839,7 @@ def test_gossip_query_channel_range(node_factory, bitcoind, chainparams):
     msgs = l2.query_gossip('query_channel_range',
                            genesis_blockhash,
                            0, 1000000,
-                           filters=['0109'])
+                           filters=['0109', '0012'])
     # It should definitely have split
     l2.daemon.wait_for_log('reply_channel_range: splitting 0-1 of 2')
 
@@ -854,12 +864,12 @@ def test_gossip_query_channel_range(node_factory, bitcoind, chainparams):
     msgs = l2.query_gossip('query_channel_range',
                            genesis_blockhash,
                            1, 429496000,
-                           filters=['0109'])
+                           filters=['0109', '0012'])
     assert len(msgs) == 2
 
     # This should actually be large enough for zlib to kick in!
     scid34, _ = l3.fundchannel(l4, 10**5)
-    bitcoind.generate_block(5)
+    mine_funding_to_announce(bitcoind, [l1, l2, l3, l4])
     l2.daemon.wait_for_log('Received node_announcement for node ' + l4.info['id'])
 
     # Restore infinite encode size.
@@ -870,7 +880,7 @@ def test_gossip_query_channel_range(node_factory, bitcoind, chainparams):
     msgs = l2.query_gossip('query_channel_range',
                            genesis_blockhash,
                            0, 65535,
-                           filters=['0109'])
+                           filters=['0109', '0012'])
     encoded = subprocess.run(['devtools/mkencoded', '--scids', '01', scid12, scid23, scid34],
                              check=True,
                              timeout=TIMEOUT,
@@ -909,12 +919,6 @@ def test_report_routing_failure(node_factory, bitcoind):
     # Finally the only possible path is
     # l1-l2-l3-l4.
 
-    def fund_from_to_payer(lsrc, ldst, lpayer):
-        lsrc.rpc.connect(ldst.info['id'], 'localhost', ldst.port)
-        c, _ = lsrc.fundchannel(ldst, 10000000)
-        bitcoind.generate_block(5)
-        lpayer.wait_for_channel_updates([c])
-
     # Setup
     # Construct lightningd
     l1, l2, l3, l4 = node_factory.get_nodes(4)
@@ -931,7 +935,7 @@ def test_report_routing_failure(node_factory, bitcoind):
                                       dst.daemon.lightning_dir))
         c, _ = src.fundchannel(dst, 10**6)
         channels.append(c)
-    bitcoind.generate_block(5)
+    mine_funding_to_announce(bitcoind, [l1, l2, l3, l4])
 
     for c in channels:
         l1.wait_channel_active(c)
@@ -957,7 +961,7 @@ def test_query_short_channel_id(node_factory, bitcoind, chainparams):
     msgs = l1.query_gossip('query_short_channel_ids',
                            chain_hash,
                            encoded,
-                           filters=['0109'])
+                           filters=['0109', '0012'])
 
     # Should just get the WIRE_REPLY_SHORT_CHANNEL_IDS_END = 262
     # (with chainhash and completeflag = 1)
@@ -967,7 +971,7 @@ def test_query_short_channel_id(node_factory, bitcoind, chainparams):
     # Make channels public.
     scid12, _ = l1.fundchannel(l2, 10**5)
     scid23, _ = l2.fundchannel(l3, 10**5)
-    bitcoind.generate_block(5)
+    mine_funding_to_announce(bitcoind, [l1, l2, l3])
 
     # It will know about everything.
     l1.daemon.wait_for_log('Received node_announcement for node {}'.format(l3.info['id']))
@@ -980,7 +984,7 @@ def test_query_short_channel_id(node_factory, bitcoind, chainparams):
     msgs = l1.query_gossip('query_short_channel_ids',
                            chain_hash,
                            encoded,
-                           filters=['0109'])
+                           filters=['0109', '0012'])
 
     assert len(msgs) == 6
     # 0x0100 = channel_announcement
@@ -1000,7 +1004,7 @@ def test_query_short_channel_id(node_factory, bitcoind, chainparams):
     msgs = l1.query_gossip('query_short_channel_ids',
                            chain_hash,
                            encoded,
-                           filters=['0109'])
+                           filters=['0109', '0012'])
 
     # Technically, this order could be different, but this matches code.
     assert len(msgs) == 10
@@ -1273,7 +1277,8 @@ def test_node_reannounce(node_factory, bitcoind, chainparams):
                            '0', '0xFFFFFFFF',
                            # Filter out gossip_timestamp_filter,
                            # channel_announcement and channel_updates.
-                           filters=['0109', '0102', '0100'])
+                           # And pings.
+                           filters=['0109', '0102', '0100', '0012'])
 
     assert len(msgs) == 2
     assert (bytes("SENIORBEAM", encoding="utf8").hex() in msgs[0]
@@ -1287,7 +1292,8 @@ def test_node_reannounce(node_factory, bitcoind, chainparams):
                             '0', '0xFFFFFFFF',
                             # Filter out gossip_timestamp_filter,
                             # channel_announcement and channel_updates.
-                            filters=['0109', '0102', '0100'])
+                            # And pings.
+                            filters=['0109', '0102', '0100', '0012'])
     assert msgs == msgs2
     # Won't have queued up another one, either.
     assert not l1.daemon.is_in_log('node_announcement: delaying')
@@ -1311,7 +1317,8 @@ def test_node_reannounce(node_factory, bitcoind, chainparams):
                             '0', '0xFFFFFFFF',
                             # Filter out gossip_timestamp_filter,
                             # channel_announcement and channel_updates.
-                            filters=['0109', '0102', '0100'])
+                            # And pings.
+                            filters=['0109', '0102', '0100', '0012'])
     assert msgs != msgs2
 
 
@@ -1328,11 +1335,14 @@ def test_gossipwith(node_factory):
     num_msgs = 0
     while len(out):
         l, t = struct.unpack('>HH', out[0:4])
-        # channel_announcement node_announcement, channel_update or timestamp_filter
-        assert t == 256 or t == 257 or t == 258 or t == 265
         out = out[2 + l:]
-        if t != 265:
-            num_msgs += 1
+
+        # Ignore pings, timestamp_filter
+        if t == 265 or t == 18:
+            continue
+        # channel_announcement node_announcement or channel_update
+        assert t == 256 or t == 257 or t == 258
+        num_msgs += 1
 
     # one channel announcement, two channel_updates, two node announcements.
     assert num_msgs == 5
@@ -1348,7 +1358,7 @@ def test_gossip_notices_close(node_factory, bitcoind):
     node_factory.join_nodes([l2, l3])
     l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
 
-    bitcoind.generate_block(5)
+    mine_funding_to_announce(bitcoind, [l1, l2, l3])
 
     # Make sure l1 learns about channel and nodes.
     wait_for(lambda: len(l1.rpc.listchannels()['channels']) == 2)
@@ -1447,7 +1457,7 @@ def test_getroute_exclude(node_factory, bitcoind):
     # Now, create an alternate (better) route.
     l2.rpc.connect(l4.info['id'], 'localhost', l4.port)
     scid, _ = l2.fundchannel(l4, 1000000, wait_for_active=False)
-    bitcoind.generate_block(5)
+    mine_funding_to_announce(bitcoind, [l1, l2, l3, l4, l5])
 
     # We don't wait above, because we care about it hitting l1.
     l1.daemon.wait_for_logs([r'update for channel {}/0 now ACTIVE'
@@ -1484,7 +1494,7 @@ def test_getroute_exclude(node_factory, bitcoind):
     scid15, _ = l1.fundchannel(l5, 1000000, wait_for_active=False)
     l5.rpc.connect(l4.info['id'], 'localhost', l4.port)
     scid54, _ = l5.fundchannel(l4, 1000000, wait_for_active=False)
-    bitcoind.generate_block(5)
+    mine_funding_to_announce(bitcoind, [l1, l2, l3, l4, l5])
 
     # We don't wait above, because we care about it hitting l1.
     l1.daemon.wait_for_logs([r'update for channel {}/0 now ACTIVE'
@@ -1568,7 +1578,7 @@ def setup_gossip_store_test(node_factory, bitcoind):
     scid23, _ = l2.fundchannel(l3, 10**6)
 
     # Have that channel announced.
-    bitcoind.generate_block(5)
+    mine_funding_to_announce(bitcoind, [l1, l2, l3])
     # Make sure we've got node_announcements
     wait_for(lambda: ['alias' in n for n in l2.rpc.listnodes()['nodes']] == [True, True])
 
@@ -1799,10 +1809,13 @@ def test_gossip_ratelimit(node_factory, bitcoind):
     canned gossip to the other partition consisting of l3. l3 should ratelimit
     the incoming gossip.
 
+    We get BROKEN logs because gossipd talks about non-existent channels to
+    lightningd ("**BROKEN** lightningd: Local update for bad scid 103x1x1").
     """
     l3, = node_factory.get_nodes(
         1,
-        opts=[{'dev-gossip-time': 1568096251}]
+        opts=[{'dev-gossip-time': 1568096251,
+               'allow_broken_log': True}]
     )
 
     # Bump to block 102, so the following tx ends up in 103x1:
@@ -1958,7 +1971,11 @@ def test_torport_onions(node_factory):
 @unittest.skipIf(not COMPAT, "needs COMPAT to convert obsolete gossip_store")
 def test_gossip_store_upgrade_v7_v8(node_factory):
     """Version 8 added feature bits to local channel announcements"""
-    l1 = node_factory.get_node(start=False)
+
+    # We get BROKEN logs because gossipd talks about non-existent channels to
+    # lightningd ("**BROKEN** lightningd: Local update for bad scid 103x1x1").
+    l1 = node_factory.get_node(start=False,
+                               allow_broken_log=True)
 
     # A channel announcement with no channel_update.
     with open(os.path.join(l1.daemon.lightning_dir, TEST_NETWORK, 'gossip_store'), 'wb') as f:
@@ -2087,7 +2104,7 @@ def test_topology_leak(node_factory, bitcoind):
     l1, l2, l3 = node_factory.line_graph(3)
 
     l1.rpc.listchannels()
-    bitcoind.generate_block(5)
+    mine_funding_to_announce(bitcoind, [l1, l2, l3])
 
     # Wait until l1 sees all the channels.
     wait_for(lambda: len(l1.rpc.listchannels()['channels']) == 4)
