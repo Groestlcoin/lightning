@@ -2,6 +2,7 @@
 
 export DEBIAN_FRONTEND=noninteractive
 export GROESTLCOIN_VERSION=2.20.1
+export RUST_VERSION=nightly
 sudo useradd -ms /bin/bash tester
 sudo apt-get update -qq
 
@@ -60,3 +61,8 @@ sudo chmod 0440 /etc/sudoers.d/tester
        groestlcoin-$GROESTLCOIN_VERSION-x86_64-linux-gnu.tar.gz \
        groestlcoin-$GROESTLCOIN_VERSION
 )
+
+if [ "$RUST" == "1" ]; then
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- \
+      -y --default-toolchain ${RUST_VERSION}
+fi
