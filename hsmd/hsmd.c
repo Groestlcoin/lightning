@@ -165,6 +165,7 @@ static struct io_plan *bad_req(struct io_conn *conn,
  * and then call handle_client with argument 'c' */
 static struct io_plan *client_read_next(struct io_conn *conn, struct client *c)
 {
+	c->msg_in = tal_free(c->msg_in);
 	return io_read_wire(conn, c, &c->msg_in, handle_client, c);
 }
 
@@ -186,6 +187,8 @@ static struct client *new_client(const tal_t *ctx,
 				 int fd)
 {
 	struct client *c = tal(ctx, struct client);
+
+	c->msg_in = NULL;
 
 	/*~ All-zero pubkey is used for the initial master connection */
 	if (id) {
@@ -555,7 +558,6 @@ static struct io_plan *handle_memleak(struct io_conn *conn,
 	memtable = memleak_find_allocations(tmpctx, msg_in, msg_in);
 
 	/* Now delete clients and anything they point to. */
-	memleak_remove_region(memtable, c, tal_bytelen(c));
 	memleak_remove_region(memtable,
 			      dbid_zero_clients, sizeof(dbid_zero_clients));
 	memleak_remove_uintmap(memtable, &clients);
