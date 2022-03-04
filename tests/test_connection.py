@@ -3236,7 +3236,7 @@ def test_nonstatic_channel(node_factory, bitcoind):
                                      opts=[{},
                                            # needs at least 15 to connect
                                            # (and 9 is a dependent)
-                                           {'dev-force-features': '9,15////'}])
+                                           {'dev-force-features': '9,15/////'}])
     chan = only_one(only_one(l1.rpc.listpeers()['peers'])['channels'])
     assert 'option_static_remotekey' not in chan['features']
     assert 'option_anchor_outputs' not in chan['features']
@@ -3712,6 +3712,7 @@ def test_ping_timeout(node_factory):
                                                'disconnect': l1_disconnects},
                                               {}])
     # Takes 15-45 seconds, then another to try second ping
-    l1.daemon.wait_for_log('Last ping unreturned: hanging up',
-                           timeout=45 + 45 + 5)
-    wait_for(lambda: l1.rpc.getpeer(l2.info['id'])['connected'] is False)
+    # Because of ping timer randomness we don't know which side hangs up first
+    wait_for(lambda: l1.rpc.getpeer(l2.info['id'])['connected'] is False, timeout=45 + 45 + 5)
+    wait_for(lambda: (l1.daemon.is_in_log('Last ping unreturned: hanging up')
+                      or l2.daemon.is_in_log('Last ping unreturned: hanging up')))
