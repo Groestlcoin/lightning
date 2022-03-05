@@ -8,13 +8,16 @@
 #include <common/fee_states.h>
 #include <common/onionreply.h>
 #include <common/type_to_string.h>
+#include <db/bindings.h>
+#include <db/common.h>
+#include <db/exec.h>
+#include <db/utils.h>
 #include <lightningd/chaintopology.h>
 #include <lightningd/channel.h>
 #include <lightningd/coin_mvts.h>
 #include <lightningd/notification.h>
 #include <lightningd/peer_control.h>
 #include <onchaind/onchaind_wiregen.h>
-#include <wallet/db_common.h>
 #include <wallet/invoices.h>
 #include <wallet/txfilter.h>
 #include <wallet/wallet.h>
@@ -44,6 +47,21 @@ struct channel_state_param {
 	const char *type_key;
 	const enum channel_state_bucket state;
 };
+
+/* Implement db_fatal, as a wrapper around fatal.
+ * We use a ifndef block so that it can get be
+ * implemented in a test file first, if necessary */
+#ifndef DB_FATAL
+#define DB_FATAL
+void db_fatal(const char *fmt, ...)
+{
+	va_list ap;
+
+	va_start(ap, fmt);
+	fatal_vfmt(fmt, ap);
+	va_end(ap);
+}
+#endif /* DB_FATAL */
 
 static void outpointfilters_init(struct wallet *w)
 {
@@ -4674,6 +4692,7 @@ bool wallet_offer_create(struct wallet *w,
 	db_query_prepared(stmt);
 
 	if (db_step(stmt)) {
+		db_col_ignore(stmt, "1");
 		tal_free(stmt);
 		return false;
 	}

@@ -1,14 +1,33 @@
 #include "config.h"
   #include <lightningd/log.h>
 
-static void wallet_test_fatal(const char *fmt, ...);
-#define db_fatal wallet_test_fatal
 #include "test_utils.h"
+#include <ccan/tal/str/str.h>
+#include <db/common.h>
 
 static void db_log_(struct log *log UNUSED, enum log_level level UNUSED, const struct node_id *node_id UNUSED, bool call_notifier UNUSED, const char *fmt UNUSED, ...)
 {
 }
 #define log_ db_log_
+
+#ifndef DB_FATAL
+#define DB_FATAL
+static char *wallet_err;
+void db_fatal(const char *fmt, ...)
+{
+	va_list ap;
+
+	/* Fail hard if we're complaining about not being in transaction */
+	assert(!strstarts(fmt, "No longer in transaction"));
+
+	/* Fail hard if we're complaining about not being in transaction */
+	assert(!strstarts(fmt, "No longer in transaction"));
+
+	va_start(ap, fmt);
+	wallet_err = tal_vfmt(NULL, fmt, ap);
+	va_end(ap);
+}
+#endif /* DB_FATAL */
 
 #include "wallet/wallet.c"
 #include "lightningd/htlc_end.c"
@@ -16,6 +35,10 @@ static void db_log_(struct log *log UNUSED, enum log_level level UNUSED, const s
 #include "lightningd/peer_htlcs.c"
 #include "lightningd/channel.c"
 
+#include "db/bindings.c"
+#include "db/db_sqlite3.c"
+#include "db/exec.c"
+#include "db/utils.c"
 #include "wallet/db.c"
 
 #include <common/setup.h>
@@ -837,22 +860,6 @@ bool fromwire_hsmd_get_channel_basepoints_reply(const void *p UNNEEDED,
 	return true;
 }
 
-static char *wallet_err;
-static void wallet_test_fatal(const char *fmt, ...)
-{
-	va_list ap;
-
-	/* Fail hard if we're complaining about not being in transaction */
-	assert(!strstarts(fmt, "No longer in transaction"));
-
-	/* Fail hard if we're complaining about not being in transaction */
-	assert(!strstarts(fmt, "No longer in transaction"));
-
-	va_start(ap, fmt);
-	wallet_err = tal_vfmt(NULL, fmt, ap);
-	va_end(ap);
-}
-
 #define transaction_wrap(db, ...)					\
 	(db_begin_transaction(db), __VA_ARGS__, db_commit_transaction(db), wallet_err == NULL)
 
@@ -905,6 +912,7 @@ static struct wallet *create_test_wallet(struct lightningd *ld, const tal_t *ctx
 
 	dsn = tal_fmt(NULL, "sqlite3://%s", filename);
 	w->db = db_open(w, dsn);
+	w->db->report_changes_fn = NULL;
 	tal_free(dsn);
 	tal_add_destructor2(w, cleanup_test_wallet, filename);
 

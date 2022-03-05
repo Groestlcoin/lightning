@@ -710,9 +710,10 @@ i.e. only definitively resolved HTLCs or confirmed bitcoin transactions.
 		"credit":"2000000000msat",
 		"debit":"0msat",
 		"output_value": "2000000000msat", // ('chain_mvt' only)
+		"output_count": 2, // ('chain_mvt' only, typically only channel closes)
 		"fees": "382msat", // ('channel_mvt' only)
 		"tags": ["deposit"],
-		"blockheight":102, // (May be null)
+		"blockheight":102, // 'chain_mvt' only
 		"timestamp":1585948198,
 		"coin_type":"bc"
 	}
@@ -756,6 +757,9 @@ multiple times. `channel_mvt` only
 `output_value` is the total value of the on-chain UTXO. Note that for
 channel opens/closes the total output value will not necessarily correspond
 to the amount that's credited/debited.
+
+`output_count` is the total outputs to expect for a channel close. Useful
+for figuring out when every onchain output for a close has been resolved.
 
 `fees` is an HTLC annotation for the amount of fees either paid or
 earned. For "invoice" tagged events, the fees are the total fees

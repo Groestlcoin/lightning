@@ -31,6 +31,7 @@ msgdata,connectd_init_reply,num_bindings,u16,
 msgdata,connectd_init_reply,bindings,wireaddr_internal,num_bindings
 msgdata,connectd_init_reply,num_announcable,u16,
 msgdata,connectd_init_reply,announcable,wireaddr,num_announcable
+msgdata,connectd_init_reply,failmsg,?wirestring,
 
 # Activate the connect daemon, so others can connect.
 msgtype,connectd_activate,2025
@@ -39,6 +40,7 @@ msgdata,connectd_activate,listen,bool,
 
 # Connectd->master, I am ready.
 msgtype,connectd_activate_reply,2125
+msgdata,connectd_activate_reply,failmsg,?wirestring,
 
 # connectd->master: disconnect this peer please (due to reconnect).
 msgtype,connectd_reconnected,2112
