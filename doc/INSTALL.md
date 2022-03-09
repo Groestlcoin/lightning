@@ -38,9 +38,9 @@ Get dependencies:
     sudo apt-get update
     sudo apt-get install -y \
       autoconf automake build-essential git libtool libgmp-dev libsqlite3-dev \
-      python3 python3-mako python3-pip net-tools zlib1g-dev libsodium-dev \
-      gettext
-    pip3 install --user mrkd mistune==0.8.4
+      python3 python3-pip net-tools zlib1g-dev libsodium-dev gettext
+    pip install --user poetry
+    poetry install
 
 If you don't have Groestlcoin installed locally you'll need to install that
 as well. It's now available via [snapd](https://snapcraft.io/groestlcoin-core).
@@ -60,8 +60,6 @@ For development or running tests, get additional dependencies:
 
     sudo apt-get install -y valgrind libpq-dev shellcheck cppcheck \
       libsecp256k1-dev jq
-    pip3 install --upgrade pip
-    pip3 install --user -r requirements.txt
 
 Build lightning:
 

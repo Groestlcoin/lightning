@@ -17,17 +17,9 @@ export VALGRIND=${VALGRIND:-0}
 export FUZZING=${FUZZING:-0}
 export LIGHTNINGD_POSTGRES_NO_VACUUM=1
 
-pip3 install --user -U \
-     -r requirements.lock
-
-# Install utilities that aren't dependencies, but make
-# running tests easier/feasible on CI (and pytest which
-# keeps breaking the rerunfailures plugin).
-pip3 install --user \
-     blinker \
-     flake8 \
-     flaky \
-     mako
+pip3 install --user poetry
+poetry config virtualenvs.create false --local
+poetry install
 
 if [ "$TARGET_HOST" == "arm-linux-gnueabihf" ] || [ "$TARGET_HOST" == "aarch64-linux-gnu" ]
 then
