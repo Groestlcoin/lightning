@@ -207,6 +207,9 @@ bool fromwire_channeld_dev_memleak_reply(const void *p UNNEEDED, bool *leak UNNE
 /* Generated stub for fromwire_connectd_peer_connected */
 bool fromwire_connectd_peer_connected(const tal_t *ctx UNNEEDED, const void *p UNNEEDED, struct node_id *id UNNEEDED, struct wireaddr_internal *addr UNNEEDED, struct wireaddr **remote_addr UNNEEDED, bool *incoming UNNEEDED, u8 **features UNNEEDED)
 { fprintf(stderr, "fromwire_connectd_peer_connected called!\n"); abort(); }
+/* Generated stub for fromwire_dualopend_dev_memleak_reply */
+bool fromwire_dualopend_dev_memleak_reply(const void *p UNNEEDED, bool *leak UNNEEDED)
+{ fprintf(stderr, "fromwire_dualopend_dev_memleak_reply called!\n"); abort(); }
 /* Generated stub for fromwire_hsmd_sign_bolt12_reply */
 bool fromwire_hsmd_sign_bolt12_reply(const void *p UNNEEDED, struct bip340sig *sig UNNEEDED)
 { fprintf(stderr, "fromwire_hsmd_sign_bolt12_reply called!\n"); abort(); }
@@ -222,6 +225,9 @@ void fromwire_node_id(const u8 **cursor UNNEEDED, size_t *max UNNEEDED, struct n
 /* Generated stub for fromwire_onchaind_dev_memleak_reply */
 bool fromwire_onchaind_dev_memleak_reply(const void *p UNNEEDED, bool *leak UNNEEDED)
 { fprintf(stderr, "fromwire_onchaind_dev_memleak_reply called!\n"); abort(); }
+/* Generated stub for fromwire_openingd_dev_memleak_reply */
+bool fromwire_openingd_dev_memleak_reply(const void *p UNNEEDED, bool *leak UNNEEDED)
+{ fprintf(stderr, "fromwire_openingd_dev_memleak_reply called!\n"); abort(); }
 /* Generated stub for get_block_height */
 u32 get_block_height(const struct chain_topology *topo UNNEEDED)
 { fprintf(stderr, "get_block_height called!\n"); abort(); }
@@ -558,9 +564,6 @@ struct command_result *param_u64(struct command *cmd UNNEEDED, const char *name 
 /* Generated stub for peer_active_channel */
 struct channel *peer_active_channel(struct peer *peer UNNEEDED)
 { fprintf(stderr, "peer_active_channel called!\n"); abort(); }
-/* Generated stub for peer_memleak_done */
-void peer_memleak_done(struct command *cmd UNNEEDED, struct subd *leaker UNNEEDED)
-{ fprintf(stderr, "peer_memleak_done called!\n"); abort(); }
 /* Generated stub for peer_normal_channel */
 struct channel *peer_normal_channel(struct peer *peer UNNEEDED)
 { fprintf(stderr, "peer_normal_channel called!\n"); abort(); }
@@ -594,12 +597,19 @@ bool plugin_hook_call_(struct lightningd *ld UNNEEDED, const struct plugin_hook 
 void plugin_request_send(struct plugin *plugin UNNEEDED,
 			 struct jsonrpc_request *req TAKES UNNEEDED)
 { fprintf(stderr, "plugin_request_send called!\n"); abort(); }
+/* Generated stub for report_subd_memleak */
+void report_subd_memleak(struct leak_detect *leak_detect UNNEEDED, struct subd *leaker UNNEEDED)
+{ fprintf(stderr, "report_subd_memleak called!\n"); abort(); }
 /* Generated stub for resolve_close_command */
 void resolve_close_command(struct lightningd *ld UNNEEDED, struct channel *channel UNNEEDED,
 			   bool cooperative UNNEEDED)
 { fprintf(stderr, "resolve_close_command called!\n"); abort(); }
+/* Generated stub for start_leak_request */
+void start_leak_request(const struct subd_req *req UNNEEDED,
+			struct leak_detect *leak_detect UNNEEDED)
+{ fprintf(stderr, "start_leak_request called!\n"); abort(); }
 /* Generated stub for subd_req_ */
-void subd_req_(const tal_t *ctx UNNEEDED,
+struct subd_req *subd_req_(const tal_t *ctx UNNEEDED,
 	       struct subd *sd UNNEEDED,
 	       const u8 *msg_out UNNEEDED,
 	       int fd_out UNNEEDED, size_t num_fds_in UNNEEDED,
@@ -627,11 +637,17 @@ u8 *towire_channeld_specific_feerates(const tal_t *ctx UNNEEDED, u32 feerate_bas
 /* Generated stub for towire_connectd_peer_final_msg */
 u8 *towire_connectd_peer_final_msg(const tal_t *ctx UNNEEDED, const struct node_id *id UNNEEDED, const u8 *msg UNNEEDED)
 { fprintf(stderr, "towire_connectd_peer_final_msg called!\n"); abort(); }
+/* Generated stub for towire_dualopend_dev_memleak */
+u8 *towire_dualopend_dev_memleak(const tal_t *ctx UNNEEDED)
+{ fprintf(stderr, "towire_dualopend_dev_memleak called!\n"); abort(); }
 /* Generated stub for towire_errorfmt */
 u8 *towire_errorfmt(const tal_t *ctx UNNEEDED,
 		    const struct channel_id *channel UNNEEDED,
 		    const char *fmt UNNEEDED, ...)
 { fprintf(stderr, "towire_errorfmt called!\n"); abort(); }
+/* Generated stub for towire_gossipd_remote_addr */
+u8 *towire_gossipd_remote_addr(const tal_t *ctx UNNEEDED, const struct wireaddr *remote_addr UNNEEDED)
+{ fprintf(stderr, "towire_gossipd_remote_addr called!\n"); abort(); }
 /* Generated stub for towire_hsmd_sign_bolt12 */
 u8 *towire_hsmd_sign_bolt12(const tal_t *ctx UNNEEDED, const wirestring *messagename UNNEEDED, const wirestring *fieldname UNNEEDED, const struct sha256 *merkleroot UNNEEDED, const u8 *publictweak UNNEEDED)
 { fprintf(stderr, "towire_hsmd_sign_bolt12 called!\n"); abort(); }
@@ -647,6 +663,9 @@ void towire_node_id(u8 **pptr UNNEEDED, const struct node_id *id UNNEEDED)
 /* Generated stub for towire_onchaind_dev_memleak */
 u8 *towire_onchaind_dev_memleak(const tal_t *ctx UNNEEDED)
 { fprintf(stderr, "towire_onchaind_dev_memleak called!\n"); abort(); }
+/* Generated stub for towire_openingd_dev_memleak */
+u8 *towire_openingd_dev_memleak(const tal_t *ctx UNNEEDED)
+{ fprintf(stderr, "towire_openingd_dev_memleak called!\n"); abort(); }
 /* Generated stub for towire_warningfmt */
 u8 *towire_warningfmt(const tal_t *ctx UNNEEDED,
 		      const struct channel_id *channel UNNEEDED,

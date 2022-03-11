@@ -144,9 +144,15 @@ struct lightningd {
 	/* Setup: And the bitset for each, whether to listen, announce or both */
 	enum addr_listen_announce *proposed_listen_announce;
 
-	/* Actual bindings and announcables from gossipd */
+	/* Actual bindings and announceables from gossipd */
 	struct wireaddr_internal *binding;
-	struct wireaddr *announcable;
+	struct wireaddr *announceable;
+
+	/* unverified remote_addr as reported by recent peers */
+	struct wireaddr *remote_addr_v4;
+	struct wireaddr *remote_addr_v6;
+	struct node_id remote_addr_v4_peer;
+	struct node_id remote_addr_v6_peer;
 
 	/* Bearer of all my secrets. */
 	int hsm_fd;

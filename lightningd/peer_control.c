@@ -35,6 +35,7 @@
 #include <connectd/connectd_wiregen.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <gossipd/gossipd_wiregen.h>
 #include <hsmd/hsmd_wiregen.h>
 #include <inttypes.h>
 #include <lightningd/bitcoind.h>
@@ -62,6 +63,8 @@
 #include <lightningd/subd.h>
 #include <limits.h>
 #include <onchaind/onchaind_wiregen.h>
+#include <openingd/dualopend_wiregen.h>
+#include <openingd/openingd_wiregen.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <wally_bip32.h>
@@ -1107,6 +1110,66 @@ peer_connected_hook_deserialize(struct peer_connected_hook_payload *payload,
 	return true;
 }
 
+/* Compare and store `remote_addr` and the `peer_id` that reported it.
+ * If new address was reported by at least one other, do node_announcement */
+static void update_remote_addr(struct lightningd *ld,
+			       const struct wireaddr *remote_addr,
+			       const struct node_id peer_id)
+{
+	/* failsafe to prevent privacy leakage. */
+	if (ld->always_use_proxy)
+		return;
+
+	switch (remote_addr->type) {
+	case ADDR_TYPE_IPV4:
+		/* init pointers first time */
+		if (ld->remote_addr_v4 == NULL) {
+			ld->remote_addr_v4 = tal_dup(ld, struct wireaddr,
+						     remote_addr);
+			ld->remote_addr_v4_peer = peer_id;
+		}
+		/* if updated by the same peer just remember the latest addr */
+		if (node_id_eq(&ld->remote_addr_v4_peer, &peer_id)) {
+			*ld->remote_addr_v4 = *remote_addr;
+			break;
+		}
+		/* tell gossip we have a valid update */
+		if (wireaddr_eq_without_port(ld->remote_addr_v4, remote_addr))
+			subd_send_msg(ld->gossip, towire_gossipd_remote_addr(
+							  tmpctx,
+							  ld->remote_addr_v4));
+		/* store latest values */
+		*ld->remote_addr_v4 = *remote_addr;
+		ld->remote_addr_v4_peer = peer_id;
+		break;
+	case ADDR_TYPE_IPV6:
+		/* same code :s/4/6/ without the comments ;) */
+		if (ld->remote_addr_v6 == NULL) {
+			ld->remote_addr_v6 = tal_dup(ld, struct wireaddr,
+						     remote_addr);
+			ld->remote_addr_v6_peer = peer_id;
+		}
+		if (node_id_eq(&ld->remote_addr_v6_peer, &peer_id)) {
+			*ld->remote_addr_v6 = *remote_addr;
+			break;
+		}
+		if (wireaddr_eq_without_port(ld->remote_addr_v6, remote_addr))
+			subd_send_msg(ld->gossip, towire_gossipd_remote_addr(
+							  tmpctx,
+							  ld->remote_addr_v6));
+		*ld->remote_addr_v6 = *remote_addr;
+		ld->remote_addr_v6_peer = peer_id;
+		break;
+
+	/* ignore all other cases */
+	case ADDR_TYPE_TOR_V2_REMOVED:
+	case ADDR_TYPE_TOR_V3:
+	case ADDR_TYPE_DNS:
+	case ADDR_TYPE_WEBSOCKET:
+		break;
+	}
+}
+
 REGISTER_PLUGIN_HOOK(peer_connected,
 		     peer_connected_hook_deserialize,
 		     peer_connected_hook_final,
@@ -1158,12 +1221,14 @@ void peer_connected(struct lightningd *ld, const u8 *msg, int peer_fd)
 	if (!hook_payload->channel)
 		hook_payload->channel = peer_unsaved_channel(peer);
 
-	/* Log remote_addr for now */
-	if (hook_payload->remote_addr && (
-	    hook_payload->remote_addr->type == ADDR_TYPE_IPV4 ||
-	    hook_payload->remote_addr->type == ADDR_TYPE_IPV6)) {
+	/* Log and update remote_addr for Nat/IP discovery. */
+	if (hook_payload->remote_addr) {
 		log_info(ld->log, "Peer says it sees our address as: %s",
 			 fmt_wireaddr(tmpctx, hook_payload->remote_addr));
+		/* Currently only from peers we have a channel with, until we
+		 * do stuff like probing for remote_addr to a random node. */
+		if (hook_payload->channel)
+			update_remote_addr(ld, hook_payload->remote_addr, id);
 	}
 
 	plugin_hook_call_peer_connected(ld, hook_payload);
@@ -1721,8 +1786,8 @@ static struct command_result *json_getinfo(struct command *cmd,
     if (cmd->ld->listen) {
         /* These are the addresses we're announcing */
         json_array_start(response, "address");
-        for (size_t i = 0; i < tal_count(cmd->ld->announcable); i++)
-            json_add_address(response, NULL, cmd->ld->announcable+i);
+        for (size_t i = 0; i < tal_count(cmd->ld->announceable); i++)
+            json_add_address(response, NULL, cmd->ld->announceable+i);
         json_array_end(response);
 
         /* This is what we're actually bound to. */
@@ -2323,104 +2388,92 @@ static const struct json_command dev_forget_channel_command = {
 };
 AUTODATA(json_command, &dev_forget_channel_command);
 
-static void subd_died_forget_memleak(struct subd *openingd, struct command *cmd)
-{
-	/* FIXME: We ignore the remaining per-peer daemons in this case. */
-	peer_memleak_done(cmd, NULL);
-}
-
-/* Mutual recursion */
-static void peer_memleak_req_next(struct command *cmd, struct channel *prev);
-static void peer_memleak_req_done(struct subd *subd, bool found_leak,
-				  struct command *cmd)
-{
-	struct channel *c = subd->channel;
-
-	if (found_leak)
-		peer_memleak_done(cmd, subd);
-	else
-		peer_memleak_req_next(cmd, c);
-}
-
 static void channeld_memleak_req_done(struct subd *channeld,
 				      const u8 *msg, const int *fds UNUSED,
-				      struct command *cmd)
+				      struct leak_detect *leaks)
 {
 	bool found_leak;
 
-	tal_del_destructor2(channeld, subd_died_forget_memleak, cmd);
-	if (!fromwire_channeld_dev_memleak_reply(msg, &found_leak)) {
-		was_pending(command_fail(cmd, LIGHTNINGD,
-					 "Bad channel_dev_memleak"));
-		return;
-	}
-	peer_memleak_req_done(channeld, found_leak, cmd);
+	if (!fromwire_channeld_dev_memleak_reply(msg, &found_leak))
+		fatal("Bad channel_dev_memleak");
+
+	if (found_leak)
+		report_subd_memleak(leaks, channeld);
 }
 
 static void onchaind_memleak_req_done(struct subd *onchaind,
 				      const u8 *msg, const int *fds UNUSED,
-				      struct command *cmd)
+				      struct leak_detect *leaks)
 {
 	bool found_leak;
 
-	tal_del_destructor2(onchaind, subd_died_forget_memleak, cmd);
-	if (!fromwire_onchaind_dev_memleak_reply(msg, &found_leak)) {
-		was_pending(command_fail(cmd, LIGHTNINGD,
-					 "Bad onchain_dev_memleak"));
-		return;
-	}
-	peer_memleak_req_done(onchaind, found_leak, cmd);
+	if (!fromwire_onchaind_dev_memleak_reply(msg, &found_leak))
+		fatal("Bad onchaind_dev_memleak");
+
+	if (found_leak)
+		report_subd_memleak(leaks, onchaind);
 }
 
-static void peer_memleak_req_next(struct command *cmd, struct channel *prev)
+static void openingd_memleak_req_done(struct subd *open_daemon,
+				     const u8 *msg, const int *fds UNUSED,
+				     struct leak_detect *leaks)
+{
+	bool found_leak;
+
+	if (!fromwire_openingd_dev_memleak_reply(msg, &found_leak))
+		fatal("Bad opening_dev_memleak");
+
+	if (found_leak)
+		report_subd_memleak(leaks, open_daemon);
+}
+
+static void dualopend_memleak_req_done(struct subd *dualopend,
+				     const u8 *msg, const int *fds UNUSED,
+				     struct leak_detect *leaks)
+{
+	bool found_leak;
+
+	if (!fromwire_dualopend_dev_memleak_reply(msg, &found_leak))
+		fatal("Bad dualopend_dev_memleak");
+
+	if (found_leak)
+		report_subd_memleak(leaks, dualopend);
+}
+
+void peer_dev_memleak(struct lightningd *ld, struct leak_detect *leaks)
 {
 	struct peer *p;
 
-	list_for_each(&cmd->ld->peers, p, list) {
+	list_for_each(&ld->peers, p, list) {
 		struct channel *c;
+		if (p->uncommitted_channel) {
+			struct subd *openingd = p->uncommitted_channel->open_daemon;
+			start_leak_request(subd_req(openingd, openingd,
+						    take(towire_openingd_dev_memleak(NULL)),
+						    -1, 0, openingd_memleak_req_done, leaks),
+					   leaks);
+		}
 
 		list_for_each(&p->channels, c, list) {
-			if (c == prev) {
-				prev = NULL;
-				continue;
-			}
-
 			if (!c->owner)
 				continue;
-
-			if (prev != NULL)
-				continue;
-
-			/* Note: closingd and dualopend do their own
-			 * checking automatically */
-			if (channel_unsaved(c))
-				continue;
-
 			if (streq(c->owner->name, "channeld")) {
-				subd_req(c, c->owner,
+				start_leak_request(subd_req(c, c->owner,
 					 take(towire_channeld_dev_memleak(NULL)),
-					 -1, 0, channeld_memleak_req_done, cmd);
-				tal_add_destructor2(c->owner,
-						    subd_died_forget_memleak,
-						    cmd);
-				return;
-			}
-			if (streq(c->owner->name, "onchaind")) {
-				subd_req(c, c->owner,
+					 -1, 0, channeld_memleak_req_done, leaks),
+					leaks);
+			} else if (streq(c->owner->name, "onchaind")) {
+				start_leak_request(subd_req(c, c->owner,
 					 take(towire_onchaind_dev_memleak(NULL)),
-					 -1, 0, onchaind_memleak_req_done, cmd);
-				tal_add_destructor2(c->owner,
-						    subd_died_forget_memleak,
-						    cmd);
-				return;
+					 -1, 0, onchaind_memleak_req_done, leaks),
+					leaks);
+			} else if (streq(c->owner->name, "dualopend")) {
+				start_leak_request(subd_req(c, c->owner,
+					 take(towire_dualopend_dev_memleak(NULL)),
+					 -1, 0, dualopend_memleak_req_done, leaks),
+					leaks);
 			}
 		}
 	}
-	peer_memleak_done(cmd, NULL);
-}
-
-void peer_dev_memleak(struct command *cmd)
-{
-	peer_memleak_req_next(cmd, NULL);
 }
 #endif /* DEVELOPER */

@@ -11,8 +11,8 @@ msgdata,gossipd_init,our_features,feature_set,
 msgdata,gossipd_init,id,node_id,
 msgdata,gossipd_init,rgb,u8,3
 msgdata,gossipd_init,alias,u8,32
-msgdata,gossipd_init,num_announcable,u16,
-msgdata,gossipd_init,announcable,wireaddr,num_announcable
+msgdata,gossipd_init,num_announceable,u16,
+msgdata,gossipd_init,announceable,wireaddr,num_announceable
 msgdata,gossipd_init,dev_gossip_time,?u32,
 msgdata,gossipd_init,dev_fast_gossip,bool,
 msgdata,gossipd_init,dev_fast_gossip_prune,bool,
@@ -125,3 +125,7 @@ msgdata,gossipd_local_private_channel,features,u8,len
 # Tell gossipd we used the channel update (in case it was deferred)
 msgtype,gossipd_used_local_channel_update,3052
 msgdata,gossipd_used_local_channel_update,scid,short_channel_id,
+
+# Tell gossipd we have discovered a new remote_addr
+msgtype,gossipd_remote_addr,3009
+msgdata,gossipd_remote_addr,remote_addr,wireaddr,

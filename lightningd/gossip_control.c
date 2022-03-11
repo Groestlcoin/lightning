@@ -176,6 +176,7 @@ static unsigned gossip_msg(struct subd *gossip, const u8 *msg, const int *fds)
 	case WIRE_GOSSIPD_ADDGOSSIP_REPLY:
 	case WIRE_GOSSIPD_NEW_BLOCKHEIGHT_REPLY:
 	case WIRE_GOSSIPD_GET_ADDRS_REPLY:
+	case WIRE_GOSSIPD_REMOTE_ADDR:
 		break;
 
 	case WIRE_GOSSIPD_GET_TXOUT:
@@ -258,7 +259,7 @@ void gossip_init(struct lightningd *ld, int connectd_fd)
 	    &ld->id,
 	    ld->rgb,
 	    ld->alias,
-	    ld->announcable,
+	    ld->announceable,
 	    IFDEV(ld->dev_gossip_time ? &ld->dev_gossip_time: NULL, NULL),
 	    IFDEV(ld->dev_fast_gossip, false),
 	    IFDEV(ld->dev_fast_gossip_prune, false));

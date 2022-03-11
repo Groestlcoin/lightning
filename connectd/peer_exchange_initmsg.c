@@ -90,7 +90,7 @@ static struct io_plan *peer_init_received(struct io_conn *conn,
 
 	/* fetch optional tlv `remote_addr` */
 	remote_addr = NULL;
-#if EXPERIMENTAL_FEATURES /* BOLT1 remote_addr #917 */
+
 	/* BOLT-remote-address #1:
 	 * The receiving node:
 	 * ...
@@ -100,7 +100,12 @@ static struct io_plan *peer_init_received(struct io_conn *conn,
 		switch (tlvs->remote_addr->type) {
 		case ADDR_TYPE_IPV4:
 		case ADDR_TYPE_IPV6:
-			remote_addr = tal_steal(peer, tlvs->remote_addr);
+#if DEVELOPER		/* ignore private addresses (non-DEVELOPER builds) */
+			if (address_routable(tlvs->remote_addr, true))
+#else
+			if (address_routable(tlvs->remote_addr, false))
+#endif /* DEVELOPER */
+				remote_addr = tal_steal(peer, tlvs->remote_addr);
 			break;
 		/* We are only interested in IP addresses */
 		case ADDR_TYPE_TOR_V2_REMOVED:
@@ -110,7 +115,6 @@ static struct io_plan *peer_init_received(struct io_conn *conn,
 			break;
 		}
 	}
-#endif
 
 	/* The globalfeatures field is now unused, but there was a
 	 * window where it was: combine the two. */
@@ -212,7 +216,7 @@ struct io_plan *peer_exchange_initmsg(struct io_conn *conn,
 
 	/* set optional tlv `remote_addr` on incoming IP connections */
 	tlvs->remote_addr = NULL;
-#if EXPERIMENTAL_FEATURES /* BOLT1 remote_addr #917 */
+
 	/* BOLT-remote-address #1:
 	 * The sending node:
 	 * ...
@@ -236,7 +240,6 @@ struct io_plan *peer_exchange_initmsg(struct io_conn *conn,
 			break;
 		}
 	}
-#endif
 
 	/* Initially, there were two sets of feature bits: global and local.
 	 * Local affected peer nodes only, global affected everyone.  Both were
