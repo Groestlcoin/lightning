@@ -9,7 +9,7 @@ If Tor is not installed you can install it on Debian based Linux systems (Ubuntu
 ```bash
 sudo apt install tor
 ```
-then `/etc/init.d/tor start` or `sudo systemctl start tor` depending
+then `/etc/init.d/tor start` or `sudo systemctl enable --now tor` depending
 on your system configuration.
 
 Most default setting should be sufficient.
@@ -46,6 +46,12 @@ forwarding (which can be hard to set up for random cheap router models).
 Tor provides NAT-traversal for free, so even if you or your ISP has a complex
 network between you and the Internet, as long as you can use Tor you can
 be connected to.
+
+Note: c-lightning also support IPv4/6 address discovery behind NAT routers.
+For this to work you need to forward the TCP port 9735 to your node.
+In this case you don't need TOR to punch through your firewall.
+This usually has the benefit of quicker and more stable connections but does not
+offer additional privacy.
 
 On most Linux distributions, making a standard installation of `tor` will
 automatically set it up to have a SOCKS5 proxy at port 9050.
@@ -204,7 +210,7 @@ Tor service.  Both types of addresses can coexist on the same node.
 
 Save the file and restart the Tor service. In linux:
 
-`/etc/init.d/tor restart` or `sudo systemctl start tor` depending
+`/etc/init.d/tor restart` or `sudo systemctl restart tor` depending
 on the configuration of your system.
 
 You will find the newly created address (myaddress.onion) with:
