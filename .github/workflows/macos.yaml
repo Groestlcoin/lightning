@@ -56,9 +56,6 @@ jobs:
           export CFLAGS="-Wno-error -Wno-nullability-completeness -Wno-expansion-to-defined -Wno-builtin-requires-header"
           export CXXFLAGS="-Wno-error -Wno-nullability-completeness -Wno-expansion-to-defined -Wno-builtin-requires-header"
 
-          pip3 install --user -U \
-            -r requirements.lock
-
           ./configure
           make
 
