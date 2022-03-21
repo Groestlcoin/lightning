@@ -594,12 +594,18 @@ static bool funder_finalize_channel_setup(struct state *state,
 	 * witness script.  It also needs the amount of the funding output,
 	 * as segwit signatures commit to that as well, even though it doesn't
 	 * explicitly appear in the transaction itself. */
+	struct simple_htlc **htlcs = tal_arr(tmpctx, struct simple_htlc *, 0);
+	u32 feerate = 0; // unused since there are no htlcs
+	u64 commit_num = 0;
 	msg = towire_hsmd_sign_remote_commitment_tx(NULL,
 						   *tx,
 						   &state->channel->funding_pubkey[REMOTE],
 						   &state->first_per_commitment_point[REMOTE],
 						    channel_has(state->channel,
-								OPT_STATIC_REMOTEKEY));
+								OPT_STATIC_REMOTEKEY),
+						    commit_num,
+						    (const struct simple_htlc **) htlcs,
+						    feerate);
 
 	wire_sync_write(HSM_FD, take(msg));
 	msg = wire_sync_read(tmpctx, HSM_FD);
@@ -694,6 +700,8 @@ static bool funder_finalize_channel_setup(struct state *state,
 				   "Could not meet our fees and reserve: %s", err_reason);
 		goto fail;
 	}
+
+	validate_initial_commitment_signature(HSM_FD, *tx, sig);
 
 	if (!check_tx_sig(*tx, 0, NULL, wscript, &state->their_funding_pubkey, sig)) {
 		peer_failed_err(state->pps, &state->channel_id,
@@ -1127,6 +1135,8 @@ static u8 *fundee_channel(struct state *state, const u8 *open_channel_msg)
 		return NULL;
 	}
 
+	validate_initial_commitment_signature(HSM_FD, local_commit, &theirsig);
+
 	if (!check_tx_sig(local_commit, 0, NULL, wscript, &their_funding_pubkey,
 			  &theirsig)) {
 		/* BOLT #1:
@@ -1185,12 +1195,18 @@ static u8 *fundee_channel(struct state *state, const u8 *open_channel_msg)
 	}
 
 	/* Make HSM sign it */
+	struct simple_htlc **htlcs = tal_arr(tmpctx, struct simple_htlc *, 0);
+	u32 feerate = 0; // unused since there are no htlcs
+	u64 commit_num = 0;
 	msg = towire_hsmd_sign_remote_commitment_tx(NULL,
 						   remote_commit,
 						   &state->channel->funding_pubkey[REMOTE],
 						   &state->first_per_commitment_point[REMOTE],
 						    channel_has(state->channel,
-								OPT_STATIC_REMOTEKEY));
+								OPT_STATIC_REMOTEKEY),
+						   commit_num,
+						   (const struct simple_htlc **) htlcs,
+						   feerate);
 
 	wire_sync_write(HSM_FD, take(msg));
 	msg = wire_sync_read(tmpctx, HSM_FD);

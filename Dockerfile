@@ -45,6 +45,7 @@ RUN apt-get update -qq && \
         gettext \
         git \
         gnupg \
+        libpq-dev \
         libtool \
         libffi-dev \
         python3 \
@@ -94,7 +95,7 @@ RUN ./configure --prefix=/tmp/lightning_install --enable-static && make -j3 DEVE
 FROM debian:buster-slim as final
 
 COPY --from=downloader /opt/tini /usr/bin/tini
-RUN apt-get update && apt-get install -y --no-install-recommends socat inotify-tools python3 python3-pip \
+RUN apt-get update && apt-get install -y --no-install-recommends socat inotify-tools python3 python3-pip libpq5\
     && rm -rf /var/lib/apt/lists/*
 
 ENV LIGHTNINGD_DATA=/root/.lightning
