@@ -117,15 +117,14 @@ void notify_feerate_change(struct lightningd *ld)
 	/* FIXME: We should notify onchaind about NORMAL fee change in case
 	 * it's going to generate more txs. */
 	list_for_each(&ld->peers, peer, list) {
-		struct channel *channel = peer_active_channel(peer);
+		struct channel *channel;
 
-		if (!channel)
-			continue;
-
-		/* FIXME: We choose not to drop to chain if we can't contact
-		 * peer.  We *could* do so, however. */
-		try_update_feerates(ld, channel);
+		list_for_each(&peer->channels, channel, list)
+			try_update_feerates(ld, channel);
 	}
+
+	/* FIXME: We choose not to drop to chain if we can't contact
+	 * peer.  We *could* do so, however. */
 }
 
 void channel_record_open(struct channel *channel)
@@ -548,7 +547,7 @@ static unsigned channel_msg(struct subd *sd, const u8 *msg, const int *fds)
 	case WIRE_CHANNELD_DEV_REENABLE_COMMIT:
 	case WIRE_CHANNELD_FEERATES:
 	case WIRE_CHANNELD_BLOCKHEIGHT:
-	case WIRE_CHANNELD_SPECIFIC_FEERATES:
+	case WIRE_CHANNELD_CONFIG_CHANNEL:
 	case WIRE_CHANNELD_CHANNEL_UPDATE:
 	case WIRE_CHANNELD_DEV_MEMLEAK:
 	case WIRE_CHANNELD_DEV_QUIESCE:
@@ -568,7 +567,7 @@ void peer_start_channeld(struct channel *channel,
 			 struct peer_fd *peer_fd,
 			 const u8 *fwd_msg,
 			 bool reconnected,
-			 const u8 *reestablish_only)
+			 bool reestablish_only)
 {
 	u8 *initmsg;
 	int hsmfd;
@@ -702,6 +701,8 @@ void peer_start_channeld(struct channel *channel,
 				       channel->opener,
 				       channel->feerate_base,
 				       channel->feerate_ppm,
+				       channel->htlc_minimum_msat,
+				       channel->htlc_maximum_msat,
 				       channel->our_msat,
 				       &channel->local_basepoints,
 				       &channel->local_funding_pubkey,
@@ -906,18 +907,6 @@ void channel_notify_new_block(struct lightningd *ld,
 	tal_free(to_forget);
 }
 
-struct channel *find_channel_by_id(const struct peer *peer,
-				   const struct channel_id *cid)
-{
-	struct channel *c;
-
-	list_for_each(&peer->channels, c, list) {
-		if (channel_id_eq(&c->cid, cid))
-			return c;
-	}
-	return NULL;
-}
-
 /* Since this could vanish while we're checking with bitcoind, we need to save
  * the details and re-lookup.
  *
@@ -1063,6 +1052,7 @@ static struct command_result *json_dev_feerate(struct command *cmd,
 	struct json_stream *response;
 	struct channel *channel;
 	const u8 *msg;
+	bool more_than_one;
 
 	if (!param(cmd, buffer, params,
 		   p_req("id", param_node_id, &id),
@@ -1074,9 +1064,12 @@ static struct command_result *json_dev_feerate(struct command *cmd,
 	if (!peer)
 		return command_fail(cmd, LIGHTNINGD, "Peer not connected");
 
-	channel = peer_active_channel(peer);
+	channel = peer_any_active_channel(peer, &more_than_one);
 	if (!channel || !channel->owner || channel->state != CHANNELD_NORMAL)
 		return command_fail(cmd, LIGHTNINGD, "Peer bad state");
+	/* This is a dev command: fix the api if you need this! */
+	if (more_than_one)
+		return command_fail(cmd, LIGHTNINGD, "More than one channel");
 
 	msg = towire_channeld_feerates(NULL, *feerate,
 				       feerate_min(cmd->ld, NULL),
@@ -1121,6 +1114,7 @@ static struct command_result *json_dev_quiesce(struct command *cmd,
 	struct peer *peer;
 	struct channel *channel;
 	const u8 *msg;
+	bool more_than_one;
 
 	if (!param(cmd, buffer, params,
 		   p_req("id", param_node_id, &id),
@@ -1131,9 +1125,12 @@ static struct command_result *json_dev_quiesce(struct command *cmd,
 	if (!peer)
 		return command_fail(cmd, LIGHTNINGD, "Peer not connected");
 
-	channel = peer_active_channel(peer);
+	channel = peer_any_active_channel(peer, &more_than_one);
 	if (!channel || !channel->owner || channel->state != CHANNELD_NORMAL)
 		return command_fail(cmd, LIGHTNINGD, "Peer bad state");
+	/* This is a dev command: fix the api if you need this! */
+	if (more_than_one)
+		return command_fail(cmd, LIGHTNINGD, "More than one channel");
 
 	msg = towire_channeld_dev_quiesce(NULL);
 	subd_req(channel->owner, channel->owner, take(msg), -1, 0,

@@ -194,6 +194,7 @@ static struct lightningd *new_lightningd(const tal_t *ctx)
 	list_head_init(&ld->sendpay_commands);
 	list_head_init(&ld->close_commands);
 	list_head_init(&ld->ping_commands);
+	list_head_init(&ld->disconnect_commands);
 	list_head_init(&ld->waitblockheight_commands);
 
 	/*~ Tal also explicitly supports arrays: it stores the number of
@@ -1150,7 +1151,7 @@ int main(int argc, char *argv[])
 	/*~ This is where we ask connectd to reconnect to any peers who have
 	 * live channels with us, and makes sure we're watching the funding
 	 * tx. */
-	activate_peers(ld);
+	setup_peers(ld);
 
 	/*~ Now that all the notifications for transactions are in place, we
 	 *  can start the poll loop which queries groestlcoind for new blocks. */

@@ -621,11 +621,45 @@ static void forward_htlc(struct htlc_in *hin,
 {
 	const u8 *failmsg;
 	struct lightningd *ld = hin->key.channel->peer->ld;
-	struct channel *next = active_channel_by_scid(ld, scid);
+	struct channel *next;
 	struct htlc_out *hout = NULL;
 
+	/* This is a shortcut for specifying next peer; doesn't mean
+	 * the actual channel! */
+	next = any_channel_by_scid(ld, scid);
+	if (next) {
+		struct peer *peer = next->peer;
+		struct channel *channel;
+		struct amount_msat best_spendable = channel_amount_spendable(next);
+
+		/* Seek channel with largest spendable! */
+		list_for_each(&peer->channels, channel, list) {
+			struct amount_msat spendable;
+			if (!channel_can_add_htlc(channel))
+				continue;
+			spendable = channel_amount_spendable(channel);
+			if (!amount_msat_greater(spendable, best_spendable))
+				continue;
+
+			/* Don't override if fees differ... */
+			if (channel->feerate_base != next->feerate_base
+			    || channel->feerate_ppm != next->feerate_ppm)
+				continue;
+			/* Or if this would be below min for channel! */
+			if (amount_msat_less(amt_to_forward,
+					     channel->channel_info.their_config.htlc_minimum))
+				continue;
+
+			/* OK, it's better! */
+			log_debug(next->log, "Chose a better channel: %s",
+				  type_to_string(tmpctx, struct short_channel_id,
+						 channel->scid));
+			next = channel;
+		}
+	}
+
 	/* Unknown peer, or peer not ready. */
-	if (!next || !next->scid) {
+	if (!next || !channel_active(next)) {
 		local_fail_in_htlc(hin, take(towire_unknown_next_peer(NULL)));
 		wallet_forwarded_payment_add(hin->key.channel->peer->ld->wallet,
 					 hin, next ? next->scid : NULL, NULL,
@@ -654,6 +688,20 @@ static void forward_htlc(struct htlc_in *hin,
 		}
 		log_info(hin->key.channel->log,
 			 "Allowing payment using older feerate");
+	}
+
+	if (amount_msat_greater(amt_to_forward, next->htlc_maximum_msat)
+	    || amount_msat_less(amt_to_forward, next->htlc_minimum_msat)) {
+		/* Are we in old-range grace-period? */
+		if (!time_before(time_now(), next->old_feerate_timeout)
+		    || amount_msat_less(amt_to_forward, next->old_htlc_minimum_msat)
+		    || amount_msat_greater(amt_to_forward, next->old_htlc_maximum_msat)) {
+			failmsg = towire_temporary_channel_failure(tmpctx,
+								   get_channel_update(next));
+			goto fail;
+		}
+		log_info(hin->key.channel->log,
+			 "Allowing htlc using older htlc_minimum/maximum_msat");
 	}
 
 	if (!check_cltv(hin, cltv_expiry, outgoing_cltv_value,

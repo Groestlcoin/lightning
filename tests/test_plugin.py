@@ -440,7 +440,7 @@ def test_plugin_connected_hook_chaining(node_factory):
     ])
 
     # FIXME: this error occurs *after* connection, so we connect then drop.
-    l3.daemon.wait_for_log(r"chan#1: peer_in WIRE_WARNING")
+    l3.daemon.wait_for_log(r"-connectd: peer_in WIRE_WARNING")
     l3.daemon.wait_for_log(r"You are in reject list")
 
     def check_disconnect():
@@ -935,7 +935,7 @@ def test_channel_state_changed_unilateral(node_factory, bitcoind):
     assert(l2.rpc.listpeers()['peers'][0]['channels'][0]['closer'] == 'local')
     if EXPERIMENTAL_DUAL_FUND:
         l1.daemon.wait_for_log(r'Peer has reconnected, state')
-        l2.daemon.wait_for_log(r'Peer has reconnected, state')
+        l2.daemon.wait_for_log(r'Telling connectd to send error')
 
     # l1 will receive error, and go into AWAITING_UNILATERAL
     # FIXME: l2 should re-xmit shutdown, but it doesn't until it's mined :(

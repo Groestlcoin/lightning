@@ -77,7 +77,6 @@ static struct command_result *connect_cmd_succeed(struct command *cmd,
 static void try_connect(const tal_t *ctx,
 			struct lightningd *ld,
 			const struct node_id *id,
-			struct channel *channel,
 			u32 seconds_delay,
 			const struct wireaddr_internal *addrhint);
 
@@ -95,7 +94,6 @@ static struct command_result *json_connect(struct command *cmd,
 	const char *name;
 	struct wireaddr_internal *addr;
 	const char *err_msg;
-	struct peer *peer;
 
 	if (!param(cmd, buffer, params,
 		   p_req("id", param_tok, (const jsmntok_t **) &idtok),
@@ -137,24 +135,6 @@ static struct command_result *json_connect(struct command *cmd,
 				    "Can't specify port without host");
 	}
 
-	/* If we know about peer, see if it's already connected. */
-	peer = peer_by_id(cmd->ld, &id);
-	if (peer) {
-		struct channel *channel = peer_active_channel(peer);
-
-		if (!channel)
-			channel = peer_unsaved_channel(peer);
-
-		if (peer->uncommitted_channel
-		    || (channel && channel->connected)) {
-			log_debug(cmd->ld->log, "Already connected via %s",
-				  type_to_string(tmpctx, struct wireaddr_internal, &peer->addr));
-			return connect_cmd_succeed(cmd, peer,
-						   peer->connected_incoming,
-						   &peer->addr);
-		}
-	}
-
 	/* Was there parseable host name? */
 	if (name) {
 		/* Is there a port? */
@@ -176,7 +156,7 @@ static struct command_result *json_connect(struct command *cmd,
 	} else
 		addr = NULL;
 
-	try_connect(cmd, cmd->ld, &id, NULL, 0, addr);
+	try_connect(cmd, cmd->ld, &id, 0, addr);
 
 	/* Leave this here for peer_connected or connect_failed. */
 	new_connect(cmd->ld, &id, cmd);
@@ -197,8 +177,6 @@ AUTODATA(json_command, &connect_command);
 struct delayed_reconnect {
 	struct lightningd *ld;
 	struct node_id id;
-	/* May be unset if there's no associated channel */
-	struct channel *channel;
 	u32 seconds_delayed;
 	struct wireaddr_internal *addrhint;
 };
@@ -214,12 +192,6 @@ static void gossipd_got_addrs(struct subd *subd,
 	if (!fromwire_gossipd_get_addrs_reply(tmpctx, msg, &addrs))
 		fatal("Gossipd gave bad GOSSIPD_GET_ADDRS_REPLY %s",
 		      tal_hex(msg, msg));
-
-	/* Might have gone onchain (if it was actually freed, we were too). */
-	if (d->channel && !channel_active(d->channel)) {
-		tal_free(d);
-		return;
-	}
 
 	connectmsg = towire_connectd_connect_to_peer(NULL,
 						     &d->id,
@@ -238,20 +210,19 @@ static void do_connect(struct delayed_reconnect *d)
 	subd_req(d, d->ld->gossip, take(msg), -1, 0, gossipd_got_addrs, d);
 }
 
-/* channel may be NULL here */
+/* peer may be NULL here */
 static void try_connect(const tal_t *ctx,
 			struct lightningd *ld,
 			const struct node_id *id,
-			struct channel *channel,
 			u32 seconds_delay,
 			const struct wireaddr_internal *addrhint)
 {
 	struct delayed_reconnect *d;
+	struct peer *peer;
 
 	d = tal(ctx, struct delayed_reconnect);
 	d->ld = ld;
 	d->id = *id;
-	d->channel = channel;
 	d->seconds_delayed = seconds_delay;
 	d->addrhint = tal_dup_or_null(d, struct wireaddr_internal, addrhint);
 
@@ -260,14 +231,22 @@ static void try_connect(const tal_t *ctx,
 		return;
 	}
 
-	/* We never have a delay when connecting without a channel */
-	assert(channel);
-	channel_set_billboard(channel, false,
-			      tal_fmt(tmpctx,
-				      "Will attempt reconnect "
-				      "in %u seconds", seconds_delay));
-	log_debug(channel->log, "Will try reconnect in %u seconds",
-		  seconds_delay);
+	log_peer_debug(ld->log, id, "Will try reconnect in %u seconds",
+		       seconds_delay);
+	/* Update any channel billboards */
+	peer = peer_by_id(ld, id);
+	if (peer) {
+		struct channel *channel;
+		list_for_each(&peer->channels, channel, list) {
+			if (!channel_active(channel))
+				continue;
+			channel_set_billboard(channel, false,
+					      tal_fmt(tmpctx,
+						      "Will attempt reconnect "
+						      "in %u seconds",
+						      seconds_delay));
+		}
+	}
 
 	/* We fuzz the timer by up to 1 second, to avoid getting into
 	 * simultanous-reconnect deadlocks with peer. */
@@ -277,17 +256,17 @@ static void try_connect(const tal_t *ctx,
 			     do_connect, d));
 }
 
-void try_reconnect(struct channel *channel,
+void try_reconnect(const tal_t *ctx,
+		   struct peer *peer,
 		   u32 seconds_delay,
 		   const struct wireaddr_internal *addrhint)
 {
-	if (!channel->peer->ld->reconnect)
+	if (!peer->ld->reconnect)
 		return;
 
-	try_connect(channel,
-		    channel->peer->ld,
-		    &channel->peer->id,
-		    channel,
+	try_connect(ctx,
+		    peer->ld,
+		    &peer->id,
 		    seconds_delay,
 		    addrhint);
 }
@@ -300,7 +279,7 @@ static void connect_failed(struct lightningd *ld, const u8 *msg)
 	struct connect *c;
 	u32 seconds_to_delay;
 	struct wireaddr_internal *addrhint;
-	struct channel *channel;
+	struct peer *peer;
 
 	if (!fromwire_connectd_connect_failed(tmpctx, msg, &id, &errcode, &errmsg,
 						&seconds_to_delay, &addrhint))
@@ -314,9 +293,11 @@ static void connect_failed(struct lightningd *ld, const u8 *msg)
 	}
 
 	/* If we have an active channel, then reconnect. */
-	channel = active_channel_by_id(ld, &id, NULL);
-	if (channel)
-		try_reconnect(channel, seconds_to_delay, addrhint);
+	peer = peer_by_id(ld, &id);
+	if (peer) {
+		if (peer_any_active_channel(peer, NULL))
+			try_reconnect(peer, peer, seconds_to_delay, addrhint);
+	}
 }
 
 void connect_succeeded(struct lightningd *ld, const struct peer *peer,
@@ -332,25 +313,52 @@ void connect_succeeded(struct lightningd *ld, const struct peer *peer,
 	}
 }
 
+static void peer_already_connected(struct lightningd *ld, const u8 *msg)
+{
+	struct node_id id;
+	struct peer *peer;
+
+	if (!fromwire_connectd_peer_already_connected(msg, &id))
+		fatal("Bad msg %s from connectd", tal_hex(tmpctx, msg));
+
+	peer = peer_by_id(ld, &id);
+	if (peer)
+		connect_succeeded(ld, peer,
+				  peer->connected_incoming,
+				  &peer->addr);
+}
+
 static void peer_please_disconnect(struct lightningd *ld, const u8 *msg)
 {
 	struct node_id id;
-	struct channel *c;
-	struct uncommitted_channel *uc;
+	struct peer *peer;
+	struct channel *c, **channels;
 
 	if (!fromwire_connectd_reconnected(msg, &id))
 		fatal("Bad msg %s from connectd", tal_hex(tmpctx, msg));
 
-	c = active_channel_by_id(ld, &id, &uc);
-	if (uc)
-		kill_uncommitted_channel(uc, "Reconnected");
-	else if (c) {
-		channel_cleanup_commands(c, "Reconnected");
-		channel_fail_reconnect(c, "Reconnected");
-	}
-	else if ((c = unsaved_channel_by_id(ld, &id))) {
-		log_info(c->log, "Killing opening daemon: Reconnected");
-		channel_unsaved_close_conn(c, "Reconnected");
+	peer = peer_by_id(ld, &id);
+	if (!peer)
+		return;
+
+	/* Freeing channels can free peer, so gather first. */
+	channels = tal_arr(tmpctx, struct channel *, 0);
+	list_for_each(&peer->channels, c, list)
+		tal_arr_expand(&channels, c);
+
+	if (peer->uncommitted_channel)
+		kill_uncommitted_channel(peer->uncommitted_channel,
+					 "Reconnected");
+
+	for (size_t i = 0; i < tal_count(channels); i++) {
+		c = channels[i];
+		if (channel_active(c)) {
+			channel_cleanup_commands(c, "Reconnected");
+			channel_fail_reconnect(c, "Reconnected");
+		} else if (channel_unsaved(c)) {
+			log_info(c->log, "Killing opening daemon: Reconnected");
+			channel_unsaved_close_conn(c, "Reconnected");
+		}
 	}
 }
 
@@ -420,9 +428,10 @@ static unsigned connectd_msg(struct subd *connectd, const u8 *msg, const int *fd
 	case WIRE_CONNECTD_INIT:
 	case WIRE_CONNECTD_ACTIVATE:
 	case WIRE_CONNECTD_CONNECT_TO_PEER:
-	case WIRE_CONNECTD_PEER_DISCONNECTED:
+	case WIRE_CONNECTD_DISCARD_PEER:
 	case WIRE_CONNECTD_DEV_MEMLEAK:
 	case WIRE_CONNECTD_PEER_FINAL_MSG:
+	case WIRE_CONNECTD_PEER_MAKE_ACTIVE:
 	case WIRE_CONNECTD_PING:
 	case WIRE_CONNECTD_SEND_ONIONMSG:
 	case WIRE_CONNECTD_CUSTOMMSG_OUT:
@@ -438,9 +447,21 @@ static unsigned connectd_msg(struct subd *connectd, const u8 *msg, const int *fd
 		break;
 
 	case WIRE_CONNECTD_PEER_CONNECTED:
+		peer_connected(connectd->ld, msg);
+		break;
+
+	case WIRE_CONNECTD_PEER_ACTIVE:
 		if (tal_count(fds) != 1)
 			return 1;
-		peer_connected(connectd->ld, msg, fds[0]);
+		peer_active(connectd->ld, msg, fds[0]);
+		break;
+
+	case WIRE_CONNECTD_PEER_DISCONNECT_DONE:
+		peer_disconnect_done(connectd->ld, msg);
+		break;
+
+	case WIRE_CONNECTD_PEER_ALREADY_CONNECTED:
+		peer_already_connected(connectd->ld, msg);
 		break;
 
 	case WIRE_CONNECTD_CONNECT_FAILED:
@@ -580,6 +601,31 @@ void connectd_activate(struct lightningd *ld)
 	io_loop(NULL, NULL);
 }
 
+void maybe_disconnect_peer(struct lightningd *ld, struct peer *peer)
+{
+	struct channel *channel;
+
+	/* Any channels left which want to talk? */
+	if (peer->uncommitted_channel)
+		return;
+
+	list_for_each(&peer->channels, channel, list) {
+		if (!channel->owner)
+			continue;
+		if (channel->owner->talks_to_peer)
+			return;
+	}
+
+	/* If shutting down, connectd no longer exists */
+	if (!ld->connectd) {
+		peer->is_connected = false;
+		return;
+	}
+
+	subd_send_msg(ld->connectd,
+		      take(towire_connectd_discard_peer(NULL, &peer->id)));
+}
+
 static struct command_result *json_sendcustommsg(struct command *cmd,
 						 const char *buffer,
 						 const jsmntok_t *obj UNNEEDED,
@@ -625,8 +671,7 @@ static struct command_result *json_sendcustommsg(struct command *cmd,
 				    type_to_string(cmd, struct node_id, dest));
 	}
 
-	/* FIXME: This won't work once connectd keeps peers */
-	if (!peer_get_owning_subd(peer)) {
+	if (!peer->is_connected) {
 		return command_fail(cmd, JSONRPC2_INVALID_REQUEST,
 				    "Peer is not connected: %s",
 				    type_to_string(cmd, struct node_id, dest));

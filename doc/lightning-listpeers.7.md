@@ -87,6 +87,8 @@ On success, an object containing **peers** is returned.  It is an array of objec
   - **spendable_msat** (msat, optional): total we could send through channel
   - **receivable_msat** (msat, optional): total peer could send through channel
   - **minimum_htlc_in_msat** (msat, optional): the minimum amount HTLC we accept
+  - **minimum_htlc_out_msat** (msat, optional): the minimum amount HTLC we will send
+  - **maximum_htlc_out_msat** (msat, optional): the maximum amount HTLC we will send
   - **their_to_self_delay** (u32, optional): the number of blocks before they can take their funds if they unilateral close
   - **our_to_self_delay** (u32, optional): the number of blocks before we can take our funds if we unilateral close
   - **max_accepted_htlcs** (u32, optional): Maximum number of incoming HTLC we will accept at once
@@ -369,7 +371,7 @@ SEE ALSO
 --------
 
 lightning-connect(7), lightning-fundchannel\_start(7),
-lightning-setchannelfee(7)
+lightning-setchannel(7)
 
 RESOURCES
 ---------
@@ -378,4 +380,4 @@ Main web site: <https://github.com/ElementsProject/lightning> Lightning
 RFC site (BOLT \#9):
 <https://github.com/lightningnetwork/lightning-rfc/blob/master/09-features.md>
 
-[comment]: # ( SHA256STAMP:001e3cf495571bb09fe29f74adde8a6e40e69ddb1169934924eaf901a1e5f3c0)
+[comment]: # ( SHA256STAMP:147b7008c8f4acb031df625e0731614339a75ee5861cb9f40cd542b1017e3660)

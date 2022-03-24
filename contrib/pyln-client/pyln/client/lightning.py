@@ -615,7 +615,7 @@ class LightningRpc(UnixDomainSocketRpc):
 
     def dev_pay(self, bolt11, msatoshi=None, label=None, riskfactor=None,
                 maxfeepercent=None, retry_for=None,
-                maxdelay=None, exemptfee=None, use_shadow=True, exclude=[]):
+                maxdelay=None, exemptfee=None, use_shadow=True, exclude=None):
         """
         A developer version of `pay`, with the possibility to deactivate
         shadow routing (used for testing).
@@ -700,7 +700,9 @@ class LightningRpc(UnixDomainSocketRpc):
         }
         return self.call("feerates", payload)
 
-    def fundchannel(self, node_id, amount, feerate=None, announce=True, minconf=None, utxos=None, push_msat=None, close_to=None, request_amt=None, compact_lease=None):
+    def fundchannel(self, node_id, amount, feerate=None, announce=True,
+                    minconf=None, utxos=None, push_msat=None, close_to=None,
+                    request_amt=None, compact_lease=None):
         """
         Fund channel with {id} using {amount} satoshis with feerate
         of {feerate} (uses default feerate if unset).
@@ -728,7 +730,8 @@ class LightningRpc(UnixDomainSocketRpc):
         }
         return self.call("fundchannel", payload)
 
-    def fundchannel_start(self, node_id, amount, feerate=None, announce=True, close_to=None):
+    def fundchannel_start(self, node_id, amount, feerate=None, announce=True,
+                          close_to=None):
         """
         Start channel funding with {id} for {amount} satoshis
         with feerate of {feerate} (uses default feerate if unset).
@@ -792,7 +795,8 @@ class LightningRpc(UnixDomainSocketRpc):
         res = self.call("listpeers", payload)
         return res.get("peers") and res["peers"][0] or None
 
-    def getroute(self, node_id, msatoshi, riskfactor, cltv=9, fromid=None, fuzzpercent=None, exclude=[], maxhops=20):
+    def getroute(self, node_id, msatoshi, riskfactor, cltv=9, fromid=None,
+                 fuzzpercent=None, exclude=None, maxhops=None):
         """
         Show route to {id} for {msatoshi}, using {riskfactor} and optional
         {cltv} (default 9). If specified search from {fromid} otherwise use
@@ -822,7 +826,8 @@ class LightningRpc(UnixDomainSocketRpc):
         }
         return self.call("help", payload)
 
-    def invoice(self, msatoshi, label, description, expiry=None, fallbacks=None, preimage=None, exposeprivatechannels=None, cltv=None):
+    def invoice(self, msatoshi, label, description, expiry=None, fallbacks=None,
+                preimage=None, exposeprivatechannels=None, cltv=None):
         """
         Create an invoice for {msatoshi} with {label} and {description} with
         optional {expiry} seconds (default 1 week).
@@ -1174,6 +1179,35 @@ class LightningRpc(UnixDomainSocketRpc):
             "enforcedelay": enforcedelay,
         }
         return self.call("setchannelfee", payload)
+
+    def setchannel(self, id, feebase=None, feeppm=None, htlcmin=None, htlcmax=None, enforcedelay=None):
+        """Set configuration a channel/peer {id} (or 'all').
+
+        {feebase} is a value in millisatoshi that is added as base fee
+        to any routed payment.
+
+        {feeppm} is a value added proportionally per-millionths to any
+        routed payment volume in satoshi.
+
+        {htlcmin} is the minimum (outgoing) htlc amount to allow and
+        advertize.
+
+        {htlcmax} is the maximum (outgoing) htlc amount to allow and
+        advertize.
+
+        {enforcedelay} is the number of seconds before enforcing this
+        change.
+
+        """
+        payload = {
+            "id": id,
+            "feebase": feebase,
+            "feeppm": feeppm,
+            "htlcmin": htlcmin,
+            "htlcmax": htlcmax,
+            "enforcedelay": enforcedelay,
+        }
+        return self.call("setchannel", payload)
 
     def stop(self):
         """
