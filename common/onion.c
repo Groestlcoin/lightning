@@ -22,7 +22,7 @@ static u8 *make_tlv_hop(const tal_t *ctx,
 	/* We can't have over 64k anyway */
 	u8 *tlvs = tal_arr(ctx, u8, 3);
 
-	towire_tlv_payload(&tlvs, tlv);
+	towire_tlv_tlv_payload(&tlvs, tlv);
 
 	switch (bigsize_put(tlvs, tal_bytelen(tlvs) - 3)) {
 	case 1:
@@ -173,7 +173,6 @@ static struct tlv_tlv_payload *decrypt_tlv(const tal_t *ctx,
 	const u8 *cursor;
 	size_t max;
 	int ret;
-	struct tlv_tlv_payload *tlv;
 
 	subkey_from_hmac("rho", blinding_ss, &rho);
 	if (tal_bytelen(enc) < crypto_aead_chacha20poly1305_ietf_ABYTES)
@@ -192,13 +191,9 @@ static struct tlv_tlv_payload *decrypt_tlv(const tal_t *ctx,
 	if (ret != 0)
 		return NULL;
 
-	tlv = tlv_tlv_payload_new(ctx);
 	cursor = dec;
 	max = tal_bytelen(dec);
-	if (!fromwire_tlv_payload(&cursor, &max, tlv))
-		return tal_free(tlv);
-
-	return tlv;
+	return fromwire_tlv_tlv_payload(ctx, &cursor, &max);
 }
 #endif /* EXPERIMENTAL_FEATURES */
 
@@ -206,7 +201,7 @@ struct onion_payload *onion_decode(const tal_t *ctx,
 				   const struct route_step *rs,
 				   const struct pubkey *blinding,
 				   const struct secret *blinding_ss,
-				   u64 *accepted_extra_tlvs,
+				   const u64 *accepted_extra_tlvs,
 				   u64 *failtlvtype,
 				   size_t *failtlvpos)
 {
@@ -215,15 +210,19 @@ struct onion_payload *onion_decode(const tal_t *ctx,
 	size_t max = tal_bytelen(cursor), len;
 	struct tlv_tlv_payload *tlv;
 
-	if (!pull_payload_length(&cursor, &max, true, &len))
-		return tal_free(p);
+	if (!pull_payload_length(&cursor, &max, true, &len)) {
+		*failtlvtype = 0;
+		*failtlvpos = tal_bytelen(rs->raw_payload);
+		goto fail_no_tlv;
+	}
 
+	/* We do this manually so we can accept extra types, and get
+	 * error off and type. */
 	tlv = tlv_tlv_payload_new(p);
-	if (!fromwire_tlv_payload(&cursor, &max, tlv))
-		goto fail;
-
-	if (!tlv_fields_valid(tlv->fields, accepted_extra_tlvs, failtlvpos)) {
-		*failtlvtype = tlv->fields[*failtlvpos].numtype;
+	if (!fromwire_tlv(&cursor, &max, tlvs_tlv_tlv_payload,
+			  TLVS_ARRAY_SIZE_tlv_tlv_payload,
+			  tlv, &tlv->fields, accepted_extra_tlvs,
+			  failtlvpos, failtlvtype)) {
 		goto fail;
 	}
 
@@ -233,8 +232,14 @@ struct onion_payload *onion_decode(const tal_t *ctx,
 	 *   - MUST return an error if `amt_to_forward` or
 	 *     `outgoing_cltv_value` are not present.
 	 */
-	if (!tlv->amt_to_forward || !tlv->outgoing_cltv_value)
-		goto fail;
+	if (!tlv->amt_to_forward) {
+		*failtlvtype = TLV_TLV_PAYLOAD_AMT_TO_FORWARD;
+		goto field_bad;
+	}
+	if (!tlv->outgoing_cltv_value) {
+		*failtlvtype = TLV_TLV_PAYLOAD_OUTGOING_CLTV_VALUE;
+		goto field_bad;
+	}
 
 	p->amt_to_forward = amount_msat(*tlv->amt_to_forward);
 	p->outgoing_cltv = *tlv->outgoing_cltv_value;
@@ -247,8 +252,10 @@ struct onion_payload *onion_decode(const tal_t *ctx,
 	 *    - MUST include `short_channel_id`
 	 */
 	if (rs->nextcase == ONION_FORWARD) {
-		if (!tlv->short_channel_id)
-			goto fail;
+		if (!tlv->short_channel_id) {
+			*failtlvtype = TLV_TLV_PAYLOAD_SHORT_CHANNEL_ID;
+			goto field_bad;
+		}
 		p->forward_channel = tal_dup(p, struct short_channel_id,
 					     tlv->short_channel_id);
 		p->total_msat = NULL;
@@ -283,18 +290,30 @@ struct onion_payload *onion_decode(const tal_t *ctx,
 		if (rs->nextcase == ONION_FORWARD) {
 			struct tlv_tlv_payload *ntlv;
 
-			if (!tlv->encrypted_recipient_data)
-				goto fail;
+			if (!tlv->encrypted_recipient_data) {
+				*failtlvtype = TLV_TLV_PAYLOAD_ENCRYPTED_RECIPIENT_DATA;
+				goto field_bad;
+			}
 
 			ntlv = decrypt_tlv(tmpctx,
 					   &p->blinding_ss,
 					   tlv->encrypted_recipient_data);
-			if (!ntlv)
-				goto fail;
+			if (!ntlv) {
+				*failtlvtype = TLV_TLV_PAYLOAD_ENCRYPTED_RECIPIENT_DATA;
+				goto field_bad;
+			}
 
 			/* Must override short_channel_id */
-			if (!ntlv->short_channel_id)
+			if (!ntlv->short_channel_id) {
+				*failtlvtype = TLV_TLV_PAYLOAD_ENCRYPTED_RECIPIENT_DATA;
+				/* Place error at *end* of enctlv,
+				 * indicating missing field. */
+				*failtlvpos = tlv_field_offset(rs->raw_payload,
+							       tal_bytelen(rs->raw_payload),
+							       *failtlvtype)
+					+ tal_bytelen(tlv->encrypted_recipient_data);
 				goto fail;
+			}
 
 			*p->forward_channel
 				= *ntlv->short_channel_id;
@@ -313,8 +332,13 @@ struct onion_payload *onion_decode(const tal_t *ctx,
 	p->tlv = tal_steal(p, tlv);
 	return p;
 
+field_bad:
+	*failtlvpos = tlv_field_offset(rs->raw_payload, tal_bytelen(rs->raw_payload),
+				       *failtlvtype);
 fail:
 	tal_free(tlv);
+
+fail_no_tlv:
 	tal_free(p);
 	return NULL;
 }

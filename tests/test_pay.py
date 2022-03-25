@@ -4249,6 +4249,20 @@ def test_offer(node_factory, bitcoind):
     assert 'recurrence: every 600 seconds paywindow -10 to +600 (pay proportional)\n' in output
 
 
+def test_deprecated_offer(node_factory, bitcoind):
+    """Test that we allow old invreq name `payer_signature` with deprecated_apis"""
+    l1, l2 = node_factory.line_graph(2, opts={'experimental-offers': None,
+                                              'allow-deprecated-apis': True})
+
+    offer = l2.rpc.call('offer', {'amount': 10000,
+                                  'description': 'test'})['bolt12']
+
+    inv = l1.rpc.call('fetchinvoice', {'offer': offer})['invoice']
+    l2.daemon.wait_for_log("Testing invoice_request with old name 'payer_signature'")
+
+    l1.rpc.pay(inv)
+
+
 @pytest.mark.developer("dev-no-modern-onion is DEVELOPER-only")
 def test_fetchinvoice_3hop(node_factory, bitcoind):
     l1, l2, l3, l4 = node_factory.line_graph(4, wait_for_announce=True,
@@ -4258,27 +4272,6 @@ def test_fetchinvoice_3hop(node_factory, bitcoind):
     offer1 = l4.rpc.call('offer', {'amount': '2msat',
                                    'description': 'simple test'})
     assert offer1['created'] is True
-
-    l1.rpc.call('fetchinvoice', {'offer': offer1['bolt12']})
-
-    # Make sure l4 handled both onions before shutting down
-    l1.daemon.wait_for_log(r'plugin-fetchinvoice: Received modern onion .*obs2\\":false')
-    l1.daemon.wait_for_log(r'plugin-fetchinvoice: No match for modern onion.*obs2\\":true')
-
-    # Test with obsolete onion.
-    l4.stop()
-    l4.daemon.opts['dev-no-modern-onion'] = None
-    l4.start()
-    l4.rpc.connect(l3.info['id'], 'localhost', l3.port)
-
-    l1.rpc.call('fetchinvoice', {'offer': offer1['bolt12']})
-
-    # Test with modern onion.
-    l4.stop()
-    del l4.daemon.opts['dev-no-modern-onion']
-    l4.daemon.opts['dev-no-obsolete-onion'] = None
-    l4.start()
-    l4.rpc.connect(l3.info['id'], 'localhost', l3.port)
 
     l1.rpc.call('fetchinvoice', {'offer': offer1['bolt12']})
 
@@ -4578,10 +4571,8 @@ def test_dev_rawrequest(node_factory):
     assert 'invoice' in ret
 
 
-def do_test_sendinvoice(node_factory, bitcoind, disable):
+def test_sendinvoice(node_factory, bitcoind):
     l2opts = {'experimental-offers': None}
-    if disable:
-        l2opts[disable] = None
     l1, l2 = node_factory.line_graph(2, wait_for_announce=True,
                                      opts=[{'experimental-offers': None},
                                            l2opts])
@@ -4661,20 +4652,6 @@ def do_test_sendinvoice(node_factory, bitcoind, disable):
     assert 'pay_index' in out
     assert out['msatoshi_received'] == 10000000
     assert out['amount_received_msat'] == Millisatoshi(10000000)
-
-
-def test_sendinvoice(node_factory, bitcoind):
-    do_test_sendinvoice(node_factory, bitcoind, None)
-
-
-@pytest.mark.developer("needs to --dev-no-obsolete-onion")
-def test_sendinvoice_modern(node_factory, bitcoind):
-    do_test_sendinvoice(node_factory, bitcoind, 'dev-no-obsolete-onion')
-
-
-@pytest.mark.developer("needs to --dev-no-modern-onion")
-def test_sendinvoice_obsolete(node_factory, bitcoind):
-    do_test_sendinvoice(node_factory, bitcoind, 'dev-no-modern-onion')
 
 
 def test_self_pay(node_factory):
