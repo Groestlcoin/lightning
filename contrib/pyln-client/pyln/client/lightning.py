@@ -565,13 +565,14 @@ class LightningRpc(UnixDomainSocketRpc):
         }
         return self.call("delexpiredinvoice", payload)
 
-    def delinvoice(self, label, status):
+    def delinvoice(self, label, status, desconly=None):
         """
-        Delete unpaid invoice {label} with {status}.
+        Delete unpaid invoice {label} with {status} (or, with {desconly} true, remove its description).
         """
         payload = {
             "label": label,
-            "status": status
+            "status": status,
+            "desconly": desconly,
         }
         return self.call("delinvoice", payload)
 
@@ -827,7 +828,7 @@ class LightningRpc(UnixDomainSocketRpc):
         return self.call("help", payload)
 
     def invoice(self, msatoshi, label, description, expiry=None, fallbacks=None,
-                preimage=None, exposeprivatechannels=None, cltv=None):
+                preimage=None, exposeprivatechannels=None, cltv=None, deschashonly=None):
         """
         Create an invoice for {msatoshi} with {label} and {description} with
         optional {expiry} seconds (default 1 week).
@@ -841,6 +842,7 @@ class LightningRpc(UnixDomainSocketRpc):
             "preimage": preimage,
             "exposeprivatechannels": exposeprivatechannels,
             "cltv": cltv,
+            "deschashonly": deschashonly,
         }
         return self.call("invoice", payload)
 
