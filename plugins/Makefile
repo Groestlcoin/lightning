@@ -181,8 +181,11 @@ CLN_PLUGIN_SRC = $(shell find plugins/src -name "*.rs")
 ${CLN_PLUGIN_EXAMPLES}: ${CLN_PLUGIN_SRC}
 	(cd plugins; cargo build ${CARGO_OPTS} --examples)
 
+target/${RUST_PROFILE}/cln-grpc: ${CLN_PLUGIN_SRC}
+	cargo build ${CARGO_OPTS} --bin cln-grpc
+
 ifneq ($(RUST),0)
-DEFAULT_TARGETS += $(CLN_PLUGIN_EXAMPLES)
+DEFAULT_TARGETS += $(CLN_PLUGIN_EXAMPLES) target/${RUST_PROFILE}/cln-grpc
 endif
 
 include plugins/test/Makefile

@@ -227,6 +227,7 @@ WIRE_GEN_DEPS := $(WIRE_GEN) $(wildcard tools/gen/*_template)
 # These are filled by individual Makefiles
 ALL_PROGRAMS :=
 ALL_TEST_PROGRAMS :=
+ALL_TEST_GEN :=
 ALL_FUZZ_TARGETS :=
 ALL_C_SOURCES :=
 ALL_C_HEADERS := header_versions_gen.h version_gen.h
@@ -358,6 +359,17 @@ endif
 ifneq ($(RUST),0)
 	include cln-rpc/Makefile
 	include cln-grpc/Makefile
+
+GRPC_GEN = tests/node_pb2.py \
+	tests/node_pb2_grpc.py \
+	tests/primitives_pb2.py
+
+ALL_TEST_GEN += $(GRPC_GEN)
+
+$(GRPC_GEN): cln-grpc/proto/node.proto cln-grpc/proto/primitives.proto
+	python -m grpc_tools.protoc -I cln-grpc/proto cln-grpc/proto/node.proto --python_out=tests/ --grpc_python_out=tests/ --experimental_allow_proto3_optional
+	python -m grpc_tools.protoc -I cln-grpc/proto cln-grpc/proto/primitives.proto --python_out=tests/ --grpc_python_out=tests/ --experimental_allow_proto3_optional
+
 endif
 
 # We make pretty much everything depend on these.
@@ -424,7 +436,7 @@ else
 endif
 endif
 
-pytest: $(ALL_PROGRAMS) $(DEFAULT_TARGETS) $(ALL_TEST_PROGRAMS)
+pytest: $(ALL_PROGRAMS) $(DEFAULT_TARGETS) $(ALL_TEST_PROGRAMS) $(ALL_TEST_GEN)
 ifeq ($(PYTEST),)
 	@echo "py.test is required to run the integration tests, please install using 'pip3 install -r requirements.txt', and rerun 'configure'."
 	exit 1
