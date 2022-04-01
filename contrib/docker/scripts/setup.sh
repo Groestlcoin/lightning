@@ -1,8 +1,7 @@
 #!/bin/bash
 
 export DEBIAN_FRONTEND=noninteractive
-export BITCOIN_VERSION=0.20.1
-export ELEMENTS_VERSION=0.18.1.8
+export GROESTLCOIN_VERSION=2.20.1
 export RUST_VERSION=nightly
 export TZ="Europe/London"
 
@@ -59,17 +58,12 @@ sudo chmod 0440 /etc/sudoers.d/tester
 
 (
     cd /tmp/ || exit 1
-    wget https://storage.googleapis.com/c-lightning-tests/bitcoin-$BITCOIN_VERSION-x86_64-linux-gnu.tar.bz2
-    wget -q https://storage.googleapis.com/c-lightning-tests/elements-$ELEMENTS_VERSION-x86_64-linux-gnu.tar.bz2
-    tar -xjf bitcoin-$BITCOIN_VERSION-x86_64-linux-gnu.tar.bz2
-    tar -xjf elements-$ELEMENTS_VERSION-x86_64-linux-gnu.tar.bz2
-    sudo mv bitcoin-$BITCOIN_VERSION/bin/* /usr/local/bin
-    sudo mv elements-$ELEMENTS_VERSION/bin/* /usr/local/bin
+    wget https://github.com/Groestlcoin/groestlcoin/releases/download/v$GROESTLCOIN_VERSION/groestlcoin-$GROESTLCOIN_VERSION-x86_64-linux-gnu.tar.gz
+    tar -xjf groestlcoin-$GROESTLCOIN_VERSION-x86_64-linux-gnu.tar.gz
+    sudo mv groestlcoin-$GROESTLCOIN_VERSION/bin/* /usr/local/bin
     rm -rf \
-       bitcoin-$BITCOIN_VERSION-x86_64-linux-gnu.tar.gz \
-       bitcoin-$BITCOIN_VERSION \
-       elements-$ELEMENTS_VERSION-x86_64-linux-gnu.tar.bz2 \
-       elements-$ELEMENTS_VERSION
+       groestlcoin-$GROESTLCOIN_VERSION-x86_64-linux-gnu.tar.gz \
+       groestlcoin-$GROESTLCOIN_VERSION
 )
 
 if [ "$RUST" == "1" ]; then
