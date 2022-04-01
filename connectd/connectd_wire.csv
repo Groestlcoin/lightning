@@ -25,6 +25,7 @@ msgdata,connectd_init,websocket_port,u16,
 msgdata,connectd_init,dev_fast_gossip,bool,
 # If this is set, then fd 5 is dev_disconnect_fd.
 msgdata,connectd_init,dev_disconnect,bool,
+msgdata,connectd_init,dev_no_ping_timer,bool,
 
 # Connectd->master, here are the addresses I bound, can announce.
 msgtype,connectd_init_reply,2100
@@ -152,3 +153,7 @@ msgtype,connectd_custommsg_out,2011
 msgdata,connectd_custommsg_out,id,node_id,
 msgdata,connectd_custommsg_out,msg_len,u16,
 msgdata,connectd_custommsg_out,msg,u8,msg_len
+
+# master -> connect: stop sending gossip.
+msgtype,connectd_dev_suppress_gossip,2032
+

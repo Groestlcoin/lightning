@@ -5,6 +5,7 @@ jobs:
   smoke-test:
     name: Build on Ubuntu 20.04
     runs-on: ubuntu-20.04
+    timeout-minutes: 300
     env:
       DEVELOPER: 1
       VALGRIND: 0

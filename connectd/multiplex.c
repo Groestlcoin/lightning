@@ -169,7 +169,7 @@ void setup_peer_gossip_store(struct peer *peer,
 	}
 
 	peer->gs.gossip_timer = gossip_stream_timer(peer);
-	peer->gs.active = true;
+	peer->gs.active = IFDEV(!peer->daemon->dev_suppress_gossip, true);
 	peer->gs.timestamp_min = 0;
 	peer->gs.timestamp_max = UINT32_MAX;
 
@@ -344,7 +344,7 @@ static struct io_plan *encrypt_and_send(struct peer *peer,
 /* Kicks off write_to_peer() to look for more gossip to send from store */
 static void wake_gossip(struct peer *peer)
 {
-	peer->gs.active = true;
+	peer->gs.active = IFDEV(!peer->daemon->dev_suppress_gossip, true);
 	io_wake(peer->peer_outq);
 
 	/* And go again in 60 seconds (from now, now when we finish!) */
@@ -391,6 +391,10 @@ static void send_ping(struct peer *peer);
 
 static void set_ping_timer(struct peer *peer)
 {
+	if (IFDEV(peer->daemon->dev_no_ping_timer, false)) {
+		peer->ping_timer = NULL;
+		return;
+	}
 	peer->ping_timer = new_reltimer(&peer->daemon->timers, peer,
 					time_from_sec(15 + pseudorand(30)),
 					send_ping, peer);
