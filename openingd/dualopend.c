@@ -1202,8 +1202,7 @@ static u8 *opening_negotiate_msg(const tal_t *ctx, struct state *state)
 				  &err, &warning)) {
 			/* BOLT #1:
 			 *
-			 *  - if no existing channel is referred to by the
-			 *    message:
+			 *  - if no existing channel is referred to by `channel_id`:
 			 *    - MUST ignore the message.
 			 */
 			/* In this case, is_peer_error returns true, but sets
@@ -1850,13 +1849,14 @@ static u8 *accepter_commits(struct state *state,
 	 * The recipient:
 	 *   - if `signature` is incorrect OR non-compliant with LOW-S-standard
 	 *       rule...:
-	 *     - MUST fail the channel.
+	 *     - MUST send a `warning` and close the connection, or send an
+	 *       `error` and fail the channel.
 	 */
 	if (!check_tx_sig(local_commit, 0, NULL, wscript,
 			  &state->their_funding_pubkey, &remote_sig)) {
 		/* BOLT #1:
 		 *
-		 * ### The `error` Message
+		 * ### The `error` and `warning` Messages
 		 *...
 		 * - when failure was caused by an invalid signature check:
 		 *    - SHOULD include the raw, hex-encoded transaction in reply
@@ -2575,14 +2575,15 @@ static u8 *opener_commits(struct state *state,
 	 * The recipient:
 	 *   - if `signature` is incorrect OR non-compliant with LOW-S-standard
 	 *     rule...:
-	 *     - MUST fail the channel.
+	 *     - MUST send a `warning` and close the connection, or send an
+	 *       `error` and fail the channel.
 	 */
 	if (!check_tx_sig(local_commit, 0, NULL, wscript,
 			  &state->their_funding_pubkey,
 			  &remote_sig)) {
 		/* BOLT #1:
 		 *
-		 * ### The `error` Message
+		 * ### The `error` and `warning` Messages
 		 *...
 		 * - when failure was caused by an invalid signature check:
 		 *    - SHOULD include the raw, hex-encoded transaction in reply
@@ -3457,7 +3458,7 @@ static u8 *handle_funding_depth(struct state *state, u8 *msg)
 /* BOLT #2:
  *
  * A receiving node:
- *  - if `option_static_remotekey` or `option_anchors` applies to the commitment transaction:
+ *  - if `option_static_remotekey` applies to the commitment transaction:
  *    - if `next_revocation_number` is greater than expected above, AND
  *    `your_last_per_commitment_secret` is correct for that
  *    `next_revocation_number` minus 1:
@@ -3503,7 +3504,7 @@ check_future_dataloss_fields(struct state *state,
 
 	/* BOLT #2:
 	 * - MUST NOT broadcast its commitment transaction.
-	 * - SHOULD fail the channel.
+	 * - SHOULD send an `error` to request the peer to fail the channel.
 	 */
 	wire_sync_write(REQ_FD,
 			take(towire_dualopend_fail_fallen_behind(NULL)));
@@ -3588,7 +3589,7 @@ static void do_reconnect_dance(struct state *state)
 	/* BOLT #2:
 	 *    - if it has not sent `revoke_and_ack`, AND
 	 *      `next_revocation_number` is not equal to 0:
-	 *      - SHOULD fail the channel.
+	 *      - SHOULD send an `error` and fail the channel.
 	 */
 	/* It's possible that we've opened an outdated copy of the
 	 * database, and the peer is very much ahead of us.

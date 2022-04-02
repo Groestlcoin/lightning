@@ -5,6 +5,20 @@ message Amount {
 	uint64 msat = 1;
 }
 
+message AmountOrAll {
+	oneof value {
+		Amount amount = 1;
+		bool all = 2;
+	}
+}
+
+message AmountOrAny {
+	oneof value {
+		Amount amount = 1;
+		bool any = 2;
+	}
+}
+
 enum ChannelSide {
 	IN = 0;
 	OUT = 1;
@@ -25,3 +39,37 @@ enum ChannelState {
 }
 
 message ChannelStateChangeCause {}
+
+message Outpoint {
+	bytes txid = 1;
+	uint32 outnum = 2;
+}
+
+message Feerate {
+	oneof style {
+		bool slow = 1;
+		bool normal = 2;
+		bool urgent = 3;
+		uint32 perkb = 4;
+		uint32 perkw = 5;
+	}
+}
+
+message OutputDesc {
+	string address = 1;
+	Amount amount = 2;
+}
+
+message RouteHop {
+	bytes id = 1;
+        string short_channel_id = 2;
+	Amount feebase = 3;
+        uint32 feeprop = 4;
+	uint32 expirydelta = 5;
+}
+message Routehint {
+	repeated RouteHop hops = 1;
+}
+message RoutehintList {
+	repeated Routehint hints = 2;
+}

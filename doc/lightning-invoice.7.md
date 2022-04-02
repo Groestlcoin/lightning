@@ -33,10 +33,8 @@ viewable by any node you send this invoice to (unless *deschashonly* is
 true as described below). It must be UTF-8, and cannot use *\\u* JSON 
 escape codes.
 
-The *expiry* is optionally the time the invoice is valid for; without a
-suffix it is interpreted as seconds, otherwise suffixes *s*, *m*, *h*,
-*d*, *w* indicate seconds, minutes, hours, days and weeks respectively.
-If no value is provided the default of 604800 (1w) is used.
+The *expiry* is optionally the time the invoice is valid for, in seconds.
+If no value is provided the default of 604800 (1 week) is used.
 
 The *fallbacks* array is one or more fallback addresses to include in
 the invoice (in order from most-preferred to least): note that these
@@ -80,8 +78,8 @@ RETURN VALUE
 [comment]: # (GENERATE-FROM-SCHEMA-START)
 On success, an object is returned, containing:
 - **bolt11** (string): the bolt11 string
-- **payment_hash** (hex): the hash of the *payment_preimage* which will prove payment (always 64 characters)
-- **payment_secret** (hex): the *payment_secret* to place in the onion (always 64 characters)
+- **payment_hash** (hash): the hash of the *payment_preimage* which will prove payment (always 64 characters)
+- **payment_secret** (secret): the *payment_secret* to place in the onion (always 64 characters)
 - **expires_at** (u64): UNIX timestamp of when invoice expires
 
 The following warnings may also be returned:
@@ -119,4 +117,4 @@ RESOURCES
 
 Main web site: <https://github.com/ElementsProject/lightning>
 
-[comment]: # ( SHA256STAMP:f7d82473482e5454fc03641fddcfa97984e6a597e7ad377ced2cbed1512e91ed)
+[comment]: # ( SHA256STAMP:834b9d7b84845d423a677662b66b9109b3b8c4b7219a91d98f2817561d68a8cd)

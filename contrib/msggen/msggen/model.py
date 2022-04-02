@@ -1,5 +1,6 @@
 from typing import List, Union, Optional
 import logging
+from copy import copy
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +19,7 @@ class FieldName:
             "type": "item_type"
         }.get(self.name, self.name)
 
-        name = name.replace(' ', '_').replace('-', '_')
+        name = name.replace(' ', '_').replace('-', '_').replace('[]', '')
         return name
 
     def __str__(self):
@@ -99,7 +100,7 @@ class CompositeField(Field):
     def from_js(cls, js, path):
         typename = path2type(path)
 
-        properties = js["properties"]
+        properties = js.get("properties", {})
         # Ok, let's flatten the conditional properties. We do this by
         # reformatting the outer conditions into the `allOf` format.
         top = {
@@ -133,18 +134,25 @@ class CompositeField(Field):
                 logger.warning(f"Unmanaged {fpath}, it is deprecated")
                 continue
 
-            if "type" not in ftype:
+            if fpath in overrides:
+                field = copy(overrides[fpath])
+                field.path = fpath
+                field.description = desc
+                if isinstance(field, ArrayField):
+                    field.itemtype.path = fpath
+
+            elif "type" not in ftype:
                 logger.warning(f"Unmanaged {fpath}, it doesn't have a type")
                 continue
 
-            # TODO Remove the `['string', 'null']` match once
-            # `listpeers.peers[].channels[].closer` no longer has this
-            # type
-            if ftype["type"] == ["string", "null"]:
+            elif ftype["type"] == ["string", "null"]:
+                # TODO Remove the `['string', 'null']` match once
+                # `listpeers.peers[].channels[].closer` no longer has this
+                # type
                 ftype["type"] = "string"
 
             # Peek into the type so we know how to decode it
-            if ftype["type"] in ["string", ["string", "null"]] and "enum" in ftype:
+            elif ftype["type"] in ["string", ["string", "null"]] and "enum" in ftype:
                 field = EnumField.from_js(ftype, fpath)
 
             elif ftype["type"] == "object":
@@ -211,6 +219,40 @@ class EnumField(Field):
         return f"Enum[path={self.path}, required={self.required}, values=[{values}]]"
 
 
+class UnionField(Field):
+    """A type that can be one of a number of types.
+
+    Corresponds to the `oneOf` type in JSON-Schema, an `enum` in Rust
+    and a `oneof` in protobuf.
+
+    """
+    def __init__(self, path, description, variants):
+        Field.__init__(self, path, description)
+        self.variants = variants
+        self.typename = path2type(path)
+
+    @classmethod
+    def from_js(cls, js, path):
+        assert('oneOf' in js)
+        variants = []
+        for child_js in js['oneOf']:
+            if child_js["type"] == "object":
+                itemtype = CompositeField.from_js(child_js, path)
+
+            elif child_js["type"] == "string" and "enum" in child_js:
+                itemtype = EnumField.from_js(child_js, path)
+
+            elif child_js["type"] in PrimitiveField.types:
+                itemtype = PrimitiveField(
+                    child_js["type"], path, child_js.get("description", "")
+                )
+            elif child_js["type"] == "array":
+                itemtype = ArrayField.from_js(path, child_js)
+            variants.append(itemtype)
+
+        return UnionField(path, js.get('description', None), variants)
+
+
 class PrimitiveField(Field):
     # Leaf types that we expect the binding languages to provide
     types = [
@@ -218,16 +260,27 @@ class PrimitiveField(Field):
         "u32",
         "u64",
         "u8",
+        "f32",
+        "float",
         "string",
         "pubkey",
         "signature",
         "msat",
+        "msat_or_any",
+        "msat_or_all",
         "hex",
         "short_channel_id",
+        "short_channel_id_dir",
         "txid",
         "integer",
+        "outpoint",
         "u16",
         "number",
+        "feerate",
+        "utxo",  # A string representing the tuple (txid, outnum)
+        "outputdesc",  # A dict that maps an address to an amount (bitcoind style)
+        "secret",
+        "hash",
     ]
 
     def __init__(self, typename, path, description):
@@ -250,12 +303,16 @@ class ArrayField(Field):
         # Determine how nested we are
         dims = 1
         child_js = js["items"]
-        while child_js["type"] == "array":
+        while child_js.get("type", None) == "array":
             dims += 1
             child_js = child_js["items"]
 
         path += "[]" * dims
-        if child_js["type"] == "object":
+        if 'oneOf' in child_js:
+            assert('type' not in child_js)
+            itemtype = UnionField.from_js(child_js, path)
+
+        elif child_js["type"] == "object":
             itemtype = CompositeField.from_js(child_js, path)
 
         elif child_js["type"] == "string" and "enum" in child_js:
@@ -271,11 +328,6 @@ class ArrayField(Field):
             itemtype, dims=dims, path=path, description=js.get("description", "")
         )
 
-    def normalized(self):
-        # Strip the '[]' that we use to signal an array. The name
-        # itself doesn't need this.
-        return Field.normalized(self)[:-2]
-
 
 class Command:
     def __init__(self, name, fields):
@@ -285,6 +337,25 @@ class Command:
     def __str__(self):
         fieldnames = ",".join([f.path.split(".")[-1] for f in self.fields])
         return f"Command[name={self.name}, fields=[{fieldnames}]]"
+
+
+InvoiceLabelField = PrimitiveField("string", None, None)
+DatastoreKeyField = ArrayField(itemtype=PrimitiveField("string", None, None), dims=1, path=None, description=None)
+InvoiceExposeprivatechannelsField = PrimitiveField("boolean", None, None)
+PayExclude = ArrayField(itemtype=PrimitiveField("string", None, None), dims=1, path=None, description=None)
+RoutehintListField = PrimitiveField("RoutehintList", None, None)
+# Override fields with manually managed types, fieldpath -> field mapping
+overrides = {
+    'Invoice.label': InvoiceLabelField,
+    'DelInvoice.label': InvoiceLabelField,
+    'ListInvoices.label': InvoiceLabelField,
+    'Datastore.key': DatastoreKeyField,
+    'DelDatastore.key': DatastoreKeyField,
+    'ListDatastore.key': DatastoreKeyField,
+    'Invoice.exposeprivatechannels': InvoiceExposeprivatechannelsField,
+    'Pay.exclude': PayExclude,
+    'KeySend.routehints': RoutehintListField,
+}
 
 
 def parse_doc(command, js) -> Union[CompositeField, Command]:

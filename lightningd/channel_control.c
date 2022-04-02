@@ -9,6 +9,7 @@
 #include <common/shutdown_scriptpubkey.h>
 #include <common/type_to_string.h>
 #include <common/wire_error.h>
+#include <connectd/connectd_wiregen.h>
 #include <errno.h>
 #include <hsmd/capabilities.h>
 #include <lightningd/chaintopology.h>
@@ -275,6 +276,12 @@ static void peer_got_shutdown(struct channel *channel, const u8 *msg)
 	bool anysegwit = feature_negotiated(ld->our_features,
 					    channel->peer->their_features,
 					    OPT_SHUTDOWN_ANYSEGWIT);
+	bool anchors = feature_negotiated(ld->our_features,
+					  channel->peer->their_features,
+					  OPT_ANCHOR_OUTPUTS)
+		|| feature_negotiated(ld->our_features,
+				      channel->peer->their_features,
+				      OPT_ANCHORS_ZERO_FEE_HTLC_TX);
 
 	if (!fromwire_channeld_got_shutdown(channel, msg, &scriptpubkey,
 					    &wrong_funding)) {
@@ -283,17 +290,31 @@ static void peer_got_shutdown(struct channel *channel, const u8 *msg)
 		return;
 	}
 
-	/* FIXME: Add to spec that we must allow repeated shutdown! */
-	tal_free(channel->shutdown_scriptpubkey[REMOTE]);
-	channel->shutdown_scriptpubkey[REMOTE] = scriptpubkey;
+	/* BOLT #2:
+	 * A receiving node:
+	 *...
+	 *   - if the `scriptpubkey` is not in one of the above forms:
+	 *     - SHOULD send a `warning`.
+	 */
+	if (!valid_shutdown_scriptpubkey(scriptpubkey, anysegwit, anchors)) {
+		u8 *warning = towire_warningfmt(NULL,
+						&channel->cid,
+						"Bad shutdown scriptpubkey %s",
+						tal_hex(tmpctx, scriptpubkey));
 
-	if (!valid_shutdown_scriptpubkey(scriptpubkey, anysegwit)) {
-		channel_fail_permanent(channel,
-				       REASON_PROTOCOL,
-				       "Bad shutdown scriptpubkey %s",
+		/* Get connectd to send warning, and then allow reconnect. */
+		subd_send_msg(ld->connectd,
+			      take(towire_connectd_peer_final_msg(NULL,
+								  &channel->peer->id,
+								  warning)));
+		channel_fail_reconnect(channel, "Bad shutdown scriptpubkey %s",
 				       tal_hex(tmpctx, scriptpubkey));
 		return;
 	}
+
+	/* FIXME: Add to spec that we must allow repeated shutdown! */
+	tal_free(channel->shutdown_scriptpubkey[REMOTE]);
+	channel->shutdown_scriptpubkey[REMOTE] = scriptpubkey;
 
 	/* If we weren't already shutting down, we are now */
 	if (channel->state != CHANNELD_SHUTTING_DOWN)

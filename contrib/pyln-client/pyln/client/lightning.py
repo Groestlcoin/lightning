@@ -1127,7 +1127,7 @@ class LightningRpc(UnixDomainSocketRpc):
         }
         return self.call("plugin", payload)
 
-    def sendpay(self, route, payment_hash, label=None, msatoshi=None, bolt11=None, payment_secret=None, partid=None, groupid=None):
+    def sendpay(self, route, payment_hash, label=None, msatoshi=None, bolt11=None, payment_secret=None, partid=None, groupid=None, payment_metadata=None):
         """
         Send along {route} in return for preimage of {payment_hash}.
         """
@@ -1140,6 +1140,7 @@ class LightningRpc(UnixDomainSocketRpc):
             "payment_secret": payment_secret,
             "partid": partid,
             "groupid": groupid,
+            "payment_metadata": payment_metadata,
         }
         return self.call("sendpay", payload)
 
@@ -1336,7 +1337,7 @@ class LightningRpc(UnixDomainSocketRpc):
         }
         return self.call("unreserveinputs", payload)
 
-    def fundpsbt(self, satoshi, feerate, startweight, minconf=None, reserve=True, locktime=None, min_witness_weight=None, excess_as_change=False):
+    def fundpsbt(self, satoshi, feerate, startweight, minconf=None, reserve=None, locktime=None, min_witness_weight=None, excess_as_change=False):
         """
         Create a PSBT with inputs sufficient to give an output of satoshi.
         """
@@ -1352,7 +1353,7 @@ class LightningRpc(UnixDomainSocketRpc):
         }
         return self.call("fundpsbt", payload)
 
-    def utxopsbt(self, satoshi, feerate, startweight, utxos, reserve=True, reservedok=False, locktime=None, min_witness_weight=None, excess_as_change=False):
+    def utxopsbt(self, satoshi, feerate, startweight, utxos, reserve=None, reservedok=False, locktime=None, min_witness_weight=None, excess_as_change=False):
         """
         Create a PSBT with given inputs, to give an output of satoshi.
         """

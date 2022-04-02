@@ -3,6 +3,7 @@ from typing import Tuple
 from textwrap import dedent, indent
 import logging
 import sys
+import re
 
 from .model import (ArrayField, CompositeField, EnumField,
                     PrimitiveField, Service)
@@ -19,10 +20,13 @@ overrides = {
     'ListPeers.peers[].channels[].state_changes[].old_state': "ChannelState",
     'ListPeers.peers[].channels[].state_changes[].new_state': "ChannelState",
     'ListPeers.peers[].channels[].state_changes[].cause': "ChannelStateChangeCause",
+    'ListPeers.peers[].channels[].htlcs[].state': None,
     'ListPeers.peers[].channels[].opener': "ChannelSide",
     'ListPeers.peers[].channels[].closer': "ChannelSide",
     'ListPeers.peers[].channels[].features[]': "string",
     'ListFunds.channels[].state': 'ChannelState',
+    'ListTransactions.transactions[].type[]': None,
+    'Invoice.exposeprivatechannels': None,
 }
 
 # A map of schema type to rust primitive types.
@@ -30,12 +34,21 @@ typemap = {
     'boolean': 'bool',
     'hex': 'String',
     'msat': 'Amount',
-    'number': 'i64',
-    'pubkey': 'String',
-    'short_channel_id': 'String',
+    'msat_or_all': 'AmountOrAll',
+    'msat_or_any': 'AmountOrAny',
+    'number': 'f64',
+    'pubkey': 'Pubkey',
+    'short_channel_id': 'ShortChannelId',
     'signature': 'String',
     'string': 'String',
     'txid': 'String',
+    'float': 'f32',
+    'utxo': 'Utxo',
+    'feerate': 'Feerate',
+    'outpoint': 'Outpoint',
+    'outputdesc': 'OutputDesc',
+    'hash': 'Sha256',
+    'secret': 'Secret',
 }
 
 header = f"""#![allow(non_camel_case_types)]
@@ -56,6 +69,7 @@ def normalize_varname(field):
     """
     # Dashes are not valid names
     field.path = field.path.replace("-", "_")
+    field.path = re.sub(r'(?<!^)(?=[A-Z])', '_', field.path).lower()
     return field
 
 
@@ -75,15 +89,18 @@ def gen_field(field):
 def gen_enum(e):
     defi, decl = "", ""
 
+    if e.path in overrides and overrides[e.path] is None:
+        return "", ""
+
     if e.description != "":
         decl += f"/// {e.description}\n"
 
-    decl += f"#[derive(Copy, Clone, Debug, Deserialize, Serialize)]\n#[serde(rename_all = \"lowercase\")]\npub enum {e.typename} {{\n"
+    decl += f"#[derive(Copy, Clone, Debug, Deserialize, Serialize)]\npub enum {e.typename} {{\n"
     for v in e.variants:
         if v is None:
             continue
         norm = v.normalized()
-        # decl += f"    #[serde(rename = \"{v}\")]\n"
+        decl += f"    #[serde(rename = \"{v}\")]\n"
         decl += f"    {norm},\n"
     decl += "}\n\n"
 
@@ -115,7 +132,7 @@ def gen_enum(e):
     if e.required:
         defi = f"    // Path `{e.path}`\n    #[serde(rename = \"{e.name}\")]\n    pub {e.name.normalized()}: {typename},\n"
     else:
-        defi = f'    #[serde(skip_serializing_if = "Option::is_none")]'
+        defi = f'    #[serde(skip_serializing_if = "Option::is_none")]\n'
         defi = f"    pub {e.name.normalized()}: Option<{typename}>,\n"
 
     return defi, decl
@@ -138,23 +155,27 @@ def gen_primitive(p):
 def gen_array(a):
     name = a.name.normalized().replace("[]", "")
     logger.debug(f"Generating array field {a.name} -> {name} ({a.path})")
-
     _, decl = gen_field(a.itemtype)
 
-    if isinstance(a.itemtype, PrimitiveField):
+    if a.path in overrides:
+        decl = ""  # No declaration if we have an override
+        itemtype = overrides[a.path]
+    elif isinstance(a.itemtype, PrimitiveField):
         itemtype = a.itemtype.typename
     elif isinstance(a.itemtype, CompositeField):
         itemtype = a.itemtype.typename
     elif isinstance(a.itemtype, EnumField):
         itemtype = a.itemtype.typename
 
-    if a.path in overrides:
-        decl = ""  # No declaration if we have an override
-        itemtype = overrides[a.path]
+    if itemtype is None:
+        return ("", "")  # Override said not to include
 
     itemtype = typemap.get(itemtype, itemtype)
-    alias = a.name.normalized()[:-2]  # Strip the `[]` suffix for arrays.
-    defi = f"    #[serde(alias = \"{alias}\")]\n    pub {name}: {'Vec<'*a.dims}{itemtype}{'>'*a.dims},\n"
+    alias = a.name.normalized()
+    if a.required:
+        defi = f"    #[serde(alias = \"{alias}\")]\n    pub {name}: {'Vec<'*a.dims}{itemtype}{'>'*a.dims},\n"
+    else:
+        defi = f"    #[serde(alias = \"{alias}\", skip_serializing_if = \"Option::is_none\")]\n    pub {name}: Option<{'Vec<'*a.dims}{itemtype}{'>'*a.dims}>,\n"
 
     return (defi, decl)
 

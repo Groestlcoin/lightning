@@ -1,13 +1,14 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "type": "object",
+  "additionalProperties": false,
   "required": [
     "id"
   ],
   "properties": {
     "id": {
-      "type": "pubkey",
-      "description": ""
+      "type": "string",
+      "description": "peer id, channel id or short_channel_id"
     },
     "unilateraltimeout": {
       "type": "u32",
@@ -30,9 +31,9 @@
       "description": ""
     },
     "feerange": {
-      "type": {
-        "type": "array",
-        "items": "u32"
+      "type": "array",
+      "items": {
+        "type": "feerate"
       },
       "description": ""
     }

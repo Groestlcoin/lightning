@@ -1,10 +1,8 @@
 from fixtures import *  # noqa: F401,F403
-from node_pb2_grpc import NodeStub
 from pathlib import Path
 from pyln.testing.utils import env, TEST_NETWORK, wait_for
 from ephemeral_port_reserve import reserve
 import grpc
-import node_pb2 as nodepb
 import pytest
 import subprocess
 
@@ -73,6 +71,11 @@ def test_plugin_start(node_factory):
 
 def test_grpc_connect(node_factory):
     """Attempts to connect to the grpc interface and call getinfo"""
+    # These only exist if we have rust!
+    from node_pb2_grpc import NodeStub  # noqa: E402
+    import node_pb2 as nodepb  # noqa: E402
+    from primitives_pb2 import AmountOrAny, Amount  # noqa: E402
+
     grpc_port = reserve()
     bin_path = Path.cwd() / "target" / "debug" / "cln-grpc"
     l1 = node_factory.get_node(options={"plugin": str(bin_path), "grpc-port": str(grpc_port)})
@@ -100,6 +103,27 @@ def test_grpc_connect(node_factory):
 
     response = stub.ListFunds(nodepb.ListfundsRequest())
     print(response)
+
+    inv = stub.Invoice(nodepb.InvoiceRequest(
+        msatoshi=AmountOrAny(any=True),
+        description="hello",
+        label="lbl1",
+        preimage=b"\x00" * 32,
+        cltv=24
+    ))
+    print(inv)
+
+    rates = stub.Feerates(nodepb.FeeratesRequest(style='PERKB'))
+    print(rates)
+
+    # Test a failing RPC call, so we know that errors are returned correctly.
+    with pytest.raises(Exception, match=r'Duplicate label'):
+        # This request creates a label collision
+        stub.Invoice(nodepb.InvoiceRequest(
+            msatoshi=AmountOrAny(amount=Amount(msat=12345)),
+            description="hello",
+            label="lbl1",
+        ))
 
 
 def test_grpc_generate_certificate(node_factory):
@@ -162,6 +186,10 @@ def test_grpc_wrong_auth(node_factory):
     We create two instances, each generates its own certs and keys,
     and then we try to cross the wires.
     """
+    # These only exist if we have rust!
+    from node_pb2_grpc import NodeStub  # noqa: E402
+    import node_pb2 as nodepb  # noqa: E402
+
     grpc_port = reserve()
     bin_path = Path.cwd() / "target" / "debug" / "cln-grpc"
     l1, l2 = node_factory.get_nodes(2, opts={

@@ -10,7 +10,9 @@ typemap = {
     'boolean': 'bool',
     'hex': 'bytes',
     'msat': 'Amount',
-    'number': 'sint64',
+    'msat_or_all': 'AmountOrAll',
+    'msat_or_any': 'AmountOrAny',
+    'number': 'double',
     'pubkey': 'bytes',
     'short_channel_id': 'string',
     'signature': 'bytes',
@@ -20,7 +22,13 @@ typemap = {
     'u32': 'uint32',
     'u64': 'uint64',
     'u16': 'uint32',  # Yeah, I know...
+    'f32': 'float',
     'integer': 'sint64',
+    "outpoint": "Outpoint",
+    "feerate": "Feerate",
+    "outputdesc": "OutputDesc",
+    "secret": "bytes",
+    "hash": "bytes",
 }
 
 
@@ -29,11 +37,14 @@ overrides = {
     # Truncate the tree here, it's a complex structure with identitcal
     # types
     'ListPeers.peers[].channels[].state_changes[]': None,
+    'ListPeers.peers[].channels[].htlcs[].state': None,
     'ListPeers.peers[].channels[].opener': "ChannelSide",
     'ListPeers.peers[].channels[].closer': "ChannelSide",
     'ListPeers.peers[].channels[].features[]': "string",
     'ListFunds.channels[].state': 'ChannelState',
+    'ListTransactions.transactions[].type[]': None,
 }
+
 
 method_name_overrides = {
     "Connect": "ConnectPeer",
@@ -55,8 +66,16 @@ class GrpcGenerator:
         else:
             self.dest.write(text)
 
-    def field2number(self, field):
+    def field2number(self, message_name, field):
         m = self.meta['grpc-field-map']
+
+        # Wrap each field mapping by the message_name, since otherwise
+        # requests and responses share the same number space (just
+        # cosmetic really, but why not do it?)
+        if message_name not in m:
+            m[message_name] = {}
+        m = m[message_name]
+
         # Simple case first: if we've already assigned a number let's reuse that
         if field.path in m:
             return m[field.path]
@@ -70,16 +89,16 @@ class GrpcGenerator:
             if parent2 == parent:
                 maxnum = max(maxnum, v)
 
-        self.meta['grpc-field-map'][field.path] = maxnum + 1
+        m[field.path] = maxnum + 1
         self.logger.warn(f"Assigning new field number to {field.path} => {m[field.path]}")
 
-        return self.meta['grpc-field-map'][field.path]
+        return m[field.path]
 
-    def enumerate_fields(self, fields):
+    def enumerate_fields(self, message_name, fields):
         """Use the meta map to identify which number this field will get.
         """
         for f in fields:
-            yield (self.field2number(f), f)
+            yield (self.field2number(message_name, f), f)
 
     def enumvar2number(self, typename, variant):
         """Find an existing variant number of generate a new one.
@@ -170,7 +189,7 @@ class GrpcGenerator:
             if isinstance(f, EnumField) and f.path not in overrides.keys():
                 self.generate_enum(f, indent=1)
 
-        for i, f in self.enumerate_fields(message.fields):
+        for i, f in self.enumerate_fields(message.typename, message.fields):
             if overrides.get(f.path, "") is None:
                 continue
 
@@ -250,9 +269,20 @@ class GrpcConverterGenerator:
                 continue
 
             name = f.normalized()
+            name = re.sub(r'(?<!^)(?=[A-Z])', '_', name).lower()
             if isinstance(f, ArrayField):
-                self.write(f"{name}: c.{name}.iter().map(|s| s.into()).collect(),\n", numindent=3)
+                typ = f.itemtype.typename
+                # The inner conversion applied to each element in the
+                # array. The current item is called `i`
+                mapping = {
+                    'hex': f'hex::decode(i).unwrap()',
+                    'secret': f'i.clone().to_vec()',
+                }.get(typ, f'i.into()')
 
+                if f.required:
+                    self.write(f"{name}: c.{name}.iter().map(|i| {mapping}).collect(), // Rule #3 for type {typ} \n", numindent=3)
+                else:
+                    self.write(f"{name}: c.{name}.as_ref().map(|arr| arr.iter().map(|i| {mapping}).collect()).unwrap_or(vec![]), // Rule #3 \n", numindent=3)
             elif isinstance(f, EnumField):
                 if f.required:
                     self.write(f"{name}: c.{name} as i32,\n", numindent=3)
@@ -271,17 +301,24 @@ class GrpcConverterGenerator:
                     'u16?': f'c.{name}.map(|v| v.into())',
                     'msat': f'Some(c.{name}.into())',
                     'msat?': f'c.{name}.map(|f| f.into())',
-                    'pubkey': f'hex::decode(&c.{name}).unwrap()',
-                    'pubkey?': f'c.{name}.as_ref().map(|v| hex::decode(&v).unwrap())',
+                    'pubkey': f'c.{name}.to_vec()',
+                    'pubkey?': f'c.{name}.as_ref().map(|v| v.to_vec())',
                     'hex': f'hex::decode(&c.{name}).unwrap()',
                     'hex?': f'c.{name}.as_ref().map(|v| hex::decode(&v).unwrap())',
                     'txid': f'hex::decode(&c.{name}).unwrap()',
                     'txid?': f'c.{name}.as_ref().map(|v| hex::decode(&v).unwrap())',
+                    'short_channel_id': f'c.{name}.to_string()',
+                    'short_channel_id?': f'c.{name}.as_ref().map(|v| v.to_string())',
+                    'hash': f'c.{name}.clone().to_vec()',
+                    'hash?': f'c.{name}.clone().map(|v| v.to_vec())',
+                    'secret': f'c.{name}.clone().to_vec()',
+                    'secret?': f'c.{name}.clone().map(|v| v.to_vec())',
                 }.get(
                     typ,
                     f'c.{name}.clone()'  # default to just assignment
                 )
-                self.write(f"{name}: {rhs},\n", numindent=3)
+
+                self.write(f"{name}: {rhs}, // Rule #2 for type {typ}\n", numindent=3)
 
         self.write(f"""\
                 }}
@@ -310,6 +347,7 @@ class GrpcConverterGenerator:
         #[allow(unused_imports)]
         use cln_rpc::model::{responses,requests};
         use crate::pb;
+        use std::str::FromStr;
 
         """)
 
@@ -350,11 +388,20 @@ class GrpcUnconverterGenerator(GrpcConverterGenerator):
         for f in field.fields:
             name = f.normalized()
             if isinstance(f, ArrayField):
-                self.write(f"{name}: c.{name}.iter().map(|s| s.into()).collect(),\n", numindent=3)
+                typ = f.itemtype.typename
+                mapping = {
+                    'hex': f'hex::encode(s)',
+                    'u32': f's.clone()',
+                    'secret': f's.clone().try_into().unwrap()'
+                }.get(typ, f's.into()')
+                if f.required:
+                    self.write(f"{name}: c.{name}.iter().map(|s| {mapping}).collect(), // Rule #4\n", numindent=3)
+                else:
+                    self.write(f"{name}: Some(c.{name}.iter().map(|s| {mapping}).collect()), // Rule #4\n", numindent=3)
 
             elif isinstance(f, EnumField):
                 if f.required:
-                    self.write(f"{name}: c.{name}.into(),\n", numindent=3)
+                    self.write(f"{name}: c.{name}.try_into().unwrap(),\n", numindent=3)
                 else:
                     self.write(f"{name}: c.{name}.map(|v| v.try_into().unwrap()),\n", numindent=3)
                 pass
@@ -370,14 +417,29 @@ class GrpcUnconverterGenerator(GrpcConverterGenerator):
                     'hex': f'hex::encode(&c.{name})',
                     'hex?': f'c.{name}.clone().map(|v| hex::encode(v))',
                     'txid?': f'c.{name}.clone().map(|v| hex::encode(v))',
-                    'pubkey': f'hex::encode(&c.{name})',
-                    'pubkey?': f'c.{name}.clone().map(|v| hex::encode(v))',
-                    'msat': f'c.{name}.as_ref().unwrap().into()'
+                    'pubkey': f'cln_rpc::primitives::Pubkey::from_slice(&c.{name}).unwrap()',
+                    'pubkey?': f'c.{name}.as_ref().map(|v| cln_rpc::primitives::Pubkey::from_slice(v).unwrap())',
+                    'msat': f'c.{name}.as_ref().unwrap().into()',
+                    'msat?': f'c.{name}.as_ref().map(|a| a.into())',
+                    'msat_or_all': f'c.{name}.as_ref().unwrap().into()',
+                    'msat_or_all?': f'c.{name}.as_ref().map(|a| a.into())',
+                    'msat_or_any': f'c.{name}.as_ref().unwrap().into()',
+                    'msat_or_any?': f'c.{name}.as_ref().map(|a| a.into())',
+                    'feerate': f'c.{name}.as_ref().unwrap().into()',
+                    'feerate?': f'c.{name}.as_ref().map(|a| a.into())',
+                    'RoutehintList?': f'c.{name}.clone().map(|rl| rl.into())',
+                    'short_channel_id': f'cln_rpc::primitives::ShortChannelId::from_str(&c.{name}).unwrap()',
+                    'short_channel_id?': f'c.{name}.as_ref().map(|v| cln_rpc::primitives::ShortChannelId::from_str(&v).unwrap())',
+                    'secret': f'c.{name}.clone().try_into().unwrap()',
+                    'secret?': f'c.{name}.clone().map(|v| v.try_into().unwrap())',
+                    'hash': f'c.{name}.clone().try_into().unwrap()',
+                    'hash?': f'c.{name}.clone().map(|v| v.try_into().unwrap())',
+                    'txid': f'hex::encode(&c.{name})',
                 }.get(
                     typ,
                     f'c.{name}.clone()'  # default to just assignment
                 )
-                self.write(f"{name}: {rhs},\n", numindent=3)
+                self.write(f"{name}: {rhs}, // Rule #1 for type {typ}\n", numindent=3)
 
         self.write(f"""\
                 }}
@@ -396,7 +458,7 @@ class GrpcServerGenerator(GrpcConverterGenerator):
         use anyhow::Result;
         use std::path::{{Path, PathBuf}};
         use cln_rpc::model::requests;
-        use log::debug;
+        use log::{{debug, trace}};
         use tonic::{{Code, Status}};
 
         #[derive(Clone)]
@@ -431,7 +493,8 @@ class GrpcServerGenerator(GrpcConverterGenerator):
             ) -> Result<tonic::Response<pb::{method.response.typename}>, tonic::Status> {{
                 let req = request.into_inner();
                 let req: requests::{method.request.typename} = (&req).into();
-                debug!("Client asked for getinfo");
+                debug!("Client asked for {name}");
+                trace!("{name} request: {{:?}}", req);
                 let mut rpc = ClnRpc::new(&self.rpc_path)
                     .await
                     .map_err(|e| Status::new(Code::Internal, e.to_string()))?;
@@ -441,9 +504,10 @@ class GrpcServerGenerator(GrpcConverterGenerator):
                        Code::Unknown,
                        format!("Error calling method {method.name}: {{:?}}", e)))?;
                 match result {{
-                    Response::{method.name}(r) => Ok(
-                        tonic::Response::new((&r).into())
-                    ),
+                    Response::{method.name}(r) => {{
+                       trace!("{name} response: {{:?}}", r);
+                       Ok(tonic::Response::new((&r).into()))
+                    }},
                     r => Err(Status::new(
                         Code::Internal,
                         format!(
