@@ -7,7 +7,7 @@ from pyln.proto.onion import TlvPayload
 from pyln.testing.utils import EXPERIMENTAL_DUAL_FUND, FUNDAMOUNT
 from utils import (
     DEVELOPER, wait_for, only_one, sync_blockheight, TIMEOUT,
-    EXPERIMENTAL_FEATURES, env, VALGRIND, mine_funding_to_announce
+    EXPERIMENTAL_FEATURES, VALGRIND, mine_funding_to_announce
 )
 import copy
 import os
@@ -90,7 +90,7 @@ def test_pay_amounts(node_factory):
 
 
 @pytest.mark.developer("needs to deactivate shadow routing")
-def test_pay_limits(node_factory, compat):
+def test_pay_limits(node_factory):
     """Test that we enforce fee max percentage and max delay"""
     l1, l2, l3 = node_factory.line_graph(3, wait_for_announce=True)
 
@@ -128,10 +128,15 @@ def test_pay_limits(node_factory, compat):
     assert(len(status) == 2)
     assert(status[0]['failure']['code'] == 205)
 
+    # This fails!
+    err = r'Fee exceeds our fee budget: 2msat > 1msat, discarding route'
+    with pytest.raises(RpcError, match=err) as err:
+        l1.rpc.pay(bolt11=inv['bolt11'], msatoshi=100000, maxfee=1)
+
     # This works, because fee is less than exemptfee.
     l1.dev_pay(inv['bolt11'], msatoshi=100000, maxfeepercent=0.0001,
                exemptfee=2000, use_shadow=False)
-    status = l1.rpc.call('paystatus', {'bolt11': inv['bolt11']})['pay'][2]['attempts']
+    status = l1.rpc.call('paystatus', {'bolt11': inv['bolt11']})['pay'][3]['attempts']
     assert len(status) == 1
     assert status[0]['strategy'] == "Initial attempt"
 
@@ -346,7 +351,7 @@ def test_pay_error_update_fees(node_factory):
 
 
 @pytest.mark.developer("needs to deactivate shadow routing")
-def test_pay_optional_args(node_factory, compat):
+def test_pay_optional_args(node_factory):
     l1, l2 = node_factory.line_graph(2)
 
     inv1 = l2.rpc.invoice(123000, 'test_pay', 'desc')['bolt11']
@@ -1575,7 +1580,7 @@ def test_pay_retry(node_factory, bitcoind, executor, chainparams):
 
 @pytest.mark.developer("needs DEVELOPER=1 otherwise gossip takes 5 minutes!")
 @pytest.mark.slow_test
-def test_pay_routeboost(node_factory, bitcoind, compat):
+def test_pay_routeboost(node_factory, bitcoind):
     """Make sure we can use routeboost information. """
     # l1->l2->l3--private-->l4
     l1, l2 = node_factory.line_graph(2, announce_channels=True, wait_for_announce=True)
@@ -2173,6 +2178,29 @@ def test_setchannel_all(node_factory, bitcoind):
     assert result['channels'][1]['fee_proportional_millionths'] == 0xBEEF
     assert result['channels'][1]['minimum_htlc_out_msat'] == 0xBAD
     assert result['channels'][1]['maximum_htlc_out_msat'] == 0xCAFE
+
+
+@pytest.mark.developer("updates are delayed without --dev-fast-gossip")
+def test_setchannel_startup_opts(node_factory, bitcoind):
+    """Tests that custom config/cmdline options are applied correctly when set
+    """
+    opts = {
+        'fee-base': 2,
+        'fee-per-satoshi': 3,
+        'htlc-minimum-msat': '4msat',
+        'htlc-maximum-msat': '5msat'
+    }
+    l1, l2 = node_factory.line_graph(2, opts=opts, wait_for_announce=True)
+
+    result = l2.rpc.listchannels()['channels']
+    assert result[0]['base_fee_millisatoshi'] == 2
+    assert result[0]['fee_per_millionth'] == 3
+    assert result[0]['htlc_minimum_msat'] == Millisatoshi(4)
+    assert result[0]['htlc_maximum_msat'] == Millisatoshi(5)
+    assert result[1]['base_fee_millisatoshi'] == 2
+    assert result[1]['fee_per_millionth'] == 3
+    assert result[1]['htlc_minimum_msat'] == Millisatoshi(4)
+    assert result[1]['htlc_maximum_msat'] == Millisatoshi(5)
 
 
 @pytest.mark.developer("gossip without DEVELOPER=1 is slow")
@@ -3244,7 +3272,7 @@ def test_sendpay_blinding(node_factory):
     l1.rpc.waitsendpay(inv['payment_hash'])
 
 
-def test_excluded_adjacent_routehint(node_factory, bitcoind, compat):
+def test_excluded_adjacent_routehint(node_factory, bitcoind):
     """Test case where we try have a routehint which leads to an adjacent
     node, but the result exceeds our maxfee; we crashed trying to find
     what part of the path was most expensive in that case
@@ -3411,7 +3439,7 @@ def test_invalid_onion_channel_update(node_factory):
 
 
 @pytest.mark.developer("Requires use_shadow")
-def test_pay_exemptfee(node_factory, compat):
+def test_pay_exemptfee(node_factory):
     """Tiny payment, huge fee
 
     l1 -> l2 -> l3
@@ -3521,6 +3549,24 @@ def test_mpp_presplit(node_factory):
 
     assert(inv['msatoshi'] == inv['msatoshi_received'])
 
+    # Make sure that bolt11 isn't duplicated for every part
+    bolt11s = 0
+    count = 0
+    for p in l1.rpc.listsendpays()['payments']:
+        if 'bolt11' in p:
+            bolt11s += 1
+        count += 1
+
+    # You were supposed to mpp!
+    assert count > 1
+    # Not every one should have the bolt11 string
+    assert bolt11s < count
+    # In fact, only one should
+    assert bolt11s == 1
+
+    # But listpays() gathers it:
+    assert only_one(l1.rpc.listpays()['pays'])['bolt11'] == inv['bolt11']
+
 
 def test_mpp_adaptive(node_factory, bitcoind):
     """We have two paths, both too small on their own, let's combine them.
@@ -3589,6 +3635,22 @@ def test_mpp_adaptive(node_factory, bitcoind):
     from pprint import pprint
     pprint(p)
     pprint(l1.rpc.paystatus(inv))
+
+    # Make sure that bolt11 isn't duplicated for every part
+    bolt11s = 0
+    count = 0
+    for p in l1.rpc.listsendpays()['payments']:
+        if 'bolt11' in p:
+            bolt11s += 1
+        count += 1
+
+    # You were supposed to mpp!
+    assert count > 1
+    # Not every one should have the bolt11 string
+    assert bolt11s < count
+
+    # listpays() shows bolt11 string
+    assert 'bolt11' in only_one(l1.rpc.listpays()['pays'])
 
 
 def test_pay_fail_unconfirmed_channel(node_factory, bitcoind):
@@ -3766,46 +3828,6 @@ def test_listpay_result_with_paymod(node_factory, bitcoind):
     assert 'payment_hash' in l1.rpc.listpays()['pays'][0]
     assert 'destination' in l1.rpc.listpays()['pays'][0]
     assert 'destination' in l2.rpc.listpays()['pays'][0]
-
-
-@unittest.skipIf(env('COMPAT') != 1, "legacypay requires COMPAT=1")
-def test_listpays_ongoing_attempt(node_factory, bitcoind, executor):
-    """Test to reproduce issue #3915.
-
-    The issue is that the bolt11 string is not initialized if the root payment
-    was split (no attempt with the bolt11 annotation ever hit `lightningd`,
-    hence we cannot filter by that. In addition keysends never have a bolt11
-    string, so we need to switch to payment_hash comparisons anyway.
-    """
-    plugin = os.path.join(os.path.dirname(__file__), 'plugins', 'hold_htlcs.py')
-    l1, l2, l3 = node_factory.line_graph(3, opts=[{}, {}, {'plugin': plugin}],
-                                         wait_for_announce=True)
-
-    f = executor.submit(l1.rpc.keysend, l3.info['id'], 100)
-    l3.daemon.wait_for_log(r'Holding onto an incoming htlc')
-    l1.rpc.listpays()
-    f.result()
-
-    inv = l2.rpc.invoice(10**6, 'legacy', 'desc')['bolt11']
-    l1.rpc.legacypay(inv)
-    l1.rpc.listpays()
-
-    # Produce loads of parts to increase probability of hitting the issue,
-    # should result in 100 splits at least
-    inv = l3.rpc.invoice(10**9, 'mpp invoice', 'desc')['bolt11']
-
-    # Start the payment, it'll get stuck for 10 seconds at l3
-    executor.submit(l1.rpc.pay, inv)
-    l1.daemon.wait_for_log(r'Split into [0-9]+ sub-payments due to initial size')
-    l3.daemon.wait_for_log(r'Holding onto an incoming htlc')
-
-    # While that is going on, check in with `listpays` to see if aggregation
-    # is working.
-    l1.rpc.listpays()
-
-    # Now restart and see if we still can aggregate things correctly.
-    l1.restart()
-    l1.rpc.listpays()
 
 
 def test_listsendpays_and_listpays_order(node_factory):
@@ -5051,7 +5073,7 @@ def test_pay_bolt11_metadata(node_factory, bitcoind):
     # After CI started failing, I *also* hacked it to set expiry to BIGNUM.
     inv = "lnbcrt1230n1p3yzgcxsp5q8g040f9rl9mu2unkjuj0vn262s6nyrhz5hythk3ueu2lfzahmzspp5ve584t0cv27hwmy0cx9ca8uwyqyfw9y9dm3r8vus9fv36r2l9yjsdq8v3jhxccmq6w35xjueqd9ejqmt9w3skgct5vyxqxra2q2qcqp99q2sqqqqqysgqfw6efxpzk5x5vfj8se46yg667x5cvhyttnmuqyk0q7rmhx3gs249qhtdggnek8c5adm2pztkjddlwyn2art2zg9xap2ckczzl3fzz4qqsej6mf"
     # Make l2 "know" about this invoice.
-    l2.rpc.invoice(msatoshi='123000', label='label1', description='desc', preimage='00' * 32)
+    l2.rpc.invoice(msatoshi=123000, label='label1', description='desc', preimage='00' * 32)
 
     with pytest.raises(RpcError, match=r'WIRE_INVALID_ONION_PAYLOAD'):
         l1.rpc.pay(inv)
