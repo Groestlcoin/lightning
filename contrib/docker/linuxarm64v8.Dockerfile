@@ -1,7 +1,7 @@
 # This dockerfile is meant to cross compile with a x64 machine for a arm64v8 host
 # It is using multi stage build:
-# * downloader: Download litecoin/bitcoin and qemu binaries needed for c-lightning
-# * builder: Cross compile c-lightning dependencies, then c-lightning itself with static linking
+# * downloader: Download groestlcoin and qemu binaries needed for Core Lightning
+# * builder: Cross compile Core Lightning dependencies, then Core Lightning itself with static linking
 # * final: Copy the binaries required at runtime
 # The resulting image uploaded to dockerhub will only contain what is needed for runtime.
 # From the root of the repository, run "docker build -t yourimage:yourtag -f contrib/linuxarm64v8.Dockerfile ."
@@ -57,12 +57,12 @@ STRIP=${target_host}-strip \
 QEMU_LD_PREFIX=/usr/${target_host} \
 HOST=${target_host}
 
-RUN wget -q https://zlib.net/zlib-1.2.11.tar.gz \
-&& tar xvf zlib-1.2.11.tar.gz \
-&& cd zlib-1.2.11 \
+RUN wget -q https://zlib.net/zlib-1.2.12.tar.gz \
+&& tar xvf zlib-1.2.12.tar.gz \
+&& cd zlib-1.2.12 \
 && ./configure --prefix=$QEMU_LD_PREFIX \
 && make \
-&& make install && cd .. && rm zlib-1.2.11.tar.gz && rm -rf zlib-1.2.11
+&& make install && cd .. && rm zlib-1.2.12.tar.gz && rm -rf zlib-1.2.12
 
 RUN apt-get install -y --no-install-recommends unzip tclsh \
 && wget -q https://www.sqlite.org/2019/sqlite-src-3290000.zip \

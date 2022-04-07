@@ -91,7 +91,7 @@ Here's a list of parts, with notes:
 Debugging
 ---------
 
-You can build c-lightning with DEVELOPER=1 to use dev commands listed in
+You can build Core Lightning with DEVELOPER=1 to use dev commands listed in
 ``cli/lightning-cli help``. ``./configure --enable-developer`` will do that.
 You can log console messages with log_info() in lightningd and status_debug()
 in other subdaemons.
@@ -110,7 +110,7 @@ subdaemon will be stopped (it sends itself a SIGSTOP); you'll need to
 Database
 --------
 
-c-lightning state is persisted in `lightning-dir`.
+Core Lightning state is persisted in `lightning-dir`.
 It is a sqlite database stored in the `lightningd.sqlite3` file, typically
 under `~/.lightning/<network>/`.
 You can run queries against this file like so:
@@ -191,7 +191,7 @@ A modern desktop can build and run through all the tests in a couple of minutes 
 
 Adjust `-j` and `PYTEST_PAR` accordingly for your hardware.
 
-There are three kinds of tests:
+There are four kinds of tests:
 
 * **source tests** - run by `make check-source`, looks for whitespace,
   header order, and checks formatted quotes from BOLTs if BOLTDIR
@@ -225,7 +225,7 @@ There are three kinds of tests:
 
   `make check-python`
 
-Our Travis CI instance (see `.travis.yml`) runs all these for each
+Our Github Actions instance (see `.github/workflows/*.yml`) runs all these for each
 pull request.
 
 #### Additional Environment Variables

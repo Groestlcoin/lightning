@@ -1,6 +1,6 @@
-# c-lightning: A specification compliant Lightning Network implementation in C
+# Core Lightning (CLN): A specification compliant Lightning Network implementation in C
 
-c-lightning is a lightweight, highly customizable and [standard compliant][std] implementation of the Lightning Network protocol.
+Core Lightning (previously c-lightning) is a lightweight, highly customizable and [standard compliant][std] implementation of the Lightning Network protocol.
 
 * [Getting Started](#getting-started)
     * [Installation](#installation)
@@ -32,7 +32,7 @@ Don't hesitate to reach out to us on IRC at [#lightning-dev @ libera.chat][irc1]
 
 ## Getting Started
 
-c-lightning only works on Linux and Mac OS, and requires a locally (or remotely) running `groestlcoind` (version 2.16.0 or above) that is fully caught up with the network you're testing on, and relays transactions (ie with `blocksonly=0`).
+Core Lightning only works on Linux and Mac OS, and requires a locally (or remotely) running `groestlcoind` (version 2.16.0 or above) that is fully caught up with the network you're running on, and relays transactions (ie with `blocksonly=0`).
 Pruning (`prune=n` option in `groestlcoin.conf`) is partially supported, see [here](#pruning) for more details.
 
 ### Installation
@@ -90,7 +90,7 @@ This creates a `.lightning/` subdirectory in your home directory: see `man -l do
 
 ### Using The JSON-RPC Interface
 
-c-lightning exposes a [JSON-RPC 2.0][jsonrpcspec] interface over a Unix Domain socket; the `lightning-cli` tool can be used to access it, or there is a [python client library](contrib/pyln-client).
+Core Lightning exposes a [JSON-RPC 2.0][jsonrpcspec] interface over a Unix Domain socket; the `lightning-cli` tool can be used to access it, or there is a [python client library](contrib/pyln-client).
 
 You can use `lightning-cli help` to print a table of RPC methods; `lightning-cli help <command>`
 will offer specific information on that command.
@@ -111,7 +111,7 @@ Once you've started for the first time, there's a script called
 `contrib/bootstrap-node.sh` which will connect you to other nodes on
 the lightning network.
 
-There are also numerous plugins available for c-lightning which add
+There are also numerous plugins available for Core Lightning which add
 capabilities: in particular there's a collection at:
 
 	https://github.com/lightningd/plugins
@@ -193,11 +193,11 @@ To use a configuration file, create a file named `config` within your top-level 
 
 ### Pruning
 
-c-lightning requires JSON-RPC access to a fully synchronized `groestlcoind` in order to synchronize with the Groestlcoin network.
+Core Lightning requires JSON-RPC access to a fully synchronized `groestlcoind` in order to synchronize with the Groestlcoin network.
 Access to ZeroMQ is not required and `groestlcoind` does not need to be run with `txindex` like other implementations.
 The lightning daemon will poll `groestlcoind` for new blocks that it hasn't processed yet, thus synchronizing itself with `groestlcoind`.
-If `groestlcoind` prunes a block that c-lightning has not processed yet, e.g., c-lightning was not running for a prolonged period, then `groestlcoind` will not be able to serve the missing blocks, hence c-lightning will not be able to synchronize anymore and will be stuck.
-In order to avoid this situation you should be monitoring the gap between c-lightning's blockheight using `lightning-cli getinfo` and `groestlcoind`'s blockheight using `groestlcoin-cli getblockchaininfo`.
+If `groestlcoind` prunes a block that Core Lightning has not processed yet, e.g., Core Lightning was not running for a prolonged period, then `groestlcoind` will not be able to serve the missing blocks, hence Core Lightning will not be able to synchronize anymore and will be stuck.
+In order to avoid this situation you should be monitoring the gap between Core Lightning's blockheight using `lightning-cli getinfo` and `groestlcoind`'s blockheight using `groestlcoin-cli getblockchaininfo`.
 If the two blockheights drift apart it might be necessary to intervene.
 
 ### HD wallet encryption
@@ -213,8 +213,6 @@ You should also configure with `--enable-developer` to get additional checks and
 
 [blockstream-store-blog]: https://blockstream.com/2018/01/16/en-lightning-charge/
 [std]: https://github.com/lightningnetwork/lightning-rfc
-[travis-ci]: https://travis-ci.org/ElementsProject/lightning.svg?branch=master
-[travis-ci-link]: https://travis-ci.org/ElementsProject/lightning
 [prs]: https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=flat
 [prs-link]: http://makeapullrequest.com
 [IRC]: https://img.shields.io/badge/chat-on%20libera-brightgreen.svg

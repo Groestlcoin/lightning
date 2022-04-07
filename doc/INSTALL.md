@@ -41,7 +41,6 @@ Get dependencies:
       python3 python3-pip net-tools zlib1g-dev libsodium-dev gettext
     pip3 install --upgrade pip
     pip3 install --user poetry
-    poetry install
 
 If you don't have Groestlcoin installed locally you'll need to install that
 as well. It's now available via [snapd](https://snapcraft.io/groestlcoin-core).
@@ -62,10 +61,15 @@ For development or running tests, get additional dependencies:
     sudo apt-get install -y valgrind libpq-dev shellcheck cppcheck \
       libsecp256k1-dev jq
 
+If you want to build the Rust plugins (currently, cln-grpc):
+
+	sudo apt-get install -y cargo rustfmt
+
 Build lightning:
 
+    poetry install
     ./configure
-    make
+    poetry run make
     sudo make install
 
 Running lightning:
@@ -73,8 +77,6 @@ Running lightning:
     groestlcoind &
     ./lightningd/lightningd &
     ./cli/lightning-cli help
-
-**Note**: You may need to include `testnet=1` in `groestlcoin.conf`
 
 To Build on Fedora
 ---------------------
@@ -131,6 +133,38 @@ $ groestlcoind -testnet &
 $ lightningd --network=testnet
 ```
 
+To Build on OpenBSD
+--------------------
+
+OS version: OpenBSD 6.7
+
+Install dependencies:
+```
+pkg_add git python gmake py3-pip libtool gmp
+pkg_add automake # (select highest version, automake1.16.2 at time of writing)
+pkg_add autoconf # (select highest version, autoconf-2.69p2 at time of writing)
+```
+Install `mako` and `mrkd` otherwise we run into build errors:
+```
+pip3.7 install --user poetry
+poetry install
+```
+
+Add `/home/<username>/.local/bin` to your path:
+
+`export PATH=$PATH:/home/<username>/.local/bin`
+
+Needed for `configure`:
+```
+export AUTOCONF_VERSION=2.69
+export AUTOMAKE_VERSION=1.16
+./configure
+```
+
+Finally, build `c-lightning`:
+
+`gmake`
+
 To Build on macOS
 ---------------------
 
@@ -158,6 +192,7 @@ If you need Python 3.x for mako (or get a mako build error):
     $ source ~/.bash_profile
     $ pyenv install 3.7.4
     $ pip install --upgrade pip
+    $ pip install poetry
 
 If you don't have groestlcoind installed locally you'll need to install that
 as well:
@@ -177,16 +212,11 @@ Clone lightning:
     $ git clone https://github.com/groestlcoin/lightning.git
     $ cd lightning
 
-Configure Python 3.x & get mako:
-
-    $ pyenv local 3.7.4
-    $ pip install mako
-
 Build lightning:
 
-    $ pip install -r requirements.txt
+    $ poetry install
     $ ./configure
-    $ make
+    $ poetry run make
 
 Running lightning:
 
@@ -203,7 +233,7 @@ To cross-compile for Android
 
 Make a standalone toolchain as per
 https://developer.android.com/ndk/guides/standalone_toolchain.html.
-For c-lightning you must target an API level of 24 or higher.
+For Core Lightning you must target an API level of 24 or higher.
 
 Depending on your toolchain location and target arch, source env variables
 such as:
@@ -263,9 +293,9 @@ Obtain and install cross-compiled versions of sqlite3, gmp and zlib:
 
 Download and build zlib:
 
-    wget https://zlib.net/zlib-1.2.11.tar.gz
-    tar xvf zlib-1.2.11.tar.gz
-    cd zlib-1.2.11
+    wget https://zlib.net/zlib-1.2.12.tar.gz
+    tar xvf zlib-1.2.12.tar.gz
+    cd zlib-1.2.12
     ./configure --prefix=$QEMU_LD_PREFIX
     make
     make install
@@ -288,7 +318,7 @@ Download and build gmp:
     make
     make install
 
-Then, build c-lightning with the following commands:
+Then, build Core Lightning with the following commands:
 
     ./configure
     make
@@ -299,8 +329,8 @@ For all the other Pi devices out there, consider using [Armbian](https://www.arm
 
 You can compile in `customize-image.sh` using the instructions for Ubuntu.
 
-A working example that compiles both groestlcoind and c-lightning for Armbian can
-be found [here](https://github.com/groestlcoin/armbian-groestlcoin-core).
+A working example that compiles both groestlcoind and Core Lightning for Armbian can
+be found [here](https://github.com/Groestlcoin/armbian-groestlcoin-core).
 
 To compile for Alpine
 ---------------------
