@@ -75,7 +75,7 @@ PLUGIN_ALL_HEADER :=				\
 	$(PLUGIN_SPENDER_HEADER)
 PLUGIN_ALL_OBJS := $(PLUGIN_ALL_SRC:.c=.o)
 
-PLUGINS :=					\
+C_PLUGINS :=					\
 	plugins/autoclean			\
 	plugins/bcli				\
 	plugins/fetchinvoice			\
@@ -87,10 +87,21 @@ PLUGINS :=					\
 	plugins/txprepare			\
 	plugins/spenderp
 
+PLUGINS := $(C_PLUGINS)
+
+ifneq ($(RUST),0)
+# Builtin plugins must be in this plugins dir to work when we're executed
+# *without* make install.
+plugins/cln-grpc: target/${RUST_PROFILE}/cln-grpc
+	@cp $< $@
+
+PLUGINS += plugins/cln-grpc
+endif
+
 # Make sure these depend on everything.
 ALL_C_SOURCES += $(PLUGIN_ALL_SRC)
 ALL_C_HEADERS += $(PLUGIN_ALL_HEADER)
-ALL_PROGRAMS += $(PLUGINS)
+ALL_PROGRAMS += $(C_PLUGINS)
 
 PLUGIN_COMMON_OBJS :=				\
 	bitcoin/base58.o			\
@@ -185,7 +196,7 @@ target/${RUST_PROFILE}/cln-grpc: ${CLN_PLUGIN_SRC}
 	cargo build ${CARGO_OPTS} --bin cln-grpc
 
 ifneq ($(RUST),0)
-DEFAULT_TARGETS += $(CLN_PLUGIN_EXAMPLES) target/${RUST_PROFILE}/cln-grpc
+DEFAULT_TARGETS += $(CLN_PLUGIN_EXAMPLES) plugins/cln-grpc
 endif
 
 include plugins/test/Makefile
