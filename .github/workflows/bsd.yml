@@ -40,6 +40,10 @@ jobs:
           ln -s /root/.local/bin/mrkd /usr/local/bin/mrkd
 
         run: |
+          # fatal: unsafe repository ('/Users/runner/work/lightning/lightning' is owned by someone else)
+          git config --global --add safe.directory `pwd`
+          git submodule update --init --recursive
+          
           # Configure and build
           ./configure CC="$CC"
           gmake
