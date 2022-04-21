@@ -40,9 +40,9 @@ jobs:
           ln -s /root/.local/bin/mrkd /usr/local/bin/mrkd
 
         run: |
+          git clone https://github.com/lightningnetwork/lightning-rfc.git ../lightning-rfc
           # fatal: unsafe repository ('/Users/runner/work/lightning/lightning' is owned by someone else)
           git config --global --add safe.directory $GITHUB_WORKSPACE
-          git submodule update --init --recursive
 
           # Configure and build
           ./configure CC="$CC"
