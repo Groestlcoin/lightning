@@ -2,6 +2,7 @@
 
 echo "Running in $(pwd)"
 export ARCH=${ARCH:-64}
+export BOLTDIR=bolts
 export CC=${COMPILER:-gcc}
 export COMPAT=${COMPAT:-1}
 export TEST_CHECK_DBSTMTS=${TEST_CHECK_DBSTMTS:-0}
@@ -20,6 +21,19 @@ export LIGHTNINGD_POSTGRES_NO_VACUUM=1
 pip3 install --user poetry
 poetry config virtualenvs.create false --local
 poetry install
+
+git clone https://github.com/lightning/bolts.git ../${BOLTDIR}
+git submodule update --init --recursive
+
+./configure CC="$CC"
+cat config.vars
+
+cat << EOF > pytest.ini
+[pytest]
+addopts=-p no:logging --color=yes --timeout=1800 --timeout-method=thread --test-group-random-seed=42 --force-flaky --no-success-flaky-report --max-runs=3
+markers =
+    slow_test: marks tests as slow (deselect with '-m "not slow_test"')
+EOF
 
 if [ "$TARGET_HOST" == "arm-linux-gnueabihf" ] || [ "$TARGET_HOST" == "aarch64-linux-gnu" ]
 then

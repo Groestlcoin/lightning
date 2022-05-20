@@ -20,8 +20,8 @@ PKGNAME = c-lightning
 CCANDIR := ccan
 
 # Where we keep the BOLT RFCs
-BOLTDIR := ../lightning-rfc/
-DEFAULT_BOLTVERSION := e60d594abf436e768116684080997a8d4f960263
+BOLTDIR := ../bolts/
+DEFAULT_BOLTVERSION := 105c2e5e9f17c68e8c19dc4ca548600a0b8f66f0
 # Can be overridden on cmdline.
 BOLTVERSION := $(DEFAULT_BOLTVERSION)
 

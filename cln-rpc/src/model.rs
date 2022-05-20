@@ -1160,6 +1160,8 @@ pub mod responses {
 	    // Path `ListPeers.peers[].channels[].opener`
 	    #[serde(rename = "opener")]
 	    pub opener: ChannelSide,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub closer: Option<ChannelSide>,
 	    #[serde(alias = "features")]
 	    pub features: Vec<String>,
 	    #[serde(alias = "to_us_msat", skip_serializing_if = "Option::is_none")]
@@ -1284,6 +1286,8 @@ pub mod responses {
 	    // Path `ListFunds.outputs[].status`
 	    #[serde(rename = "status")]
 	    pub status: ListfundsOutputsStatus,
+	    #[serde(alias = "reserved")]
+	    pub reserved: bool,
 	    #[serde(alias = "blockheight", skip_serializing_if = "Option::is_none")]
 	    pub blockheight: Option<u32>,
 	}
