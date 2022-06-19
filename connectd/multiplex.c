@@ -10,7 +10,6 @@
 #include <common/dev_disconnect.h>
 #include <common/features.h>
 #include <common/gossip_constants.h>
-#include <common/gossip_rcvd_filter.h>
 #include <common/gossip_store.h>
 #include <common/memleak.h>
 #include <common/per_peer_state.h>
@@ -23,6 +22,7 @@
 #include <connectd/connectd.h>
 #include <connectd/connectd_gossipd_wiregen.h>
 #include <connectd/connectd_wiregen.h>
+#include <connectd/gossip_rcvd_filter.h>
 #include <connectd/multiplex.h>
 #include <connectd/onion_message.h>
 #include <errno.h>
@@ -344,6 +344,9 @@ static struct io_plan *encrypt_and_send(struct peer *peer,
 /* Kicks off write_to_peer() to look for more gossip to send from store */
 static void wake_gossip(struct peer *peer)
 {
+	/* Don't remember sent per-peer gossip forever. */
+	gossip_rcvd_filter_age(peer->gs.grf);
+
 	peer->gs.active = IFDEV(!peer->daemon->dev_suppress_gossip, true);
 	io_wake(peer->peer_outq);
 
@@ -643,8 +646,7 @@ static bool handle_message_locally(struct peer *peer, const u8 *msg)
 	enum peer_wire type = fromwire_peektype(msg);
 
 	/* We remember these so we don't rexmit them */
-	if (is_msg_gossip_broadcast(msg))
-		gossip_rcvd_filter_add(peer->gs.grf, msg);
+	gossip_rcvd_filter_add(peer->gs.grf, msg);
 
 	if (type == WIRE_GOSSIP_TIMESTAMP_FILTER) {
 		handle_gossip_timestamp_filter_in(peer, msg);

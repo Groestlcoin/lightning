@@ -22,6 +22,18 @@ used as protocol on top of the two streams, with the plugin acting as
 server and `lightningd` acting as client. The plugin file needs to be
 executable (e.g. use `chmod a+x plugin_name`)
 
+### Warning
+
+As noted, `lightningd` uses `stdin` as an intake mechanism.  This can
+cause unexpected behavior if one is not careful.  To wit, care should 
+be taken to ensure that debug/logging statements must be routed to 
+`stderr` or directly to a file.  Activities that are benign in other 
+contexts (`println!`, `dbg!`, etc) will cause the plugin to be killed
+with an error along the lines of:
+
+`UNUSUAL plugin-cln-plugin-startup: Killing plugin: JSON-RPC message 
+does not contain "jsonrpc" field`
+
 ## A day in the life of a plugin
 
 During startup of `lightningd` you can use the `--plugin=` option to
@@ -29,7 +41,7 @@ register one or more plugins that should be started. In case you wish
 to start several plugins you have to use the `--plugin=` argument
 once for each plugin (or `--plugin-dir` or place them in the default
 plugin dirs, usually `/usr/local/libexec/c-lightning/plugins` and
-`~/.lightningd/plugins`). An example call might look like:
+`~/.lightning/plugins`). An example call might look like:
 
 ```
 lightningd --plugin=/path/to/plugin1 --plugin=path/to/plugin2
@@ -1365,6 +1377,8 @@ The payload of the hook call has the following format:
     "next_onion": "[1365bytes of serialized onion]"
   },
   "htlc": {
+    "short_channel_id": "4x5x6",
+    "id": 27,
     "amount": "43msat",
     "cltv_expiry": 500028,
     "cltv_expiry_relative": 10,
@@ -1393,6 +1407,8 @@ For detailed information about each field please refer to [BOLT 04 of the specif
    - `shared_secret` is the shared secret we used to decrypt the incoming
      onion. It is shared with the sender that constructed the onion.
  - `htlc`:
+   - `short_channel_id` is the channel this payment is coming from.
+   - `id` is the low-level sequential HTLC id integer as sent by the channel peer.
    - `amount` is the amount that we received with the HTLC. This amount minus
      the `forward_amount` is the fee that will stay with us.
    - `cltv_expiry` determines when the HTLC reverts back to the
