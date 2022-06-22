@@ -19,6 +19,5 @@ setup(name='pylightning',
       author_email='groestlcoin@gmail.com',
       license='MIT',
       packages=['lightning'],
-      scripts=['lightning-pay'],
       zip_safe=True,
       install_requires=requirements)

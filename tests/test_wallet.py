@@ -864,26 +864,26 @@ def test_sign_and_send_psbt(node_factory, bitcoind, chainparams):
         l1.rpc.signpsbt(invalid_psbt)
 
     wallet_coin_mvts = [
-        {'type': 'chain_mvt', 'credit': 1000000000, 'debit': 0, 'tags': ['deposit']},
-        {'type': 'chain_mvt', 'credit': 1000000000, 'debit': 0, 'tags': ['deposit']},
-        {'type': 'chain_mvt', 'credit': 1000000000, 'debit': 0, 'tags': ['deposit']},
-        {'type': 'chain_mvt', 'credit': 1000000000, 'debit': 0, 'tags': ['deposit']},
-        {'type': 'chain_mvt', 'credit': 1000000000, 'debit': 0, 'tags': ['deposit']},
-        {'type': 'chain_mvt', 'credit': 1000000000, 'debit': 0, 'tags': ['deposit']},
-        {'type': 'chain_mvt', 'credit': 1000000000, 'debit': 0, 'tags': ['deposit']},
-        {'type': 'chain_mvt', 'credit': 1000000000, 'debit': 0, 'tags': ['deposit']},
-        {'type': 'chain_mvt', 'credit': 1000000000, 'debit': 0, 'tags': ['deposit']},
-        {'type': 'chain_mvt', 'credit': 1000000000, 'debit': 0, 'tags': ['deposit']},
-        {'type': 'chain_mvt', 'credit': 1000000000, 'debit': 0, 'tags': ['deposit']},
-        {'type': 'chain_mvt', 'credit': 1000000000, 'debit': 0, 'tags': ['deposit']},
-        {'type': 'chain_mvt', 'credit': 0, 'debit': 1000000000, 'tags': ['withdrawal']},
-        {'type': 'chain_mvt', 'credit': 0, 'debit': 1000000000, 'tags': ['withdrawal']},
-        {'type': 'chain_mvt', 'credit': 0, 'debit': 1000000000, 'tags': ['withdrawal']},
-        {'type': 'chain_mvt', 'credit': 0, 'debit': 1000000000, 'tags': ['withdrawal']},
-        {'type': 'chain_mvt', 'credit': 0, 'debit': 1000000000, 'tags': ['withdrawal']},
-        {'type': 'chain_mvt', 'credit': 0, 'debit': 1000000000, 'tags': ['withdrawal']},
-        {'type': 'chain_mvt', 'credit': 0, 'debit': 1000000000, 'tags': ['withdrawal']},
-        {'type': 'chain_mvt', 'credit': 0, 'debit': 1000000000, 'tags': ['withdrawal']},
+        {'type': 'chain_mvt', 'credit_msat': 1000000000, 'debit_msat': 0, 'tags': ['deposit']},
+        {'type': 'chain_mvt', 'credit_msat': 1000000000, 'debit_msat': 0, 'tags': ['deposit']},
+        {'type': 'chain_mvt', 'credit_msat': 1000000000, 'debit_msat': 0, 'tags': ['deposit']},
+        {'type': 'chain_mvt', 'credit_msat': 1000000000, 'debit_msat': 0, 'tags': ['deposit']},
+        {'type': 'chain_mvt', 'credit_msat': 1000000000, 'debit_msat': 0, 'tags': ['deposit']},
+        {'type': 'chain_mvt', 'credit_msat': 1000000000, 'debit_msat': 0, 'tags': ['deposit']},
+        {'type': 'chain_mvt', 'credit_msat': 1000000000, 'debit_msat': 0, 'tags': ['deposit']},
+        {'type': 'chain_mvt', 'credit_msat': 1000000000, 'debit_msat': 0, 'tags': ['deposit']},
+        {'type': 'chain_mvt', 'credit_msat': 1000000000, 'debit_msat': 0, 'tags': ['deposit']},
+        {'type': 'chain_mvt', 'credit_msat': 1000000000, 'debit_msat': 0, 'tags': ['deposit']},
+        {'type': 'chain_mvt', 'credit_msat': 1000000000, 'debit_msat': 0, 'tags': ['deposit']},
+        {'type': 'chain_mvt', 'credit_msat': 1000000000, 'debit_msat': 0, 'tags': ['deposit']},
+        {'type': 'chain_mvt', 'credit_msat': 0, 'debit_msat': 1000000000, 'tags': ['withdrawal']},
+        {'type': 'chain_mvt', 'credit_msat': 0, 'debit_msat': 1000000000, 'tags': ['withdrawal']},
+        {'type': 'chain_mvt', 'credit_msat': 0, 'debit_msat': 1000000000, 'tags': ['withdrawal']},
+        {'type': 'chain_mvt', 'credit_msat': 0, 'debit_msat': 1000000000, 'tags': ['withdrawal']},
+        {'type': 'chain_mvt', 'credit_msat': 0, 'debit_msat': 1000000000, 'tags': ['withdrawal']},
+        {'type': 'chain_mvt', 'credit_msat': 0, 'debit_msat': 1000000000, 'tags': ['withdrawal']},
+        {'type': 'chain_mvt', 'credit_msat': 0, 'debit_msat': 1000000000, 'tags': ['withdrawal']},
+        {'type': 'chain_mvt', 'credit_msat': 0, 'debit_msat': 1000000000, 'tags': ['withdrawal']},
     ]
 
     check_coin_moves(l1, 'wallet', wallet_coin_mvts, chainparams)
@@ -945,14 +945,14 @@ def test_transaction_annotations(node_factory, bitcoind):
     assert(len(outputs) == 1 and outputs[0]['status'] == 'confirmed')
     out = outputs[0]
     idx = out['output']
-    assert(idx in [0, 1] and out['value'] == 10**6)
+    assert(idx in [0, 1] and out['amount_msat'] == Millisatoshi("{}sat".format(10**6)))
 
     # ... and it should have an annotation on the output reading 'deposit'
     txs = l1.rpc.listtransactions()['transactions']
     assert(len(txs) == 1)
     tx = txs[0]
     output = tx['outputs'][idx]
-    assert(output['type'] == 'deposit' and output['msat'] == Millisatoshi(1000000000))
+    assert(output['type'] == 'deposit' and output['amount_msat'] == Millisatoshi(1000000000))
 
     # ... and all other output should be change, and have no annotations
     types = []

@@ -452,11 +452,10 @@ class LightningRpc(UnixDomainSocketRpc):
             if isinstance(obj, dict):
                 for k, v in obj.items():
                     if k.endswith('msat'):
-                        if isinstance(v, str) and v.endswith('msat'):
-                            obj[k] = Millisatoshi(v)
-                        # Special case for array of msat values
-                        elif isinstance(v, list) and all(isinstance(e, str) and e.endswith('msat') for e in v):
+                        if isinstance(v, list):
                             obj[k] = [Millisatoshi(e) for e in v]
+                        else:
+                            obj[k] = Millisatoshi(v)
                     else:
                         obj[k] = LightningRpc.LightningJSONDecoder.replace_amounts(v)
             elif isinstance(obj, list):
@@ -614,7 +613,7 @@ class LightningRpc(UnixDomainSocketRpc):
         """
         return self.call("dev-memleak")
 
-    def dev_pay(self, bolt11, msatoshi=None, label=None, riskfactor=None,
+    def dev_pay(self, bolt11, amount_msat=None, label=None, riskfactor=None,
                 maxfeepercent=None, retry_for=None,
                 maxdelay=None, exemptfee=None, use_shadow=True, exclude=None):
         """
@@ -623,7 +622,7 @@ class LightningRpc(UnixDomainSocketRpc):
         """
         payload = {
             "bolt11": bolt11,
-            "msatoshi": msatoshi,
+            "amount_msat": amount_msat,
             "label": label,
             "riskfactor": riskfactor,
             "maxfeepercent": maxfeepercent,
@@ -796,19 +795,26 @@ class LightningRpc(UnixDomainSocketRpc):
         res = self.call("listpeers", payload)
         return res.get("peers") and res["peers"][0] or None
 
-    def getroute(self, node_id, msatoshi, riskfactor, cltv=9, fromid=None,
-                 fuzzpercent=None, exclude=None, maxhops=None):
+    def getroute(self, node_id, amount_msat=None, riskfactor=None, cltv=9, fromid=None,
+                 fuzzpercent=None, exclude=None, maxhops=None, msatoshi=None):
         """
-        Show route to {id} for {msatoshi}, using {riskfactor} and optional
+        Show route to {id} for {amount_msat}, using {riskfactor} and optional
         {cltv} (default 9). If specified search from {fromid} otherwise use
         this node as source. Randomize the route with up to {fuzzpercent}
         (0.0 -> 100.0, default 5.0). {exclude} is an optional array of
         scid/direction or node-id to exclude. Limit the number of hops in the
         route to {maxhops}.
         """
+        if msatoshi:
+            amount_msat = msatoshi
+        if riskfactor is None:
+            raise TypeError("getroute() missing 'riskfactor'")
+        if amount_msat is None:
+            raise TypeError("getroute() missing 'amount_msat'")
+
         payload = {
             "id": node_id,
-            "msatoshi": msatoshi,
+            "amount_msat": amount_msat,
             "riskfactor": riskfactor,
             "cltv": cltv,
             "fromid": fromid,
@@ -827,14 +833,22 @@ class LightningRpc(UnixDomainSocketRpc):
         }
         return self.call("help", payload)
 
-    def invoice(self, msatoshi, label, description, expiry=None, fallbacks=None,
-                preimage=None, exposeprivatechannels=None, cltv=None, deschashonly=None):
+    def invoice(self, amount_msat=None, label=None, description=None, expiry=None, fallbacks=None,
+                preimage=None, exposeprivatechannels=None, cltv=None, deschashonly=None, msatoshi=None):
         """
-        Create an invoice for {msatoshi} with {label} and {description} with
+        Create an invoice for {amount_msat} with {label} and {description} with
         optional {expiry} seconds (default 1 week).
         """
+        if msatoshi:
+            amount_msat = msatoshi
+        if label is None:
+            raise TypeError("invoice() missing 'label'")
+        if description is None:
+            raise TypeError("invoice() missing 'description'")
+        if amount_msat is None:
+            raise TypeError("invoice() missing 'amount_msat'")
         payload = {
-            "msatoshi": msatoshi,
+            "amount_msat": amount_msat,
             "label": label,
             "description": description,
             "expiry": expiry,
@@ -994,18 +1008,21 @@ class LightningRpc(UnixDomainSocketRpc):
         """
         return self.call("newaddr", {"addresstype": addresstype})
 
-    def pay(self, bolt11, msatoshi=None, label=None, riskfactor=None,
+    def pay(self, bolt11, amount_msat=None, label=None, riskfactor=None,
             maxfeepercent=None, retry_for=None,
             maxdelay=None, exemptfee=None, localofferid=None, exclude=None,
-            maxfee=None, description=None):
+            maxfee=None, description=None, msatoshi=None):
         """
-        Send payment specified by {bolt11} with {msatoshi}
+        Send payment specified by {bolt11} with {amount_msat}
         (ignored if {bolt11} has an amount), optional {label}
         and {riskfactor} (default 1.0).
         """
+        # Deprecated usage
+        if msatoshi:
+            amount_msat = msatoshi
         payload = {
             "bolt11": bolt11,
-            "msatoshi": msatoshi,
+            "amount_msat": amount_msat,
             "label": label,
             "riskfactor": riskfactor,
             "maxfeepercent": maxfeepercent,
@@ -1131,15 +1148,18 @@ class LightningRpc(UnixDomainSocketRpc):
         }
         return self.call("plugin", payload)
 
-    def sendpay(self, route, payment_hash, label=None, msatoshi=None, bolt11=None, payment_secret=None, partid=None, groupid=None, payment_metadata=None):
+    def sendpay(self, route, payment_hash, label=None, amount_msat=None, bolt11=None, payment_secret=None, partid=None, groupid=None, payment_metadata=None, msatoshi=None):
         """
         Send along {route} in return for preimage of {payment_hash}.
         """
+        # Deprecated usage
+        if msatoshi:
+            amount_msat = msatoshi
         payload = {
             "route": route,
             "payment_hash": payment_hash,
             "label": label,
-            "msatoshi": msatoshi,
+            "amount_msat": amount_msat,
             "bolt11": bolt11,
             "payment_secret": payment_secret,
             "partid": partid,
@@ -1150,8 +1170,8 @@ class LightningRpc(UnixDomainSocketRpc):
 
     def sendonion(
             self, onion, first_hop, payment_hash, label=None,
-            shared_secrets=None, partid=None, bolt11=None, msatoshi=None,
-            destination=None
+            shared_secrets=None, partid=None, bolt11=None, amount_msat=None,
+            destination=None, msatoshi=None
     ):
         """Send an outgoing payment using the specified onion.
 
@@ -1160,6 +1180,9 @@ class LightningRpc(UnixDomainSocketRpc):
         internal handling, but not required.
 
         """
+        # Deprecated usage
+        if msatoshi:
+            amount_msat = msatoshi
         payload = {
             "onion": onion,
             "first_hop": first_hop,
@@ -1168,7 +1191,7 @@ class LightningRpc(UnixDomainSocketRpc):
             "shared_secrets": shared_secrets,
             "partid": partid,
             "bolt11": bolt11,
-            "msatoshi": msatoshi,
+            "amount_msat": amount_msat,
             "destination": destination,
         }
         return self.call("sendonion", payload)
@@ -1427,11 +1450,16 @@ class LightningRpc(UnixDomainSocketRpc):
         payload.update({k: v for k, v in kwargs.items()})
         return self.call("getsharedsecret", payload)
 
-    def keysend(self, destination, msatoshi, label=None, maxfeepercent=None,
+    def keysend(self, destination, amount_msat=None, label=None, maxfeepercent=None,
                 retry_for=None, maxdelay=None, exemptfee=None,
-                extratlvs=None):
+                extratlvs=None, msatoshi=None):
         """
         """
+        # Deprecated usage
+        if msatoshi:
+            amount_msat = msatoshi
+        if amount_msat is None:
+            raise TypeError("keysend() missing 'amount_msat'")
 
         if extratlvs is not None and not isinstance(extratlvs, dict):
             raise ValueError(
@@ -1440,7 +1468,7 @@ class LightningRpc(UnixDomainSocketRpc):
 
         payload = {
             "destination": destination,
-            "msatoshi": msatoshi,
+            "amount_msat": amount_msat,
             "label": label,
             "maxfeepercent": maxfeepercent,
             "retry_for": retry_for,

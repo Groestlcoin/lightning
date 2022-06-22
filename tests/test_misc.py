@@ -626,11 +626,11 @@ def test_withdraw_misc(node_factory, bitcoind, chainparams):
     assert account_balance(l1, 'wallet') == 0
 
     external_moves = [
-        {'type': 'chain_mvt', 'credit': 2000000000, 'debit': 0, 'tags': ['deposit']},
-        {'type': 'chain_mvt', 'credit': 2000000000, 'debit': 0, 'tags': ['deposit']},
-        {'type': 'chain_mvt', 'credit': 2000000000, 'debit': 0, 'tags': ['deposit']},
-        {'type': 'chain_mvt', 'credit': 2000000000, 'debit': 0, 'tags': ['deposit']},
-        {'type': 'chain_mvt', 'credit': 11957603000, 'debit': 0, 'tags': ['deposit']},
+        {'type': 'chain_mvt', 'credit_msat': 2000000000, 'debit_msat': 0, 'tags': ['deposit']},
+        {'type': 'chain_mvt', 'credit_msat': 2000000000, 'debit_msat': 0, 'tags': ['deposit']},
+        {'type': 'chain_mvt', 'credit_msat': 2000000000, 'debit_msat': 0, 'tags': ['deposit']},
+        {'type': 'chain_mvt', 'credit_msat': 2000000000, 'debit_msat': 0, 'tags': ['deposit']},
+        {'type': 'chain_mvt', 'credit_msat': 11957603000, 'debit_msat': 0, 'tags': ['deposit']},
     ]
 
     check_coin_moves(l1, 'external', external_moves, chainparams)
@@ -969,8 +969,7 @@ def test_cli(node_factory):
                      '   "invoices": [',
                      '      {',
                      r'         "label": "l\"[]{}",',
-                     '         "msatoshi": 123000,',
-                     '         "amount_msat": "123000msat",',
+                     '         "amount_msat": 123000,',
                      '         "status": "unpaid",',
                      r'         "description": "d\"[]{}",',
                      '      }',
@@ -2074,7 +2073,7 @@ def test_unicode_rpc(node_factory, executor, bitcoind):
     node = node_factory.get_node()
     desc = "Some candy 🍬 and a nice glass of milk 🥛."
 
-    node.rpc.invoice(msatoshi=42, label=desc, description=desc)
+    node.rpc.invoice(amount_msat=42, label=desc, description=desc)
     invoices = node.rpc.listinvoices()['invoices']
     assert(len(invoices) == 1)
     assert(invoices[0]['description'] == desc)
@@ -2325,7 +2324,7 @@ def test_listforwards(node_factory, bitcoind):
     # status=settled
     settled_forwards = l2.rpc.listforwards(status='settled')['forwards']
     assert len(settled_forwards) == 2
-    assert sum(x['out_msatoshi'] for x in settled_forwards) == 3000
+    assert sum(x['out_msat'] for x in settled_forwards) == 3000
 
     # status=local_failed
     failed_forwards = l2.rpc.listforwards(status='local_failed')['forwards']

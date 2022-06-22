@@ -1026,7 +1026,7 @@ class LightningNode(object):
         assert len(invoices) == 1 and invoices[0]['status'] == 'unpaid'
 
         routestep = {
-            'msatoshi': amt,
+            'amount_msat': amt,
             'id': dst_id,
             'delay': 5,
             'channel': '1x1x1'  # note: can be bogus for 1-hop direct payments
@@ -1152,23 +1152,23 @@ class LightningNode(object):
         except RpcError:
             return None
 
-    def dev_pay(self, bolt11, msatoshi=None, label=None, riskfactor=None,
+    def dev_pay(self, bolt11, amount_msat=None, label=None, riskfactor=None,
                 maxfeepercent=None, retry_for=None,
                 maxdelay=None, exemptfee=None, use_shadow=True, exclude=[]):
         """Wrapper for rpc.dev_pay which suppresses the request schema"""
         # FIXME? dev options are not in schema
         old_check = self.rpc.check_request_schemas
         self.rpc.check_request_schemas = False
-        ret = self.rpc.dev_pay(bolt11, msatoshi, label, riskfactor,
+        ret = self.rpc.dev_pay(bolt11, amount_msat, label, riskfactor,
                                maxfeepercent, retry_for,
                                maxdelay, exemptfee, use_shadow, exclude)
         self.rpc.check_request_schemas = old_check
         return ret
 
-    def dev_invoice(self, msatoshi, label, description, expiry=None, fallbacks=None, preimage=None, exposeprivatechannels=None, cltv=None, dev_routes=None):
+    def dev_invoice(self, amount_msat, label, description, expiry=None, fallbacks=None, preimage=None, exposeprivatechannels=None, cltv=None, dev_routes=None):
         """Wrapper for rpc.invoice() with dev-routes option"""
         payload = {
-            "msatoshi": msatoshi,
+            "amount_msat": amount_msat,
             "label": label,
             "description": description,
             "expiry": expiry,

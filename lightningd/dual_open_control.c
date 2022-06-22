@@ -195,8 +195,9 @@ static void rbf_channel_hook_serialize(struct rbf_channel_payload *payload,
 	json_object_start(stream, "rbf_channel");
 	json_add_node_id(stream, "id", &payload->peer_id);
 	json_add_channel_id(stream, "channel_id", &payload->channel_id);
-	json_add_amount_sat_only(stream, "their_funding",
-				 payload->their_funding);
+	json_add_amount_sats_deprecated(stream,
+					"their_funding", "their_funding_msat",
+					payload->their_funding);
 	json_add_num(stream, "locktime", payload->locktime);
 	json_add_num(stream, "feerate_our_max",
 		     payload->feerate_our_max);
@@ -204,7 +205,7 @@ static void rbf_channel_hook_serialize(struct rbf_channel_payload *payload,
 		     payload->feerate_our_min);
 	json_add_num(stream, "funding_feerate_per_kw",
 		     payload->funding_feerate_per_kw);
-	json_add_amount_sat_only(stream, "channel_max_msat",
+	json_add_amount_sat_msat(stream, "channel_max_msat",
 				 payload->channel_max);
 	json_object_end(stream);
 }
@@ -263,10 +264,11 @@ static void openchannel2_hook_serialize(struct openchannel2_payload *payload,
 	json_object_start(stream, "openchannel2");
 	json_add_node_id(stream, "id", &payload->peer_id);
 	json_add_channel_id(stream, "channel_id", &payload->channel_id);
-	json_add_amount_sat_only(stream, "their_funding",
-				 payload->their_funding);
-	json_add_amount_sat_only(stream, "dust_limit_satoshis",
-				 payload->dust_limit_satoshis);
+	json_add_amount_sats_deprecated(stream, "their_funding", "their_funding_msat",
+					payload->their_funding);
+	json_add_amount_sats_deprecated(stream, "dust_limit_satoshis",
+					"dust_limit_msat",
+					payload->dust_limit_satoshis);
 	json_add_amount_msat_only(stream, "max_htlc_value_in_flight_msat",
 				  payload->max_htlc_value_in_flight_msat);
 	json_add_amount_msat_only(stream, "htlc_minimum_msat",
@@ -286,10 +288,10 @@ static void openchannel2_hook_serialize(struct openchannel2_payload *payload,
 	if (tal_bytelen(payload->shutdown_scriptpubkey) != 0)
 		json_add_hex_talarr(stream, "shutdown_scriptpubkey",
 				    payload->shutdown_scriptpubkey);
-	json_add_amount_sat_only(stream, "channel_max_msat",
+	json_add_amount_sat_msat(stream, "channel_max_msat",
 				 payload->channel_max);
 	if (!amount_sat_zero(payload->requested_lease_amt)) {
-		json_add_amount_sat_only(stream, "requested_lease_msat",
+		json_add_amount_sat_msat(stream, "requested_lease_msat",
 					 payload->requested_lease_amt);
 		json_add_num(stream, "lease_blockheight_start",
 			     payload->lease_blockheight_start);
@@ -745,8 +747,7 @@ openchannel2_hook_deserialize(struct openchannel2_payload *payload,
 		payload->our_shutdown_scriptpubkey = shutdown_script;
 
 
-	struct amount_sat sats;
-	struct amount_msat msats;
+	struct amount_msat fee_base, fee_max_base;
 	payload->rates = tal(payload, struct lease_rates);
 	err = json_scan(payload, buffer, toks,
 			"{lease_fee_base_msat:%"
@@ -754,10 +755,10 @@ openchannel2_hook_deserialize(struct openchannel2_payload *payload,
 			",channel_fee_max_base_msat:%"
 			",channel_fee_max_proportional_thousandths:%"
 			",funding_weight:%}",
-			JSON_SCAN(json_to_sat, &sats),
+			JSON_SCAN(json_to_msat, &fee_base),
 			JSON_SCAN(json_to_u16,
 				  &payload->rates->lease_fee_basis),
-			JSON_SCAN(json_to_msat, &msats),
+			JSON_SCAN(json_to_msat, &fee_max_base),
 			JSON_SCAN(json_to_u16,
 				  &payload->rates->channel_fee_max_proportional_thousandths),
 			JSON_SCAN(json_to_u16,
@@ -769,11 +770,11 @@ openchannel2_hook_deserialize(struct openchannel2_payload *payload,
 
 	/* Convert to u32s */
 	if (payload->rates &&
-	    !lease_rates_set_lease_fee_sat(payload->rates, sats))
-		fatal("Plugin sent overflowing `lease_fee_base_msat`");
+	    !lease_rates_set_lease_fee_msat(payload->rates, fee_base))
+		fatal("Plugin sent overflowing/non-sat `lease_fee_base_msat`");
 
 	if (payload->rates &&
-	    !lease_rates_set_chan_fee_base_msat(payload->rates, msats))
+	    !lease_rates_set_chan_fee_base_msat(payload->rates, fee_max_base))
 		fatal("Plugin sent overflowing `channel_fee_max_base_msat`");
 
 	/* Add a serial_id to everything that doesn't have one yet */
@@ -1632,8 +1633,8 @@ static void handle_dry_run_finished(struct subd *dualopend, const u8 *msg)
 	channel->open_attempt = tal_free(channel->open_attempt);
 
 	response = json_stream_success(cmd);
-	json_add_amount_sat_only(response, "our_funding_msat", our_funding);
-	json_add_amount_sat_only(response, "their_funding_msat", their_funding);
+	json_add_amount_sat_msat(response, "our_funding_msat", our_funding);
+	json_add_amount_sat_msat(response, "their_funding_msat", their_funding);
 
 	if (rates) {
 		json_add_lease_rates(response, rates);

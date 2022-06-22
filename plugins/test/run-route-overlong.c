@@ -14,6 +14,8 @@ struct command_result *command_finished(struct command *cmd UNNEEDED, struct jso
 /* Generated stub for command_still_pending */
 struct command_result *command_still_pending(struct command *cmd UNNEEDED)
 { fprintf(stderr, "command_still_pending called!\n"); abort(); }
+/* Generated stub for deprecated_apis */
+bool deprecated_apis;
 /* Generated stub for feature_offered */
 bool feature_offered(const u8 *features UNNEEDED, size_t f UNNEEDED)
 { fprintf(stderr, "feature_offered called!\n"); abort(); }
@@ -73,7 +75,7 @@ void json_add_short_channel_id(struct json_stream *response UNNEEDED,
 			       const struct short_channel_id *id UNNEEDED)
 { fprintf(stderr, "json_add_short_channel_id called!\n"); abort(); }
 /* Generated stub for json_add_string */
-void json_add_string(struct json_stream *result UNNEEDED, const char *fieldname UNNEEDED, const char *value UNNEEDED)
+void json_add_string(struct json_stream *result UNNEEDED, const char *fieldname UNNEEDED, const char *value TAKES UNNEEDED)
 { fprintf(stderr, "json_add_string called!\n"); abort(); }
 /* Generated stub for json_add_timeabs */
 void json_add_timeabs(struct json_stream *result UNNEEDED, const char *fieldname UNNEEDED,

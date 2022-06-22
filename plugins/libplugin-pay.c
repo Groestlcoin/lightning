@@ -916,7 +916,7 @@ static struct payment_result *tal_sendpay_result_from_json(const tal_t *ctx,
 	/* Initial sanity checks, all these fields must exist. */
 	if (idtok == NULL || idtok->type != JSMN_PRIMITIVE ||
 	    hashtok == NULL || hashtok->type != JSMN_STRING ||
-	    senttok == NULL || senttok->type != JSMN_STRING ||
+	    senttok == NULL ||
 	    statustok == NULL || statustok->type != JSMN_STRING) {
 		return NULL;
 	}
@@ -1554,7 +1554,7 @@ static struct command_result *payment_createonion_success(struct command *cmd,
 	json_object_end(req->js);
 
 	json_add_sha256(req->js, "payment_hash", p->payment_hash);
-	json_add_amount_msat_only(req->js, "msatoshi", p->amount);
+	json_add_amount_msat_only(req->js, "amount_msat", p->amount);
 
 	json_array_start(req->js, "shared_secrets");
 	secrets = p->createonion_response->shared_secrets;
@@ -1825,7 +1825,9 @@ static void payment_add_attempt(struct json_stream *s, const char *fieldname, st
 		json_add_string(s, "failreason", p->failreason);
 
 	json_add_u64(s, "partid", p->partid);
-	json_add_amount_msat_only(s, "amount", p->amount);
+	if (deprecated_apis)
+		json_add_amount_msat_only(s, "amount", p->amount);
+	json_add_amount_msat_only(s, "amount_msat", p->amount);
 	if (p->parent != NULL)
 		json_add_u64(s, "parent_partid", p->parent->partid);
 

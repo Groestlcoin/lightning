@@ -1044,7 +1044,11 @@ static void htlc_accepted_hook_serialize(struct htlc_accepted_hook_payload *p,
 		if (p->payload->forward_channel)
 			json_add_short_channel_id(s, "short_channel_id",
 						  p->payload->forward_channel);
-		json_add_amount_msat_only(s, "forward_amount",
+		if (deprecated_apis)
+			json_add_string(s, "forward_amount",
+					fmt_amount_msat(tmpctx,
+							p->payload->amt_to_forward));
+		json_add_amount_msat_only(s, "forward_msat",
 					  p->payload->amt_to_forward);
 		json_add_u32(s, "outgoing_cltv_value", p->payload->outgoing_cltv);
 		/* These are specified together in TLV, so only print total_msat
@@ -1067,7 +1071,9 @@ static void htlc_accepted_hook_serialize(struct htlc_accepted_hook_payload *p,
 	json_object_start(s, "htlc");
 	json_add_short_channel_id(s, "short_channel_id", hin->key.channel->scid);
 	json_add_u64(s, "id", hin->key.id);
-	json_add_amount_msat_only(s, "amount", hin->msat);
+	if (deprecated_apis)
+		json_add_amount_msat_only(s, "amount", hin->msat);
+	json_add_amount_msat_only(s, "amount_msat", hin->msat);
 	json_add_u32(s, "cltv_expiry", expiry);
 	json_add_s32(s, "cltv_expiry_relative", expiry - blockheight);
 	json_add_sha256(s, "payment_hash", &hin->payment_hash);

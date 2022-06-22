@@ -396,7 +396,7 @@ def test_pay_plugin(node_factory):
         l1.rpc.call('pay')
 
     # Make sure usage messages are present.
-    msg = 'pay bolt11 [msatoshi] [label] [riskfactor] [maxfeepercent] '\
+    msg = 'pay bolt11 [amount_msat] [label] [riskfactor] [maxfeepercent] '\
           '[retry_for] [maxdelay] [exemptfee] [localofferid] [exclude] '\
           '[maxfee] [description]'
     if DEVELOPER:
@@ -626,11 +626,11 @@ def test_openchannel_hook(node_factory, bitcoind):
     # Make sure plugin got all the vars we expect
     expected = {
         'channel_flags': '1',
-        'dust_limit_satoshis': '546000msat',
-        'htlc_minimum_msat': '0msat',
+        'dust_limit_msat': 546000,
+        'htlc_minimum_msat': 0,
         'id': l1.info['id'],
         'max_accepted_htlcs': '483',
-        'max_htlc_value_in_flight_msat': '18446744073709551615msat',
+        'max_htlc_value_in_flight_msat': 18446744073709551615,
         'to_self_delay': '5',
     }
 
@@ -643,15 +643,15 @@ def test_openchannel_hook(node_factory, bitcoind):
             'feerate_our_max': '150000',
             'feerate_our_min': '1875',
             'locktime': '.*',
-            'their_funding': '100000000msat',
-            'channel_max_msat': '16777215000msat',
+            'their_funding_msat': 100000000,
+            'channel_max_msat': 16777215000,
         })
     else:
         expected.update({
-            'channel_reserve_satoshis': '1000000msat',
+            'channel_reserve_msat': 1000000,
             'feerate_per_kw': '7500',
-            'funding_satoshis': '100000000msat',
-            'push_msat': '0msat',
+            'funding_msat': 100000000,
+            'push_msat': 0,
         })
 
     l2.daemon.wait_for_log('reject_odd_funding_amounts.py: {} VARS'.format(len(expected)))
@@ -1076,7 +1076,7 @@ def test_htlc_accepted_hook_resolve(node_factory):
         {}
     ], wait_for_announce=True)
 
-    inv = l3.rpc.invoice(msatoshi=1000, label="lbl", description="desc", preimage="00" * 32)['bolt11']
+    inv = l3.rpc.invoice(amount_msat=1000, label="lbl", description="desc", preimage="00" * 32)['bolt11']
     l1.rpc.pay(inv)
 
     # And the invoice must still be unpaid
@@ -1093,7 +1093,7 @@ def test_htlc_accepted_hook_direct_restart(node_factory, executor):
          'plugin': os.path.join(os.getcwd(), 'tests/plugins/hold_htlcs.py')}
     ])
 
-    i1 = l2.rpc.invoice(msatoshi=1000, label="direct", description="desc")['bolt11']
+    i1 = l2.rpc.invoice(amount_msat=1000, label="direct", description="desc")['bolt11']
     f1 = executor.submit(l1.rpc.pay, i1)
 
     l2.daemon.wait_for_log(r'Holding onto an incoming htlc for 10 seconds')
@@ -1126,7 +1126,7 @@ def test_htlc_accepted_hook_forward_restart(node_factory, executor):
         {'may_reconnect': True},
     ], wait_for_announce=True)
 
-    i1 = l3.rpc.invoice(msatoshi=1000, label="direct", description="desc")['bolt11']
+    i1 = l3.rpc.invoice(amount_msat=1000, label="direct", description="desc")['bolt11']
     f1 = executor.submit(l1.dev_pay, i1, use_shadow=False)
 
     l2.daemon.wait_for_log(r'Holding onto an incoming htlc for 10 seconds')
@@ -1148,7 +1148,7 @@ def test_htlc_accepted_hook_forward_restart(node_factory, executor):
     assert onion['type'] == 'tlv'
     assert re.match(r'^11020203e80401..0608................$', onion['payload'])
     assert len(onion['shared_secret']) == 64
-    assert onion['forward_amount'] == '1000msat'
+    assert onion['forward_msat'] == Millisatoshi(1000)
     assert len(onion['next_onion']) == 2 * (1300 + 32 + 33 + 1)
 
     f1.result()
@@ -1290,11 +1290,11 @@ def test_forward_event_notification(node_factory, bitcoind, executor):
     fee = amount * 10 // 1000000 + 1
     c12 = l1.get_channel_scid(l2)
     c25 = l2.get_channel_scid(l5)
-    route = [{'msatoshi': amount + fee - 1,
+    route = [{'amount_msat': amount + fee - 1,
               'id': l2.info['id'],
               'delay': 12,
               'channel': c12},
-             {'msatoshi': amount - 1,
+             {'amount_msat': amount - 1,
               'id': l5.info['id'],
               'delay': 5,
               'channel': c25}]
@@ -1921,26 +1921,26 @@ def test_coin_movement_notices(node_factory, bitcoind, chainparams):
     """Verify that channel coin movements are triggered correctly.  """
 
     l1_l2_mvts = [
-        {'type': 'chain_mvt', 'credit': 0, 'debit': 0, 'tags': ['channel_open']},
-        {'type': 'channel_mvt', 'credit': 100001001, 'debit': 0, 'tags': ['routed'], 'fees': '1001msat'},
-        {'type': 'channel_mvt', 'credit': 0, 'debit': 50000000, 'tags': ['routed'], 'fees': '501msat'},
-        {'type': 'channel_mvt', 'credit': 100000000, 'debit': 0, 'tags': ['invoice'], 'fees': '0msat'},
-        {'type': 'channel_mvt', 'credit': 0, 'debit': 50000000, 'tags': ['invoice'], 'fees': '0msat'},
-        {'type': 'chain_mvt', 'credit': 0, 'debit': 100001001, 'tags': ['channel_close']},
+        {'type': 'chain_mvt', 'credit_msat': 0, 'debit_msat': 0, 'tags': ['channel_open']},
+        {'type': 'channel_mvt', 'credit_msat': 100001001, 'debit_msat': 0, 'tags': ['routed'], 'fees_msat': '1001msat'},
+        {'type': 'channel_mvt', 'credit_msat': 0, 'debit_msat': 50000000, 'tags': ['routed'], 'fees_msat': '501msat'},
+        {'type': 'channel_mvt', 'credit_msat': 100000000, 'debit_msat': 0, 'tags': ['invoice'], 'fees_msat': '0msat'},
+        {'type': 'channel_mvt', 'credit_msat': 0, 'debit_msat': 50000000, 'tags': ['invoice'], 'fees_msat': '0msat'},
+        {'type': 'chain_mvt', 'credit_msat': 0, 'debit_msat': 100001001, 'tags': ['channel_close']},
     ]
 
     l2_l3_mvts = [
-        {'type': 'chain_mvt', 'credit': 1000000000, 'debit': 0, 'tags': ['channel_open', 'opener']},
-        {'type': 'channel_mvt', 'credit': 0, 'debit': 100000000, 'tags': ['routed'], 'fees': '1001msat'},
-        {'type': 'channel_mvt', 'credit': 50000501, 'debit': 0, 'tags': ['routed'], 'fees': '501msat'},
-        {'type': 'chain_mvt', 'credit': 0, 'debit': 950000501, 'tags': ['channel_close']},
+        {'type': 'chain_mvt', 'credit_msat': 1000000000, 'debit_msat': 0, 'tags': ['channel_open', 'opener']},
+        {'type': 'channel_mvt', 'credit_msat': 0, 'debit_msat': 100000000, 'tags': ['routed'], 'fees_msat': '1001msat'},
+        {'type': 'channel_mvt', 'credit_msat': 50000501, 'debit_msat': 0, 'tags': ['routed'], 'fees_msat': '501msat'},
+        {'type': 'chain_mvt', 'credit_msat': 0, 'debit_msat': 950000501, 'tags': ['channel_close']},
     ]
 
     l3_l2_mvts = [
-        {'type': 'chain_mvt', 'credit': 0, 'debit': 0, 'tags': ['channel_open']},
-        {'type': 'channel_mvt', 'credit': 100000000, 'debit': 0, 'tags': ['invoice'], 'fees': '0msat'},
-        {'type': 'channel_mvt', 'credit': 0, 'debit': 50000501, 'tags': ['invoice'], 'fees': '501msat'},
-        {'type': 'chain_mvt', 'credit': 0, 'debit': 49999499, 'tags': ['channel_close']},
+        {'type': 'chain_mvt', 'credit_msat': 0, 'debit_msat': 0, 'tags': ['channel_open']},
+        {'type': 'channel_mvt', 'credit_msat': 100000000, 'debit_msat': 0, 'tags': ['invoice'], 'fees_msat': '0msat'},
+        {'type': 'channel_mvt', 'credit_msat': 0, 'debit_msat': 50000501, 'tags': ['invoice'], 'fees_msat': '501msat'},
+        {'type': 'chain_mvt', 'credit_msat': 0, 'debit_msat': 49999499, 'tags': ['channel_close']},
     ]
 
     coin_plugin = os.path.join(os.getcwd(), 'tests/plugins/coin_movements.py')
@@ -2054,7 +2054,7 @@ def test_3847_repro(node_factory, bitcoind):
     amt = 20 * 1000 * 1000
 
     i1 = l3.rpc.invoice(
-        msatoshi=amt, label="direct", description="desc"
+        amount_msat=amt, label="direct", description="desc"
     )['bolt11']
     with pytest.raises(RpcError):
         l1.rpc.pay(i1, retry_for=10)

@@ -852,17 +852,17 @@ def test_channel_lease_post_expiry(node_factory, bitcoind, chainparams):
     l2.daemon.wait_for_log('Resolved FUNDING_TRANSACTION/FUNDING_OUTPUT by MUTUAL_CLOSE')
 
     channel_mvts_1 = [
-        {'type': 'chain_mvt', 'credit': 506432000, 'debit': 0, 'tags': ['channel_open', 'opener', 'leased']},
-        {'type': 'channel_mvt', 'credit': 0, 'debit': 6432000, 'tags': ['lease_fee'], 'fees': '0msat'},
-        {'type': 'channel_mvt', 'credit': 0, 'debit': 10000, 'tags': ['invoice'], 'fees': '0msat'},
-        {'type': 'chain_mvt', 'credit': 0, 'debit': 499990000, 'tags': ['channel_close']},
+        {'type': 'chain_mvt', 'credit_msat': 506432000, 'debit_msat': 0, 'tags': ['channel_open', 'opener', 'leased']},
+        {'type': 'channel_mvt', 'credit_msat': 0, 'debit_msat': 6432000, 'tags': ['lease_fee'], 'fees_msat': '0msat'},
+        {'type': 'channel_mvt', 'credit_msat': 0, 'debit_msat': 10000, 'tags': ['invoice'], 'fees_msat': '0msat'},
+        {'type': 'chain_mvt', 'credit_msat': 0, 'debit_msat': 499990000, 'tags': ['channel_close']},
     ]
 
     channel_mvts_2 = [
-        {'type': 'chain_mvt', 'credit': 500000000, 'debit': 0, 'tags': ['channel_open', 'leased']},
-        {'type': 'channel_mvt', 'credit': 6432000, 'debit': 0, 'tags': ['lease_fee'], 'fees': '0msat'},
-        {'type': 'channel_mvt', 'credit': 10000, 'debit': 0, 'tags': ['invoice'], 'fees': '0msat'},
-        {'type': 'chain_mvt', 'credit': 0, 'debit': 506442000, 'tags': ['channel_close']},
+        {'type': 'chain_mvt', 'credit_msat': 500000000, 'debit_msat': 0, 'tags': ['channel_open', 'leased']},
+        {'type': 'channel_mvt', 'credit_msat': 6432000, 'debit_msat': 0, 'tags': ['lease_fee'], 'fees_msat': '0msat'},
+        {'type': 'channel_mvt', 'credit_msat': 10000, 'debit_msat': 0, 'tags': ['invoice'], 'fees_msat': '0msat'},
+        {'type': 'chain_mvt', 'credit_msat': 0, 'debit_msat': 506442000, 'tags': ['channel_close']},
     ]
 
     check_coin_moves(l1, channel_id, channel_mvts_1, chainparams)
@@ -1285,11 +1285,11 @@ def test_penalty_htlc_tx_fulfill(node_factory, bitcoind, chainparams):
     if not chainparams['elements']:
         # Also check snapshots
         expected_bals_2 = [
-            {'blockheight': 101, 'accounts': [{'balance': '0msat'}]},
-            {'blockheight': 108, 'accounts': [{'balance': '995433000msat'}, {'balance': '500000000msat'}, {'balance': '499994999msat'}]},
+            {'blockheight': 101, 'accounts': [{'balance_msat': '0msat'}]},
+            {'blockheight': 108, 'accounts': [{'balance_msat': '995433000msat'}, {'balance_msat': '500000000msat'}, {'balance_msat': '499994999msat'}]},
             # There's a duplicate because we stop and restart l2 twice
             # (both times at block 108)
-            {'blockheight': 108, 'accounts': [{'balance': '995433000msat'}, {'balance': '500000000msat'}, {'balance': '499994999msat'}]},
+            {'blockheight': 108, 'accounts': [{'balance_msat': '995433000msat'}, {'balance_msat': '500000000msat'}, {'balance_msat': '499994999msat'}]},
         ]
         check_balance_snaps(l2, expected_bals_2)
 
@@ -1856,7 +1856,7 @@ def test_onchaind_replay(node_factory, bitcoind):
     inv = l2.rpc.invoice(10**8, 'onchaind_replay', 'desc')
     rhash = inv['payment_hash']
     routestep = {
-        'msatoshi': 10**8 - 1,
+        'amount_msat': 10**8 - 1,
         'id': l2.info['id'],
         'delay': 101,
         'channel': '1x1x1'
@@ -1916,7 +1916,7 @@ def test_onchain_dust_out(node_factory, bitcoind, executor):
     inv = l2.rpc.invoice(1, 'onchain_dust_out', 'desc')
     rhash = inv['payment_hash']
     routestep = {
-        'msatoshi': 1,
+        'amount_msat': 1,
         'id': l2.info['id'],
         'delay': 5,
         'channel': '1x1x1'
@@ -1988,7 +1988,7 @@ def test_onchain_timeout(node_factory, bitcoind, executor):
     rhash = inv['payment_hash']
     # We underpay, so it fails.
     routestep = {
-        'msatoshi': 10**8 - 1,
+        'amount_msat': 10**8 - 1,
         'id': l2.info['id'],
         'delay': 5,
         'channel': '1x1x1'
@@ -2460,7 +2460,7 @@ def test_onchain_feechange(node_factory, bitcoind, executor):
     rhash = inv['payment_hash']
     # We underpay, so it fails.
     routestep = {
-        'msatoshi': 10**8 - 1,
+        'amount_msat': 10**8 - 1,
         'id': l2.info['id'],
         'delay': 5,
         'channel': '1x1x1'
@@ -2545,7 +2545,7 @@ def test_onchain_all_dust(node_factory, bitcoind, executor):
     rhash = inv['payment_hash']
     # We underpay, so it fails.
     routestep = {
-        'msatoshi': 10**7 - 1,
+        'amount_msat': 10**7 - 1,
         'id': l2.info['id'],
         'delay': 5,
         'channel': '1x1x1'
@@ -2735,10 +2735,10 @@ def setup_multihtlc_test(node_factory, bitcoind):
     nodes[-1].rpc.dev_ignore_htlcs(id=nodes[-2].info['id'], ignore=True)
 
     preimage = "0" * 64
-    inv = nodes[0].rpc.invoice(msatoshi=10**8, label='x', description='desc',
+    inv = nodes[0].rpc.invoice(amount_msat=10**8, label='x', description='desc',
                                preimage=preimage)
     h = inv['payment_hash']
-    nodes[-1].rpc.invoice(msatoshi=10**8, label='x', description='desc',
+    nodes[-1].rpc.invoice(amount_msat=10**8, label='x', description='desc',
                           preimage=preimage)['payment_hash']
 
     # First, the failed attempts (paying wrong node).  CLTV1
@@ -3641,8 +3641,8 @@ We send an HTLC, and peer unilaterally closes: do we close upstream?
                                                 'dev-no-ping-timer': None},
                                                {'dev-no-ping-timer': None}])
 
-    ph1 = l3.rpc.invoice(msatoshi="10000sat", label='x1', description='desc2')['payment_hash']
-    ph2 = l3.rpc.invoice(msatoshi="10000sat", label='x2', description='desc2')['payment_hash']
+    ph1 = l3.rpc.invoice(amount_msat="10000sat", label='x1', description='desc2')['payment_hash']
+    ph2 = l3.rpc.invoice(amount_msat="10000sat", label='x2', description='desc2')['payment_hash']
 
     route = l1.rpc.getroute(l3.info['id'], 1, 1)['route']
 
