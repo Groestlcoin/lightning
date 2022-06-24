@@ -1866,6 +1866,9 @@ def test_signmessage(node_factory):
     checknokey = l2.rpc.checkmessage(message="message for you", zbase=zm)
     assert checknokey['pubkey'] == l1.info['id']
     assert checknokey['verified']
+    # check that checkmassage used with a wrong zbase format throws an RPC exception
+    with pytest.raises(RpcError, match="zbase is not valid zbase32"):
+        l2.rpc.checkmessage(message="wrong zbase format", zbase="wrong zbase format")
 
 
 def test_include(node_factory):
@@ -2605,3 +2608,13 @@ def test_datastore_keylist(node_factory):
                                                                          'string': 'ab2val2',
                                                                          'generation': 1,
                                                                          'hex': b'ab2val2'.hex()}]}
+
+
+@unittest.skipIf(os.getenv('TEST_DB_PROVIDER', 'sqlite3') != 'sqlite3',
+                 "This test requires sqlite3")
+def test_torv2_in_db(node_factory):
+    l1, l2 = node_factory.line_graph(2, wait_for_announce=True)
+
+    l1.stop()
+    l1.db_manip("UPDATE peers SET address='3fyb44wdhnd2ghhl.onion:1234';")
+    l1.start()
