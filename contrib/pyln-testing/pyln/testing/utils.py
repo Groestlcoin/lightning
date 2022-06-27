@@ -7,10 +7,10 @@ from pyln.client import RpcError
 from pyln.testing.btcproxy import BitcoinRpcProxy
 from collections import OrderedDict
 from decimal import Decimal
-from ephemeral_port_reserve import reserve  # type: ignore
 from pyln.client import LightningRpc
 from pyln.client import Millisatoshi
 
+import ephemeral_port_reserve  # type: ignore
 import json
 import logging
 import lzma
@@ -146,6 +146,27 @@ def get_tx_p2wsh_outnum(bitcoind, tx, amount):
     return None
 
 
+unused_port_lock = threading.Lock()
+unused_port_set = set()
+
+
+def reserve_unused_port():
+    """Get an unused port: avoids handing out the same port unless it's been
+    returned"""
+    with unused_port_lock:
+        while True:
+            port = ephemeral_port_reserve.reserve()
+            if port not in unused_port_set:
+                break
+        unused_port_set.add(port)
+
+    return port
+
+
+def drop_unused_port(port):
+    unused_port_set.remove(port)
+
+
 class TailableProc(object):
     """A monitorable process that we can start, stop and tail.
 
@@ -153,13 +174,20 @@ class TailableProc(object):
     tail the processes and react to their output.
     """
 
-    def __init__(self, outputDir=None, verbose=True):
+    def __init__(self, outputDir, verbose=True):
         self.logs = []
-        self.logs_cond = threading.Condition(threading.RLock())
         self.env = os.environ.copy()
-        self.running = False
         self.proc = None
         self.outputDir = outputDir
+        if not os.path.exists(outputDir):
+            os.makedirs(outputDir)
+        # Create and open them.
+        self.stdout_filename = os.path.join(outputDir, "log")
+        self.stderr_filename = os.path.join(outputDir, "errlog")
+        self.stdout_write = open(self.stdout_filename, "wt")
+        self.stderr_write = open(self.stderr_filename, "wt")
+        self.stdout_read = open(self.stdout_filename, "rt")
+        self.stderr_read = open(self.stderr_filename, "rt")
         self.logsearch_start = 0
         self.err_logs = []
         self.prefix = ""
@@ -171,29 +199,26 @@ class TailableProc(object):
         # pass it to the log matcher and not print it to stdout).
         self.log_filter = lambda line: False
 
-    def start(self, stdin=None, stdout=None, stderr=None):
-        """Start the underlying process and start monitoring it.
+    def start(self, stdin=None, stdout_redir=True):
+        """Start the underlying process and start monitoring it. If
+        stdout_redir is false, you have to make sure logs go into
+        outputDir/log
+
         """
         logging.debug("Starting '%s'", " ".join(self.cmd_line))
-        self.proc = subprocess.Popen(self.cmd_line,
-                                     stdin=stdin,
-                                     stdout=stdout if stdout else subprocess.PIPE,
-                                     stderr=stderr,
-                                     env=self.env)
-        self.thread = threading.Thread(target=self.tail)
-        self.thread.daemon = True
-        self.thread.start()
-        self.running = True
-
-    def save_log(self):
-        if self.outputDir:
-            logpath = os.path.join(self.outputDir, 'log')
-            with open(logpath, 'w') as f:
-                for l in self.logs:
-                    f.write(l + '\n')
+        if stdout_redir:
+            self.proc = subprocess.Popen(self.cmd_line,
+                                         stdin=stdin,
+                                         stdout=self.stdout_write,
+                                         stderr=self.stderr_write,
+                                         env=self.env)
+        else:
+            self.proc = subprocess.Popen(self.cmd_line,
+                                         stdin=stdin,
+                                         stderr=self.stderr_write,
+                                         env=self.env)
 
     def stop(self, timeout=10):
-        self.save_log()
         self.proc.terminate()
 
         # Now give it some time to react to the signal
@@ -203,56 +228,32 @@ class TailableProc(object):
             self.proc.kill()
 
         self.proc.wait()
-        self.thread.join()
-
         return self.proc.returncode
 
     def kill(self):
         """Kill process without giving it warning."""
         self.proc.kill()
         self.proc.wait()
-        self.thread.join()
 
-    def tail(self):
-        """Tail the stdout of the process and remember it.
-
-        Stores the lines of output produced by the process in
-        self.logs and signals that a new line was read so that it can
-        be picked up by consumers.
+    def logs_catchup(self):
+        """Save the latest stdout / stderr contents; return true if we got anything.
         """
-        for line in iter(self.proc.stdout.readline, ''):
-            if len(line) == 0:
-                break
-
-            line = line.decode('UTF-8', 'replace').rstrip()
-
-            if self.log_filter(line):
-                continue
-
-            if self.verbose:
-                sys.stdout.write("{}: {}\n".format(self.prefix, line))
-
-            with self.logs_cond:
-                self.logs.append(line)
-                self.logs_cond.notifyAll()
-
-        self.running = False
-        self.proc.stdout.close()
-
-        if self.proc.stderr:
-            for line in iter(self.proc.stderr.readline, ''):
-
-                if line is None or len(line) == 0:
-                    break
-
-                line = line.rstrip().decode('UTF-8', 'replace')
-                self.err_logs.append(line)
-
-            self.proc.stderr.close()
+        new_stdout = self.stdout_read.readlines()
+        if self.verbose:
+            for line in new_stdout:
+                sys.stdout.write("{}: {}".format(self.prefix, line))
+        self.logs += [l.rstrip() for l in new_stdout]
+        new_stderr = self.stderr_read.readlines()
+        if self.verbose:
+            for line in new_stderr:
+                sys.stderr.write("{}-stderr: {}".format(self.prefix, line))
+        self.err_logs += [l.rstrip() for l in new_stderr]
+        return len(new_stdout) > 0 or len(new_stderr) > 0
 
     def is_in_log(self, regex, start=0):
         """Look for `regex` in the logs."""
 
+        self.logs_catchup()
         ex = re.compile(regex)
         for l in self.logs[start:]:
             if ex.search(l):
@@ -265,6 +266,7 @@ class TailableProc(object):
     def is_in_stderr(self, regex):
         """Look for `regex` in stderr."""
 
+        self.logs_catchup()
         ex = re.compile(regex)
         for l in self.err_logs:
             if ex.search(l):
@@ -290,31 +292,29 @@ class TailableProc(object):
         logging.debug("Waiting for {} in the logs".format(regexs))
         exs = [re.compile(r) for r in regexs]
         start_time = time.time()
-        pos = self.logsearch_start
         while True:
-            if timeout is not None and time.time() > start_time + timeout:
-                print("Time-out: can't find {} in logs".format(exs))
-                for r in exs:
-                    if self.is_in_log(r):
-                        print("({} was previously in logs!)".format(r))
-                raise TimeoutError('Unable to find "{}" in logs.'.format(exs))
+            if self.logsearch_start >= len(self.logs):
+                if not self.logs_catchup():
+                    time.sleep(0.25)
 
-            with self.logs_cond:
-                if pos >= len(self.logs):
-                    if not self.running:
-                        raise ValueError('Process died while waiting for logs')
-                    self.logs_cond.wait(1)
-                    continue
+                if timeout is not None and time.time() > start_time + timeout:
+                    print("Time-out: can't find {} in logs".format(exs))
+                    for r in exs:
+                        if self.is_in_log(r):
+                            print("({} was previously in logs!)".format(r))
+                    raise TimeoutError('Unable to find "{}" in logs.'.format(exs))
+                continue
 
-                for r in exs.copy():
-                    self.logsearch_start = pos + 1
-                    if r.search(self.logs[pos]):
-                        logging.debug("Found '%s' in logs", r)
-                        exs.remove(r)
-                        break
-                if len(exs) == 0:
-                    return self.logs[pos]
-                pos += 1
+            line = self.logs[self.logsearch_start]
+            self.logsearch_start += 1
+            for r in exs.copy():
+                if r.search(line):
+                    logging.debug("Found '%s' in logs", r)
+                    exs.remove(r)
+                    if len(exs) == 0:
+                        return line
+                    # Don't match same line with different regexs!
+                    break
 
     def wait_for_log(self, regex, timeout=TIMEOUT):
         """Look for `regex` in the logs.
@@ -367,7 +367,10 @@ class BitcoinD(TailableProc):
         TailableProc.__init__(self, bitcoin_dir, verbose=False)
 
         if rpcport is None:
-            rpcport = reserve()
+            self.reserved_rpcport = reserve_unused_port()
+            rpcport = self.reserved_rpcport
+        else:
+            self.reserved_rpcport = None
 
         self.bitcoin_dir = bitcoin_dir
         self.rpcport = rpcport
@@ -397,6 +400,10 @@ class BitcoinD(TailableProc):
         write_config(self.conf_file, BITCOIND_CONFIG, BITCOIND_REGTEST)
         self.rpc = SimpleBitcoinProxy(btc_conf_file=self.conf_file)
         self.proxies = []
+
+    def __del__(self):
+        if self.reserved_rpcport is not None:
+            drop_unused_port(self.reserved_rpcport)
 
     def start(self):
         TailableProc.start(self)
@@ -531,7 +538,8 @@ class ElementsD(BitcoinD):
 
 class LightningD(TailableProc):
     def __init__(self, lightning_dir, bitcoindproxy, port=9735, random_hsm=False, node_id=0):
-        TailableProc.__init__(self, lightning_dir)
+        # We handle our own version of verbose, below.
+        TailableProc.__init__(self, lightning_dir, verbose=False)
         self.executable = 'lightningd'
         self.lightning_dir = lightning_dir
         self.port = port
@@ -570,6 +578,10 @@ class LightningD(TailableProc):
             self.opts['dev-fast-gossip'] = None
             self.opts['dev-bitcoind-poll'] = 1
         self.prefix = 'lightningd-%d' % (node_id)
+        # Log to stdout so we see it in failure cases, and log file for TailableProc.
+        self.opts['log-file'] = ['-', os.path.join(lightning_dir, "log")]
+        # In case you want specific ordering!
+        self.early_opts = []
 
     def cleanup(self):
         # To force blackhole to exit, disconnect file must be truncated!
@@ -590,17 +602,16 @@ class LightningD(TailableProc):
             else:
                 opts.append("--{}={}".format(k, v))
 
-        return self.cmd_prefix + [self.executable] + opts
+        return self.cmd_prefix + [self.executable] + self.early_opts + opts
 
-    def start(self, stdin=None, stdout=None, stderr=None,
-              wait_for_initialized=True):
+    def start(self, stdin=None, wait_for_initialized=True):
         self.opts['bitcoin-rpcport'] = self.rpcproxy.rpcport
-        TailableProc.start(self, stdin, stdout, stderr)
+        TailableProc.start(self, stdin, stdout_redir=False)
         if wait_for_initialized:
             self.wait_for_log("Server started with public key")
         logging.info("LightningD started")
 
-    def wait(self, timeout=10):
+    def wait(self, timeout=TIMEOUT):
         """Wait for the daemon to stop for up to timeout seconds
 
         Returns the returncode of the process, None if the process did
@@ -824,8 +835,8 @@ class LightningNode(object):
             info = self.rpc.getinfo()
         return 'warning_bitcoind_sync' not in info and 'warning_lightningd_sync' not in info
 
-    def start(self, wait_for_bitcoind_sync=True, stderr=None):
-        self.daemon.start(stderr=stderr)
+    def start(self, wait_for_bitcoind_sync=True):
+        self.daemon.start()
         # Cache `getinfo`, we'll be using it a lot
         self.info = self.rpc.getinfo()
         # This shortcut is sufficient for our simple tests.
@@ -850,7 +861,6 @@ class LightningNode(object):
         if self.rc is None:
             self.rc = self.daemon.stop()
 
-        self.daemon.save_log()
         self.daemon.cleanup()
 
         if self.rc != 0 and not self.may_fail:
@@ -1123,6 +1133,7 @@ class LightningNode(object):
                                timeout=TIMEOUT,
                                stdout=subprocess.PIPE).stdout.strip()
         out = subprocess.run(['devtools/gossipwith',
+                              '--features=40',  # OPT_GOSSIP_QUERIES
                               '--timeout-after={}'.format(int(math.sqrt(TIMEOUT) + 1)),
                               '{}@localhost:{}'.format(self.info['id'],
                                                        self.port),
@@ -1281,6 +1292,7 @@ class NodeFactory(object):
         self.testname = testname
         self.next_id = 1
         self.nodes = []
+        self.reserved_ports = []
         self.executor = executor
         self.bitcoind = bitcoind
         self.directory = directory
@@ -1312,10 +1324,6 @@ class NodeFactory(object):
         node_opts = {k: v for k, v in opts.items() if k in node_opt_keys}
         cli_opts = {k: v for k, v in opts.items() if k not in node_opt_keys}
         return node_opts, cli_opts
-
-    def get_next_port(self):
-        with self.lock:
-            return reserve()
 
     def get_node_id(self):
         """Generate a unique numeric ID for a lightning node
@@ -1361,7 +1369,7 @@ class NodeFactory(object):
                  expect_fail=False, cleandir=True, **kwargs):
         self.throttler.wait()
         node_id = self.get_node_id() if not node_id else node_id
-        port = self.get_next_port()
+        port = reserve_unused_port()
 
         lightning_dir = os.path.join(
             self.directory, "lightning-{}/".format(node_id))
@@ -1383,6 +1391,7 @@ class NodeFactory(object):
         node.set_feerates(feerates, False)
 
         self.nodes.append(node)
+        self.reserved_ports.append(port)
         if dbfile:
             out = open(os.path.join(node.daemon.lightning_dir, TEST_NETWORK,
                                     'lightningd.sqlite3'), 'xb')
@@ -1391,12 +1400,7 @@ class NodeFactory(object):
 
         if start:
             try:
-                # Capture stderr if we're failing
-                if expect_fail:
-                    stderr = subprocess.PIPE
-                else:
-                    stderr = None
-                node.start(wait_for_bitcoind_sync, stderr=stderr)
+                node.start(wait_for_bitcoind_sync)
             except Exception:
                 if expect_fail:
                     return node
@@ -1449,15 +1453,15 @@ class NodeFactory(object):
 
         bitcoind.generate_block(5)
 
-        # Make sure everyone sees all channels: we can cheat and
-        # simply check the ends (since it's a line).
-        nodes[0].wait_channel_active(scids[-1])
-        nodes[-1].wait_channel_active(scids[0])
-
-        # Make sure we have all node announcements, too (just check ends)
+        # Make sure everyone sees all channels, all other nodes
         for n in nodes:
-            for end in (nodes[0], nodes[-1]):
-                wait_for(lambda: 'alias' in only_one(end.rpc.listnodes(n.info['id'])['nodes']))
+            for scid in scids:
+                n.wait_channel_active(scid)
+
+        # Make sure we have all node announcements, too
+        for n in nodes:
+            for n2 in nodes:
+                wait_for(lambda: 'alias' in only_one(n.rpc.listnodes(n2.info['id'])['nodes']))
 
     def line_graph(self, num_nodes, fundchannel=True, fundamount=FUNDAMOUNT, wait_for_announce=False, opts=None, announce_channels=True):
         """ Create nodes, connect them and optionally fund channels.
@@ -1494,5 +1498,8 @@ class NodeFactory(object):
                     self.nodes[i].daemon.lightning_dir,
                     json.dumps(leaks, sort_keys=True, indent=4)
                 ))
+
+        for p in self.reserved_ports:
+            drop_unused_port(p)
 
         return not unexpected_fail, err_msgs

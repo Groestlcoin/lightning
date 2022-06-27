@@ -1,6 +1,5 @@
 from fixtures import *  # noqa: F401,F403
 from fixtures import TEST_NETWORK
-from flaky import flaky  # noqa: F401
 from ephemeral_port_reserve import reserve  # type: ignore
 from pyln.client import RpcError, Millisatoshi
 import pyln.proto.wire as wire
@@ -658,7 +657,6 @@ def test_reconnect_gossiping(node_factory):
     l2.daemon.wait_for_log('processing now old peer gone')
 
 
-@flaky
 @pytest.mark.developer("needs dev-disconnect")
 @pytest.mark.openchannel('v1')
 @pytest.mark.openchannel('v2')
@@ -853,7 +851,6 @@ def test_reconnect_receiver_fulfill(node_factory):
     assert only_one(l2.rpc.listinvoices('testpayment2')['invoices'])['status'] == 'paid'
 
 
-@flaky
 @pytest.mark.developer
 @pytest.mark.openchannel('v1')
 @pytest.mark.openchannel('v2')
@@ -886,7 +883,6 @@ def test_shutdown_reconnect(node_factory):
     assert l1.bitcoin.rpc.getmempoolinfo()['size'] == 1
 
 
-@flaky
 @pytest.mark.developer
 def test_reconnect_remote_sends_no_sigs(node_factory):
     """We re-announce, even when remote node doesn't send its announcement_signatures on reconnect.
@@ -1991,6 +1987,9 @@ def test_multifunding_feerates(node_factory, bitcoind):
     entry = bitcoind.rpc.getmempoolentry(res['txid'])
     weight = entry['weight']
 
+    # If signature is unexpectedly short, we get a spurious failure here!
+    res = bitcoind.rpc.decoderawtransaction(res['tx'])
+    weight += 71 - len(res['vin'][0]['txinwitness'][0]) // 2
     expected_fee = int(funding_tx_feerate[:-5]) * weight // 1000
     assert expected_fee == entry['fees']['base'] * 10 ** 8
 
@@ -3855,12 +3854,15 @@ def test_ping_timeout(node_factory):
     # Disconnects after this, but doesn't know it.
     l1_disconnects = ['xWIRE_PING']
 
-    l1, l2 = node_factory.line_graph(2, opts=[{'dev-no-reconnect': None,
-                                               'disconnect': l1_disconnects},
-                                              {}])
+    l1, l2 = node_factory.get_nodes(2, opts=[{'dev-no-reconnect': None,
+                                              'disconnect': l1_disconnects},
+                                             {}])
+    l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
+
     # Takes 15-45 seconds, then another to try second ping
     # Because of ping timer randomness we don't know which side hangs up first
-    wait_for(lambda: l1.rpc.getpeer(l2.info['id'])['connected'] is False, timeout=45 + 45 + 5)
+    wait_for(lambda: l1.rpc.listpeers(l2.info['id'])['peers'] == [],
+             timeout=45 + 45 + 5)
     wait_for(lambda: (l1.daemon.is_in_log('Last ping unreturned: hanging up')
                       or l2.daemon.is_in_log('Last ping unreturned: hanging up')))
 
@@ -3883,6 +3885,8 @@ def test_multichan(node_factory, executor, bitcoind):
     assert(len(only_one(l3.rpc.listpeers(l2.info['id'])['peers'])['channels']) == 2)
 
     bitcoind.generate_block(1, wait_for_mempool=1)
+    # Make sure new channel is also CHANNELD_NORMAL
+    wait_for(lambda: [c['state'] for c in only_one(l2.rpc.listpeers(l3.info['id'])['peers'])['channels']] == ["CHANNELD_NORMAL", "CHANNELD_NORMAL"])
 
     # Dance around to get the *other* scid.
     wait_for(lambda: all(['short_channel_id' in c for c in l3.rpc.listpeers()['peers'][0]['channels']]))

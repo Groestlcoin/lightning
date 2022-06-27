@@ -2,7 +2,6 @@ from bitcoin.rpc import JSONRPCError
 from decimal import Decimal
 from fixtures import *  # noqa: F401,F403
 from fixtures import TEST_NETWORK
-from flaky import flaky  # noqa: F401
 from pyln.client import RpcError, Millisatoshi
 from utils import (
     only_one, wait_for, sync_blockheight, EXPERIMENTAL_FEATURES,
@@ -13,6 +12,7 @@ from utils import (
 import os
 import pytest
 import subprocess
+import time
 import unittest
 
 
@@ -1038,12 +1038,17 @@ def test_hsm_secret_encryption(node_factory):
 
     # Test we cannot restore the same wallet with another password
     l1.daemon.opts.update({"encrypted-hsm": None})
-    l1.daemon.start(stdin=slave_fd, stderr=subprocess.STDOUT,
-                    wait_for_initialized=False)
+    l1.daemon.start(stdin=slave_fd, wait_for_initialized=False)
     l1.daemon.wait_for_log(r'Enter hsm_secret password')
     write_all(master_fd, password[2:].encode("utf-8"))
     assert(l1.daemon.proc.wait(WAIT_TIMEOUT) == HSM_BAD_PASSWORD)
-    assert(l1.daemon.is_in_log("Wrong password for encrypted hsm_secret."))
+    assert(l1.daemon.is_in_stderr("Wrong password for encrypted hsm_secret."))
+
+    # Not sure why this helps, but seems to reduce flakiness where
+    # tail() thread in testing/utils.py gets 'ValueError: readline of
+    # closed file' and we get `ValueError: Process died while waiting for logs`
+    # when waiting for "Server started with public key" below.
+    time.sleep(10)
 
     # Test we can restore the same wallet with the same password
     l1.daemon.start(stdin=slave_fd, wait_for_initialized=False)
@@ -1063,9 +1068,9 @@ def test_hsm_secret_encryption(node_factory):
 
 class HsmTool(TailableProc):
     """Helper for testing the hsmtool as a subprocess"""
-    def __init__(self, *args):
+    def __init__(self, directory, *args):
         self.prefix = "hsmtool"
-        TailableProc.__init__(self)
+        TailableProc.__init__(self, os.path.join(directory, "hsmtool"))
         assert hasattr(self, "env")
         self.cmd_line = ["tools/hsmtool", *args]
 
@@ -1092,9 +1097,8 @@ def test_hsmtool_secret_decryption(node_factory):
 
     # We can't use a wrong password !
     master_fd, slave_fd = os.openpty()
-    hsmtool = HsmTool("decrypt", hsm_path)
-    hsmtool.start(stdin=slave_fd,
-                  stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    hsmtool = HsmTool(node_factory.directory, "decrypt", hsm_path)
+    hsmtool.start(stdin=slave_fd)
     hsmtool.wait_for_log(r"Enter hsm_secret password:")
     write_all(master_fd, "A wrong pass\n\n".encode("utf-8"))
     hsmtool.proc.wait(WAIT_TIMEOUT)
@@ -1102,8 +1106,7 @@ def test_hsmtool_secret_decryption(node_factory):
 
     # Decrypt it with hsmtool
     master_fd, slave_fd = os.openpty()
-    hsmtool.start(stdin=slave_fd,
-                  stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    hsmtool.start(stdin=slave_fd)
     hsmtool.wait_for_log(r"Enter hsm_secret password:")
     write_all(master_fd, password.encode("utf-8"))
     assert hsmtool.proc.wait(WAIT_TIMEOUT) == 0
@@ -1116,9 +1119,8 @@ def test_hsmtool_secret_decryption(node_factory):
 
     # Test we can encrypt it offline
     master_fd, slave_fd = os.openpty()
-    hsmtool = HsmTool("encrypt", hsm_path)
-    hsmtool.start(stdin=slave_fd,
-                  stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    hsmtool = HsmTool(node_factory.directory, "encrypt", hsm_path)
+    hsmtool.start(stdin=slave_fd)
     hsmtool.wait_for_log(r"Enter hsm_secret password:")
     write_all(master_fd, password.encode("utf-8"))
     hsmtool.wait_for_log(r"Confirm hsm_secret password:")
@@ -1131,7 +1133,7 @@ def test_hsmtool_secret_decryption(node_factory):
 
     l1.daemon.opts.update({"encrypted-hsm": None})
     master_fd, slave_fd = os.openpty()
-    l1.daemon.start(stdin=slave_fd, stderr=subprocess.STDOUT,
+    l1.daemon.start(stdin=slave_fd,
                     wait_for_initialized=False)
 
     l1.daemon.wait_for_log(r'The hsm_secret is encrypted')
@@ -1143,9 +1145,8 @@ def test_hsmtool_secret_decryption(node_factory):
 
     # And finally test that we can also decrypt if encrypted with hsmtool
     master_fd, slave_fd = os.openpty()
-    hsmtool = HsmTool("decrypt", hsm_path)
-    hsmtool.start(stdin=slave_fd,
-                  stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    hsmtool = HsmTool(node_factory.directory, "decrypt", hsm_path)
+    hsmtool.start(stdin=slave_fd)
     hsmtool.wait_for_log(r"Enter hsm_secret password:")
     write_all(master_fd, password.encode("utf-8"))
     assert hsmtool.proc.wait(WAIT_TIMEOUT) == 0
@@ -1155,9 +1156,8 @@ def test_hsmtool_secret_decryption(node_factory):
 
     # We can roundtrip encryption and decryption using a password provided
     # through stdin.
-    hsmtool = HsmTool("encrypt", hsm_path)
-    hsmtool.start(stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                  stderr=subprocess.PIPE)
+    hsmtool = HsmTool(node_factory.directory, "encrypt", hsm_path)
+    hsmtool.start(stdin=subprocess.PIPE)
     hsmtool.proc.stdin.write(password.encode("utf-8"))
     hsmtool.proc.stdin.write(password.encode("utf-8"))
     hsmtool.proc.stdin.flush()
@@ -1165,9 +1165,8 @@ def test_hsmtool_secret_decryption(node_factory):
     assert hsmtool.proc.wait(WAIT_TIMEOUT) == 0
 
     master_fd, slave_fd = os.openpty()
-    hsmtool = HsmTool("decrypt", hsm_path)
-    hsmtool.start(stdin=slave_fd,
-                  stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    hsmtool = HsmTool(node_factory.directory, "decrypt", hsm_path)
+    hsmtool.start(stdin=slave_fd)
     hsmtool.wait_for_log("Enter hsm_secret password:")
     write_all(master_fd, password.encode("utf-8"))
     hsmtool.wait_for_log("Successfully decrypted")
@@ -1226,19 +1225,17 @@ def test_hsmtool_generatehsm(node_factory):
     hsm_path = os.path.join(l1.daemon.lightning_dir, TEST_NETWORK,
                             "hsm_secret")
 
-    hsmtool = HsmTool("generatehsm", hsm_path)
+    hsmtool = HsmTool(node_factory.directory, "generatehsm", hsm_path)
 
     # You cannot re-generate an already existing hsm_secret
     master_fd, slave_fd = os.openpty()
-    hsmtool.start(stdin=slave_fd, stdout=subprocess.PIPE,
-                  stderr=subprocess.PIPE)
+    hsmtool.start(stdin=slave_fd)
     assert hsmtool.proc.wait(WAIT_TIMEOUT) == 2
     os.remove(hsm_path)
 
     # We can generate a valid hsm_secret from a wordlist and a "passphrase"
     master_fd, slave_fd = os.openpty()
-    hsmtool.start(stdin=slave_fd, stdout=subprocess.PIPE,
-                  stderr=subprocess.PIPE)
+    hsmtool.start(stdin=slave_fd)
     hsmtool.wait_for_log(r"Select your language:")
     write_all(master_fd, "0\n".encode("utf-8"))
     hsmtool.wait_for_log(r"Introduce your BIP39 word list")
@@ -1295,13 +1292,10 @@ def test_withdraw_nlocktime(node_factory):
     assert nlocktime > 0 and nlocktime <= tip
 
 
-@flaky
 @unittest.skipIf(VALGRIND, "A big loop is used to check fuzz.")
 def test_withdraw_nlocktime_fuzz(node_factory, bitcoind):
     """
     Test that we eventually fuzz nLockTime for withdrawal transactions.
-    Marked flaky "just in case" as we fuzz from 0 to 100 with a 10%
-    probability.
     """
     l1 = node_factory.get_node(1)
     l1.fundwallet(10**8)

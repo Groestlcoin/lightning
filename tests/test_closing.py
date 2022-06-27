@@ -846,7 +846,7 @@ def test_channel_lease_post_expiry(node_factory, bitcoind, chainparams):
     l1.rpc.close(chan)
     l2.daemon.wait_for_log('State changed from CLOSINGD_SIGEXCHANGE to CLOSINGD_COMPLETE')
 
-    bitcoind.generate_block(2)
+    bitcoind.generate_block(2, wait_for_mempool=1)
     sync_blockheight(bitcoind, [l1, l2])
     l1.daemon.wait_for_log('Resolved FUNDING_TRANSACTION/FUNDING_OUTPUT by MUTUAL_CLOSE')
     l2.daemon.wait_for_log('Resolved FUNDING_TRANSACTION/FUNDING_OUTPUT by MUTUAL_CLOSE')
@@ -966,10 +966,10 @@ def test_channel_lease_unilat_closes(node_factory, bitcoind):
     # we *can* spend the 1csv lock one
     l2.rpc.withdraw(l2.rpc.newaddr()['bech32'], "all", utxos=[utxo3])
 
-    # This can timeout, so do it in four easy stages.
-    for i in range(4):
-        bitcoind.generate_block(4032 // 4)
-        sync_blockheight(bitcoind, [l2, l3])
+    # This can timeout, so do it in easy stages.
+    for i in range(16):
+        bitcoind.generate_block(4032 // 16)
+    sync_blockheight(bitcoind, [l2, l3])
 
     l2.rpc.withdraw(l2.rpc.newaddr()['bech32'], "all", utxos=[utxo1])
 

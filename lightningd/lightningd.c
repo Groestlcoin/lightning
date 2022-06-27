@@ -184,7 +184,7 @@ static struct lightningd *new_lightningd(const tal_t *ctx)
 	 * allocation function): ld->log will be implicitly freed when ld
 	 * is. */
 	ld->log = new_log(ld, ld->log_book, NULL, "lightningd");
-	ld->logfile = NULL;
+	ld->logfiles = NULL;
 
 	/*~ We explicitly set these to NULL: if they're still NULL after option
 	 * parsing, we know they're to be set to the defaults. */
@@ -856,6 +856,7 @@ void lightningd_exit(struct lightningd *ld, int exit_code)
 {
 	ld->exit_code = tal(ld, int);
 	*ld->exit_code = exit_code;
+	log_debug(ld->log, "io_break: %s", __func__);
 	io_break(ld);
 }
 
@@ -1184,6 +1185,7 @@ int main(int argc, char *argv[])
 	 *  shut down.
 	 */
 	assert(io_loop_ret == ld);
+	log_debug(ld->log, "io_loop_with_timers: %s", __func__);
 
 	/* Fail JSON RPC requests and ignore plugin's responses */
 	ld->state = LD_STATE_SHUTDOWN;

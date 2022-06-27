@@ -493,6 +493,16 @@ static char *opt_important_plugin(const char *arg, struct lightningd *ld)
 	return NULL;
 }
 
+/* Test code looks in logs, so we print prompts to log as well as stdout */
+static void prompt(struct lightningd *ld, const char *str)
+{
+	printf("%s\n", str);
+	log_debug(ld->log, "PROMPT: %s", str);
+	/* If we don't flush we might end up being buffered and we might seem
+	 * to hang while we wait for the password. */
+	fflush(stdout);
+}
+
 /* Prompt the user to enter a password, from which will be derived the key used
  * for `hsm_secret` encryption.
  * The algorithm used to derive the key is Argon2(id), to which libsodium
@@ -509,18 +519,15 @@ static char *opt_set_hsm_password(struct lightningd *ld)
 		return tal_fmt(NULL, "Could not access 'hsm_secret': %s",
 			       strerror(errno));
 
-	printf("The hsm_secret is encrypted with a password. In order to "
-	       "decrypt it and start the node you must provide the password.\n");
-	printf("Enter hsm_secret password:\n");
-	/* If we don't flush we might end up being buffered and we might seem
-	 * to hang while we wait for the password. */
-	fflush(stdout);
+	prompt(ld, "The hsm_secret is encrypted with a password. In order to "
+	       "decrypt it and start the node you must provide the password.");
+	prompt(ld, "Enter hsm_secret password:");
 
 	passwd = read_stdin_pass_with_exit_code(&err_msg, &opt_exitcode);
 	if (!passwd)
 		return err_msg;
 	if (!is_encrypted) {
-		printf("Confirm hsm_secret password:\n");
+		prompt(ld, "Confirm hsm_secret password:");
 		fflush(stdout);
 		passwd_confirmation = read_stdin_pass_with_exit_code(&err_msg, &opt_exitcode);
 		if (!passwd_confirmation)
@@ -532,7 +539,7 @@ static char *opt_set_hsm_password(struct lightningd *ld)
 		}
 		free(passwd_confirmation);
 	}
-	printf("\n");
+	prompt(ld, "");
 
 	ld->config.keypass = tal(NULL, struct secret);
 
@@ -884,7 +891,7 @@ static void check_config(struct lightningd *ld)
 	if (ld->always_use_proxy && !ld->proxyaddr)
 		fatal("--always-use-proxy needs --proxy");
 
-	if (ld->daemon_parent_fd != -1 && !ld->logfile)
+	if (ld->daemon_parent_fd != -1 && !ld->logfiles)
 		fatal("--daemon needs --log-file");
 }
 
@@ -1442,6 +1449,14 @@ static void json_add_opt_addrs(struct json_stream *response,
 	}
 }
 
+static void json_add_opt_log_to_files(struct json_stream *response,
+			       const char *name0,
+			       const char **logfiles)
+{
+	for (size_t i = 0; i < tal_count(logfiles); i++)
+		json_add_string(response, name0, logfiles[i]);
+}
+
 struct json_add_opt_alt_subdaemon_args {
 	const char *name0;
 	struct json_stream *response;
@@ -1572,7 +1587,8 @@ static void add_config(struct lightningd *ld,
 		} else if (opt->cb_arg == (void *)opt_set_alias) {
 			answer = (const char *)ld->alias;
 		} else if (opt->cb_arg == (void *)arg_log_to_file) {
-			answer = ld->logfile;
+			if (ld->logfiles)
+				json_add_opt_log_to_files(response, name0, ld->logfiles);
 		} else if (opt->cb_arg == (void *)opt_add_addr) {
 			json_add_opt_addrs(response, name0,
 					   ld->proposed_wireaddr,
