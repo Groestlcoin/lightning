@@ -1,4 +1,5 @@
 #include "config.h"
+#include <assert.h>
 #include <bitcoin/chainparams.h>
 #include <ccan/array_size/array_size.h>
 #include <ccan/tal/str/str.h>
@@ -24,6 +25,7 @@ const struct chainparams networks[] = {
                                       0x0b, 0xcc, 0x49, 0x4d, 0x59, 0x7c, 0x92,
                                       0xc5, 0x0a, 0x00, 0x00}}}},
      .rpc_port = 1441,
+     .ln_port = 9735,
      .cli = "groestlcoin-cli",
      .cli_args = NULL,
      .cli_min_supported_version = 216000,
@@ -56,6 +58,7 @@ const struct chainparams networks[] = {
               0xff, 0x00, 0x00, 0x00}}}},
      .rpc_port = 18443,
      .cli = "groestlcoin-cli",
+     .ln_port = 19846,
      .cli_args = "-regtest",
      .cli_min_supported_version = 216000,
      .dust_limit = { 546 },
@@ -73,8 +76,13 @@ const struct chainparams networks[] = {
      .onchain_hrp = "tgrs",
      .lightning_hrp = "sgrs",
      .bip70_name = "signet",
-     .genesis_blockhash = {{{.u.u8 = {0xce, 0xbd, 0x8f, 0x6e, 0x69, 0x77, 0x30, 0xb7, 0x4c, 0x70, 0x9c, 0xdd, 0x1e, 0x6a, 0xba, 0xaf, 0x2a, 0xfc, 0x98, 0xbf, 0x4c, 0xff, 0xb2, 0x39, 0xf3, 0xdb, 0x44, 0x27, 0x64, 0x29, 0x00, 0x00}}}},
+     .genesis_blockhash = {{{.u.u8 = {0xce, 0xbd, 0x8f, 0x6e, 0x69, 0x77, 0x30,
+                                      0xb7, 0x4c, 0x70, 0x9c, 0xdd, 0x1e, 0x6a,
+                                      0xba, 0xaf, 0x2a, 0xfc, 0x98, 0xbf, 0x4c,
+                                      0xff, 0xb2, 0x39, 0xf3, 0xdb, 0x44, 0x27,
+                                      0x64, 0x29, 0x00, 0x00}}}},
      .rpc_port = 31441,
+     .ln_port = 39735,
      .cli = "groestlcoin-cli",
      .cli_args = "-signet",
      .cli_min_supported_version = 216000,
@@ -98,6 +106,7 @@ const struct chainparams networks[] = {
                                       0xd3, 0xcd, 0x98, 0x98, 0xfc, 0x50, 0xbb,
                                       0xff, 0x00, 0x00, 0x00}}}},
      .rpc_port = 17766,
+     .ln_port = 19735,
      .cli = "groestlcoin-cli",
      .cli_args = "-testnet",
      .cli_min_supported_version = 216000,
@@ -150,4 +159,10 @@ const char *chainparams_get_network_names(const tal_t *ctx)
     for (size_t i = 1; i < ARRAY_SIZE(networks); ++i)
         tal_append_fmt(&networks_string, ", %s", networks[i].network_name);
     return networks_string;
+}
+
+int chainparams_get_ln_port(const struct chainparams *params)
+{
+	assert(params);
+	return params->ln_port;
 }

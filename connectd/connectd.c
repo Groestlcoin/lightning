@@ -8,6 +8,7 @@
  * it.
  */
 #include "config.h"
+#include <bitcoin/chainparams.h>
 #include <ccan/array_size/array_size.h>
 #include <ccan/asort/asort.h>
 #include <ccan/closefrom/closefrom.h>
@@ -90,6 +91,18 @@ struct connecting {
 
 	/* How many seconds did we wait this time? */
 	u32 seconds_waited;
+};
+
+/*~ This is an ad-hoc marshalling structure where we store arguments so we
+ * can call peer_connected again. */
+struct peer_reconnected {
+	struct daemon *daemon;
+	struct node_id id;
+	struct wireaddr_internal addr;
+	const struct wireaddr *remote_addr;
+	struct crypto_state cs;
+	const u8 *their_features;
+	bool incoming;
 };
 
 /*~ C programs should generally be written bottom-to-top, with the root
@@ -226,13 +239,8 @@ static struct io_plan *retry_peer_connected(struct io_conn *conn,
 	/*~ Usually the pattern is to return this directly. */
 	return peer_connected(conn, pr->daemon, &pr->id, &pr->addr,
 			      pr->remote_addr,
-			      &pr->cs, take(pr->their_features), pr->incoming);
-}
-
-/*~ A common use for destructors is to remove themselves from a data structure */
-static void destroy_peer_reconnected(struct peer_reconnected *pr)
-{
-	peer_reconnected_htable_del(&pr->daemon->reconnected, pr);
+			      &pr->cs, take(pr->their_features), pr->incoming,
+			      true);
 }
 
 /*~ If we already know about this peer, we tell lightningd and it disconnects
@@ -251,27 +259,18 @@ static struct io_plan *peer_reconnected(struct io_conn *conn,
 
 	status_peer_debug(id, "reconnect");
 
-	/* If we have a previous reconnection, we replace it. */
-	pr = peer_reconnected_htable_get(&daemon->reconnected, id);
-	if (pr) {
-		peer_reconnected_htable_del(&daemon->reconnected, pr);
-		tal_free(pr);
-	}
-
 	/* Tell master to kill it: will send peer_disconnect */
 	msg = towire_connectd_reconnected(NULL, id);
 	daemon_conn_send(daemon->master, take(msg));
 
 	/* Save arguments for next time. */
-	pr = tal(daemon, struct peer_reconnected);
+	pr = tal(conn, struct peer_reconnected);
 	pr->daemon = daemon;
 	pr->id = *id;
 	pr->cs = *cs;
 	pr->addr = *addr;
 	pr->remote_addr = tal_dup_or_null(pr, struct wireaddr, remote_addr);
 	pr->incoming = incoming;
-	peer_reconnected_htable_add(&daemon->reconnected, pr);
-	tal_add_destructor(pr, destroy_peer_reconnected);
 
 	/*~ Note that tal_dup_talarr() will do handle the take() of features
 	 * (turning it into a simply tal_steal() in those cases). */
@@ -336,7 +335,8 @@ struct io_plan *peer_connected(struct io_conn *conn,
 			       const struct wireaddr *remote_addr,
 			       struct crypto_state *cs,
 			       const u8 *their_features TAKES,
-			       bool incoming)
+			       bool incoming,
+			       bool retrying)
 {
 	u8 *msg;
 	struct peer *peer;
@@ -346,9 +346,18 @@ struct io_plan *peer_connected(struct io_conn *conn,
 	bool option_gossip_queries;
 
 	peer = peer_htable_get(&daemon->peers, id);
-	if (peer)
+	if (peer) {
+		/* If we were already retrying, we only get one chance: there
+		 * can be multiple reconnections, and we must not keep around
+		 * stale ones */
+		if (retrying) {
+			if (taken(their_features))
+				tal_free(their_features);
+			return io_close(conn);
+		}
 		return peer_reconnected(conn, daemon, id, addr, remote_addr, cs,
 					their_features, incoming);
+	}
 
 	/* We promised we'd take it by marking it TAKEN above; prepare to free it. */
 	if (taken(their_features))
@@ -747,6 +756,7 @@ static void destroy_io_conn(struct io_conn *conn, struct connecting *connect)
 				      &connect->addrs[connect->addrnum]),
 		       connect->connstate, errstr));
 	connect->addrnum++;
+	connect->conn = NULL;
 	try_connect_one_addr(connect);
 }
 
@@ -848,8 +858,7 @@ static void try_connect_one_addr(struct connecting *connect)
 	struct sockaddr_in6 *sa6;
 #endif
 
-	/* In case we fail without a connection, make destroy_io_conn happy */
-	connect->conn = NULL;
+	assert(!connect->conn);
 
 	/* Out of addresses? */
 	if (connect->addrnum == tal_count(connect->addrs)) {
@@ -1707,7 +1716,7 @@ static void add_seed_addrs(struct wireaddr_internal **addrs,
 
 	for (size_t i = 0; i < tal_count(hostnames); i++) {
 		status_peer_debug(id, "Resolving %s", hostnames[i]);
-		new_addrs = wireaddr_from_hostname(tmpctx, hostnames[i], DEFAULT_PORT,
+		new_addrs = wireaddr_from_hostname(tmpctx, hostnames[i], chainparams_get_ln_port(chainparams),
 		                                   NULL, broken_reply, NULL);
 		if (new_addrs) {
 			for (size_t j = 0; j < tal_count(new_addrs); j++) {
@@ -1859,7 +1868,7 @@ static void try_connect_peer(struct daemon *daemon,
 			for (size_t i = 0; i < tal_count(hostnames); i++) {
 				wireaddr_from_unresolved(&unresolved,
 				                         hostnames[i],
-				                         DEFAULT_PORT);
+				                         chainparams_get_ln_port(chainparams));
 				tal_arr_expand(&addrs, unresolved);
 			}
 		} else if (daemon->use_dns) {
@@ -1891,6 +1900,7 @@ static void try_connect_peer(struct daemon *daemon,
 	connect->seconds_waited = seconds_waited;
 	connect->addrhint = tal_steal(connect, addrhint);
 	connect->errors = tal_strdup(connect, "");
+	connect->conn = NULL;
 	list_add_tail(&daemon->connecting, &connect->list);
 	tal_add_destructor(connect, destroy_connecting);
 
@@ -1943,7 +1953,7 @@ void peer_conn_closed(struct peer *peer)
 	tal_free(peer);
 
 	/* If we wanted to connect to it, but found it was exiting, try again */
-	if (connect)
+	if (connect && !connect->conn)
 		try_connect_one_addr(connect);
 }
 
@@ -1998,7 +2008,6 @@ static void dev_connect_memleak(struct daemon *daemon, const u8 *msg)
 	/* Now delete daemon and those which it has pointers to. */
 	memleak_remove_region(memtable, daemon, sizeof(daemon));
 	memleak_remove_htable(memtable, &daemon->peers.raw);
-	memleak_remove_htable(memtable, &daemon->reconnected.raw);
 
 	found_leak = dump_memleak(memtable, memleak_status_broken);
 	daemon_conn_send(daemon->master,
@@ -2145,7 +2154,6 @@ int main(int argc, char *argv[])
 	/* Allocate and set up our simple top-level structure. */
 	daemon = tal(NULL, struct daemon);
 	peer_htable_init(&daemon->peers);
-	peer_reconnected_htable_init(&daemon->reconnected);
 	memleak_add_helper(daemon, memleak_daemon_cb);
 	list_head_init(&daemon->connecting);
 	timers_init(&daemon->timers, time_mono());
