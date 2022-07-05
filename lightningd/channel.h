@@ -119,6 +119,12 @@ struct channel {
 	/* Minimum funding depth (specified by us if they fund). */
 	u32 minimum_depth;
 
+	/* Depth of the funding TX as reported by the txout
+	 * watch. Only used while we're in state
+	 * CHANNELD_AWAITING_LOCKING, afterwards the watches do not
+	 * trigger anymore. */
+	u32 depth;
+
 	/* Tracking commitment transaction numbers. */
 	u64 next_index[NUM_SIDES];
 	u64 next_htlc_id;
@@ -134,6 +140,12 @@ struct channel {
 	bool remote_funding_locked;
 	/* Channel if locked locally. */
 	struct short_channel_id *scid;
+
+	/* Alias used for option_zeroconf, or option_scid_alias, if
+	 * present. LOCAL are all the alias we told the peer about and
+	 * REMOTE is one of the aliases we got from the peer and we'll
+	 * use in a routehint. */
+	struct short_channel_id *alias[NUM_SIDES];
 
 	struct channel_id cid;
 
@@ -278,6 +290,8 @@ struct channel *new_channel(struct peer *peer, u64 dbid,
 			    bool remote_funding_locked,
 			    /* NULL or stolen */
 			    struct short_channel_id *scid STEALS,
+			    struct short_channel_id *alias_local STEALS,
+			    struct short_channel_id *alias_remote STEALS,
 			    struct channel_id *cid,
 			    struct amount_msat our_msatoshi,
 			    struct amount_msat msatoshi_to_us_min,
@@ -409,6 +423,11 @@ struct channel *find_channel_by_id(const struct peer *peer,
 struct channel *find_channel_by_scid(const struct peer *peer,
 				     const struct short_channel_id *scid);
 
+/* Find a channel by its alias, either local or remote. */
+struct channel *find_channel_by_alias(const struct peer *peer,
+				      const struct short_channel_id *alias,
+				      enum side side);
+
 void channel_set_last_tx(struct channel *channel,
 			 struct bitcoin_tx *tx,
 			 const struct bitcoin_signature *sig,
@@ -462,6 +481,16 @@ static inline bool channel_has(const struct channel *channel, int f)
 {
 	return channel_type_has(channel->type, f);
 }
+
+/**
+ * Either returns the short_channel_id if it is known or the local alias.
+ *
+ * This is used to refer to a channel by its scid. But sometimes we
+ * don't have a scid yet, e.g., for `zeroconf` channels, so we resort
+ * to referencing it by the local alias, which we have in that case.
+ */
+const struct short_channel_id *
+channel_scid_or_local_alias(const struct channel *chan);
 
 void get_channel_basepoints(struct lightningd *ld,
 			    const struct node_id *peer_id,

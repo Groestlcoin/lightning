@@ -327,7 +327,8 @@
                     "type": "string",
                     "enum": [
                       "option_static_remotekey",
-                      "option_anchor_outputs"
+                      "option_anchor_outputs",
+                      "option_zeroconf"
                     ],
                     "description": "BOLT #9 features which apply to this channel"
                   }
@@ -459,6 +460,20 @@
                 },
                 "htlc_minimum_msat": {
                   "deprecated": true
+                },
+                "alias": {
+                  "type": "object",
+                  "required": [],
+                  "properties": {
+                    "local": {
+                      "type": "short_channel_id",
+                      "description": "An alias assigned by this node to this channel, used for outgoing payments"
+                    },
+                    "remote": {
+                      "type": "short_channel_id",
+                      "description": "An alias assigned by the remote node to this channel, usable in routehints and invoices"
+                    }
+                  }
                 },
                 "state_changes": {
                   "type": "array",
@@ -663,6 +678,7 @@
                             "payment_hash": {},
                             "local_trimmed": {},
                             "status": {},
+                            "alias": {},
                             "state": {
                               "type": "string",
                               "enum": [
@@ -750,6 +766,7 @@
                       "funding_outnum": {},
                       "close_to": {},
                       "private": {},
+                      "alias": {},
                       "opener": {},
                       "closer": {},
                       "features": {},
@@ -826,6 +843,7 @@
                     ],
                     "properties": {
                       "state": {},
+                      "alias": {},
                       "scratch_txid": {},
                       "feerate": {},
                       "owner": {},
@@ -910,6 +928,7 @@
                       "direction"
                     ],
                     "properties": {
+                      "alias": {},
                       "state": {},
                       "scratch_txid": {},
                       "feerate": {},
@@ -1001,6 +1020,7 @@
                       "scratch_txid": {},
                       "feerate": {},
                       "owner": {},
+                      "alias": {},
                       "short_channel_id": {},
                       "channel_id": {},
                       "funding_txid": {},

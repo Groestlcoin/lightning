@@ -29,6 +29,7 @@
 #include <lightningd/plugin_hook.h>
 #include <lightningd/subd.h>
 #include <openingd/openingd_wiregen.h>
+#include <sodium/randombytes.h>
 #include <wally_psbt.h>
 
 void json_add_uncommitted_channel(struct json_stream *response,
@@ -99,6 +100,7 @@ wallet_commit_channel(struct lightningd *ld,
 	s64 final_key_idx;
 	u64 static_remotekey_start;
 	u32 lease_start_blockheight = 0; /* No leases on v1 */
+	struct short_channel_id *alias_local;
 
 	/* We cannot both be the fundee *and* have a `fundchannel_start`
 	 * command running!
@@ -158,6 +160,9 @@ wallet_commit_channel(struct lightningd *ld,
 	else
 		static_remotekey_start = 0x7FFFFFFFFFFFFFFF;
 
+	alias_local = tal(NULL, struct short_channel_id);
+	randombytes_buf(alias_local, sizeof(struct short_channel_id));
+
 	channel = new_channel(uc->peer, uc->dbid,
 			      NULL, /* No shachain yet */
 			      CHANNELD_AWAITING_LOCKIN,
@@ -174,6 +179,8 @@ wallet_commit_channel(struct lightningd *ld,
 			      local_funding,
 			      false, /* !remote_funding_locked */
 			      NULL, /* no scid yet */
+			      alias_local, /* But maybe we have an alias we want to use? */
+			      NULL, /* They haven't told us an alias yet */
 			      cid,
 			      /* The three arguments below are msatoshi_to_us,
 			       * msatoshi_to_us_min, and msatoshi_to_us_max.
@@ -701,6 +708,7 @@ openchannel_hook_deserialize(struct openchannel_hook_payload *payload,
 	const jsmntok_t *t_result  = json_get_member(buffer, toks, "result");
 	const jsmntok_t *t_errmsg  = json_get_member(buffer, toks, "error_message");
 	const jsmntok_t *t_closeto = json_get_member(buffer, toks, "close_to");
+	const jsmntok_t *t_mindepth = json_get_member(buffer, toks, "mindepth");
 
 	if (!t_result)
 		fatal("Plugin returned an invalid response to the"
@@ -752,6 +760,16 @@ openchannel_hook_deserialize(struct openchannel_hook_payload *payload,
 				break;
 		}
 	}
+
+	if (t_mindepth != NULL) {
+		json_to_u32(buffer, t_mindepth, &payload->uc->minimum_depth);
+		log_debug(
+		    openingd->ld->log,
+		    "Setting mindepth=%d for this channel as requested by "
+		    "the openchannel hook",
+		    payload->uc->minimum_depth);
+	}
+
 	return true;
 }
 
@@ -891,13 +909,6 @@ bool peer_start_openingd(struct peer *peer, struct peer_fd *peer_fd)
 		       &max_to_self_delay,
 		       &min_effective_htlc_capacity);
 
-	/* BOLT #2:
-	 *
-	 * The sender:
-	 *   - SHOULD set `minimum_depth` to a number of blocks it considers
-	 *     reasonable to avoid double-spending of the funding transaction.
-	 */
-	uc->minimum_depth = peer->ld->config.anchor_confirms;
 
 	msg = towire_openingd_init(NULL,
 				  chainparams,
@@ -1057,7 +1068,7 @@ static struct command_result *json_fundchannel_start(struct command *cmd,
 	struct node_id *id;
 	struct peer *peer;
 	bool *announce_channel;
-	u32 *feerate_per_kw;
+	u32 *feerate_per_kw, *mindepth;
 
 	struct amount_sat *amount;
 	struct amount_msat *push_msat;
@@ -1077,6 +1088,7 @@ static struct command_result *json_fundchannel_start(struct command *cmd,
 		   p_opt_def("announce", param_bool, &announce_channel, true),
 		   p_opt("close_to", param_bitcoin_address, &fc->our_upfront_shutdown_script),
 		   p_opt("push_msat", param_msat, &push_msat),
+		   p_opt_def("mindepth", param_u32, &mindepth, cmd->ld->config.anchor_confirms),
 		   NULL))
 		return command_param_failed();
 
@@ -1166,6 +1178,15 @@ static struct command_result *json_fundchannel_start(struct command *cmd,
 
 	peer->uncommitted_channel->fc = tal_steal(peer->uncommitted_channel, fc);
 	fc->uc = peer->uncommitted_channel;
+
+	/* BOLT #2:
+	 *
+	 * The sender:
+	 *   - SHOULD set `minimum_depth` to a number of blocks it considers
+	 *     reasonable to avoid double-spending of the funding transaction.
+	 */
+	assert(mindepth != NULL);
+	fc->uc->minimum_depth = *mindepth;
 
 	/* Needs to be stolen away from cmd */
 	if (fc->our_upfront_shutdown_script)

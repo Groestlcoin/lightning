@@ -5,6 +5,8 @@ from utils import (
     only_one, wait_for, sync_blockheight, first_channel_id, calc_lease_fee
 )
 
+from pathlib import Path
+from pprint import pprint
 import pytest
 import re
 import unittest
@@ -1187,3 +1189,205 @@ def test_funder_contribution_limits(node_factory, bitcoind):
     l1.fundchannel(l3, 10**7)
     assert l3.daemon.is_in_log('Policy .* returned funding amount of 50000sat')
     assert l3.daemon.is_in_log(r'calling `signpsbt` .* 7 inputs')
+
+
+def test_zeroconf_mindepth(bitcoind, node_factory):
+    """Check that funder/fundee can customize mindepth.
+
+    Zeroconf will use this to set the mindepth to 0, which coupled
+    with an artificial depth=0 event that will result in an immediate
+    `channel_ready` being sent.
+
+    """
+    plugin_path = Path(__file__).parent / "plugins" / "zeroconf-selective.py"
+
+    l1, l2 = node_factory.get_nodes(2, opts=[
+        {},
+        {
+            'plugin': str(plugin_path),
+            'zeroconf-allow': '0266e4598d1d3c415f572a8488830b60f7e744ed9235eb0b1ba93283b315c03518',
+            'zeroconf-mindepth': '2',
+        },
+    ])
+
+    # Try to open a mindepth=6 channel
+    l1.fundwallet(10**6)
+
+    l1.connect(l2)
+    assert (int(l1.rpc.listpeers()['peers'][0]['features'], 16) >> 50) & 0x02 != 0
+
+    # Now start the negotiation, l1 should have negotiated zeroconf,
+    # and use their own mindepth=6, while l2 uses mindepth=2 from the
+    # plugin
+    l1.rpc.fundchannel(l2.info['id'], 'all', mindepth=6)
+
+    assert l1.db.query('SELECT minimum_depth FROM channels') == [{'minimum_depth': 6}]
+    assert l2.db.query('SELECT minimum_depth FROM channels') == [{'minimum_depth': 2}]
+
+    bitcoind.generate_block(2, wait_for_mempool=1)  # Confirm on the l2 side.
+    l2.daemon.wait_for_log(r'peer_out WIRE_FUNDING_LOCKED')
+    # l1 should not be sending funding_locked/channel_ready yet, it is
+    # configured to wait for 6 confirmations.
+    assert not l1.daemon.is_in_log(r'peer_out WIRE_FUNDING_LOCKED')
+
+    bitcoind.generate_block(4)  # Confirm on the l2 side.
+    l1.daemon.wait_for_log(r'peer_out WIRE_FUNDING_LOCKED')
+
+    wait_for(lambda: l1.rpc.listpeers()['peers'][0]['channels'][0]['state'] == "CHANNELD_NORMAL")
+    wait_for(lambda: l2.rpc.listpeers()['peers'][0]['channels'][0]['state'] == "CHANNELD_NORMAL")
+
+
+def test_zeroconf_open(bitcoind, node_factory):
+    """Let's open a zeroconf channel
+
+    Just test that both parties opting in results in a channel that is
+    immediately usable.
+
+    """
+    plugin_path = Path(__file__).parent / "plugins" / "zeroconf-selective.py"
+
+    l1, l2 = node_factory.get_nodes(2, opts=[
+        {},
+        {
+            'plugin': str(plugin_path),
+            'zeroconf-allow': '0266e4598d1d3c415f572a8488830b60f7e744ed9235eb0b1ba93283b315c03518'
+        },
+    ])
+
+    # Try to open a mindepth=0 channel
+    l1.fundwallet(10**6)
+
+    l1.connect(l2)
+    assert (int(l1.rpc.listpeers()['peers'][0]['features'], 16) >> 50) & 0x02 != 0
+
+    # Now start the negotiation, l1 should have negotiated zeroconf,
+    # and use their own mindepth=6, while l2 uses mindepth=2 from the
+    # plugin
+    l1.rpc.fundchannel(l2.info['id'], 'all', mindepth=0)
+
+    assert l1.db.query('SELECT minimum_depth FROM channels') == [{'minimum_depth': 0}]
+    assert l2.db.query('SELECT minimum_depth FROM channels') == [{'minimum_depth': 0}]
+
+    l1.daemon.wait_for_logs([
+        r'peer_in WIRE_FUNDING_LOCKED',
+        r'Peer told us that they\'ll use alias=[0-9x]+ for this channel',
+    ])
+    l2.daemon.wait_for_logs([
+        r'peer_in WIRE_FUNDING_LOCKED',
+        r'Peer told us that they\'ll use alias=[0-9x]+ for this channel',
+    ])
+
+    wait_for(lambda: l1.rpc.listpeers()['peers'][0]['channels'][0]['state'] == 'CHANNELD_NORMAL')
+    wait_for(lambda: l2.rpc.listpeers()['peers'][0]['channels'][0]['state'] == 'CHANNELD_NORMAL')
+    wait_for(lambda: l2.rpc.listincoming()['incoming'] != [])
+
+    inv = l2.rpc.invoice(10**8, 'lbl', 'desc')['bolt11']
+    details = l1.rpc.decodepay(inv)
+    pprint(details)
+    assert('routes' in details and len(details['routes']) == 1)
+    hop = details['routes'][0][0]  # First (and only) hop of hint 0
+    l1alias = l1.rpc.listpeers()['peers'][0]['channels'][0]['alias']['local']
+    assert(hop['pubkey'] == l1.info['id'])  # l1 is the entrypoint
+    assert(hop['short_channel_id'] == l1alias)  # Alias has to make sense to entrypoint
+    l1.rpc.pay(inv)
+
+    # Ensure lightningd knows about the balance change before
+    # attempting the other way around.
+    l2.daemon.wait_for_log(r'Balance [0-9]+msat -> [0-9]+msat')
+
+    # Inverse payments should work too
+    pprint(l2.rpc.listpeers())
+    inv = l1.rpc.invoice(10**5, 'lbl', 'desc')['bolt11']
+    l2.rpc.pay(inv)
+
+
+def test_zeroconf_public(bitcoind, node_factory):
+    """Test that we transition correctly from zeroconf to public
+
+    The differences being that a public channel MUST use the public
+    scid. l1 and l2 open a zeroconf channel, then l3 learns about it
+    after 6 confirmations.
+
+    """
+    plugin_path = Path(__file__).parent / "plugins" / "zeroconf-selective.py"
+
+    l1, l2, l3 = node_factory.get_nodes(3, opts=[
+        {},
+        {
+            'plugin': str(plugin_path),
+            'zeroconf-allow': '0266e4598d1d3c415f572a8488830b60f7e744ed9235eb0b1ba93283b315c03518'
+        },
+        {}
+    ])
+    l1.fundwallet(10**6)
+    l1.connect(l2)
+    l1.rpc.fundchannel(l2.info['id'], 'all', mindepth=0)
+
+    # Wait for the update to be signed (might not be the most reliable
+    # signal)
+    l1.daemon.wait_for_log(r'Got WIRE_HSMD_CUPDATE_SIG_REQ')
+    l2.daemon.wait_for_log(r'Got WIRE_HSMD_CUPDATE_SIG_REQ')
+
+    l1chan = l1.rpc.listpeers()['peers'][0]['channels'][0]
+    l2chan = l2.rpc.listpeers()['peers'][0]['channels'][0]
+
+    # We have no confirmation yet, so no `short_channel_id`
+    assert('short_channel_id' not in l1chan)
+    assert('short_channel_id' not in l2chan)
+
+    # Now add 1 confirmation, we should get a `short_channel_id`
+    bitcoind.generate_block(1)
+    l1.daemon.wait_for_log(r'Funding tx [a-f0-9]{64} depth 1 of 0')
+    l2.daemon.wait_for_log(r'Funding tx [a-f0-9]{64} depth 1 of 0')
+
+    l1chan = l1.rpc.listpeers()['peers'][0]['channels'][0]
+    l2chan = l2.rpc.listpeers()['peers'][0]['channels'][0]
+    assert('short_channel_id' in l1chan)
+    assert('short_channel_id' in l2chan)
+
+    # Now make it public, we should be switching over to the real
+    # scid.
+    bitcoind.generate_block(5)
+    # Wait for l3 to learn about the channel, it'll have checked the
+    # funding outpoint, scripts, etc.
+    l3.connect(l1)
+    wait_for(lambda: len(l3.rpc.listchannels()['channels']) == 2)
+
+
+def test_zeroconf_forward(node_factory, bitcoind):
+    """Ensure that we can use zeroconf channels in forwards.
+
+    Test that we add routehints using the zeroconf channel, and then
+    ensure that l2 uses the alias from the routehint to forward the
+    payment. Then do the inverse by sending from l3 to l1, first hop
+    being the zeroconf channel
+
+    """
+    plugin_path = Path(__file__).parent / "plugins" / "zeroconf-selective.py"
+    opts = [
+        {},
+        {},
+        {
+            'plugin': str(plugin_path),
+            'zeroconf-allow': '022d223620a359a47ff7f7ac447c85c46c923da53389221a0054c11c1e3ca31d59'
+        }
+    ]
+    l1, l2, l3 = node_factory.get_nodes(3, opts=opts)
+
+    l1.connect(l2)
+    l1.fundchannel(l2, 10**6)
+    bitcoind.generate_block(6)
+
+    l2.connect(l3)
+    l2.fundwallet(10**7)
+    l2.rpc.fundchannel(l3.info['id'], 10**6, mindepth=0)
+    wait_for(lambda: l3.rpc.listincoming()['incoming'] != [])
+
+    inv = l3.rpc.invoice(42 * 10**6, 'inv1', 'desc')['bolt11']
+    l1.rpc.pay(inv)
+
+    # And now try the other way around: zeroconf channel first
+    # followed by a public one.
+    wait_for(lambda: len(l3.rpc.listchannels()['channels']) == 4)
+    inv = l1.rpc.invoice(42, 'back1', 'desc')['bolt11']
+    l3.rpc.pay(inv)

@@ -352,6 +352,8 @@ struct channel *new_channel(struct peer *peer, u64 dbid,
 			    bool remote_funding_locked,
 			    /* NULL or stolen */
 			    struct short_channel_id *scid,
+			    struct short_channel_id *alias_local STEALS,
+			    struct short_channel_id *alias_remote STEALS,
 			    struct channel_id *cid,
 			    struct amount_msat our_msat,
 			    struct amount_msat msat_to_us_min,
@@ -428,6 +430,7 @@ struct channel *new_channel(struct peer *peer, u64 dbid,
 	channel->channel_flags = channel_flags;
 	channel->our_config = *our_config;
 	channel->minimum_depth = minimum_depth;
+	channel->depth = 0;
 	channel->next_index[LOCAL] = next_index_local;
 	channel->next_index[REMOTE] = next_index_remote;
 	channel->next_htlc_id = next_htlc_id;
@@ -437,6 +440,8 @@ struct channel *new_channel(struct peer *peer, u64 dbid,
 	channel->our_funds = our_funds;
 	channel->remote_funding_locked = remote_funding_locked;
 	channel->scid = tal_steal(channel, scid);
+	channel->alias[LOCAL] = tal_steal(channel, alias_local);
+	channel->alias[REMOTE] = tal_steal(channel, alias_remote);  /* Haven't gotten one yet. */
 	channel->cid = *cid;
 	channel->our_msat = our_msat;
 	channel->msat_to_us_min = msat_to_us_min;
@@ -596,6 +601,11 @@ struct channel *any_channel_by_scid(struct lightningd *ld,
 			if (chan->scid
 			    && short_channel_id_eq(scid, chan->scid))
 				return chan;
+			/* We also want to find the channel by its local alias
+			 * when we forward. */
+			if (chan->alias[LOCAL] &&
+			    short_channel_id_eq(scid, chan->alias[LOCAL]))
+				return chan;
 		}
 	}
 	return NULL;
@@ -655,6 +665,18 @@ struct channel *find_channel_by_scid(const struct peer *peer,
 
 	list_for_each(&peer->channels, c, list) {
 		if (c->scid && short_channel_id_eq(c->scid, scid))
+			return c;
+	}
+	return NULL;
+}
+
+struct channel *find_channel_by_alias(const struct peer *peer,
+				      const struct short_channel_id *alias,
+				      enum side side)
+{
+	struct channel *c;
+	list_for_each(&peer->channels, c, list) {
+		if (c->alias[side] && short_channel_id_eq(c->alias[side], alias))
 			return c;
 	}
 	return NULL;
@@ -934,4 +956,14 @@ void channel_fail_reconnect(struct channel *channel, const char *fmt, ...)
 	va_start(ap, fmt);
 	err_and_reconnect(channel, tal_vfmt(tmpctx, fmt, ap), 1);
 	va_end(ap);
+}
+
+const struct short_channel_id *
+channel_scid_or_local_alias(const struct channel *chan)
+{
+	assert(chan->scid != NULL || chan->alias[LOCAL] != NULL);
+	if (chan->scid != NULL)
+		return chan->scid;
+	else
+		return chan->alias[LOCAL];
 }

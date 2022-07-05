@@ -2293,7 +2293,7 @@ local_channel_hints_listpeers(struct command *cmd, const char *buffer,
 			      const jsmntok_t *toks, struct payment *p)
 {
 	const jsmntok_t *peers, *peer, *channels, *channel, *spendsats, *scid,
-		*dir, *connected, *max_htlc, *htlcs, *state;
+	    *dir, *connected, *max_htlc, *htlcs, *state, *alias, *alias_local;
 	size_t i, j;
 	peers = json_get_member(buffer, toks, "peers");
 
@@ -2311,12 +2311,20 @@ local_channel_hints_listpeers(struct command *cmd, const char *buffer,
 			struct channel_hint h;
 			spendsats = json_get_member(buffer, channel, "spendable_msat");
 			scid = json_get_member(buffer, channel, "short_channel_id");
+
+			alias = json_get_member(buffer, channel, "alias");
+			if (alias != NULL)
+				alias_local = json_get_member(buffer, alias, "local");
+			else
+				alias_local = NULL;
+
 			dir = json_get_member(buffer, channel, "direction");
 			max_htlc = json_get_member(buffer, channel, "max_accepted_htlcs");
 			htlcs = json_get_member(buffer, channel, "htlcs");
 			state = json_get_member(buffer, channel, "state");
-			if (spendsats == NULL || scid == NULL || dir == NULL ||
-			    max_htlc == NULL || state == NULL ||
+			if (spendsats == NULL ||
+			    (scid == NULL && alias_local == NULL) ||
+			    dir == NULL || max_htlc == NULL || state == NULL ||
 			    max_htlc->type != JSMN_PRIMITIVE || htlcs == NULL ||
 			    htlcs->type != JSMN_ARRAY)
 				continue;
@@ -2327,7 +2335,11 @@ local_channel_hints_listpeers(struct command *cmd, const char *buffer,
 			json_to_bool(buffer, connected, &h.enabled);
 			h.enabled &= json_tok_streq(buffer, state, "CHANNELD_NORMAL");
 
-			json_to_short_channel_id(buffer, scid, &h.scid.scid);
+			if (scid != NULL)
+				json_to_short_channel_id(buffer, scid, &h.scid.scid);
+			else
+				json_to_short_channel_id(buffer, alias_local, &h.scid.scid);
+
 			json_to_int(buffer, dir, &h.scid.dir);
 
 			json_to_msat(buffer, spendsats, &h.estimated_capacity);
@@ -3228,9 +3240,17 @@ static struct command_result *direct_pay_listpeers(struct command *cmd,
 			if (!streq(chan->state, "CHANNELD_NORMAL"))
 			    continue;
 
+			/* Must have either a local alias for zeroconf
+			 * channels or a final scid. */
+			assert(chan->alias[LOCAL] || chan->scid);
 			d->chan = tal(d, struct short_channel_id_dir);
-			d->chan->scid = *chan->scid;
-			d->chan->dir = *chan->direction;
+			if (chan->scid) {
+				d->chan->scid = *chan->scid;
+				d->chan->dir = *chan->direction;
+			} else {
+				d->chan->scid = *chan->alias[LOCAL];
+				d->chan->dir = 0; /* Don't care. */
+			}
 		}
 	}
 cont:

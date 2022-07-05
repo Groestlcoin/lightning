@@ -46,7 +46,7 @@ On success, an object containing **peers** is returned.  It is an array of objec
   - **state** (string): the channel state, in particular "CHANNELD_NORMAL" means the channel can be used normally (one of "OPENINGD", "CHANNELD_AWAITING_LOCKIN", "CHANNELD_NORMAL", "CHANNELD_SHUTTING_DOWN", "CLOSINGD_SIGEXCHANGE", "CLOSINGD_COMPLETE", "AWAITING_UNILATERAL", "FUNDING_SPEND_SEEN", "ONCHAIN", "DUALOPEND_OPEN_INIT", "DUALOPEND_AWAITING_LOCKIN")
   - **opener** (string): Who initiated the channel (one of "local", "remote")
   - **features** (array of strings):
-    - BOLT #9 features which apply to this channel (one of "option_static_remotekey", "option_anchor_outputs")
+    - BOLT #9 features which apply to this channel (one of "option_static_remotekey", "option_anchor_outputs", "option_zeroconf")
   - **scratch_txid** (txid, optional): The txid we would use if we went onchain now
   - **feerate** (object, optional): Feerates for the current tx:
     - **perkw** (u32): Feerate per 1000 weight (i.e kSipa)
@@ -92,6 +92,9 @@ On success, an object containing **peers** is returned.  It is an array of objec
   - **their_to_self_delay** (u32, optional): the number of blocks before they can take their funds if they unilateral close
   - **our_to_self_delay** (u32, optional): the number of blocks before we can take our funds if we unilateral close
   - **max_accepted_htlcs** (u32, optional): Maximum number of incoming HTLC we will accept at once
+  - **alias** (object, optional):
+    - **local** (short_channel_id, optional): An alias assigned by this node to this channel, used for outgoing payments
+    - **remote** (short_channel_id, optional): An alias assigned by the remote node to this channel, usable in routehints and invoices
   - **state_changes** (array of objects, optional): Prior state changes:
     - **timestamp** (string): UTC timestamp of form YYYY-mm-ddTHH:MM:SS.%03dZ
     - **old_state** (string): Previous state (one of "OPENINGD", "CHANNELD_AWAITING_LOCKIN", "CHANNELD_NORMAL", "CHANNELD_SHUTTING_DOWN", "CLOSINGD_SIGEXCHANGE", "CLOSINGD_COMPLETE", "AWAITING_UNILATERAL", "FUNDING_SPEND_SEEN", "ONCHAIN", "DUALOPEND_OPEN_INIT", "DUALOPEND_AWAITING_LOCKIN")
@@ -381,4 +384,4 @@ Main web site: <https://github.com/ElementsProject/lightning> Lightning
 RFC site (BOLT \#9):
 <https://github.com/lightningnetwork/lightning-rfc/blob/master/09-features.md>
 
-[comment]: # ( SHA256STAMP:e6829e8ced923131b95bcfa4f366dd04286fe85485039e9ebc89e79899937df6)
+[comment]: # ( SHA256STAMP:fcfc465cbbe95430f4fc6473099142c576883e333ef9fe31d04372f411e49f6d)

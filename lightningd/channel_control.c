@@ -179,8 +179,13 @@ void channel_record_open(struct channel *channel)
 
 static void lockin_complete(struct channel *channel)
 {
-	/* We set this once we're locked in. */
-	assert(channel->scid);
+	if (!channel->scid &&
+	    (!channel->alias[REMOTE] || !channel->alias[LOCAL])) {
+		log_debug(channel->log, "Attempted lockin, but neither scid "
+					"nor aliases are set, ignoring");
+		return;
+	}
+
 	/* We set this once they're locked in. */
 	assert(channel->remote_funding_locked);
 
@@ -203,7 +208,10 @@ static void lockin_complete(struct channel *channel)
 
 	try_update_blockheight(channel->peer->ld, channel,
 			       get_block_height(channel->peer->ld->topology));
-	channel_record_open(channel);
+
+	/* Only record this once we get a real confirmation. */
+	if (channel->scid)
+		channel_record_open(channel);
 }
 
 bool channel_on_funding_locked(struct channel *channel,
@@ -230,9 +238,10 @@ bool channel_on_funding_locked(struct channel *channel,
 static void peer_got_funding_locked(struct channel *channel, const u8 *msg)
 {
 	struct pubkey next_per_commitment_point;
+	struct short_channel_id *alias_remote;
 
-	if (!fromwire_channeld_got_funding_locked(msg,
-						 &next_per_commitment_point)) {
+	if (!fromwire_channeld_got_funding_locked(tmpctx,
+		msg, &next_per_commitment_point, &alias_remote)) {
 		channel_internal_error(channel,
 				       "bad channel_got_funding_locked %s",
 				       tal_hex(channel, msg));
@@ -242,11 +251,14 @@ static void peer_got_funding_locked(struct channel *channel, const u8 *msg)
 	if (!channel_on_funding_locked(channel, &next_per_commitment_point))
 		return;
 
-	if (channel->scid)
+	if (channel->alias[REMOTE] == NULL)
+		channel->alias[REMOTE] = tal_steal(channel, alias_remote);
+
+	/* Remember that we got the lockin */
+	wallet_channel_save(channel->peer->ld->wallet, channel);
+
+	if (channel->depth >= channel->minimum_depth)
 		lockin_complete(channel);
-	else
-		/* Remember that we got the lockin */
-		wallet_channel_save(channel->peer->ld->wallet, channel);
 }
 
 static void peer_got_announcement(struct channel *channel, const u8 *msg)
@@ -780,6 +792,11 @@ void peer_start_channeld(struct channel *channel,
 		try_update_blockheight(ld, channel,
 				       get_block_height(ld->topology));
 	}
+
+	/* Artificial confirmation event for zeroconf */
+	subd_send_msg(channel->owner,
+		      take(towire_channeld_funding_depth(
+			  NULL, channel->scid, channel->alias[LOCAL], 0)));
 }
 
 bool channel_tell_depth(struct lightningd *ld,
@@ -790,6 +807,7 @@ bool channel_tell_depth(struct lightningd *ld,
 	const char *txidstr;
 
 	txidstr = type_to_string(tmpctx, struct bitcoin_txid, txid);
+	channel->depth = depth;
 
 	if (!channel->owner) {
 		log_debug(channel->log,
@@ -823,14 +841,33 @@ bool channel_tell_depth(struct lightningd *ld,
 	}
 
 	subd_send_msg(channel->owner,
-		      take(towire_channeld_funding_depth(NULL, channel->scid,
-							 depth)));
+		      take(towire_channeld_funding_depth(
+			  NULL, channel->scid, channel->alias[LOCAL], depth)));
 
-	if (channel->remote_funding_locked
-	    && channel->state == CHANNELD_AWAITING_LOCKIN
-	    && depth >= channel->minimum_depth)
+	if (channel->remote_funding_locked &&
+		 channel->state == CHANNELD_AWAITING_LOCKIN &&
+		 depth >= channel->minimum_depth)
 		lockin_complete(channel);
 
+	else if (depth == 1 && channel->minimum_depth == 0) {
+		/* If we have a zeroconf channel, i.e., no scid yet
+		 * but have exchange `channel_ready` messages, then we
+		 * need to fire a second time, in order to trigger the
+		 * `coin_movement` event. This is a subset of the
+		 * `lockin_complete` function below. */
+
+		assert(channel->scid != NULL);
+		/* Fees might have changed (and we use IMMEDIATE once we're
+		 * funded), so update now. */
+		try_update_feerates(channel->peer->ld, channel);
+
+		try_update_blockheight(
+		    channel->peer->ld, channel,
+		    get_block_height(channel->peer->ld->topology));
+
+		/* Only record this once we get a real confirmation. */
+		channel_record_open(channel);
+	}
 	return true;
 }
 
