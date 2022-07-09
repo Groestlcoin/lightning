@@ -2691,7 +2691,7 @@ def test_fundee_forget_funding_tx_unconfirmed(node_factory, bitcoind):
     # is much slower in VALGRIND mode and wait_for_log
     # could time out before lightningd processes all the
     # blocks.
-    blocks = 200
+    blocks = 50
     # opener
     l1 = node_factory.get_node()
     # peer
@@ -2700,14 +2700,16 @@ def test_fundee_forget_funding_tx_unconfirmed(node_factory, bitcoind):
 
     # Give opener some funds.
     l1.fundwallet(10**7)
-    # Let blocks settle.
-    time.sleep(1)
 
     def mock_sendrawtransaction(r):
         return {'id': r['id'], 'error': {'code': 100, 'message': 'sendrawtransaction disabled'}}
 
+    def mock_donothing(r):
+        return {'id': r['id'], 'result': {'success': True}}
+
     # Prevent opener from broadcasting funding tx (any tx really).
     l1.daemon.rpcproxy.mock_rpc('sendrawtransaction', mock_sendrawtransaction)
+    l2.daemon.rpcproxy.mock_rpc('sendrawtransaction', mock_donothing)
 
     # Fund the channel.
     # The process will complete, but opener will be unable
@@ -2719,10 +2721,52 @@ def test_fundee_forget_funding_tx_unconfirmed(node_factory, bitcoind):
     bitcoind.generate_block(blocks)
 
     # fundee will forget channel!
-    l2.daemon.wait_for_log('Forgetting channel: It has been {} blocks'.format(blocks))
+    # (Note that we let the last number be anything (hence the {}\d)
+    l2.daemon.wait_for_log(r'Forgetting channel: It has been {}\d blocks'.format(str(blocks)[:-1]))
 
     # fundee will also forget and disconnect from peer.
     assert len(l2.rpc.listpeers(l1.info['id'])['peers']) == 0
+
+
+@pytest.mark.developer("needs --dev-max-funding-unconfirmed-blocks")
+@pytest.mark.openchannel('v2')
+def test_fundee_node_unconfirmed(node_factory, bitcoind):
+    """Test that fundee will successfully broadcast and
+    funder still has correct UTXOs/correctly advances the channel
+    """
+    # opener
+    l1, l2 = node_factory.line_graph(2, fundchannel=False)
+
+    # Give opener some funds.
+    l1.fundwallet(10**7)
+
+    start_amount = only_one(l1.rpc.listfunds()['outputs'])['amount_msat']
+
+    def mock_sendrawtransaction(r):
+        return {'id': r['id'], 'error': {'code': 100, 'message': 'sendrawtransaction disabled'}}
+
+    def mock_donothing(r):
+        time.sleep(10)
+        return bitcoind.rpc.sendrawtransaction(r['params'][0])
+
+    # Prevent both from broadcasting funding tx (any tx really).
+    l1.daemon.rpcproxy.mock_rpc('sendrawtransaction', mock_sendrawtransaction)
+    l2.daemon.rpcproxy.mock_rpc('sendrawtransaction', mock_donothing)
+
+    # Fund the channel.
+    # The process will complete, but opener will be unable
+    # to broadcast and confirm funding tx.
+    with pytest.raises(RpcError, match=r'sendrawtransaction disabled'):
+        l1.rpc.fundchannel(l2.info['id'], 10**6)
+
+    # Generate blocks until unconfirmed.
+    bitcoind.generate_block(1, wait_for_mempool=1)
+
+    # Check that l1 opened the channel
+    wait_for(lambda: only_one(only_one(l1.rpc.listpeers()['peers'])['channels'])['state'] == 'CHANNELD_NORMAL')
+    end_amount = only_one(l1.rpc.listfunds()['outputs'])['amount_msat']
+    # We should be out the onchaind fees
+    assert start_amount > end_amount + Millisatoshi(10 ** 7 * 100)
 
 
 @pytest.mark.developer("needs dev_fail")
@@ -3858,15 +3902,18 @@ def test_ping_timeout(node_factory):
 
     l1, l2 = node_factory.get_nodes(2, opts=[{'dev-no-reconnect': None,
                                               'disconnect': l1_disconnects},
-                                             {}])
+                                             {'dev-no-ping-timer': None}])
     l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
 
-    # Takes 15-45 seconds, then another to try second ping
-    # Because of ping timer randomness we don't know which side hangs up first
-    wait_for(lambda: l1.rpc.listpeers(l2.info['id'])['peers'] == [],
-             timeout=45 + 45 + 5)
-    wait_for(lambda: (l1.daemon.is_in_log('Last ping unreturned: hanging up')
-                      or l2.daemon.is_in_log('Last ping unreturned: hanging up')))
+    # This can take 10 seconds (dev-fast-gossip means timer fires every 5 seconds)
+    l1.daemon.wait_for_log('seeker: startup peer finished', timeout=15)
+    # Ping timers runs at 15-45 seconds, *but* only fires if also 60 seconds
+    # after previous traffic.
+    l1.daemon.wait_for_log('dev_disconnect: xWIRE_PING', timeout=60 + 45 + 5)
+
+    # Next pign will cause hangup
+    l1.daemon.wait_for_log('Last ping unreturned: hanging up', timeout=45 + 5)
+    wait_for(lambda: l1.rpc.listpeers(l2.info['id'])['peers'] == [])
 
 
 @pytest.mark.openchannel('v1')

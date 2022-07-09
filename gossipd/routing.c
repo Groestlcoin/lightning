@@ -368,6 +368,7 @@ static struct node *new_node(struct routing_state *rstate,
 	n->id = *id;
 	memset(n->chans.arr, 0, sizeof(n->chans.arr));
 	broadcastable_init(&n->bcast);
+	broadcastable_init(&n->rgraph);
 	n->tokens = TOKEN_MAX;
 	node_map_add(rstate->nodes, n);
 	tal_add_destructor2(n, destroy_node, rstate);
@@ -437,6 +438,7 @@ static void force_node_announce_rexmit(struct routing_state *rstate,
 					     announce,
 					     node->bcast.timestamp,
 					     is_local,
+					     false,
 					     NULL);
 }
 
@@ -520,6 +522,7 @@ static void init_half_chan(struct routing_state *rstate,
 	struct half_chan *c = &chan->half[channel_idx];
 
 	broadcastable_init(&c->bcast);
+	broadcastable_init(&c->rgraph);
 	c->tokens = TOKEN_MAX;
 }
 
@@ -790,6 +793,7 @@ static void add_channel_announce_to_broadcast(struct routing_state *rstate,
 						     channel_announce,
 						     chan->bcast.timestamp,
 						     is_local,
+						     false,
 						     addendum);
 	rstate->local_channel_announced |= is_local;
 }
@@ -1255,6 +1259,7 @@ bool routing_add_channel_update(struct routing_state *rstate,
 	struct unupdated_channel *uc;
 	u8 direction;
 	struct amount_sat sat;
+	bool spam;
 
 	/* Make sure we own msg, even if we don't save it. */
 	if (taken(update))
@@ -1337,7 +1342,7 @@ bool routing_add_channel_update(struct routing_state *rstate,
 			return false;
 		}
 
-		if (timestamp <= hc->bcast.timestamp) {
+		if (timestamp <= hc->rgraph.timestamp) {
 			SUPERVERBOSE("Ignoring outdated update.");
 			/* Ignoring != failing */
 			return true;
@@ -1360,26 +1365,48 @@ bool routing_add_channel_update(struct routing_state *rstate,
 		if (!ratelimit(rstate,
 			       &hc->tokens, hc->bcast.timestamp, timestamp)) {
 			status_peer_debug(peer ? &peer->id : NULL,
-					  "Ignoring spammy update for %s/%u"
+					  "Spammy update for %s/%u flagged"
 					  " (last %u, now %u)",
 					  type_to_string(tmpctx,
 							 struct short_channel_id,
 							 &short_channel_id),
 					  direction,
 					  hc->bcast.timestamp, timestamp);
-			/* Ignoring != failing */
-			return true;
+			spam = true;
+		} else {
+			spam = false;
 		}
+	} else {
+		spam = false;
 	}
-
-	chan->half[direction].bcast.timestamp = timestamp;
-
-	/* Safe even if was never added, but if it's a private channel it
-	 * would be a WIRE_GOSSIP_STORE_PRIVATE_UPDATE. */
-	gossip_store_delete(rstate->gs, &hc->bcast,
-			    is_chan_public(chan)
-			    ? WIRE_CHANNEL_UPDATE
-			    : WIRE_GOSSIP_STORE_PRIVATE_UPDATE);
+	/* Routing graph always uses the latest message. */
+	hc->rgraph.timestamp = timestamp;
+	if (spam) {
+		/* Remove the prior spam update if it exists. */
+		if (hc->rgraph.index != hc->bcast.index) {
+			gossip_store_delete(rstate->gs, &hc->rgraph,
+					    is_chan_public(chan)
+					    ? WIRE_CHANNEL_UPDATE
+					    : WIRE_GOSSIP_STORE_PRIVATE_UPDATE);
+		}
+	} else {
+		/* Safe to broadcast */
+		hc->bcast.timestamp = timestamp;
+		/* Remove prior spam update if one exists. */
+		if (hc->rgraph.index != hc->bcast.index) {
+			/* Safe even if was never added, but if it's a
+			 * private channel it would be a
+			 * WIRE_GOSSIP_STORE_PRIVATE_UPDATE. */
+			gossip_store_delete(rstate->gs, &hc->rgraph,
+					    is_chan_public(chan)
+					    ? WIRE_CHANNEL_UPDATE
+					    : WIRE_GOSSIP_STORE_PRIVATE_UPDATE);
+		}
+		gossip_store_delete(rstate->gs, &hc->bcast,
+				    is_chan_public(chan)
+				    ? WIRE_CHANNEL_UPDATE
+				    : WIRE_GOSSIP_STORE_PRIVATE_UPDATE);
+	}
 
 	/* BOLT #7:
 	 *   - MUST consider the `timestamp` of the `channel_announcement` to be
@@ -1401,23 +1428,31 @@ bool routing_add_channel_update(struct routing_state *rstate,
 			hc->bcast.index
 				= gossip_store_add_private_update(rstate->gs,
 								  update);
-		} else
+			/* No need to separately track spam for private
+			 * channels. */
+			hc->rgraph.index = hc->bcast.index;
+		} else {
 			hc->bcast.index = index;
+			hc->rgraph.index = index;
+		}
 		return true;
 	}
 
 	/* If we're loading from store, this means we don't re-add to store. */
-	if (index)
-		hc->bcast.index = index;
-	else {
-		hc->bcast.index
-			= gossip_store_add(rstate->gs, update,
-					   hc->bcast.timestamp,
+	if (index) {
+		if (!spam)
+			hc->bcast.index = index;
+		hc->rgraph.index = index;
+	} else {
+		hc->rgraph.index
+			= gossip_store_add(rstate->gs, update, timestamp,
 					   local_direction(rstate, chan, NULL),
-					   NULL);
+					   spam, NULL);
 		if (hc->bcast.timestamp > rstate->last_timestamp
 		    && hc->bcast.timestamp < time_now().ts.tv_sec)
 			rstate->last_timestamp = hc->bcast.timestamp;
+		if (!spam)
+			hc->bcast.index = hc->rgraph.index;
 
 		peer_supplied_good_gossip(peer, 1);
 	}
@@ -1581,6 +1616,7 @@ bool routing_add_node_announcement(struct routing_state *rstate,
 	u8 alias[32];
 	u8 *features, *addresses;
 	struct tlv_node_ann_tlvs *na_tlv;
+	bool spam;
 
 	if (was_unknown)
 		*was_unknown = false;
@@ -1646,7 +1682,7 @@ bool routing_add_node_announcement(struct routing_state *rstate,
 			return false;
 		}
 
-		if (node->bcast.timestamp >= timestamp) {
+		if (node->rgraph.timestamp >= timestamp) {
 			SUPERVERBOSE("Ignoring node announcement, it's outdated.");
 			/* OK unless we're loading from store */
 			return index == 0;
@@ -1670,36 +1706,55 @@ bool routing_add_node_announcement(struct routing_state *rstate,
 		if (!ratelimit(rstate,
 			       &node->tokens, node->bcast.timestamp, timestamp)) {
 			status_peer_debug(peer ? &peer->id : NULL,
-					  "Ignoring spammy nannounce for %s"
+					  "Spammy nannounce for %s flagged"
 					  " (last %u, now %u)",
 					  type_to_string(tmpctx,
 							 struct node_id,
 							 &node_id),
 					  node->bcast.timestamp, timestamp);
-			/* Ignoring != failing */
-			return true;
+			spam = true;
+		} else {
+			spam = false;
 		}
+	} else {
+		spam = false;
 	}
 
-	/* Harmless if it was never added */
-	gossip_store_delete(rstate->gs,
-			    &node->bcast,
-			    WIRE_NODE_ANNOUNCEMENT);
+	/* Routing graph always references the latest message. */
+	node->rgraph.timestamp = timestamp;
+	if (!spam) {
+		node->bcast.timestamp = timestamp;
+		/* remove prior spam update if one exists */
+		if (node->rgraph.index != node->bcast.index) {
+			/* Harmless if it was never added */
+			gossip_store_delete(rstate->gs, &node->rgraph,
+					    WIRE_NODE_ANNOUNCEMENT);
+		}
+		gossip_store_delete(rstate->gs, &node->bcast,
+				    WIRE_NODE_ANNOUNCEMENT);
+	/* Remove prior spam update. */
+	} else if (node->rgraph.index != node->bcast.index) {
+		gossip_store_delete(rstate->gs, &node->rgraph,
+				    WIRE_NODE_ANNOUNCEMENT);
+	}
 
-	node->bcast.timestamp = timestamp;
-	if (node->bcast.timestamp > rstate->last_timestamp
-	    && node->bcast.timestamp < time_now().ts.tv_sec)
-		rstate->last_timestamp = node->bcast.timestamp;
-
-	if (index)
-		node->bcast.index = index;
-	else {
-		node->bcast.index
-			= gossip_store_add(rstate->gs, msg,
-					   node->bcast.timestamp,
+	/* Don't add to the store if it was loaded from the store. */
+	if (index) {
+		node->rgraph.index = index;
+		if (!spam)
+			node->bcast.index = index;
+	} else {
+		node->rgraph.index
+			= gossip_store_add(rstate->gs, msg, timestamp,
 					   node_id_eq(&node_id,
 						      &rstate->local_id),
-					   NULL);
+					   spam, NULL);
+		if (node->bcast.timestamp > rstate->last_timestamp
+		    && node->bcast.timestamp < time_now().ts.tv_sec)
+			rstate->last_timestamp = node->bcast.timestamp;
+		if (!spam)
+			node->bcast.index = node->rgraph.index;
+
 		peer_supplied_good_gossip(peer, 1);
 	}
 
@@ -1919,7 +1974,7 @@ bool routing_add_private_channel(struct routing_state *rstate,
 		u8 *msg = towire_gossip_store_private_channel(tmpctx,
 							      capacity,
 							      chan_ann);
-		index = gossip_store_add(rstate->gs, msg, 0, false, NULL);
+		index = gossip_store_add(rstate->gs, msg, 0, false, false, NULL);
 	}
 	chan->bcast.index = index;
 	return true;

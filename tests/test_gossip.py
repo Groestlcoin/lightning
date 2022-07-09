@@ -1127,7 +1127,7 @@ def test_gossip_store_load(node_factory):
     """Make sure we can read canned gossip store"""
     l1 = node_factory.get_node(start=False)
     with open(os.path.join(l1.daemon.lightning_dir, TEST_NETWORK, 'gossip_store'), 'wb') as f:
-        f.write(bytearray.fromhex("09"        # GOSSIP_STORE_VERSION
+        f.write(bytearray.fromhex("0a"        # GOSSIP_STORE_VERSION
                                   "000001b0"  # len
                                   "fea676e8"  # csum
                                   "5b8d9b44"  # timestamp
@@ -1159,7 +1159,7 @@ def test_gossip_store_load_announce_before_update(node_factory):
     """Make sure we can read canned gossip store with node_announce before update.  This happens when a channel_update gets replaced, leaving node_announce before it"""
     l1 = node_factory.get_node(start=False)
     with open(os.path.join(l1.daemon.lightning_dir, TEST_NETWORK, 'gossip_store'), 'wb') as f:
-        f.write(bytearray.fromhex("09"        # GOSSIP_STORE_VERSION
+        f.write(bytearray.fromhex("0a"        # GOSSIP_STORE_VERSION
                                   "000001b0"  # len
                                   "fea676e8"  # csum
                                   "5b8d9b44"  # timestamp
@@ -1202,7 +1202,7 @@ def test_gossip_store_load_amount_truncated(node_factory):
     """Make sure we can read canned gossip store with truncated amount"""
     l1 = node_factory.get_node(start=False, allow_broken_log=True)
     with open(os.path.join(l1.daemon.lightning_dir, TEST_NETWORK, 'gossip_store'), 'wb') as f:
-        f.write(bytearray.fromhex("09"        # GOSSIP_STORE_VERSION
+        f.write(bytearray.fromhex("0a"        # GOSSIP_STORE_VERSION
                                   "000001b0"  # len
                                   "fea676e8"  # csum
                                   "5b8d9b44"  # timestamp
@@ -1281,8 +1281,7 @@ def test_node_reannounce(node_factory, bitcoind, chainparams):
                             filters=['0109', '0107', '0102', '0100', '0012'])
 
     # May send its own announcement *twice*, since it always spams us.
-    msgs2 = list(set(msgs2))
-    assert msgs == msgs2
+    assert set(msgs) == set(msgs2)
     # Won't have queued up another one, either.
     assert not l1.daemon.is_in_log('node_announcement: delaying')
 
@@ -1308,8 +1307,7 @@ def test_node_reannounce(node_factory, bitcoind, chainparams):
                             # channel_announcement and channel_updates.
                             # And pings.
                             filters=['0109', '0107', '0102', '0100', '0012'])
-    msgs2 = list(set(msgs2))
-    assert msgs != msgs2
+    assert set(msgs) != set(msgs2)
 
 
 def test_gossipwith(node_factory):
@@ -1669,7 +1667,7 @@ def test_gossip_store_load_no_channel_update(node_factory):
 
     # A channel announcement with no channel_update.
     with open(os.path.join(l1.daemon.lightning_dir, TEST_NETWORK, 'gossip_store'), 'wb') as f:
-        f.write(bytearray.fromhex("09"        # GOSSIP_STORE_VERSION
+        f.write(bytearray.fromhex("0a"        # GOSSIP_STORE_VERSION
                                   "000001b0"  # len
                                   "fea676e8"  # csum
                                   "5b8d9b44"  # timestamp
@@ -1696,7 +1694,7 @@ def test_gossip_store_load_no_channel_update(node_factory):
     l1.rpc.call('dev-compact-gossip-store')
 
     with open(os.path.join(l1.daemon.lightning_dir, TEST_NETWORK, 'gossip_store'), "rb") as f:
-        assert bytearray(f.read()) == bytearray.fromhex("09")
+        assert bytearray(f.read()) == bytearray.fromhex("0a")
 
 
 @pytest.mark.developer("gossip without DEVELOPER=1 is slow")
@@ -1768,7 +1766,7 @@ def test_gossip_announce_unknown_block(node_factory, bitcoind):
     sync_blockheight(bitcoind, [l1])
 
 
-@pytest.mark.developer("gossip without DEVELOPER=1 is slow")
+@unittest.skipIf(DEVELOPER, "Developer gossip too fast!")
 def test_gossip_no_backtalk(node_factory):
     # l3 connects, gets gossip, but should *not* play it back.
     l1, l2, l3 = node_factory.get_nodes(3,
@@ -1781,8 +1779,8 @@ def test_gossip_no_backtalk(node_factory):
                              r'\[IN\] 0102', r'\[IN\] 0102',
                              r'\[IN\] 0101', r'\[IN\] 0101'])
 
-    # With DEVELOPER, this is long enough for gossip flush.
-    time.sleep(2)
+    # Will flush every 60 seconds, so definitely should by this time!
+    time.sleep(90)
     assert not l3.daemon.is_in_log(r'\[OUT\] 0100')
 
 
@@ -1795,7 +1793,7 @@ def test_gossip_ratelimit(node_factory, bitcoind):
     """Check that we ratelimit incoming gossip.
 
     We create a partitioned network, in which the first partition consisting
-    of l1 and l2 is used to create an on-chain footprint and twe then feed
+    of l1 and l2 is used to create an on-chain footprint and we then feed
     canned gossip to the other partition consisting of l3. l3 should ratelimit
     the incoming gossip.
 
@@ -1863,13 +1861,34 @@ def test_gossip_ratelimit(node_factory, bitcoind):
             '0102c479b7684b9db496b844f6925f4ffd8a27c5840a020d1b537623c1545dcd8e195776381bbf51213e541a853a4a49a0faf84316e7ccca5e7074901a96bbabe04e06226e46111a0b59caaf126043eb5bbf28c34f3a5e332a1fc7b2b73cf188910f00006700000100015d77400201010006000000000000000000000014000003eb000000003b023380',
             # timestamp=1568096259, fee_proportional_millionths=1004
             '01024b866012d995d3d7aec7b7218a283de2d03492dbfa21e71dd546ec2e36c3d4200453420aa02f476f99c73fe1e223ea192f5fa544b70a8319f2a216f1513d503d06226e46111a0b59caaf126043eb5bbf28c34f3a5e332a1fc7b2b73cf188910f00006700000100015d77400301010006000000000000000000000014000003ec000000003b023380',
-            # update 5 marks you as a nasty spammer!
+            # update 5 marks you as a nasty spammer, but the routing graph is
+            # updated with this even though the gossip is not broadcast.
             '01025b5b5a0daed874ab02bd3356d38190ff46bbaf5f10db5067da70f3ca203480ca78059e6621c6143f3da4e454d0adda6d01a9980ed48e71ccd0c613af73570a7106226e46111a0b59caaf126043eb5bbf28c34f3a5e332a1fc7b2b73cf188910f00006700000100015d77400401010006000000000000000000000014000003ed000000003b023380'
         ],
         timeout=TIMEOUT
     )
+    # Rate limited channel_update okay to use in routing graph.
+    wait_for(lambda: channel_fees(l3) == [1005])
+    # but should be flagged so we don't propagate to the network.
+    assert(l3.daemon.is_in_log("Spammy update for 103x1x1/1 flagged"))
 
-    wait_for(lambda: channel_fees(l3) == [1004])
+    # ask for a gossip sync
+    raw = subprocess.run(['devtools/gossipwith',
+                          '--initial-sync',
+                          '--timeout-after={}'.format(1),
+                          '--hex',
+                          '{}@localhost:{}'.format(l3.info['id'], l3.port)],
+                         check=True,
+                         timeout=TIMEOUT, stdout=subprocess.PIPE).stdout
+    # The last message is the most recent channel update.
+    message = raw.decode('utf-8').split()[-1]
+    decoded = subprocess.run(['devtools/decodemsg', message],
+                             check=True,
+                             timeout=TIMEOUT,
+                             stdout=subprocess.PIPE).stdout.decode('utf8')
+    assert("fee_proportional_millionths=1004" in decoded)
+    # Used in routing graph, but not passed to gossip peers.
+    assert("fee_proportional_millionths=1005" not in decoded)
 
     # 24 seconds later, it will accept another.
     l3.rpc.call('dev-gossip-set-time', [1568096251 + 24])
@@ -1882,6 +1901,20 @@ def test_gossip_ratelimit(node_factory, bitcoind):
                    check=True, timeout=TIMEOUT)
 
     wait_for(lambda: channel_fees(l3) == [1006])
+    raw = subprocess.run(['devtools/gossipwith',
+                          '--initial-sync',
+                          '--timeout-after={}'.format(1),
+                          '--hex',
+                          '{}@localhost:{}'.format(l3.info['id'], l3.port)],
+                         check=True,
+                         timeout=TIMEOUT, stdout=subprocess.PIPE).stdout
+    message = raw.decode('utf-8').split()[-1]
+    decoded = subprocess.run(['devtools/decodemsg', message],
+                             check=True,
+                             timeout=TIMEOUT,
+                             stdout=subprocess.PIPE).stdout.decode('utf8')
+
+    assert("fee_proportional_millionths=1006" in decoded)
 
 
 def check_socket(ip_addr, port):
@@ -2067,20 +2100,20 @@ def test_addgossip(node_factory):
     nann1 = l1.daemon.is_in_log(r"\[OUT\] 0101.*")
     nann2 = l2.daemon.is_in_log(r"\[OUT\] 0101.*")
 
-    # Feed them to l3 (Each one starts with TIMESTAMP chanid-xxx: [OUT] ...)
-    l3.rpc.addgossip(ann.split()[3])
+    # Feed them to l3 (Each one starts with PREFIX TIMESTAMP chanid-xxx: [OUT] ...)
+    l3.rpc.addgossip(ann.split()[4])
 
-    l3.rpc.addgossip(upd1.split()[3])
-    l3.rpc.addgossip(upd2.split()[3])
-    l3.rpc.addgossip(nann1.split()[3])
-    l3.rpc.addgossip(nann2.split()[3])
+    l3.rpc.addgossip(upd1.split()[4])
+    l3.rpc.addgossip(upd2.split()[4])
+    l3.rpc.addgossip(nann1.split()[4])
+    l3.rpc.addgossip(nann2.split()[4])
 
     # In this case, it can actually have to wait, since it does scid lookup.
     wait_for(lambda: len(l3.rpc.listchannels()['channels']) == 2)
     wait_for(lambda: len(l3.rpc.listnodes()['nodes']) == 2)
 
     # Now corrupt an update
-    badupdate = upd1.split()[3]
+    badupdate = upd1.split()[4]
     if badupdate.endswith('f'):
         badupdate = badupdate[:-1] + 'e'
     else:
