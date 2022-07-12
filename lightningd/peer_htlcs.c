@@ -538,11 +538,11 @@ static void rcvd_htlc_reply(struct subd *subd, const u8 *msg, const int *fds UNU
 			fail_in_htlc(hout->in, failonion);
 
 			/* here we haven't called connect_htlc_out(),
-			 * so set htlc field with NULL */
+			 * so set htlc field with NULL (db wants it to exist!) */
 			wallet_forwarded_payment_add(ld->wallet,
 					 hout->in,
 					 get_onion_style(hout->in),
-					 NULL, NULL,
+					 channel_scid_or_local_alias(hout->key.channel), NULL,
 					 FORWARD_LOCAL_FAILED,
 						     fromwire_peektype(hout->failmsg));
 		}
@@ -702,7 +702,7 @@ static void forward_htlc(struct htlc_in *hin,
 		local_fail_in_htlc(hin, take(towire_unknown_next_peer(NULL)));
 		wallet_forwarded_payment_add(hin->key.channel->peer->ld->wallet,
 					 hin, get_onion_style(hin),
-					 next ? next->scid : NULL, NULL,
+					 scid, NULL,
 					 FORWARD_LOCAL_FAILED,
 					 WIRE_UNKNOWN_NEXT_PEER);
 		return;
@@ -797,7 +797,7 @@ static void forward_htlc(struct htlc_in *hin,
 fail:
 	local_fail_in_htlc(hin, failmsg);
 	wallet_forwarded_payment_add(ld->wallet,
-				 hin, get_onion_style(hin), next->scid, hout,
+				 hin, get_onion_style(hin), scid, hout,
 				 FORWARD_LOCAL_FAILED,
 				 fromwire_peektype(failmsg));
 }
@@ -1337,7 +1337,7 @@ static void fulfill_our_htlc_out(struct channel *channel, struct htlc_out *hout,
 		fulfill_htlc(hout->in, preimage);
 		wallet_forwarded_payment_add(ld->wallet, hout->in,
 					     get_onion_style(hout->in),
-					     hout->key.channel->scid, hout,
+					     channel_scid_or_local_alias(hout->key.channel), hout,
 					     FORWARD_SETTLED, 0);
 	}
 }
@@ -1465,7 +1465,7 @@ static bool peer_failed_our_htlc(struct channel *channel,
 	if (hout->in)
 		wallet_forwarded_payment_add(ld->wallet, hout->in,
 					     get_onion_style(hout->in),
-					     channel->scid,
+					     channel_scid_or_local_alias(channel),
 					     hout, FORWARD_FAILED,
 					     hout->failmsg
 					     ? fromwire_peektype(hout->failmsg)
@@ -1628,7 +1628,7 @@ void onchain_failed_our_htlc(const struct channel *channel,
 				   take(towire_permanent_channel_failure(NULL)));
 		wallet_forwarded_payment_add(hout->key.channel->peer->ld->wallet,
 					 hout->in, get_onion_style(hout->in),
-					 channel->scid, hout,
+					 channel_scid_or_local_alias(channel), hout,
 					 FORWARD_LOCAL_FAILED,
 					 hout->failmsg
 					 ? fromwire_peektype(hout->failmsg)
@@ -1795,7 +1795,7 @@ static bool update_out_htlc(struct channel *channel,
 		if (hout->in) {
 			wallet_forwarded_payment_add(ld->wallet, hout->in,
 						     get_onion_style(hout->in),
-						     channel->scid, hout,
+						     channel_scid_or_local_alias(channel), hout,
 						     FORWARD_OFFERED, 0);
 		}
 
@@ -2779,7 +2779,7 @@ void json_format_forwarding_object(struct json_stream *response,
 				    "in_msatoshi", "in_msat");
 
 	/* These can be unset (aka zero) if we failed before channel lookup */
-	if (cur->channel_out.u64 != 0) {
+	if (!amount_msat_eq(cur->msat_out, AMOUNT_MSAT(0))) {
 		json_add_amount_msat_compat(response,
 					    cur->msat_out,
 					    "out_msatoshi",  "out_msat");

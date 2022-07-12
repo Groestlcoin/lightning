@@ -1604,6 +1604,10 @@ def test_forward_local_failed_stats(node_factory, bitcoind, executor):
     assert 'received_time' in stats['forwards'][3] and 'resolved_time' not in stats['forwards'][3]
     assert 'received_time' in stats['forwards'][3] and 'resolved_time' not in stats['forwards'][4]
 
+    # Correct in and out channels
+    assert [s['in_channel'] for s in stats['forwards']] == [c12] * 5
+    assert [s.get('out_channel') for s in stats['forwards']] == [c23, c24, c25, None, c24]
+
 
 @pytest.mark.developer("too slow without --dev-fast-gossip")
 @pytest.mark.slow_test
@@ -5305,3 +5309,23 @@ def test_pay_middle_fail(node_factory, bitcoind, executor):
     # And that will fail upstream
     with pytest.raises(RpcError, match=r'WIRE_INCORRECT_OR_UNKNOWN_PAYMENT_DETAILS'):
         l1.rpc.waitsendpay('00' * 32)
+
+
+def test_sendpay_dual_amounts(node_factory):
+    """Test that handing *both* msatoshi and amount_msat to sendpay works"""
+    l1 = node_factory.get_node(options={'allow-deprecated-apis': True})
+
+    route = [{'amount_msat': 1011,
+              'msatoshi': 1011,
+              'id': '022d223620a359a47ff7f7ac447c85c46c923da53389221a0054c11c1e3ca31d59',
+              'delay': 20,
+              'channel': '1x1x1'},
+             {'amount_msat': 1000,
+              'msatoshi': 1000,
+              'id': '035d2b1192dfba134e10e540875d366ebc8bc353d5aa766b80c090b39c3a5d885d',
+              'delay': 10,
+              'channel': '2x2x2'}]
+    l1.rpc.check("sendpay", route=route, payment_hash="00" * 32)
+
+    with pytest.raises(RpcError, match=r'No connection to first peer found'):
+        l1.rpc.sendpay(route=route, payment_hash="00" * 32)

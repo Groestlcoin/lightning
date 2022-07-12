@@ -34,6 +34,7 @@ static struct command_result *plugin_dynamic_list_plugins(struct plugin_command 
 		json_add_string(response, "name", p->cmd);
 		json_add_bool(response, "active",
 		              p->plugin_state == INIT_COMPLETE);
+		json_add_bool(response, "dynamic", p->dynamic);
 		json_object_end(response);
 	}
 	json_array_end(response);
@@ -71,8 +72,8 @@ plugin_dynamic_start(struct plugin_command *pcmd, const char *plugin_path,
 
 	if (!p)
 		return command_fail(pcmd->cmd, JSONRPC2_INVALID_PARAMS,
-				    "%s: already registered",
-				    plugin_path);
+				    "%s: %s", plugin_path,
+					    errno ? strerror(errno) : "already registered");
 
 	/* This will come back via plugin_cmd_killed or plugin_cmd_succeeded */
 	err = plugin_send_getmanifest(p);

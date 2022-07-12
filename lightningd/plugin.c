@@ -253,11 +253,16 @@ struct plugin *plugin_register(struct plugins *plugins, const char* path TAKES,
 			       const jsmntok_t *params STEALS)
 {
 	struct plugin *p, *p_temp;
+	char* abspath;
 	u32 chksum;
 
+	abspath = path_canon(tmpctx, path);
+	if (!abspath) {
+		return NULL;
+	}
 	/* Don't register an already registered plugin */
 	list_for_each(&plugins->plugins, p_temp, list) {
-		if (streq(path, p_temp->cmd)) {
+		if (streq(abspath, p_temp->cmd)) {
 			/* If added as "important", upgrade to "important".  */
 			if (important)
 				p_temp->important = true;
@@ -276,7 +281,7 @@ struct plugin *plugin_register(struct plugins *plugins, const char* path TAKES,
 
 	p = tal(plugins, struct plugin);
 	p->plugins = plugins;
-	p->cmd = tal_strdup(p, path);
+	p->cmd = tal_steal(p, abspath);
 	p->checksum = file_checksum(plugins->ld, p->cmd);
 	p->shortname = path_basename(p, p->cmd);
 	p->start_cmd = start_cmd;
@@ -881,10 +886,24 @@ char *plugin_opt_set(const char *arg, struct plugin_opt *popt)
 	return NULL;
 }
 
+/* Returns true if "name" was already registered and now overwritten. */
+static bool plugin_opt_register(struct plugin_opt *popt)
+{
+	bool was_registered = opt_unregister(popt->name);
+	if (streq(popt->type, "flag"))
+		opt_register_noarg(popt->name, plugin_opt_flag_set, popt,
+				   popt->description);
+	else
+		opt_register_arg(popt->name, plugin_opt_set, NULL, popt,
+				 popt->description);
+
+	return was_registered;
+}
+
 static void destroy_plugin_opt(struct plugin_opt *opt)
 {
-	if (!opt_unregister(opt->name))
-		fatal("Could not unregister %s", opt->name);
+	/* does nothing when "name" registration replaced its double */
+	opt_unregister(opt->name);
 	list_del(&opt->list);
 }
 
@@ -912,6 +931,11 @@ static const char *plugin_opt_add(struct plugin *plugin, const char *buffer,
 
 	popt->name = tal_fmt(popt, "--%.*s", nametok->end - nametok->start,
 			     buffer + nametok->start);
+
+	/* an "|" alias could circumvent the unique-option-name check */
+	if (strchr(popt->name, '|'))
+		return tal_fmt(plugin, "Option \"name\" may not contain '|'");
+
 	popt->description = NULL;
 	if (deptok) {
 		if (!json_to_bool(buffer, deptok, &popt->deprecated))
@@ -968,13 +992,10 @@ static const char *plugin_opt_add(struct plugin *plugin, const char *buffer,
 
 	list_add_tail(&plugin->plugin_opts, &popt->list);
 
-	if (streq(popt->type, "flag"))
-		opt_register_noarg(popt->name, plugin_opt_flag_set, popt,
-				   popt->description);
-
-	else
-		opt_register_arg(popt->name, plugin_opt_set, NULL, popt,
-				 popt->description);
+	/* Command line options are parsed only during ld's startup and each "name"
+	 * only once. Always registers to satisfy destructor */
+	if (plugin_opt_register(popt) && plugin->plugins->startup)
+		fatal("error starting plugin '%s': option name '%s' is already taken", plugin->cmd, popt->name);
 
 	tal_add_destructor(popt, destroy_plugin_opt);
 	return NULL;
@@ -1511,7 +1532,8 @@ static const char *plugin_parse_getmanifest_response(const char *buffer,
 	if (!err)
 		err = plugin_add_params(plugin);
 
-	plugin->plugin_state = NEEDS_INIT;
+	if (!err)
+		plugin->plugin_state = NEEDS_INIT;
 	return err;
 }
 
