@@ -1,7 +1,7 @@
 #include "config.h"
 #include <ccan/array_size/array_size.h>
+#include <common/json_param.h>
 #include <common/json_stream.h>
-#include <common/json_tok.h>
 #include <plugins/spender/fundchannel.h>
 
 static struct command_result *
@@ -27,6 +27,15 @@ fundchannel_get_result(struct command *cmd,
 		       const char *buf,
 		       const jsmntok_t *result,
 		       void *nothing UNUSED);
+
+/* Generally a bad idea, but makes sense here. */
+static struct command_result *param_tok(struct command *cmd, const char *name,
+					const char *buffer, const jsmntok_t * tok,
+					const jsmntok_t **out)
+{
+	*out = tok;
+	return NULL;
+}
 
 /* Thin wrapper aroud multifundchannel.  */
 static struct command_result *

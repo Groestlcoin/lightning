@@ -12,7 +12,6 @@
 #include <common/configdir.h>
 #include <common/features.h>
 #include <common/json_command.h>
-#include <common/json_helpers.h>
 #include <common/memleak.h>
 #include <common/timeout.h>
 #include <common/version.h>
@@ -642,6 +641,11 @@ static const char *plugin_read_json_one(struct plugin *plugin,
 		*complete = false;
 		return NULL;
 	}
+
+	if (plugin->toks->type != JSMN_OBJECT)
+		return tal_fmt(
+		    plugin,
+		    "JSON-RPC message is not a valid JSON object type");
 
 	jrtok = json_get_member(plugin->buffer, plugin->toks, "jsonrpc");
 	idtok = json_get_member(plugin->buffer, plugin->toks, "id");

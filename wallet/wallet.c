@@ -1114,6 +1114,7 @@ wallet_stmt2inflight(struct wallet *w, struct db_stmt *stmt,
 	struct amount_msat lease_fee;
 	struct bitcoin_outpoint funding;
 	struct bitcoin_signature last_sig;
+	struct bitcoin_tx *last_tx;
 	struct channel_inflight *inflight;
 
 	secp256k1_ecdsa_signature *lease_commit_sig;
@@ -1149,12 +1150,19 @@ wallet_stmt2inflight(struct wallet *w, struct db_stmt *stmt,
 		db_col_ignore(stmt, "lease_fee");
 	}
 
+	/* last_tx is null for stub channels used for recovering funds through
+	 * Static channel backups. */
+	if (!db_col_is_null(stmt, "last_tx"))
+		last_tx = db_col_psbt_to_tx(tmpctx, stmt, "last_tx");
+	else
+		last_tx = NULL;
+
 	inflight = new_inflight(chan, &funding,
 				db_col_int(stmt, "funding_feerate"),
 				funding_sat,
 				our_funding_sat,
 				db_col_psbt(tmpctx, stmt, "funding_psbt"),
-				db_col_psbt_to_tx(tmpctx, stmt, "last_tx"),
+				last_tx,
 				last_sig,
 				db_col_int(stmt, "lease_expiry"),
 				lease_commit_sig,
@@ -1260,6 +1268,7 @@ static struct channel *wallet_stmt2channel(struct wallet *w, struct db_stmt *stm
 	struct bitcoin_outpoint funding;
 	struct bitcoin_outpoint *shutdown_wrong_funding;
 	struct bitcoin_signature last_sig;
+	struct bitcoin_tx *last_tx;
 	u8 *remote_shutdown_scriptpubkey;
 	u8 *local_shutdown_scriptpubkey;
 	struct changed_htlc *last_sent_commit;
@@ -1445,6 +1454,13 @@ static struct channel *wallet_stmt2channel(struct wallet *w, struct db_stmt *stm
 	else
 		type = channel_type_none(NULL);
 
+	/* last_tx is null for stub channels used for recovering funds through
+	 * Static channel backups. */
+	if (!db_col_is_null(stmt, "last_tx"))
+		last_tx = db_col_psbt_to_tx(tmpctx, stmt, "last_tx");
+	else
+		last_tx = NULL;
+
 	chan = new_channel(peer, db_col_u64(stmt, "id"),
 			   &wshachain,
 			   db_col_int(stmt, "state"),
@@ -1469,7 +1485,7 @@ static struct channel *wallet_stmt2channel(struct wallet *w, struct db_stmt *stm
 			   our_msat,
 			   msat_to_us_min, /* msatoshi_to_us_min */
 			   msat_to_us_max, /* msatoshi_to_us_max */
-			   db_col_psbt_to_tx(tmpctx, stmt, "last_tx"),
+			   last_tx,
 			   &last_sig,
 			   wallet_htlc_sigs_load(tmpctx, w,
 						 db_col_u64(stmt, "id"),
@@ -1914,7 +1930,10 @@ void wallet_channel_save(struct wallet *w, struct channel *chan)
 	db_bind_talarr(stmt, 17, chan->shutdown_scriptpubkey[REMOTE]);
 	db_bind_u64(stmt, 18, chan->final_key_idx);
 	db_bind_u64(stmt, 19, chan->our_config.id);
-	db_bind_psbt(stmt, 20, chan->last_tx->psbt);
+	if (chan->last_tx)
+		db_bind_psbt(stmt, 20, chan->last_tx->psbt);
+	else
+		db_bind_null(stmt, 20);
 	db_bind_signature(stmt, 21, &chan->last_sig.s);
 	db_bind_int(stmt, 22, chan->last_was_revoke);
 	db_bind_int(stmt, 23, chan->min_possible_feerate);

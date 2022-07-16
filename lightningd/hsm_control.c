@@ -4,13 +4,13 @@
 #include <common/ecdh.h>
 #include <common/errcode.h>
 #include <common/hsm_encryption.h>
-#include <common/json_helpers.h>
-#include <common/param.h>
+#include <common/json_command.h>
+#include <common/json_param.h>
+#include <common/jsonrpc_errors.h>
 #include <common/type_to_string.h>
 #include <errno.h>
 #include <hsmd/hsmd_wiregen.h>
 #include <lightningd/hsm_control.h>
-#include <lightningd/json.h>
 #include <lightningd/jsonrpc.h>
 #include <lightningd/lightningd.h>
 #include <lightningd/subd.h>
@@ -126,31 +126,41 @@ struct ext_key *hsm_init(struct lightningd *ld)
 	return bip32_base;
 }
 
-static struct command_result *json_getsharedsecret(struct command *cmd,
+static struct command_result *json_makesecret(struct command *cmd,
 					   const char *buffer,
 					   const jsmntok_t *obj UNNEEDED,
 					   const jsmntok_t *params)
 {
-	struct pubkey *point;
-	struct secret ss;
+	u8 *info;
 	struct json_stream *response;
+	struct secret secret;
 
 	if (!param(cmd, buffer, params,
-		   p_req("point", &param_pubkey, &point),
+		   p_req("hex", param_bin_from_hex, &info),
 		   NULL))
 		return command_param_failed();
 
-	ecdh(point, &ss);
+	u8 *msg = towire_hsmd_derive_secret(cmd, info);
+	if (!wire_sync_write(cmd->ld->hsm_fd, take(msg)))
+		return command_fail(cmd, LIGHTNINGD,
+                     "Could not write to HSM: %s", strerror(errno));
+
+
+	msg = wire_sync_read(tmpctx, cmd->ld->hsm_fd);
+	if (!fromwire_hsmd_derive_secret_reply(msg, &secret))
+		return command_fail(cmd, LIGHTNINGD,
+                     "Bad reply from HSM: %s", strerror(errno));
+
+
 	response = json_stream_success(cmd);
-	json_add_secret(response, "shared_secret", &ss);
+	json_add_secret(response, "secret", &secret);
 	return command_success(cmd, response);
 }
 
-static const struct json_command getsharedsecret_command = {
-	"getsharedsecret",
-	"utility", /* FIXME: Or "crypto"?  */
-	&json_getsharedsecret,
-	"Compute the hash of the Elliptic Curve Diffie Hellman shared secret point from "
-	"this node private key and an input {point}."
+static const struct json_command makesecret_command = {
+	"makesecret",
+	"utility",
+	&json_makesecret,
+	"Get a pseudorandom secret key, using some {hex} data."
 };
-AUTODATA(json_command, &getsharedsecret_command);
+AUTODATA(json_command, &makesecret_command);

@@ -9,9 +9,7 @@
 #include <ccan/tal/str/str.h>
 #include <common/blockheight_states.h>
 #include <common/json_command.h>
-#include <common/json_helpers.h>
-#include <common/json_tok.h>
-#include <common/param.h>
+#include <common/json_param.h>
 #include <common/psbt_open.h>
 #include <common/shutdown_scriptpubkey.h>
 #include <common/type_to_string.h>
@@ -26,7 +24,6 @@
 #include <lightningd/dual_open_control.h>
 #include <lightningd/gossip_control.h>
 #include <lightningd/hsm_control.h>
-#include <lightningd/json.h>
 #include <lightningd/notification.h>
 #include <lightningd/opening_common.h>
 #include <lightningd/peer_control.h>
@@ -1228,6 +1225,14 @@ wallet_commit_channel(struct lightningd *ld,
 					     &commitment_feerate);
 	channel->min_possible_feerate = commitment_feerate;
 	channel->max_possible_feerate = commitment_feerate;
+	channel->scb = tal(channel, struct scb_chan);
+	channel->scb->id = channel->dbid;
+	channel->scb->addr = channel->peer->addr;
+	channel->scb->node_id = channel->peer->id;
+	channel->scb->funding = *funding;
+	channel->scb->cid = channel->cid;
+	channel->scb->funding_sats = total_funding;
+	channel->scb->type = channel_type_dup(channel->scb, channel->type);
 
 	/* We are connected */
 	channel->connected = true;

@@ -47,6 +47,7 @@ Core Lightning Documentation
    lightning-delpay <lightning-delpay.7.md>
    lightning-disableoffer <lightning-disableoffer.7.md>
    lightning-disconnect <lightning-disconnect.7.md>
+   lightning-emergencyrecover <lightning-emergencyrecover.7.md>
    lightning-feerates <lightning-feerates.7.md>
    lightning-fetchinvoice <lightning-fetchinvoice.7.md>
    lightning-fundchannel <lightning-fundchannel.7.md>
@@ -58,7 +59,6 @@ Core Lightning Documentation
    lightning-getinfo <lightning-getinfo.7.md>
    lightning-getlog <lightning-getlog.7.md>
    lightning-getroute <lightning-getroute.7.md>
-   lightning-getsharedsecret <lightning-getsharedsecret.7.md>
    lightning-help <lightning-help.7.md>
    lightning-hsmtool <lightning-hsmtool.8.md>
    lightning-invoice <lightning-invoice.7.md>
@@ -75,6 +75,7 @@ Core Lightning Documentation
    lightning-listpeers <lightning-listpeers.7.md>
    lightning-listsendpays <lightning-listsendpays.7.md>
    lightning-listtransactions <lightning-listtransactions.7.md>
+   lightning-makesecret <lightning-makesecret.7.md>
    lightning-multifundchannel <lightning-multifundchannel.7.md>
    lightning-multiwithdraw <lightning-multiwithdraw.7.md>
    lightning-newaddr <lightning-newaddr.7.md>
@@ -90,6 +91,7 @@ Core Lightning Documentation
    lightning-pay <lightning-pay.7.md>
    lightning-ping <lightning-ping.7.md>
    lightning-plugin <lightning-plugin.7.md>
+   lightning-recoverchannel <lightning-recoverchannel.7.md>
    lightning-reserveinputs <lightning-reserveinputs.7.md>
    lightning-sendcustommsg <lightning-sendcustommsg.7.md>
    lightning-sendinvoice <lightning-sendinvoice.7.md>
@@ -101,6 +103,7 @@ Core Lightning Documentation
    lightning-setchannelfee <lightning-setchannelfee.7.md>
    lightning-signmessage <lightning-signmessage.7.md>
    lightning-signpsbt <lightning-signpsbt.7.md>
+   lightning-staticbackup <lightning-staticbackup.7.md>
    lightning-stop <lightning-stop.7.md>
    lightning-txdiscard <lightning-txdiscard.7.md>
    lightning-txprepare <lightning-txprepare.7.md>

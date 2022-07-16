@@ -12,9 +12,7 @@
 #include <common/features.h>
 #include <common/hsm_encryption.h>
 #include <common/json_command.h>
-#include <common/json_helpers.h>
-#include <common/json_tok.h>
-#include <common/param.h>
+#include <common/json_param.h>
 #include <common/type_to_string.h>
 #include <common/version.h>
 #include <common/wireaddr.h>
@@ -1569,8 +1567,7 @@ static void add_config(struct lightningd *ld,
 			    || (!streq(buf, "") && strspn(buf, "0123456789.") == strlen(buf))) {
 				/* Let pure numbers and true/false through as
 				 * literals. */
-				json_add_literal(response, name0,
-						 buf, strlen(buf));
+				json_add_primitive(response, name0, buf);
 				return;
 			}
 
@@ -1676,14 +1673,14 @@ static struct command_result *json_listconfigs(struct command *cmd,
 {
 	size_t i;
 	struct json_stream *response = NULL;
-	const jsmntok_t *configtok;
+	const char *configname;
 
 	if (!param(cmd, buffer, params,
-		   p_opt("config", param_tok, &configtok),
+		   p_opt("config", param_string, &configname),
 		   NULL))
 		return command_param_failed();
 
-	if (!configtok) {
+	if (!configname) {
 		response = json_stream_success(cmd);
 		json_add_string(response, "# version", version());
 	}
@@ -1703,9 +1700,8 @@ static struct command_result *json_listconfigs(struct command *cmd,
 			if (name[0] != '-')
 				continue;
 
-			if (configtok
-			    && !memeq(buffer + configtok->start,
-				      configtok->end - configtok->start,
+			if (configname
+			    && !memeq(configname, strlen(configname),
 				      name + 1, len - 1))
 				continue;
 
@@ -1719,11 +1715,10 @@ static struct command_result *json_listconfigs(struct command *cmd,
 		}
 	}
 
-	if (configtok && !response) {
+	if (configname && !response) {
 		return command_fail(cmd, JSONRPC2_INVALID_PARAMS,
-				    "Unknown config option '%.*s'",
-				    json_tok_full_len(configtok),
-				    json_tok_full(buffer, configtok));
+				    "Unknown config option %s",
+				    configname);
 	}
 	return command_success(cmd, response);
 }

@@ -2520,7 +2520,6 @@ def test_onchain_feechange(node_factory, bitcoind, executor):
     assert only_one(l2.rpc.listinvoices('onchain_timeout')['invoices'])['status'] == 'unpaid'
 
 
-@pytest.mark.skip("Lisa, please fix this!")
 @pytest.mark.developer("needs DEVELOPER=1 for dev-set-fees")
 def test_onchain_all_dust(node_factory, bitcoind, executor):
     """Onchain handling when we reduce output to all dust"""
@@ -2558,7 +2557,7 @@ def test_onchain_all_dust(node_factory, bitcoind, executor):
     l2.wait_for_channel_onchain(l1.info['id'])
 
     # Make l1's fees really high (and wait for it to exceed 50000)
-    l1.set_feerates((100000, 100000, 100000, 100000))
+    l1.set_feerates((1000000, 1000000, 1000000, 1000000))
     l1.daemon.wait_for_log('Feerate estimate for unilateral_close set to [56789][0-9]{4}')
 
     bitcoind.generate_block(1)
@@ -3695,3 +3694,25 @@ We send an HTLC, and peer unilaterally closes: do we close upstream?
 
     with pytest.raises(RpcError, match=r'WIRE_PERMANENT_CHANNEL_FAILURE \(reply from remote\)'):
         l1.rpc.waitsendpay(ph1, timeout=TIMEOUT)
+
+
+def test_onchain_rexmit_tx(node_factory, bitcoind):
+    """Make sure we re-xmit last tx if we restart and channel is AWAITING_UNILATERAL"""
+    l1, l2 = node_factory.line_graph(2)
+
+    def ignore_sendrawtx(r):
+        return {'id': r['id'], 'result': {}}
+
+    l1.daemon.rpcproxy.mock_rpc('sendrawtransaction', ignore_sendrawtx)
+
+    l2.stop()
+    l1.rpc.close(l2.info['id'], unilateraltimeout=1)
+
+    wait_for(lambda: only_one(only_one(l1.rpc.listpeers()['peers'])['channels'])['state'] == 'AWAITING_UNILATERAL')
+    l1.stop()
+
+    assert bitcoind.rpc.getrawmempool() == []
+    l1.daemon.rpcproxy.mock_rpc('sendrawtransaction', None)
+
+    l1.start()
+    wait_for(lambda: len(bitcoind.rpc.getrawmempool()) == 1)

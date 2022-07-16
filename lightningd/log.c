@@ -7,9 +7,8 @@
 #include <ccan/tal/link/link.h>
 #include <ccan/tal/str/str.h>
 #include <common/json_command.h>
-#include <common/json_helpers.h>
+#include <common/json_param.h>
 #include <common/memleak.h>
-#include <common/param.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <lightningd/log.h>
@@ -607,8 +606,8 @@ void json_add_opt_log_levels(struct json_stream *response, struct log *log)
 	struct print_filter *i;
 
 	list_for_each(&log->lr->print_filters, i, list) {
-		json_add_member(response, "log-level", true, "%s:%s",
-				log_level_name(i->level), i->prefix);
+		json_add_str_fmt(response, "log-level", "%s:%s",
+				 log_level_name(i->level), i->prefix);
 	}
 }
 

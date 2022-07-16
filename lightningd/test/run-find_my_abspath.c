@@ -111,16 +111,6 @@ void htlcs_notify_new_block(struct lightningd *ld UNNEEDED, u32 height UNNEEDED)
 void htlcs_resubmit(struct lightningd *ld UNNEEDED,
 		    struct htlc_in_map *unconnected_htlcs_in UNNEEDED)
 { fprintf(stderr, "htlcs_resubmit called!\n"); abort(); }
-/* Generated stub for json_add_member */
-void json_add_member(struct json_stream *js UNNEEDED,
-		     const char *fieldname UNNEEDED,
-		     bool quote UNNEEDED,
-		     const char *fmt UNNEEDED, ...)
-{ fprintf(stderr, "json_add_member called!\n"); abort(); }
-/* Generated stub for json_member_direct */
-char *json_member_direct(struct json_stream *js UNNEEDED,
-			 const char *fieldname UNNEEDED, size_t extra UNNEEDED)
-{ fprintf(stderr, "json_member_direct called!\n"); abort(); }
 /* Generated stub for jsonrpc_listen */
 void jsonrpc_listen(struct jsonrpc *rpc UNNEEDED, struct lightningd *ld UNNEEDED)
 { fprintf(stderr, "jsonrpc_listen called!\n"); abort(); }
@@ -185,6 +175,9 @@ struct plugins *plugins_new(const tal_t *ctx UNNEEDED, struct log_book *log_book
 void plugins_set_builtin_plugins_dir(struct plugins *plugins UNNEEDED,
 				     const char *dir UNNEEDED)
 { fprintf(stderr, "plugins_set_builtin_plugins_dir called!\n"); abort(); }
+/* Generated stub for resend_closing_transactions */
+void resend_closing_transactions(struct lightningd *ld UNNEEDED)
+{ fprintf(stderr, "resend_closing_transactions called!\n"); abort(); }
 /* Generated stub for setup_color_and_alias */
 void setup_color_and_alias(struct lightningd *ld UNNEEDED)
 { fprintf(stderr, "setup_color_and_alias called!\n"); abort(); }

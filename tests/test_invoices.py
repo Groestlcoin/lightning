@@ -599,6 +599,13 @@ def test_autocleaninvoice(node_factory):
     assert len(l1.rpc.listinvoices('inv1')['invoices']) == 0
     assert len(l1.rpc.listinvoices('inv2')['invoices']) == 0
 
+    # stress test
+    l1.rpc.autocleaninvoice(cycle_seconds=0)
+    l1.rpc.autocleaninvoice(cycle_seconds=1)
+    l1.rpc.autocleaninvoice(cycle_seconds=0)
+    time.sleep(1)
+    l1.rpc.autocleaninvoice(cycle_seconds=1, expired_by=1)
+
 
 def test_decode_unknown(node_factory):
     l1 = node_factory.get_node()

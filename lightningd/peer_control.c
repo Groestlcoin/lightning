@@ -20,11 +20,10 @@
 #include <common/htlc_trim.h>
 #include <common/initial_commit_tx.h>
 #include <common/json_command.h>
-#include <common/json_helpers.h>
-#include <common/json_tok.h>
+#include <common/json_param.h>
 #include <common/jsonrpc_errors.h>
 #include <common/key_derive.h>
-#include <common/param.h>
+#include <common/scb_wiregen.h>
 #include <common/shutdown_scriptpubkey.h>
 #include <common/status.h>
 #include <common/timeout.h>
@@ -46,7 +45,6 @@
 #include <lightningd/connect_control.h>
 #include <lightningd/dual_open_control.h>
 #include <lightningd/hsm_control.h>
-#include <lightningd/json.h>
 #include <lightningd/jsonrpc.h>
 #include <lightningd/lightningd.h>
 #include <lightningd/log.h>
@@ -285,6 +283,21 @@ void drop_to_chain(struct lightningd *ld, struct channel *channel,
 	}
 
 	resolve_close_command(ld, channel, cooperative);
+}
+
+void resend_closing_transactions(struct lightningd *ld)
+{
+	struct peer *peer;
+	struct channel *channel;
+
+	list_for_each(&ld->peers, peer, list) {
+		list_for_each(&peer->channels, channel, list) {
+			if (channel->state == CLOSINGD_COMPLETE)
+				drop_to_chain(ld, channel, true);
+			else if (channel->state == AWAITING_UNILATERAL)
+				drop_to_chain(ld, channel, false);
+		}
+	}
 }
 
 void channel_errmsg(struct channel *channel,
@@ -1535,8 +1548,9 @@ static enum watch_result funding_depth_cb(struct lightningd *ld,
 	const char *txidstr;
 	struct short_channel_id scid;
 
-	/* Sanity check */
-	if (!check_funding_tx(tx, channel)) {
+	/* Sanity check, but we'll have to make an exception
+	 * for stub channels(1x1x1) */
+	if (!check_funding_tx(tx, channel) && !is_stub_scid(channel->scid)) {
 		channel_internal_error(channel, "Bad tx %s: %s",
 				       type_to_string(tmpctx,
 						      struct bitcoin_txid, txid),
@@ -1591,13 +1605,15 @@ static enum watch_result funding_depth_cb(struct lightningd *ld,
 			return DELETE_WATCH;
 		}
 
-		/* If we restart, we could already have peer->scid from database */
+		/* If we restart, we could already have peer->scid from database,
+		 * we don't need to update scid for stub channels(1x1x1) */
 		if (!channel->scid) {
 			channel->scid = tal(channel, struct short_channel_id);
 			*channel->scid = scid;
 			wallet_channel_save(ld->wallet, channel);
 
-		} else if (!short_channel_id_eq(channel->scid, &scid)) {
+		} else if (!short_channel_id_eq(channel->scid, &scid) &&
+			   !is_stub_scid(channel->scid)) {
 			/* This normally restarts channeld, initialized with updated scid
 			 * and also adds it (at least our halve_chan) to rtable. */
 			channel_fail_reconnect(channel,
@@ -1756,6 +1772,57 @@ static const struct json_command listpeers_command = {
 };
 /* Comment added to satisfice AUTODATA */
 AUTODATA(json_command, &listpeers_command);
+
+static void json_add_scb(struct command *cmd,
+			 const char *fieldname,
+			 struct json_stream *response,
+			 struct channel *c)
+{
+	u8 *scb = tal_arr(cmd, u8, 0);
+
+	towire_scb_chan(&scb, c->scb);
+	json_add_hex_talarr(response, fieldname,
+			    scb);
+}
+
+/* This will return a SCB for all the channels currently loaded
+ * in the in-memory channel */
+static struct command_result *json_staticbackup(struct command *cmd,
+					     const char *buffer,
+					     const jsmntok_t *obj UNNEEDED,
+					     const jsmntok_t *params)
+{
+	struct json_stream *response;
+	struct peer *peer;
+	struct channel *channel;
+
+	if (!param(cmd, buffer, params, NULL))
+        return command_param_failed();
+
+	response = json_stream_success(cmd);
+
+	json_array_start(response, "scb");
+
+	list_for_each(&cmd->ld->peers, peer, list)
+		list_for_each(&peer->channels, channel, list){
+			if (!channel->scb)
+				continue;
+			json_add_scb(cmd, NULL, response, channel);
+		}
+	json_array_end(response);
+
+	return command_success(cmd, response);
+}
+
+static const struct json_command staticbackup_command = {
+	"staticbackup",
+	"backup",
+	json_staticbackup,
+	"Returns SCB of all the channels currently present in the DB"
+};
+/* Comment added to satisfice AUTODATA */
+AUTODATA(json_command, &staticbackup_command);
+
 
 struct command_result *
 command_find_channel(struct command *cmd,

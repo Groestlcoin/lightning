@@ -1569,8 +1569,10 @@ def test_check_command(node_factory):
     with pytest.raises(RpcError, match=r'missing required parameter'):
         l1.rpc.check(command_to_check='connect', host='x', port=77)
     # Makes sure parameter types are correct.
-    with pytest.raises(RpcError, match=r'should be an integer'):
-        l1.rpc.check(command_to_check='connect', id='test', host='x', port="abcd")
+    with pytest.raises(RpcError, match=r'should be a 16-bit integer'):
+        l1.rpc.check(command_to_check='connect',
+                     id='022d223620a359a47ff7f7ac447c85c46c923da53389221a0054c11c1e3ca31d59',
+                     host='x', port="abcd")
 
     # FIXME: python wrapper doesn't let us test array params.
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -2246,29 +2248,71 @@ def test_sendcustommsg(node_factory):
 
 
 @pytest.mark.developer("needs --dev-force-privkey")
-def test_getsharedsecret(node_factory):
+def test_makesecret(node_factory):
     """
-    Test getsharedsecret command.
+    Test makesecret command.
     """
-    # From BOLT 8 test vectors.
-    options = [
-        {"dev-force-privkey": "1212121212121212121212121212121212121212121212121212121212121212"},
-        {}
-    ]
-    l1, l2 = node_factory.get_nodes(2, opts=options)
 
-    # Check BOLT 8 test vectors.
-    shared_secret = l1.rpc.getsharedsecret("028d7500dd4c12685d1f568b4c2b5048e8534b873319f3a8daa612b469132ec7f7")['shared_secret']
-    assert (shared_secret == "1e2fb3c8fe8fb9f262f649f64d26ecf0f2c0a805a767cf02dc2d77a6ef1fdcc3")
+    l1 = node_factory.get_node(options={"dev-force-privkey": "1212121212121212121212121212121212121212121212121212121212121212"})
+    secret = l1.rpc.makesecret("73636220736563726574")["secret"]
 
-    # Clear the forced privkey of l1.
-    del l1.daemon.opts["dev-force-privkey"]
-    l1.restart()
+    assert (secret == "04fe01631fcedc8d91f39ab43244e63afebaed68ee21d2f1c325fd1242726a18")
 
-    # l1 and l2 can generate the same shared secret
-    # knowing only the public key of the other.
-    assert (l1.rpc.getsharedsecret(l2.info["id"])["shared_secret"]
-            == l2.rpc.getsharedsecret(l1.info["id"])["shared_secret"])
+    # Same if we do it by parameter name
+    assert l1.rpc.makesecret(hex="73636220736563726574")["secret"] == secret
+
+    # Changing seed changes secret!
+    assert l1.rpc.makesecret(hex="73636220736563726575")["secret"] != secret
+    assert l1.rpc.makesecret(hex="736362207365637265")["secret"] != secret
+    assert l1.rpc.makesecret(hex="7363622073656372657401")["secret"] != secret
+
+
+def test_staticbackup(node_factory):
+    """
+    Test staticbackup
+    """
+    l1, l2 = node_factory.get_nodes(2, opts=[{}, {}])
+    l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
+    c12, _ = l1.fundchannel(l2, 10**5)
+
+    # Comparing the channelID, scb_chan has the channel ID starting from the 8th byte
+    # and it's own length is 32 byte, hence 16 + 64.
+    assert (len(l1.rpc.staticbackup()["scb"]) == 1
+            and l1.rpc.staticbackup()["scb"][0][16: 16 + 64] == _["channel_id"])
+
+
+def test_recoverchannel(node_factory):
+    """
+    Test recoverchannel
+    """
+    l1 = node_factory.get_node()
+    stubs = l1.rpc.recoverchannel(["0000000000000001c3a7b9d74a174497122bc52d74d6d69836acadc77e0429c6d8b68b48d5c9139a022d223620a359a47ff7f7ac447c85c46c923da53389221a0054c11c1e3ca31d5904017f0000019f0bc3a7b9d74a174497122bc52d74d6d69836acadc77e0429c6d8b68b48d5c9139a0000000000000000000186a000021000"])["stubs"]
+
+    assert len(stubs) == 1
+    assert stubs[0] == "c3a7b9d74a174497122bc52d74d6d69836acadc77e0429c6d8b68b48d5c9139a"
+
+
+@unittest.skipIf(os.getenv('TEST_DB_PROVIDER', 'sqlite3') != 'sqlite3', "deletes database, which is assumed sqlite3")
+def test_emergencyrecover(node_factory, bitcoind):
+    """
+    Test emergencyrecover
+    """
+    l1, l2 = node_factory.get_nodes(2, opts=[{}, {}])
+    l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
+    c12, _ = l1.fundchannel(l2, 10**5)
+
+    l1.stop()
+
+    os.unlink(os.path.join(l1.daemon.lightning_dir, TEST_NETWORK, "lightningd.sqlite3"))
+
+    l1.start()
+    assert l1.daemon.is_in_log('Server started with public key')
+    stubs = l1.rpc.emergencyrecover()["stubs"]
+    assert len(stubs) == 1
+    assert stubs[0] == _["channel_id"]
+
+    listfunds = l1.rpc.listfunds()["channels"][0]
+    assert listfunds["short_channel_id"] == "1x1x1"
 
 
 def test_commitfee_option(node_factory):

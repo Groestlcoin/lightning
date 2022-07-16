@@ -4,6 +4,9 @@ PLUGIN_PAY_OBJS := $(PLUGIN_PAY_SRC:.c=.o)
 PLUGIN_AUTOCLEAN_SRC := plugins/autoclean.c
 PLUGIN_AUTOCLEAN_OBJS := $(PLUGIN_AUTOCLEAN_SRC:.c=.o)
 
+PLUGIN_chanbackup_SRC := plugins/chanbackup.c
+PLUGIN_chanbackup_OBJS := $(PLUGIN_chanbackup_SRC:.c=.o)
+
 PLUGIN_TOPOLOGY_SRC := plugins/topology.c
 PLUGIN_TOPOLOGY_OBJS := $(PLUGIN_TOPOLOGY_SRC:.c=.o)
 
@@ -55,6 +58,7 @@ PLUGIN_FUNDER_OBJS := $(PLUGIN_FUNDER_SRC:.c=.o)
 
 PLUGIN_ALL_SRC :=				\
 	$(PLUGIN_AUTOCLEAN_SRC)			\
+	$(PLUGIN_chanbackup_SRC)		\
 	$(PLUGIN_BCLI_SRC)			\
 	$(PLUGIN_FETCHINVOICE_SRC)		\
 	$(PLUGIN_FUNDER_SRC)			\
@@ -77,6 +81,7 @@ PLUGIN_ALL_OBJS := $(PLUGIN_ALL_SRC:.c=.o)
 
 C_PLUGINS :=					\
 	plugins/autoclean			\
+	plugins/chanbackup			\
 	plugins/bcli				\
 	plugins/fetchinvoice			\
 	plugins/funder				\
@@ -131,17 +136,17 @@ PLUGIN_COMMON_OBJS :=				\
 	common/daemon.o				\
 	common/features.o			\
 	common/hash_u5.o			\
-	common/json.o				\
-	common/json_helpers.o			\
+	common/json_param.o			\
+	common/json_parse.o			\
+	common/json_parse_simple.o		\
 	common/json_stream.o			\
-	common/json_tok.o			\
 	common/lease_rates.o			\
 	common/memleak.o			\
 	common/node_id.o			\
-	common/param.o				\
 	common/psbt_open.o			\
 	common/pseudorand.o			\
 	common/random_select.o			\
+	common/scb_wiregen.o			\
 	common/setup.o				\
 	common/status_levels.o			\
 	common/type_to_string.o			\
@@ -161,6 +166,8 @@ $(PLUGIN_ALL_OBJS): $(PLUGIN_ALL_HEADER)
 plugins/pay: bitcoin/chainparams.o $(PLUGIN_PAY_OBJS) $(PLUGIN_LIB_OBJS) $(PLUGIN_PAY_LIB_OBJS) $(PLUGIN_COMMON_OBJS) $(JSMN_OBJS) $(CCAN_OBJS) common/gossmap.o common/fp16.o common/route.o common/dijkstra.o common/bolt12.o common/bolt12_merkle.o wire/bolt12$(EXP)_wiregen.o bitcoin/block.o
 
 plugins/autoclean: bitcoin/chainparams.o $(PLUGIN_AUTOCLEAN_OBJS) $(PLUGIN_LIB_OBJS) $(PLUGIN_COMMON_OBJS) $(JSMN_OBJS) $(CCAN_OBJS)
+
+plugins/chanbackup: bitcoin/chainparams.o $(PLUGIN_chanbackup_OBJS) $(PLUGIN_LIB_OBJS) $(PLUGIN_COMMON_OBJS) $(JSMN_OBJS) $(CCAN_OBJS)
 
 # Topology wants to decode node_announcement, and peer_wiregen which
 # pulls in some of bitcoin/.
