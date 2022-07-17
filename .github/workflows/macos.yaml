@@ -1,5 +1,5 @@
 ---
-name: CI
+name: CI MacOS
 on: [push, pull_request]
 jobs:
   smoke-test:

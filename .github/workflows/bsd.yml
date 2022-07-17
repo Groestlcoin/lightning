@@ -1,4 +1,4 @@
-name: CI
+name: CI FreeBSD
 
 on: [push, pull_request]
 
