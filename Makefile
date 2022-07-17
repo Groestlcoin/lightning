@@ -92,6 +92,7 @@ FEATURES :=
 
 CCAN_OBJS :=					\
 	ccan-asort.o				\
+	ccan-base64.o				\
 	ccan-bitmap.o				\
 	ccan-bitops.o				\
 	ccan-breakpoint.o			\
@@ -127,6 +128,8 @@ CCAN_OBJS :=					\
 	ccan-ptr_valid.o			\
 	ccan-rbuf.o				\
 	ccan-read_write_all.o			\
+	ccan-rune-coding.o			\
+	ccan-rune-rune.o			\
 	ccan-str-base32.o			\
 	ccan-str-hex.o				\
 	ccan-str.o				\
@@ -195,6 +198,8 @@ CCAN_HEADERS :=						\
 	$(CCANDIR)/ccan/ptrint/ptrint.h			\
 	$(CCANDIR)/ccan/rbuf/rbuf.h			\
 	$(CCANDIR)/ccan/read_write_all/read_write_all.h	\
+	$(CCANDIR)/ccan/rune/internal.h			\
+	$(CCANDIR)/ccan/rune/rune.h			\
 	$(CCANDIR)/ccan/short_types/short_types.h	\
 	$(CCANDIR)/ccan/str/base32/base32.h		\
 	$(CCANDIR)/ccan/str/hex/hex.h			\
@@ -627,8 +632,12 @@ endif
 header_versions_gen.h: tools/headerversions
 	@tools/headerversions $@
 
+# We make a static library, this way linker can discard unused parts.
+libccan.a: $(CCAN_OBJS)
+	@$(call VERBOSE, "ar $@", $(AR) r $@ $(CCAN_OBJS))
+
 # All binaries require the external libs, ccan and system library versions.
-$(ALL_PROGRAMS) $(ALL_TEST_PROGRAMS) $(ALL_FUZZ_TARGETS): $(EXTERNAL_LIBS) $(CCAN_OBJS)
+$(ALL_PROGRAMS) $(ALL_TEST_PROGRAMS) $(ALL_FUZZ_TARGETS): $(EXTERNAL_LIBS) libccan.a
 
 # Each test program depends on its own object.
 $(ALL_TEST_PROGRAMS) $(ALL_FUZZ_TARGETS): %: %.o
@@ -638,7 +647,7 @@ $(ALL_TEST_PROGRAMS) $(ALL_FUZZ_TARGETS): %: %.o
 # uses some ccan modules internally).  We want to rely on -lwallycore etc.
 # (as per EXTERNAL_LDLIBS) so we filter them out here.
 $(ALL_PROGRAMS) $(ALL_TEST_PROGRAMS):
-	@$(call VERBOSE, "ld $@", $(LINK.o) $(filter-out %.a,$^) $(LOADLIBES) $(EXTERNAL_LDLIBS) $(LDLIBS) -o $@)
+	@$(call VERBOSE, "ld $@", $(LINK.o) $(filter-out %.a,$^) $(LOADLIBES) $(EXTERNAL_LDLIBS) $(LDLIBS) libccan.a -o $@)
 
 # We special case the fuzzing target binaries, as they need to link against libfuzzer,
 # which brings its own main().
@@ -684,7 +693,7 @@ obsclean:
 	$(RM) gen_*.h */gen_*.[ch] */*/gen_*.[ch]
 
 clean: obsclean
-	$(RM) $(CCAN_OBJS) $(CDUMP_OBJS) $(ALL_OBJS)
+	$(RM) libccan.a $(CCAN_OBJS) $(CDUMP_OBJS) $(ALL_OBJS)
 	$(RM) $(ALL_GEN_HEADERS) $(ALL_GEN_SOURCES)
 	$(RM) $(ALL_PROGRAMS)
 	$(RM) $(ALL_TEST_PROGRAMS)
@@ -704,7 +713,7 @@ update-mocks:
 	@echo Need DEVELOPER=1 and EXPERIMENTAL_FEATURES=1 to regenerate mocks >&2; exit 1
 endif
 
-$(ALL_TEST_PROGRAMS:%=update-mocks/%.c): $(ALL_GEN_HEADERS) $(EXTERNAL_LIBS) $(CCAN_OBJS) ccan/ccan/cdump/tools/cdump-enumstr config.vars
+$(ALL_TEST_PROGRAMS:%=update-mocks/%.c): $(ALL_GEN_HEADERS) $(EXTERNAL_LIBS) libccan.a ccan/ccan/cdump/tools/cdump-enumstr config.vars
 
 update-mocks/%: %
 	@MAKE=$(MAKE) tools/update-mocks.sh "$*" $(SUPPRESS_OUTPUT)
@@ -836,6 +845,8 @@ endif
 
 ccan-breakpoint.o: $(CCANDIR)/ccan/breakpoint/breakpoint.c
 	@$(call VERBOSE, "cc $<", $(CC) $(CFLAGS) -c -o $@ $<)
+ccan-base64.o: $(CCANDIR)/ccan/base64/base64.c
+	@$(call VERBOSE, "cc $<", $(CC) $(CFLAGS) -c -o $@ $<)
 ccan-tal.o: $(CCANDIR)/ccan/tal/tal.c
 	@$(call VERBOSE, "cc $<", $(CC) $(CFLAGS) -c -o $@ $<)
 ccan-tal-str.o: $(CCANDIR)/ccan/tal/str/str.c
@@ -935,4 +946,8 @@ ccan-json_escape.o: $(CCANDIR)/ccan/json_escape/json_escape.c
 ccan-json_out.o: $(CCANDIR)/ccan/json_out/json_out.c
 	@$(call VERBOSE, "cc $<", $(CC) $(CFLAGS) -c -o $@ $<)
 ccan-closefrom.o: $(CCANDIR)/ccan/closefrom/closefrom.c
+	@$(call VERBOSE, "cc $<", $(CC) $(CFLAGS) -c -o $@ $<)
+ccan-rune-rune.o: $(CCANDIR)/ccan/rune/rune.c
+	@$(call VERBOSE, "cc $<", $(CC) $(CFLAGS) -c -o $@ $<)
+ccan-rune-coding.o: $(CCANDIR)/ccan/rune/coding.c
 	@$(call VERBOSE, "cc $<", $(CC) $(CFLAGS) -c -o $@ $<)

@@ -117,6 +117,8 @@ struct out_req *jsonrpc_request_start_(struct plugin *plugin,
 								       void *arg),
 				       void *arg);
 
+/* This variant has callbacks received whole obj, not "result" or
+ * "error" members. */
 #define jsonrpc_request_start(plugin, cmd, method, cb, errcb, arg)	\
 	jsonrpc_request_start_((plugin), (cmd), (method),		\
 		     typesafe_cb_preargs(struct command_result *, void *, \
@@ -132,6 +134,18 @@ struct out_req *jsonrpc_request_start_(struct plugin *plugin,
 		     (arg))
 
 
+/* This variant has callbacks received whole obj, not "result" or
+ * "error" members.  It also doesn't start params{}. */
+#define jsonrpc_request_whole_object_start(plugin, cmd, method, cb, arg) \
+	jsonrpc_request_start_((plugin), (cmd), (method),		\
+			       typesafe_cb_preargs(struct command_result *, void *, \
+						   (cb), (arg),		\
+						   struct command *command, \
+						   const char *buf,	\
+						   const jsmntok_t *result), \
+			       NULL,					\
+			       (arg))
+
 /* Helper to create a JSONRPC2 response stream with a "result" object. */
 struct json_stream *jsonrpc_stream_success(struct command *cmd);
 
@@ -145,6 +159,51 @@ struct json_stream *jsonrpc_stream_fail(struct command *cmd,
 struct json_stream *jsonrpc_stream_fail_data(struct command *cmd,
 					     int code,
 					     const char *err);
+
+/* Helper to jsonrpc_request_start() and send_outreq() to update datastore. */
+struct command_result *jsonrpc_set_datastore_(struct plugin *plugin,
+					      struct command *cmd,
+					      const char *path,
+					      const void *value,
+					      bool value_is_string,
+					      const char *mode,
+					      struct command_result *(*cb)(struct command *command,
+									   const char *buf,
+									   const jsmntok_t *result,
+									   void *arg),
+					      struct command_result *(*errcb)(struct command *command,
+									      const char *buf,
+									      const jsmntok_t *result,
+									      void *arg),
+					      void *arg);
+
+#define jsonrpc_set_datastore_string(plugin, cmd, path, str, mode, cb, errcb, arg) \
+	jsonrpc_set_datastore_((plugin), (cmd), (path), (str), true, (mode), \
+			       typesafe_cb_preargs(struct command_result *, void *, \
+						   (cb), (arg),		\
+						   struct command *command, \
+						   const char *buf,	\
+						   const jsmntok_t *result), \
+			       typesafe_cb_preargs(struct command_result *, void *, \
+						   (errcb), (arg),	\
+						   struct command *command, \
+						   const char *buf,	\
+						   const jsmntok_t *result), \
+			       (arg))
+
+#define jsonrpc_set_datastore_binary(plugin, cmd, path, tal_ptr, mode, cb, errcb, arg) \
+	jsonrpc_set_datastore_((plugin), (cmd), (path), (tal_ptr), false, (mode), \
+			       typesafe_cb_preargs(struct command_result *, void *, \
+						   (cb), (arg),		\
+						   struct command *command, \
+						   const char *buf,	\
+						   const jsmntok_t *result), \
+			       typesafe_cb_preargs(struct command_result *, void *, \
+						   (errcb), (arg),	\
+						   struct command *command, \
+						   const char *buf,	\
+						   const jsmntok_t *result), \
+			       (arg))
 
 /* This command is finished, here's the response (the content of the
  * "result" or "error" field) */
@@ -205,6 +264,19 @@ void rpc_scan(struct plugin *plugin,
 	      const struct json_out *params TAKES,
 	      const char *guide,
 	      ...);
+
+/* Helper to scan datastore: can only be used in init callback.  *
+ Returns false if field does not exist.  * path is /-separated.  Final
+ arg is JSON_SCAN or JSON_SCAN_TAL.
+ */
+bool rpc_scan_datastore_str(struct plugin *plugin,
+			    const char *path,
+			    ...);
+/* This variant scans the hex encoding, not the string */
+bool rpc_scan_datastore_hex(struct plugin *plugin,
+			    const char *path,
+			    ...);
+
 
 /* Send an async rpc request to lightningd. */
 struct command_result *send_outreq(struct plugin *plugin,

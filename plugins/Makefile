@@ -16,6 +16,9 @@ PLUGIN_TXPREPARE_OBJS := $(PLUGIN_TXPREPARE_SRC:.c=.o)
 PLUGIN_BCLI_SRC := plugins/bcli.c
 PLUGIN_BCLI_OBJS := $(PLUGIN_BCLI_SRC:.c=.o)
 
+PLUGIN_COMMANDO_SRC := plugins/commando.c
+PLUGIN_COMMANDO_OBJS := $(PLUGIN_COMMANDO_SRC:.c=.o)
+
 PLUGIN_KEYSEND_SRC := plugins/keysend.c
 PLUGIN_KEYSEND_OBJS := $(PLUGIN_KEYSEND_SRC:.c=.o)
 
@@ -60,6 +63,7 @@ PLUGIN_ALL_SRC :=				\
 	$(PLUGIN_AUTOCLEAN_SRC)			\
 	$(PLUGIN_chanbackup_SRC)		\
 	$(PLUGIN_BCLI_SRC)			\
+	$(PLUGIN_COMMANDO_SRC)			\
 	$(PLUGIN_FETCHINVOICE_SRC)		\
 	$(PLUGIN_FUNDER_SRC)			\
 	$(PLUGIN_TOPOLOGY_SRC)			\
@@ -83,6 +87,7 @@ C_PLUGINS :=					\
 	plugins/autoclean			\
 	plugins/chanbackup			\
 	plugins/bcli				\
+	plugins/commando			\
 	plugins/fetchinvoice			\
 	plugins/funder				\
 	plugins/topology			\
@@ -163,30 +168,32 @@ PLUGIN_COMMON_OBJS :=				\
 # Make all plugins depend on all plugin headers, for simplicity.
 $(PLUGIN_ALL_OBJS): $(PLUGIN_ALL_HEADER)
 
-plugins/pay: bitcoin/chainparams.o $(PLUGIN_PAY_OBJS) $(PLUGIN_LIB_OBJS) $(PLUGIN_PAY_LIB_OBJS) $(PLUGIN_COMMON_OBJS) $(JSMN_OBJS) $(CCAN_OBJS) common/gossmap.o common/fp16.o common/route.o common/dijkstra.o common/bolt12.o common/bolt12_merkle.o wire/bolt12$(EXP)_wiregen.o bitcoin/block.o
+plugins/pay: bitcoin/chainparams.o $(PLUGIN_PAY_OBJS) $(PLUGIN_LIB_OBJS) $(PLUGIN_PAY_LIB_OBJS) $(PLUGIN_COMMON_OBJS) $(JSMN_OBJS) common/gossmap.o common/fp16.o common/route.o common/dijkstra.o common/bolt12.o common/bolt12_merkle.o wire/bolt12$(EXP)_wiregen.o bitcoin/block.o
 
-plugins/autoclean: bitcoin/chainparams.o $(PLUGIN_AUTOCLEAN_OBJS) $(PLUGIN_LIB_OBJS) $(PLUGIN_COMMON_OBJS) $(JSMN_OBJS) $(CCAN_OBJS)
+plugins/autoclean: bitcoin/chainparams.o $(PLUGIN_AUTOCLEAN_OBJS) $(PLUGIN_LIB_OBJS) $(PLUGIN_COMMON_OBJS) $(JSMN_OBJS)
 
-plugins/chanbackup: bitcoin/chainparams.o $(PLUGIN_chanbackup_OBJS) $(PLUGIN_LIB_OBJS) $(PLUGIN_COMMON_OBJS) $(JSMN_OBJS) $(CCAN_OBJS)
+plugins/chanbackup: bitcoin/chainparams.o $(PLUGIN_chanbackup_OBJS) $(PLUGIN_LIB_OBJS) $(PLUGIN_COMMON_OBJS) $(JSMN_OBJS)
+
+plugins/commando: $(PLUGIN_COMMANDO_OBJS) $(PLUGIN_LIB_OBJS) $(PLUGIN_COMMON_OBJS) $(JSMN_OBJS) bitcoin/chainparams.o 
 
 # Topology wants to decode node_announcement, and peer_wiregen which
 # pulls in some of bitcoin/.
-plugins/topology: common/route.o common/dijkstra.o common/gossmap.o common/fp16.o bitcoin/chainparams.o wire/peer$(EXP)_wiregen.o wire/channel_type_wiregen.o bitcoin/block.o bitcoin/preimage.o  $(PLUGIN_TOPOLOGY_OBJS) $(PLUGIN_LIB_OBJS) $(PLUGIN_COMMON_OBJS) $(JSMN_OBJS) $(CCAN_OBJS)
+plugins/topology: common/route.o common/dijkstra.o common/gossmap.o common/fp16.o bitcoin/chainparams.o wire/peer$(EXP)_wiregen.o wire/channel_type_wiregen.o bitcoin/block.o bitcoin/preimage.o  $(PLUGIN_TOPOLOGY_OBJS) $(PLUGIN_LIB_OBJS) $(PLUGIN_COMMON_OBJS) $(JSMN_OBJS)
 
-plugins/txprepare: bitcoin/chainparams.o $(PLUGIN_TXPREPARE_OBJS) $(PLUGIN_LIB_OBJS) $(PLUGIN_COMMON_OBJS) $(JSMN_OBJS) $(CCAN_OBJS)
+plugins/txprepare: bitcoin/chainparams.o $(PLUGIN_TXPREPARE_OBJS) $(PLUGIN_LIB_OBJS) $(PLUGIN_COMMON_OBJS) $(JSMN_OBJS)
 
-plugins/bcli: bitcoin/chainparams.o $(PLUGIN_BCLI_OBJS) $(PLUGIN_LIB_OBJS) $(PLUGIN_COMMON_OBJS) $(JSMN_OBJS) $(CCAN_OBJS)
+plugins/bcli: bitcoin/chainparams.o $(PLUGIN_BCLI_OBJS) $(PLUGIN_LIB_OBJS) $(PLUGIN_COMMON_OBJS) $(JSMN_OBJS)
 
-plugins/keysend: bitcoin/chainparams.o wire/tlvstream.o wire/onion$(EXP)_wiregen.o $(PLUGIN_KEYSEND_OBJS) $(PLUGIN_LIB_OBJS) $(PLUGIN_PAY_LIB_OBJS) $(PLUGIN_COMMON_OBJS) $(JSMN_OBJS) $(CCAN_OBJS) common/gossmap.o common/fp16.o common/route.o common/dijkstra.o
+plugins/keysend: bitcoin/chainparams.o wire/tlvstream.o wire/onion$(EXP)_wiregen.o $(PLUGIN_KEYSEND_OBJS) $(PLUGIN_LIB_OBJS) $(PLUGIN_PAY_LIB_OBJS) $(PLUGIN_COMMON_OBJS) $(JSMN_OBJS) common/gossmap.o common/fp16.o common/route.o common/dijkstra.o
 $(PLUGIN_KEYSEND_OBJS): $(PLUGIN_PAY_LIB_HEADER)
 
-plugins/spenderp: bitcoin/block.o bitcoin/chainparams.o bitcoin/preimage.o bitcoin/psbt.o common/psbt_open.o wire/peer${EXP}_wiregen.o $(PLUGIN_SPENDER_OBJS) $(PLUGIN_LIB_OBJS) $(PLUGIN_COMMON_OBJS) $(JSMN_OBJS) $(CCAN_OBJS)
+plugins/spenderp: bitcoin/block.o bitcoin/chainparams.o bitcoin/preimage.o bitcoin/psbt.o common/psbt_open.o wire/peer${EXP}_wiregen.o $(PLUGIN_SPENDER_OBJS) $(PLUGIN_LIB_OBJS) $(PLUGIN_COMMON_OBJS) $(JSMN_OBJS)
 
-plugins/offers: bitcoin/chainparams.o $(PLUGIN_OFFERS_OBJS) $(PLUGIN_LIB_OBJS) $(PLUGIN_COMMON_OBJS) common/bolt12.o common/bolt12_merkle.o common/bolt11_json.o common/iso4217.o $(WIRE_OBJS) bitcoin/block.o common/channel_id.o bitcoin/preimage.o $(JSMN_OBJS) $(CCAN_OBJS)
+plugins/offers: bitcoin/chainparams.o $(PLUGIN_OFFERS_OBJS) $(PLUGIN_LIB_OBJS) $(PLUGIN_COMMON_OBJS) common/bolt12.o common/bolt12_merkle.o common/bolt11_json.o common/iso4217.o $(WIRE_OBJS) bitcoin/block.o common/channel_id.o bitcoin/preimage.o $(JSMN_OBJS)
 
-plugins/fetchinvoice: bitcoin/chainparams.o $(PLUGIN_FETCHINVOICE_OBJS) $(PLUGIN_LIB_OBJS) $(PLUGIN_COMMON_OBJS) common/bolt12.o common/bolt12_merkle.o common/iso4217.o $(WIRE_OBJS) bitcoin/block.o common/channel_id.o bitcoin/preimage.o $(JSMN_OBJS) $(CCAN_OBJS) common/gossmap.o common/fp16.o common/dijkstra.o common/route.o common/blindedpath.o common/hmac.o common/blinding.o
+plugins/fetchinvoice: bitcoin/chainparams.o $(PLUGIN_FETCHINVOICE_OBJS) $(PLUGIN_LIB_OBJS) $(PLUGIN_COMMON_OBJS) common/bolt12.o common/bolt12_merkle.o common/iso4217.o $(WIRE_OBJS) bitcoin/block.o common/channel_id.o bitcoin/preimage.o $(JSMN_OBJS) common/gossmap.o common/fp16.o common/dijkstra.o common/route.o common/blindedpath.o common/hmac.o common/blinding.o
 
-plugins/funder: bitcoin/chainparams.o bitcoin/psbt.o common/psbt_open.o $(PLUGIN_FUNDER_OBJS) $(PLUGIN_LIB_OBJS) $(PLUGIN_COMMON_OBJS) $(JSMN_OBJS) $(CCAN_OBJS)
+plugins/funder: bitcoin/chainparams.o bitcoin/psbt.o common/psbt_open.o $(PLUGIN_FUNDER_OBJS) $(PLUGIN_LIB_OBJS) $(PLUGIN_COMMON_OBJS) $(JSMN_OBJS)
 
 # Generated from PLUGINS definition in plugins/Makefile
 ALL_C_HEADERS += plugins/list_of_builtin_plugins_gen.h

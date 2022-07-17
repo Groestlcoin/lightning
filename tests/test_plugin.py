@@ -13,6 +13,7 @@ from utils import (
 )
 
 import ast
+import concurrent.futures
 import json
 import os
 import pytest
@@ -2544,3 +2545,253 @@ def test_plugin_shutdown(node_factory):
     l1.daemon.wait_for_logs(['test_libplugin: shutdown called',
                              'misc_notifications.py: via lightningd shutdown, datastore failed',
                              'test_libplugin: failed to self-terminate in time, killing.'])
+
+
+def test_commando(node_factory, executor):
+    l1, l2 = node_factory.line_graph(2, fundchannel=False)
+
+    # Nothing works until we've issued a rune.
+    fut = executor.submit(l2.rpc.call, method='commando',
+                          payload={'peer_id': l1.info['id'],
+                                   'method': 'listpeers'})
+    with pytest.raises(concurrent.futures.TimeoutError):
+        fut.result(10)
+
+    rune = l1.rpc.commando_rune()['rune']
+    # This works
+    res = l2.rpc.call(method='commando',
+                      payload={'peer_id': l1.info['id'],
+                               'rune': rune,
+                               'method': 'listpeers'})
+    assert len(res['peers']) == 1
+    assert res['peers'][0]['id'] == l2.info['id']
+
+    res = l2.rpc.call(method='commando',
+                      payload={'peer_id': l1.info['id'],
+                               'rune': rune,
+                               'method': 'listpeers',
+                               'params': {'id': l2.info['id']}})
+    assert len(res['peers']) == 1
+    assert res['peers'][0]['id'] == l2.info['id']
+
+    with pytest.raises(RpcError, match='missing required parameter'):
+        l2.rpc.call(method='commando',
+                    payload={'peer_id': l1.info['id'],
+                             'rune': rune,
+                             'method': 'withdraw'})
+
+    with pytest.raises(RpcError, match='unknown parameter: foobar'):
+        l2.rpc.call(method='commando',
+                    payload={'peer_id': l1.info['id'],
+                             'method': 'invoice',
+                             'rune': rune,
+                             'params': {'foobar': 1}})
+
+    ret = l2.rpc.call(method='commando',
+                      payload={'peer_id': l1.info['id'],
+                               'rune': rune,
+                               'method': 'ping',
+                               'params': {'id': l2.info['id']}})
+    assert 'totlen' in ret
+
+    # Now, reply will go over a multiple messages!
+    ret = l2.rpc.call(method='commando',
+                      payload={'peer_id': l1.info['id'],
+                               'rune': rune,
+                               'method': 'getlog',
+                               'params': {'level': 'io'}})
+
+    assert len(json.dumps(ret)) > 65535
+
+    # Command will go over multiple messages.
+    ret = l2.rpc.call(method='commando',
+                      payload={'peer_id': l1.info['id'],
+                               'rune': rune,
+                               'method': 'invoice',
+                               'params': {'amount_msat': 'any',
+                                          'label': 'label',
+                                          'description': 'A' * 200000,
+                                          'deschashonly': True}})
+
+    assert 'bolt11' in ret
+
+    # This will fail, will include data.
+    with pytest.raises(RpcError, match='No connection to first peer found') as exc_info:
+        l2.rpc.call(method='commando',
+                    payload={'peer_id': l1.info['id'],
+                             'rune': rune,
+                             'method': 'sendpay',
+                             'params': {'route': [{'amount_msat': 1000,
+                                                   'id': l1.info['id'],
+                                                   'delay': 12,
+                                                   'channel': '1x2x3'}],
+                                        'payment_hash': '00' * 32}})
+    assert exc_info.value.error['data']['erring_index'] == 0
+
+
+def test_commando_rune(node_factory):
+    l1, l2 = node_factory.line_graph(2, fundchannel=False)
+
+    # l1's commando secret is 1241faef85297127c2ac9bde95421b2c51e5218498ae4901dc670c974af4284b.
+    # I put that into a test node's commando.py to generate these runes (modified readonly to match ours):
+    # $ l1-cli commando-rune
+    #   "rune": "zKc2W88jopslgUBl0UE77aEe5PNCLn5WwqSusU_Ov3A9MA=="
+    # $ l1-cli commando-rune restrictions=readonly
+    #   "rune": "1PJnoR9a7u4Bhglj2s7rVOWqRQnswIwUoZrDVMKcLTY9MSZtZXRob2RebGlzdHxtZXRob2ReZ2V0fG1ldGhvZD1zdW1tYXJ5Jm1ldGhvZC9saXN0ZGF0YXN0b3Jl"
+    # $ l1-cli commando-rune restrictions='time>1656675211'
+    #   "rune": "RnlWC4lwBULFaObo6ZP8jfqYRyTbfWPqcMT3qW-Wmso9MiZ0aW1lPjE2NTY2NzUyMTE="
+    # $ l1-cli commando-rune restrictions='["id^022d223620a359a47ff7","method=listpeers"]'
+    #   "rune": "lXFWzb51HjWxKV5TmfdiBgd74w0moeyChj3zbLoxmws9MyZpZF4wMjJkMjIzNjIwYTM1OWE0N2ZmNyZtZXRob2Q9bGlzdHBlZXJz"
+    # $ l1-cli commando-rune lXFWzb51HjWxKV5TmfdiBgd74w0moeyChj3zbLoxmws9MyZpZF4wMjJkMjIzNjIwYTM1OWE0N2ZmNyZtZXRob2Q9bGlzdHBlZXJz 'pnamelevel!|pnamelevel/io'
+    #   "rune": "Dw2tzGCoUojAyT0JUw7fkYJYqExpEpaDRNTkyvWKoJY9MyZpZF4wMjJkMjIzNjIwYTM1OWE0N2ZmNyZtZXRob2Q9bGlzdHBlZXJzJnBuYW1lbGV2ZWwhfHBuYW1lbGV2ZWwvaW8="
+
+    rune1 = l1.rpc.commando_rune()
+    assert rune1['rune'] == 'zKc2W88jopslgUBl0UE77aEe5PNCLn5WwqSusU_Ov3A9MA=='
+    assert rune1['unique_id'] == '0'
+    rune2 = l1.rpc.commando_rune(restrictions="readonly")
+    assert rune2['rune'] == '1PJnoR9a7u4Bhglj2s7rVOWqRQnswIwUoZrDVMKcLTY9MSZtZXRob2RebGlzdHxtZXRob2ReZ2V0fG1ldGhvZD1zdW1tYXJ5Jm1ldGhvZC9saXN0ZGF0YXN0b3Jl'
+    assert rune2['unique_id'] == '1'
+    rune3 = l1.rpc.commando_rune(restrictions="time>1656675211")
+    assert rune3['rune'] == 'RnlWC4lwBULFaObo6ZP8jfqYRyTbfWPqcMT3qW-Wmso9MiZ0aW1lPjE2NTY2NzUyMTE='
+    assert rune3['unique_id'] == '2'
+    rune4 = l1.rpc.commando_rune(restrictions=["id^022d223620a359a47ff7", "method=listpeers"])
+    assert rune4['rune'] == 'lXFWzb51HjWxKV5TmfdiBgd74w0moeyChj3zbLoxmws9MyZpZF4wMjJkMjIzNjIwYTM1OWE0N2ZmNyZtZXRob2Q9bGlzdHBlZXJz'
+    assert rune4['unique_id'] == '3'
+    rune5 = l1.rpc.commando_rune(rune4['rune'], "pnamelevel!|pnamelevel/io")
+    assert rune5['rune'] == 'Dw2tzGCoUojAyT0JUw7fkYJYqExpEpaDRNTkyvWKoJY9MyZpZF4wMjJkMjIzNjIwYTM1OWE0N2ZmNyZtZXRob2Q9bGlzdHBlZXJzJnBuYW1lbGV2ZWwhfHBuYW1lbGV2ZWwvaW8='
+    assert rune5['unique_id'] == '3'
+    rune6 = l1.rpc.commando_rune(rune5['rune'], "parr1!|parr1/io")
+    assert rune6['rune'] == '2Wh6F4R51D3esZzp-7WWG51OhzhfcYKaaI8qiIonaHE9MyZpZF4wMjJkMjIzNjIwYTM1OWE0N2ZmNyZtZXRob2Q9bGlzdHBlZXJzJnBuYW1lbGV2ZWwhfHBuYW1lbGV2ZWwvaW8mcGFycjEhfHBhcnIxL2lv'
+    assert rune6['unique_id'] == '3'
+    rune7 = l1.rpc.commando_rune(restrictions="pnum=0")
+    assert rune7['rune'] == 'QJonN6ySDFw-P5VnilZxlOGRs_tST1ejtd-bAYuZfjk9NCZwbnVtPTA='
+    assert rune7['unique_id'] == '4'
+    rune8 = l1.rpc.commando_rune(rune7['rune'], "rate=3")
+    assert rune8['rune'] == 'kSYFx6ON9hr_ExcQLwVkm1ABnvc1TcMFBwLrAVee0EA9NCZwbnVtPTAmcmF0ZT0z'
+    assert rune8['unique_id'] == '4'
+    rune9 = l1.rpc.commando_rune(rune8['rune'], "rate=1")
+    assert rune9['rune'] == 'O8Zr-ULTBKO3_pKYz0QKE9xYl1vQ4Xx9PtlHuist9Rk9NCZwbnVtPTAmcmF0ZT0zJnJhdGU9MQ=='
+    assert rune9['unique_id'] == '4'
+
+    runedecodes = ((rune1, []),
+                   (rune2, [{'alternatives': ['method^list', 'method^get', 'method=summary'],
+                             'summary': "method (of command) starts with 'list' OR method (of command) starts with 'get' OR method (of command) equal to 'summary'"},
+                            {'alternatives': ['method/listdatastore'],
+                             'summary': "method (of command) unequal to 'listdatastore'"}]),
+                   (rune4, [{'alternatives': ['id^022d223620a359a47ff7'],
+                             'summary': "id (of commanding peer) starts with '022d223620a359a47ff7'"},
+                            {'alternatives': ['method=listpeers'],
+                             'summary': "method (of command) equal to 'listpeers'"}]),
+                   (rune5, [{'alternatives': ['id^022d223620a359a47ff7'],
+                             'summary': "id (of commanding peer) starts with '022d223620a359a47ff7'"},
+                            {'alternatives': ['method=listpeers'],
+                             'summary': "method (of command) equal to 'listpeers'"},
+                            {'alternatives': ['pnamelevel!', 'pnamelevel/io'],
+                             'summary': "pnamelevel (object parameter 'level') is missing OR pnamelevel (object parameter 'level') unequal to 'io'"}]),
+                   (rune6, [{'alternatives': ['id^022d223620a359a47ff7'],
+                             'summary': "id (of commanding peer) starts with '022d223620a359a47ff7'"},
+                            {'alternatives': ['method=listpeers'],
+                             'summary': "method (of command) equal to 'listpeers'"},
+                            {'alternatives': ['pnamelevel!', 'pnamelevel/io'],
+                             'summary': "pnamelevel (object parameter 'level') is missing OR pnamelevel (object parameter 'level') unequal to 'io'"},
+                            {'alternatives': ['parr1!', 'parr1/io'],
+                             'summary': "parr1 (array parameter #1) is missing OR parr1 (array parameter #1) unequal to 'io'"}]),
+                   (rune7, [{'alternatives': ['pnum=0'],
+                             'summary': "pnum (number of command parameters) equal to 0"}]),
+                   (rune8, [{'alternatives': ['pnum=0'],
+                             'summary': "pnum (number of command parameters) equal to 0"},
+                            {'alternatives': ['rate=3'],
+                             'summary': "rate (max per minute) equal to 3"}]),
+                   (rune9, [{'alternatives': ['pnum=0'],
+                             'summary': "pnum (number of command parameters) equal to 0"},
+                            {'alternatives': ['rate=3'],
+                             'summary': "rate (max per minute) equal to 3"},
+                            {'alternatives': ['rate=1'],
+                             'summary': "rate (max per minute) equal to 1"}]))
+    for decode in runedecodes:
+        rune = decode[0]
+        restrictions = decode[1]
+        decoded = l1.rpc.decode(rune['rune'])
+        assert decoded['type'] == 'rune'
+        assert decoded['unique_id'] == rune['unique_id']
+        assert decoded['valid'] is True
+        assert decoded['restrictions'] == restrictions
+
+    # Time handling is a bit special, since we annotate the timestamp with how far away it is.
+    decoded = l1.rpc.decode(rune3['rune'])
+    assert decoded['type'] == 'rune'
+    assert decoded['unique_id'] == rune3['unique_id']
+    assert decoded['valid'] is True
+    assert len(decoded['restrictions']) == 1
+    assert decoded['restrictions'][0]['alternatives'] == ['time>1656675211']
+    assert decoded['restrictions'][0]['summary'].startswith("time (in seconds since 1970) greater than 1656675211 (")
+
+    # Replace rune3 with a more useful timestamp!
+    expiry = int(time.time()) + 15
+    rune3 = l1.rpc.commando_rune(restrictions="time<{}".format(expiry))
+    ratelimit_successes = ((rune9, "getinfo", {}),
+                           (rune8, "getinfo", {}),
+                           (rune8, "getinfo", {}))
+    successes = ((rune1, "listpeers", {}),
+                 (rune2, "listpeers", {}),
+                 (rune2, "getinfo", {}),
+                 (rune2, "getinfo", {}),
+                 (rune3, "getinfo", {}),
+                 (rune4, "listpeers", {}),
+                 (rune5, "listpeers", {'id': l2.info['id']}),
+                 (rune5, "listpeers", {'id': l2.info['id'], 'level': 'broken'}),
+                 (rune6, "listpeers", [l2.info['id'], 'broken']),
+                 (rune6, "listpeers", [l2.info['id']]),
+                 (rune7, "listpeers", []),
+                 (rune7, "getinfo", {})) + ratelimit_successes
+    failures = ((rune2, "withdraw", {}),
+                (rune2, "plugin", {'subcommand': 'list'}),
+                (rune3, "getinfo", {}),
+                (rune4, "listnodes", {}),
+                (rune5, "listpeers", {'id': l2.info['id'], 'level': 'io'}),
+                (rune6, "listpeers", [l2.info['id'], 'io']),
+                (rune7, "listpeers", [l2.info['id']]),
+                (rune7, "listpeers", {'id': l2.info['id']}),
+                (rune9, "getinfo", {}),
+                (rune8, "getinfo", {}))
+
+    for rune, cmd, params in successes:
+        l2.rpc.call(method='commando',
+                    payload={'peer_id': l1.info['id'],
+                             'rune': rune['rune'],
+                             'method': cmd,
+                             'params': params})
+
+    while time.time() < expiry:
+        time.sleep(1)
+
+    for rune, cmd, params in failures:
+        print("{} {}".format(cmd, params))
+        with pytest.raises(RpcError, match='Not authorized:') as exc_info:
+            l2.rpc.call(method='commando',
+                        payload={'peer_id': l1.info['id'],
+                                 'rune': rune['rune'],
+                                 'method': cmd,
+                                 'params': params})
+        assert exc_info.value.error['code'] == 0x4c51
+
+    # rune5 can only be used by l2:
+    l3 = node_factory.get_node()
+    l3.connect(l1)
+    with pytest.raises(RpcError, match='Not authorized:') as exc_info:
+        l3.rpc.call(method='commando',
+                    payload={'peer_id': l1.info['id'],
+                             'rune': rune5['rune'],
+                             'method': "listpeers",
+                             'params': {}})
+    assert exc_info.value.error['code'] == 0x4c51
+
+    # Now wait for ratelimit expiry, ratelimits should reset.
+    time.sleep(61)
+
+    for rune, cmd, params in ratelimit_successes:
+        l2.rpc.call(method='commando',
+                    payload={'peer_id': l1.info['id'],
+                             'rune': rune['rune'],
+                             'method': cmd,
+                             'params': params})
