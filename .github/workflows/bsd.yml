@@ -4,7 +4,7 @@ on: [push, pull_request]
 
 jobs:
   testfreebsd:
-    runs-on: macos-10.15
+    runs-on: macos-12
     name: Build on FreeBSD
     env:
       DEVELOPER: 1
@@ -15,7 +15,7 @@ jobs:
     - uses: actions/checkout@v2
     - name: Build
       id: test
-      uses: vmactions/freebsd-vm@v0.1.5
+      uses: vmactions/freebsd-vm@v0.1.8
       with:
         envs: 'DEVELOPER COMPAT'
         usesh: true
