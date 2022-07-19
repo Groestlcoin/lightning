@@ -53,18 +53,14 @@ struct peer {
 	/* Connection to the peer */
 	struct io_conn *to_peer;
 
+	/* Counter to distinguish this connection from the next re-connection */
+	u64 counter;
+
+	/* Is this draining?  If so, just keep writing until queue empty */
+	bool draining;
+
 	/* Connections to the subdaemons */
 	struct subd **subds;
-
-	/* Final message to send to peer (and hangup) */
-	u8 *final_msg;
-
-	/* Set once lightningd says it's OK to close (subd tells it
-	 * it's done). */
-	bool ready_to_die;
-
-	/* Has this ever been active?  (i.e. ever had a subd attached?) */
-	bool active;
 
 	/* When socket has Nagle overridden */
 	bool urgent;
@@ -136,6 +132,9 @@ struct daemon {
 
 	/* pubkey equivalent. */
 	struct pubkey mykey;
+
+	/* Counter from which we derive connection identifiers. */
+	u64 connection_counter;
 
 	/* Base for timeout timers, and how long to wait for init msg */
 	struct timers timers;
@@ -217,10 +216,9 @@ struct io_plan *peer_connected(struct io_conn *conn,
 			       const struct wireaddr *remote_addr,
 			       struct crypto_state *cs,
 			       const u8 *their_features TAKES,
-			       bool incoming,
-			       bool retrying);
+			       bool incoming);
 
-/* Called when peer->peer_conn is finally freed */
-void peer_conn_closed(struct peer *peer);
+/* Removes peer from hash table, tells gossipd and lightningd. */
+void destroy_peer(struct peer *peer);
 
 #endif /* LIGHTNING_CONNECTD_CONNECTD_H */

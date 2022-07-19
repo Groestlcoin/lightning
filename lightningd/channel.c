@@ -24,12 +24,8 @@ void channel_set_owner(struct channel *channel, struct subd *owner)
 	struct subd *old_owner = channel->owner;
 	channel->owner = owner;
 
-	if (old_owner) {
+	if (old_owner)
 		subd_release_channel(old_owner, channel);
-		if (channel->connected)
-			maybe_disconnect_peer(channel->peer->ld, channel->peer);
-	}
-	channel->connected = (owner && owner->talks_to_peer);
 }
 
 struct htlc_out *channel_has_htlc_out(struct channel *channel)
@@ -239,8 +235,6 @@ struct channel *new_unsaved_channel(struct peer *peer,
 	channel->channel_update = NULL;
 	channel->alias[LOCAL] = channel->alias[REMOTE] = NULL;
 
-	/* Channel is connected! */
-	channel->connected = true;
 	channel->shutdown_scriptpubkey[REMOTE] = NULL;
 	channel->last_was_revoke = false;
 	channel->last_sent_commit = NULL;
@@ -376,7 +370,6 @@ struct channel *new_channel(struct peer *peer, u64 dbid,
 			    u32 first_blocknum,
 			    u32 min_possible_feerate,
 			    u32 max_possible_feerate,
-			    bool connected,
 			    const struct basepoints *local_basepoints,
 			    const struct pubkey *local_funding_pubkey,
 			    const struct pubkey *future_per_commitment_point,
@@ -485,7 +478,6 @@ struct channel *new_channel(struct peer *peer, u64 dbid,
 	channel->first_blocknum = first_blocknum;
 	channel->min_possible_feerate = min_possible_feerate;
 	channel->max_possible_feerate = max_possible_feerate;
-	channel->connected = connected;
 	channel->local_basepoints = *local_basepoints;
 	channel->local_funding_pubkey = *local_funding_pubkey;
 	channel->future_per_commitment_point
@@ -937,9 +929,9 @@ void channel_set_billboard(struct channel *channel, bool perm, const char *str)
 	}
 }
 
-static void err_and_reconnect(struct channel *channel,
-			      const char *why,
-			      u32 seconds_before_reconnect)
+static void channel_err(struct channel *channel,
+			const char *why,
+			bool delay_reconnect)
 {
 	log_info(channel->log, "Peer transient failure in %s: %s",
 		 channel_state_name(channel), why);
@@ -952,32 +944,32 @@ static void err_and_reconnect(struct channel *channel,
 		return;
 	}
 #endif
+	channel->peer->delay_reconnect = delay_reconnect;
 
 	channel_set_owner(channel, NULL);
-
-	/* Their address only useful if we connected to them */
-	try_reconnect(channel, channel->peer, seconds_before_reconnect,
-		      channel->peer->connected_incoming
-		      ? NULL
-		      : &channel->peer->addr);
 }
 
-void channel_fail_reconnect_later(struct channel *channel, const char *fmt, ...)
+void channel_fail_transient_delayreconnect(struct channel *channel, const char *fmt, ...)
 {
 	va_list ap;
 
 	va_start(ap, fmt);
-	err_and_reconnect(channel, tal_vfmt(tmpctx, fmt, ap), 60);
+	channel_err(channel, tal_vfmt(tmpctx, fmt, ap), true);
 	va_end(ap);
 }
 
-void channel_fail_reconnect(struct channel *channel, const char *fmt, ...)
+void channel_fail_transient(struct channel *channel, const char *fmt, ...)
 {
 	va_list ap;
 
 	va_start(ap, fmt);
-	err_and_reconnect(channel, tal_vfmt(tmpctx, fmt, ap), 1);
+	channel_err(channel, tal_vfmt(tmpctx, fmt, ap), false);
 	va_end(ap);
+}
+
+bool channel_is_connected(const struct channel *channel)
+{
+	return channel->owner && channel->owner->talks_to_peer;
 }
 
 const struct short_channel_id *

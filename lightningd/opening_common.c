@@ -31,7 +31,6 @@ static void destroy_uncommitted_channel(struct uncommitted_channel *uc)
 
 	uc->peer->uncommitted_channel = NULL;
 
-	maybe_disconnect_peer(uc->peer->ld, uc->peer);
 	maybe_delete_peer(uc->peer);
 }
 
@@ -60,8 +59,6 @@ new_uncommitted_channel(struct peer *peer)
 	 *     reasonable to avoid double-spending of the funding transaction.
 	 */
 	uc->minimum_depth = ld->config.anchor_confirms;
-
-	memset(&uc->cid, 0xFF, sizeof(uc->cid));
 
 	/* Declare the new channel to the HSM. */
 	new_channel_msg = towire_hsmd_new_channel(NULL, &uc->peer->id, uc->dbid);

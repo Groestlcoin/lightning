@@ -21,6 +21,7 @@
 #include <lightningd/channel.h>
 #include <lightningd/channel_control.h>
 #include <lightningd/closing_control.h>
+#include <lightningd/connect_control.h>
 #include <lightningd/dual_open_control.h>
 #include <lightningd/gossip_control.h>
 #include <lightningd/hsm_control.h>
@@ -46,14 +47,11 @@ static void channel_disconnect(struct channel *channel,
 	log_(channel->log, level, NULL, false, "%s", desc);
 	channel_cleanup_commands(channel, desc);
 
-	if (!reconnect)
-		channel_set_owner(channel, NULL);
-	else
-		channel_fail_reconnect(channel, "%s: %s",
-				       channel->owner ?
-						channel->owner->name :
-						"dualopend-dead",
-				       desc);
+	channel_fail_transient(channel, "%s: %s",
+			       channel->owner ?
+			       channel->owner->name :
+			       "dualopend-dead",
+			       desc);
 }
 
 void channel_unsaved_close_conn(struct channel *channel, const char *why)
@@ -1179,6 +1177,7 @@ wallet_commit_channel(struct lightningd *ld,
 {
 	struct amount_msat our_msat, lease_fee_msat;
 	struct channel_inflight *inflight;
+	bool any_active = peer_any_active_channel(channel->peer, NULL);
 
 	if (!amount_sat_to_msat(&our_msat, our_funding)) {
 		log_broken(channel->log, "Unable to convert funds");
@@ -1233,9 +1232,6 @@ wallet_commit_channel(struct lightningd *ld,
 	channel->scb->cid = channel->cid;
 	channel->scb->funding_sats = total_funding;
 	channel->scb->type = channel_type_dup(channel->scb, channel->type);
-
-	/* We are connected */
-	channel->connected = true;
 
 	if (our_upfront_shutdown_script)
 		channel->shutdown_scriptpubkey[LOCAL]
@@ -1295,6 +1291,14 @@ wallet_commit_channel(struct lightningd *ld,
 				channel->push);
 	wallet_inflight_add(ld->wallet, inflight);
 
+	/* We might have disconnected and decided we didn't need to
+	 * reconnect because no channels are active.  But the subd
+	 * just made it active! */
+	if (!any_active && channel->peer->connected == PEER_DISCONNECTED) {
+		try_reconnect(channel->peer, channel->peer, 1,
+			      &channel->peer->addr);
+	}
+
 	return inflight;
 }
 
@@ -1351,12 +1355,13 @@ static void handle_peer_wants_to_close(struct subd *dualopend,
 						"Bad shutdown scriptpubkey %s",
 						tal_hex(tmpctx, scriptpubkey));
 
-		/* Get connectd to send warning, and then allow reconnect. */
+		/* Get connectd to send warning, and kill subd. */
 		subd_send_msg(ld->connectd,
 			      take(towire_connectd_peer_final_msg(NULL,
 								  &channel->peer->id,
+								  channel->peer->connectd_counter,
 								  warning)));
-		channel_fail_reconnect(channel, "Bad shutdown scriptpubkey %s",
+		channel_fail_transient(channel, "Bad shutdown scriptpubkey %s",
 				       tal_hex(tmpctx, scriptpubkey));
 		return;
 	}
@@ -2588,6 +2593,7 @@ static struct command_result *json_openchannel_init(struct command *cmd,
 	struct open_attempt *oa;
 	struct lease_rates *rates;
 	struct command_result *res;
+	int fds[2];
 
 	if (!param(cmd, buffer, params,
 		   p_req("id", param_node_id, &id),
@@ -2746,10 +2752,29 @@ static struct command_result *json_openchannel_init(struct command *cmd,
 					   false,
 					   rates);
 
-	/* Tell connectd to hand us this so we can start dualopend */
+	if (socketpair(AF_LOCAL, SOCK_STREAM, 0, fds) != 0) {
+		return command_fail(cmd, FUND_MAX_EXCEEDED,
+				    "Failed to create socketpair: %s",
+				    strerror(errno));
+	}
+
+	/* Start dualopend! */
+	if (!peer_start_dualopend(peer, new_peer_fd(cmd, fds[0]), channel)) {
+		close(fds[1]);
+		/* FIXME: gets completed by failure path above! */
+		return command_its_complicated("completed by peer_start_dualopend");
+	}
+
+	/* Go! */
+	subd_send_msg(channel->owner, channel->open_attempt->open_msg);
+
+	/* Tell connectd connect this to this channel id. */
 	subd_send_msg(peer->ld->connectd,
-		      take(towire_connectd_peer_make_active(NULL, &peer->id,
-							    &channel->cid)));
+		      take(towire_connectd_peer_connect_subd(NULL,
+							     &peer->id,
+							     peer->connectd_counter,
+							     &channel->cid)));
+	subd_send_fd(peer->ld->connectd, fds[1]);
 	return command_still_pending(cmd);
 }
 
@@ -3112,6 +3137,7 @@ static struct command_result *json_queryrates(struct command *cmd,
 	struct open_attempt *oa;
 	u32 *our_upfront_shutdown_script_wallet_index;
 	struct command_result *res;
+	int fds[2];
 
 	if (!param(cmd, buffer, params,
 		   p_req("id", param_node_id, &id),
@@ -3131,9 +3157,11 @@ static struct command_result *json_queryrates(struct command *cmd,
 		return command_fail(cmd, FUNDING_UNKNOWN_PEER, "Unknown peer");
 	}
 
-	if (!peer->is_connected)
+	if (peer->connected != PEER_CONNECTED)
 		return command_fail(cmd, FUNDING_PEER_NOT_CONNECTED,
-				    "Peer not connected");
+				    "Peer %s",
+				    peer->connected == PEER_DISCONNECTED
+				    ? "not connected" : "still connecting");
 
 	/* FIXME: This is wrong: we should always create a new channel? */
 	channel = peer_any_unsaved_channel(peer, NULL);
@@ -3211,13 +3239,31 @@ static struct command_result *json_queryrates(struct command *cmd,
 					   true,
 					   NULL);
 
-	/* Tell connectd to hand us this so we can start dualopend */
-	subd_send_msg(peer->ld->connectd,
-		      take(towire_connectd_peer_make_active(NULL, &peer->id,
-							    &channel->cid)));
-	return command_still_pending(cmd);
+	if (socketpair(AF_LOCAL, SOCK_STREAM, 0, fds) != 0) {
+		return command_fail(cmd, FUND_MAX_EXCEEDED,
+				    "Failed to create socketpair: %s",
+				    strerror(errno));
+	}
 
-}
+	/* Start dualopend! */
+	if (!peer_start_dualopend(peer, new_peer_fd(cmd, fds[0]), channel)) {
+		close(fds[1]);
+		/* FIXME: gets completed by failure path above! */
+		return command_its_complicated("completed by peer_start_dualopend");
+	}
+
+	/* Go! */
+	subd_send_msg(channel->owner, channel->open_attempt->open_msg);
+
+	/* Tell connectd connect this to this channel id. */
+	subd_send_msg(peer->ld->connectd,
+		      take(towire_connectd_peer_connect_subd(NULL,
+							     &peer->id,
+							     peer->connectd_counter,
+							     &channel->cid)));
+	subd_send_fd(peer->ld->connectd, fds[1]);
+ 	return command_still_pending(cmd);
+ }
 
 static const struct json_command queryrates_command = {
 	"dev-queryrates",
@@ -3334,7 +3380,7 @@ bool peer_start_dualopend(struct peer *peer,
 	return true;
 }
 
-void peer_restart_dualopend(struct peer *peer,
+bool peer_restart_dualopend(struct peer *peer,
 			    struct peer_fd *peer_fd,
 			    struct channel *channel)
 {
@@ -3346,10 +3392,9 @@ void peer_restart_dualopend(struct peer *peer,
 	u32 *local_shutdown_script_wallet_index;
 	u8 *msg;
 
-	if (channel_unsaved(channel)) {
-		peer_start_dualopend(peer, peer_fd, channel);
-		return;
-	}
+	if (channel_unsaved(channel))
+		return peer_start_dualopend(peer, peer_fd, channel);
+
 	hsmfd = hsm_get_client_fd(peer->ld, &peer->id, channel->dbid,
 				  HSM_CAP_COMMITMENT_POINT
 				  | HSM_CAP_SIGN_REMOTE_TX
@@ -3370,9 +3415,11 @@ void peer_restart_dualopend(struct peer *peer,
 	if (!channel->owner) {
 		log_broken(channel->log, "Could not subdaemon channel: %s",
 			   strerror(errno));
-		channel_fail_reconnect_later(channel,
-					     "Failed to subdaemon channel");
-		return;
+		/* Disconnect it. */
+		subd_send_msg(peer->ld->connectd,
+			      take(towire_connectd_discard_peer(NULL, &channel->peer->id,
+								channel->peer->connectd_counter)));
+		return false;
 	}
 
 	/* Find the max self delay and min htlc capacity */
@@ -3435,6 +3482,6 @@ void peer_restart_dualopend(struct peer *peer,
 				      inflight->lease_chan_max_msat,
 				      inflight->lease_chan_max_ppt);
 
-
 	subd_send_msg(channel->owner, take(msg));
+	return true;
 }

@@ -21,7 +21,7 @@ def find_next_feerate(node, peer):
 @pytest.mark.openchannel('v2')
 @pytest.mark.developer("requres 'dev-queryrates'")
 def test_queryrates(node_factory, bitcoind):
-    l1, l2 = node_factory.get_nodes(2)
+    l1, l2 = node_factory.get_nodes(2, opts={'dev-no-reconnect': None})
 
     amount = 10 ** 6
 
@@ -42,6 +42,7 @@ def test_queryrates(node_factory, bitcoind):
                                  'channel_fee_max_base_msat': '3sat',
                                  'channel_fee_max_proportional_thousandths': 101})
 
+    wait_for(lambda: l1.rpc.listpeers()['peers'] == [])
     l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
     result = l1.rpc.dev_queryrates(l2.info['id'], amount, amount)
     assert result['our_funding_msat'] == Millisatoshi(amount * 1000)
@@ -354,7 +355,7 @@ def test_v2_rbf_liquidity_ad(node_factory, bitcoind, chainparams):
     # l1 leases a channel from l2
     l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
     rates = l1.rpc.dev_queryrates(l2.info['id'], amount, amount)
-    l1.daemon.wait_for_log('disconnect')
+    wait_for(lambda: l1.rpc.listpeers()['peers'] == [])
     l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
     chan_id = l1.rpc.fundchannel(l2.info['id'], amount, request_amt=amount,
                                  feerate='{}perkw'.format(feerate),
@@ -416,10 +417,12 @@ def test_v2_rbf_liquidity_ad(node_factory, bitcoind, chainparams):
 
 
 @unittest.skipIf(TEST_NETWORK != 'regtest', 'elementsd doesnt yet support PSBT features we need')
+@pytest.mark.developer("uses dev-no-reconnect")
 @pytest.mark.openchannel('v2')
 def test_v2_rbf_multi(node_factory, bitcoind, chainparams):
     l1, l2 = node_factory.get_nodes(2,
                                     opts={'may_reconnect': True,
+                                          'dev-no-reconnect': None,
                                           'allow_warning': True})
 
     l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
@@ -463,6 +466,7 @@ def test_v2_rbf_multi(node_factory, bitcoind, chainparams):
     # Abort this open attempt! We will re-try
     aborted = l1.rpc.openchannel_abort(chan_id)
     assert not aborted['channel_canceled']
+    wait_for(lambda: only_one(l1.rpc.listpeers()['peers'])['connected'] is False)
 
     # Do the bump, again, same feerate
     l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
@@ -653,7 +657,7 @@ def test_rbf_reconnect_tx_construct(node_factory, bitcoind, chainparams):
         l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
         with pytest.raises(RpcError):
             l1.rpc.openchannel_bump(chan_id, chan_amount, initpsbt['psbt'])
-        assert l1.rpc.getpeer(l2.info['id']) is not None
+        wait_for(lambda: l1.rpc.getpeer(l2.info['id'])['connected'] is False)
 
     # Now we finish off the completes failure check
     for d in disconnects[-2:]:
@@ -661,6 +665,7 @@ def test_rbf_reconnect_tx_construct(node_factory, bitcoind, chainparams):
         bump = l1.rpc.openchannel_bump(chan_id, chan_amount, initpsbt['psbt'])
         with pytest.raises(RpcError):
             update = l1.rpc.openchannel_update(chan_id, bump['psbt'])
+        wait_for(lambda: l1.rpc.getpeer(l2.info['id'])['connected'] is False)
 
     # Now we succeed
     l1.rpc.connect(l2.info['id'], 'localhost', l2.port)

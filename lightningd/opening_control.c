@@ -19,6 +19,7 @@
 #include <lightningd/chaintopology.h>
 #include <lightningd/channel.h>
 #include <lightningd/channel_control.h>
+#include <lightningd/connect_control.h>
 #include <lightningd/hsm_control.h>
 #include <lightningd/notification.h>
 #include <lightningd/opening_common.h>
@@ -100,6 +101,7 @@ wallet_commit_channel(struct lightningd *ld,
 	u32 lease_start_blockheight = 0; /* No leases on v1 */
 	struct short_channel_id *alias_local;
 	struct timeabs timestamp;
+	bool any_active = peer_any_active_channel(uc->peer, NULL);
 
 	/* We cannot both be the fundee *and* have a `fundchannel_start`
 	 * command running!
@@ -202,8 +204,6 @@ wallet_commit_channel(struct lightningd *ld,
 			       * in theory, but it's only used for timing out. */
 			      get_network_blockheight(ld->topology),
 			      feerate, feerate,
-			      /* We are connected */
-			      true,
 			      &uc->local_basepoints,
 			      &uc->local_funding_pubkey,
 			      NULL,
@@ -234,6 +234,15 @@ wallet_commit_channel(struct lightningd *ld,
 				     channel->state,
 				     channel->state_change_cause,
 				     "new channel opened");
+
+
+	/* We might have disconnected and decided we didn't need to
+	 * reconnect because no channels are active.  But the subd
+	 * just made it active! */
+	if (!any_active && channel->peer->connected == PEER_DISCONNECTED) {
+		try_reconnect(channel->peer, channel->peer, 1,
+			      &channel->peer->addr);
+	}
 
 	return channel;
 }
@@ -965,9 +974,11 @@ static struct command_result *json_fundchannel_complete(struct command *cmd,
 		return command_fail(cmd, FUNDING_UNKNOWN_PEER, "Unknown peer");
 	}
 
-	if (!peer->is_connected)
+	if (peer->connected != PEER_CONNECTED)
 		return command_fail(cmd, FUNDING_PEER_NOT_CONNECTED,
-				    "Peer not connected");
+				    "Peer %s",
+				    peer->connected == PEER_DISCONNECTED
+				    ? "not connected" : "still connecting");
 
 	if (!peer->uncommitted_channel
 	    || !peer->uncommitted_channel->fc
@@ -1083,7 +1094,7 @@ static struct command_result *json_fundchannel_start(struct command *cmd,
 	struct peer *peer;
 	bool *announce_channel;
 	u32 *feerate_per_kw, *mindepth;
-
+	int fds[2];
 	struct amount_sat *amount;
 	struct amount_msat *push_msat;
 	u32 *upfront_shutdown_script_wallet_index;
@@ -1138,9 +1149,13 @@ static struct command_result *json_fundchannel_start(struct command *cmd,
 		return command_fail(cmd, FUNDING_UNKNOWN_PEER, "Unknown peer");
 	}
 
-	if (!peer->is_connected)
+	if (peer->connected != PEER_CONNECTED)
 		return command_fail(cmd, FUNDING_PEER_NOT_CONNECTED,
-				    "Peer not connected");
+				    "Peer %s",
+				    peer->connected == PEER_DISCONNECTED
+				    ? "not connected" : "still connecting");
+
+	temporary_channel_id(&tmp_channel_id);
 
 	if (!peer->uncommitted_channel) {
 		if (feature_negotiated(cmd->ld->our_features,
@@ -1167,6 +1182,8 @@ static struct command_result *json_fundchannel_start(struct command *cmd,
 				    "`open_channel` from "
 				    "peer");
 	}
+
+	peer->uncommitted_channel->cid = tmp_channel_id;
 
 	/* BOLT #2:
 	 *  - if both nodes advertised `option_support_large_channel`:
@@ -1220,8 +1237,6 @@ static struct command_result *json_fundchannel_start(struct command *cmd,
 	} else
 		upfront_shutdown_script_wallet_index = NULL;
 
-	temporary_channel_id(&tmp_channel_id);
-
 	fc->open_msg
 		= towire_openingd_funder_start(fc,
 					  *amount,
@@ -1232,10 +1247,26 @@ static struct command_result *json_fundchannel_start(struct command *cmd,
 					  &tmp_channel_id,
 					  fc->channel_flags);
 
-	/* Tell connectd to make this active; when it does, we can continue */
+	if (socketpair(AF_LOCAL, SOCK_STREAM, 0, fds) != 0) {
+		return command_fail(cmd, FUND_MAX_EXCEEDED,
+				    "Failed to create socketpair: %s",
+				    strerror(errno));
+	}
+	if (!peer_start_openingd(peer, new_peer_fd(cmd, fds[0]))) {
+		close(fds[1]);
+		/* FIXME: gets completed by failure path above! */
+		return command_its_complicated("completed by peer_start_openingd");
+	}
+	/* Tell it to start funding */
+	subd_send_msg(peer->uncommitted_channel->open_daemon, fc->open_msg);
+
+	/* Tell connectd connect this to this channel id. */
 	subd_send_msg(peer->ld->connectd,
-		      take(towire_connectd_peer_make_active(NULL, &peer->id,
-							    &tmp_channel_id)));
+		      take(towire_connectd_peer_connect_subd(NULL,
+							     &peer->id,
+							     peer->connectd_counter,
+							     &peer->uncommitted_channel->cid)));
+	subd_send_fd(peer->ld->connectd, fds[1]);
 	return command_still_pending(cmd);
 }
 
@@ -1361,7 +1392,6 @@ static struct channel *stub_chan(struct command *cmd,
 			      get_network_blockheight(ld->topology),
                               FEERATE_FLOOR,
                               funding_sats.satoshis / MINIMUM_TX_WEIGHT * 1000 /* Raw: convert to feerate */,
-			      false,
 			      &basepoints,
 			      &localFundingPubkey,
 			      NULL,

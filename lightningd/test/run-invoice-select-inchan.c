@@ -68,14 +68,14 @@ void channel_fail_permanent(struct channel *channel UNNEEDED,
 			    const char *fmt UNNEEDED,
 			    ...)
 { fprintf(stderr, "channel_fail_permanent called!\n"); abort(); }
-/* Generated stub for channel_fail_reconnect */
-void channel_fail_reconnect(struct channel *channel UNNEEDED,
+/* Generated stub for channel_fail_transient */
+void channel_fail_transient(struct channel *channel UNNEEDED,
 			    const char *fmt UNNEEDED, ...)
-{ fprintf(stderr, "channel_fail_reconnect called!\n"); abort(); }
-/* Generated stub for channel_fail_reconnect_later */
-void channel_fail_reconnect_later(struct channel *channel UNNEEDED,
-				  const char *fmt UNNEEDED,...)
-{ fprintf(stderr, "channel_fail_reconnect_later called!\n"); abort(); }
+{ fprintf(stderr, "channel_fail_transient called!\n"); abort(); }
+/* Generated stub for channel_fail_transient_delayreconnect */
+void channel_fail_transient_delayreconnect(struct channel *channel UNNEEDED,
+					   const char *fmt UNNEEDED,...)
+{ fprintf(stderr, "channel_fail_transient_delayreconnect called!\n"); abort(); }
 /* Generated stub for channel_has_htlc_in */
 struct htlc_in *channel_has_htlc_in(struct channel *channel UNNEEDED)
 { fprintf(stderr, "channel_has_htlc_in called!\n"); abort(); }
@@ -147,6 +147,11 @@ struct command_result *command_success(struct command *cmd UNNEEDED,
 				       struct json_stream *response)
 
 { fprintf(stderr, "command_success called!\n"); abort(); }
+/* Generated stub for connect_failed_disconnect */
+void connect_failed_disconnect(struct lightningd *ld UNNEEDED,
+			       const struct node_id *id UNNEEDED,
+			       const struct wireaddr_internal *addr UNNEEDED)
+{ fprintf(stderr, "connect_failed_disconnect called!\n"); abort(); }
 /* Generated stub for connect_succeeded */
 void connect_succeeded(struct lightningd *ld UNNEEDED, const struct peer *peer UNNEEDED,
 		       bool incoming UNNEEDED,
@@ -217,15 +222,15 @@ bool fromwire_channel_id(const u8 **cursor UNNEEDED, size_t *max UNNEEDED,
 /* Generated stub for fromwire_channeld_dev_memleak_reply */
 bool fromwire_channeld_dev_memleak_reply(const void *p UNNEEDED, bool *leak UNNEEDED)
 { fprintf(stderr, "fromwire_channeld_dev_memleak_reply called!\n"); abort(); }
-/* Generated stub for fromwire_connectd_peer_active */
-bool fromwire_connectd_peer_active(const tal_t *ctx UNNEEDED, const void *p UNNEEDED, struct node_id *id UNNEEDED, u16 **msgtype UNNEEDED, struct channel_id *channel_id UNNEEDED)
-{ fprintf(stderr, "fromwire_connectd_peer_active called!\n"); abort(); }
 /* Generated stub for fromwire_connectd_peer_connected */
-bool fromwire_connectd_peer_connected(const tal_t *ctx UNNEEDED, const void *p UNNEEDED, struct node_id *id UNNEEDED, struct wireaddr_internal *addr UNNEEDED, struct wireaddr **remote_addr UNNEEDED, bool *incoming UNNEEDED, u8 **features UNNEEDED)
+bool fromwire_connectd_peer_connected(const tal_t *ctx UNNEEDED, const void *p UNNEEDED, struct node_id *id UNNEEDED, u64 *counter UNNEEDED, struct wireaddr_internal *addr UNNEEDED, struct wireaddr **remote_addr UNNEEDED, bool *incoming UNNEEDED, u8 **features UNNEEDED)
 { fprintf(stderr, "fromwire_connectd_peer_connected called!\n"); abort(); }
 /* Generated stub for fromwire_connectd_peer_disconnect_done */
-bool fromwire_connectd_peer_disconnect_done(const void *p UNNEEDED, struct node_id *id UNNEEDED)
+bool fromwire_connectd_peer_disconnect_done(const void *p UNNEEDED, struct node_id *id UNNEEDED, u64 *counter UNNEEDED)
 { fprintf(stderr, "fromwire_connectd_peer_disconnect_done called!\n"); abort(); }
+/* Generated stub for fromwire_connectd_peer_spoke */
+bool fromwire_connectd_peer_spoke(const void *p UNNEEDED, struct node_id *id UNNEEDED, u64 *counter UNNEEDED, u16 *msgtype UNNEEDED, struct channel_id *channel_id UNNEEDED)
+{ fprintf(stderr, "fromwire_connectd_peer_spoke called!\n"); abort(); }
 /* Generated stub for fromwire_dualopend_dev_memleak_reply */
 bool fromwire_dualopend_dev_memleak_reply(const void *p UNNEEDED, bool *leak UNNEEDED)
 { fprintf(stderr, "fromwire_dualopend_dev_memleak_reply called!\n"); abort(); }
@@ -382,7 +387,9 @@ void json_add_short_channel_id(struct json_stream *response UNNEEDED,
 			       const struct short_channel_id *id UNNEEDED)
 { fprintf(stderr, "json_add_short_channel_id called!\n"); abort(); }
 /* Generated stub for json_add_string */
-void json_add_string(struct json_stream *result UNNEEDED, const char *fieldname UNNEEDED, const char *value TAKES UNNEEDED)
+void json_add_string(struct json_stream *js UNNEEDED,
+		     const char *fieldname UNNEEDED,
+		     const char *str TAKES UNNEEDED)
 { fprintf(stderr, "json_add_string called!\n"); abort(); }
 /* Generated stub for json_add_stringn */
 void json_add_stringn(struct json_stream *result UNNEEDED, const char *fieldname UNNEEDED,
@@ -504,9 +511,6 @@ void log_(struct log *log UNNEEDED, enum log_level level UNNEEDED,
 	  const char *fmt UNNEEDED, ...)
 
 { fprintf(stderr, "log_ called!\n"); abort(); }
-/* Generated stub for maybe_disconnect_peer */
-void maybe_disconnect_peer(struct lightningd *ld UNNEEDED, struct peer *peer UNNEEDED)
-{ fprintf(stderr, "maybe_disconnect_peer called!\n"); abort(); }
 /* Generated stub for merkle_tlv */
 void merkle_tlv(const struct tlv_field *fields UNNEEDED, struct sha256 *merkle UNNEEDED)
 { fprintf(stderr, "merkle_tlv called!\n"); abort(); }
@@ -644,12 +648,12 @@ struct command_result *param_u64(struct command *cmd UNNEEDED, const char *name 
 struct channel *peer_any_active_channel(struct peer *peer UNNEEDED, bool *others UNNEEDED)
 { fprintf(stderr, "peer_any_active_channel called!\n"); abort(); }
 /* Generated stub for peer_restart_dualopend */
-void peer_restart_dualopend(struct peer *peer UNNEEDED,
+bool peer_restart_dualopend(struct peer *peer UNNEEDED,
 			    struct peer_fd *peer_fd UNNEEDED,
 			    struct channel *channel UNNEEDED)
 { fprintf(stderr, "peer_restart_dualopend called!\n"); abort(); }
 /* Generated stub for peer_start_channeld */
-void peer_start_channeld(struct channel *channel UNNEEDED,
+bool peer_start_channeld(struct channel *channel UNNEEDED,
 			 struct peer_fd *peer_fd UNNEEDED,
 			 const u8 *fwd_msg UNNEEDED,
 			 bool reconnected UNNEEDED,
@@ -690,6 +694,9 @@ struct subd_req *subd_req_(const tal_t *ctx UNNEEDED,
 	       void (*replycb)(struct subd * UNNEEDED, const u8 * UNNEEDED, const int * UNNEEDED, void *) UNNEEDED,
 	       void *replycb_data UNNEEDED)
 { fprintf(stderr, "subd_req_ called!\n"); abort(); }
+/* Generated stub for subd_send_fd */
+void subd_send_fd(struct subd *sd UNNEEDED, int fd UNNEEDED)
+{ fprintf(stderr, "subd_send_fd called!\n"); abort(); }
 /* Generated stub for subd_send_msg */
 void subd_send_msg(struct subd *sd UNNEEDED, const u8 *msg_out UNNEEDED)
 { fprintf(stderr, "subd_send_msg called!\n"); abort(); }
@@ -708,12 +715,15 @@ u8 *towire_channeld_dev_memleak(const tal_t *ctx UNNEEDED)
 /* Generated stub for towire_channeld_dev_reenable_commit */
 u8 *towire_channeld_dev_reenable_commit(const tal_t *ctx UNNEEDED)
 { fprintf(stderr, "towire_channeld_dev_reenable_commit called!\n"); abort(); }
+/* Generated stub for towire_connectd_discard_peer */
+u8 *towire_connectd_discard_peer(const tal_t *ctx UNNEEDED, const struct node_id *id UNNEEDED, u64 counter UNNEEDED)
+{ fprintf(stderr, "towire_connectd_discard_peer called!\n"); abort(); }
+/* Generated stub for towire_connectd_peer_connect_subd */
+u8 *towire_connectd_peer_connect_subd(const tal_t *ctx UNNEEDED, const struct node_id *id UNNEEDED, u64 counter UNNEEDED, const struct channel_id *channel_id UNNEEDED)
+{ fprintf(stderr, "towire_connectd_peer_connect_subd called!\n"); abort(); }
 /* Generated stub for towire_connectd_peer_final_msg */
-u8 *towire_connectd_peer_final_msg(const tal_t *ctx UNNEEDED, const struct node_id *id UNNEEDED, const u8 *msg UNNEEDED)
+u8 *towire_connectd_peer_final_msg(const tal_t *ctx UNNEEDED, const struct node_id *id UNNEEDED, u64 counter UNNEEDED, const u8 *msg UNNEEDED)
 { fprintf(stderr, "towire_connectd_peer_final_msg called!\n"); abort(); }
-/* Generated stub for towire_connectd_peer_make_active */
-u8 *towire_connectd_peer_make_active(const tal_t *ctx UNNEEDED, const struct node_id *id UNNEEDED, const struct channel_id *channel_id UNNEEDED)
-{ fprintf(stderr, "towire_connectd_peer_make_active called!\n"); abort(); }
 /* Generated stub for towire_dualopend_dev_memleak */
 u8 *towire_dualopend_dev_memleak(const tal_t *ctx UNNEEDED)
 { fprintf(stderr, "towire_dualopend_dev_memleak called!\n"); abort(); }

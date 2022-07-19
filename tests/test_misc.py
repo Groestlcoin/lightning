@@ -1095,7 +1095,8 @@ def test_funding_reorg_private(node_factory, bitcoind):
     opts = {'funding-confirms': 2, 'rescan': 10, 'may_reconnect': True,
             'allow_bad_gossip': True,
             # gossipd send lightning update for original channel.
-            'allow_broken_log': True}
+            'allow_broken_log': True,
+            'allow_warning': True}
     l1, l2 = node_factory.line_graph(2, fundchannel=False, opts=opts)
     l1.fundwallet(10000000)
     sync_blockheight(bitcoind, [l1])                # height 102
@@ -1138,7 +1139,8 @@ def test_funding_reorg_remote_lags(node_factory, bitcoind):
     """Nodes may disagree about short_channel_id before channel announcement
     """
     # may_reconnect so channeld will restart; bad gossip can happen due to reorg
-    opts = {'funding-confirms': 1, 'may_reconnect': True, 'allow_bad_gossip': True}
+    opts = {'funding-confirms': 1, 'may_reconnect': True, 'allow_bad_gossip': True,
+            'allow_warning': True}
     l1, l2 = node_factory.line_graph(2, fundchannel=False, opts=opts)
     l1.fundwallet(10000000)
     sync_blockheight(bitcoind, [l1])                # height 102
@@ -1286,9 +1288,12 @@ def test_bitcoind_goes_backwards(node_factory, bitcoind):
 
 @pytest.mark.openchannel('v1')
 @pytest.mark.openchannel('v2')
+@pytest.mark.developer("needs dev-no-reconnect")
 def test_reserve_enforcement(node_factory, executor):
     """Channeld should disallow you spending into your reserve"""
-    l1, l2 = node_factory.line_graph(2, opts={'may_reconnect': True, 'allow_warning': True})
+    l1, l2 = node_factory.line_graph(2, opts={'may_reconnect': True,
+                                              'dev-no-reconnect': None,
+                                              'allow_warning': True})
 
     # Pay 1000 satoshi to l2.
     l1.pay(l2, 1000000)
@@ -1302,7 +1307,7 @@ def test_reserve_enforcement(node_factory, executor):
     l2.db.execute('UPDATE channel_configs SET channel_reserve_satoshis=0')
 
     l2.start()
-    wait_for(lambda: only_one(l2.rpc.listpeers(l1.info['id'])['peers'])['connected'])
+    l2.rpc.connect(l1.info['id'], 'localhost', l1.port)
 
     # This should be impossible to pay entire thing back: l1 should warn and
     # close connection for trying to violate reserve.

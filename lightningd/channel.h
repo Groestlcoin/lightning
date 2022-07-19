@@ -205,9 +205,6 @@ struct channel {
 	/* Feerate range */
 	u32 min_possible_feerate, max_possible_feerate;
 
-	/* Does gossipd need to know if the owner dies? (ie. not onchaind) */
-	bool connected;
-
 	/* Do we have an "impossible" future per_commitment_point from
 	 * peer via option_data_loss_protect? */
 	const struct pubkey *future_per_commitment_point;
@@ -267,6 +264,8 @@ struct channel {
 	struct scb_chan *scb;
 };
 
+bool channel_is_connected(const struct channel *channel);
+
 /* For v2 opens, a channel that has not yet been committed/saved to disk */
 struct channel *new_unsaved_channel(struct peer *peer,
 				    u32 feerate_base,
@@ -317,7 +316,6 @@ struct channel *new_channel(struct peer *peer, u64 dbid,
 			    u32 first_blocknum,
 			    u32 min_possible_feerate,
 			    u32 max_possible_feerate,
-			    bool connected,
 			    const struct basepoints *local_basepoints,
 			    const struct pubkey *local_funding_pubkey,
 			    const struct pubkey *future_per_commitment_point,
@@ -376,11 +374,11 @@ const char *channel_state_str(enum channel_state state);
 void channel_set_owner(struct channel *channel, struct subd *owner);
 
 /* Channel has failed, but can try again. */
-void channel_fail_reconnect(struct channel *channel,
+void channel_fail_transient(struct channel *channel,
 			    const char *fmt, ...) PRINTF_FMT(2,3);
 /* Channel has failed, but can try again after a minute. */
-void channel_fail_reconnect_later(struct channel *channel,
-				  const char *fmt,...) PRINTF_FMT(2,3);
+void channel_fail_transient_delayreconnect(struct channel *channel,
+					   const char *fmt,...) PRINTF_FMT(2,3);
 
 /* Channel has failed, give up on it. */
 void channel_fail_permanent(struct channel *channel,
