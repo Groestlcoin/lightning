@@ -1850,7 +1850,9 @@ def test_relative_config_dir(node_factory):
 
 
 def test_signmessage(node_factory):
-    l1, l2 = node_factory.line_graph(2, wait_for_announce=True)
+    l1, l2 = node_factory.line_graph(2, wait_for_announce=True,
+                                     opts={'allow-deprecated-apis': True})
+    l1.rpc.jsonschemas = {}
 
     corpus = [[None,
                "this is a test!",
@@ -2712,3 +2714,21 @@ def test_torv2_in_db(node_factory):
     l1.stop()
     l1.db_manip("UPDATE peers SET address='3fyb44wdhnd2ghhl.onion:1234';")
     l1.start()
+
+
+def test_checkmessage_pubkey_not_found(node_factory):
+    l1 = node_factory.get_node()
+
+    msg = "testcase to check new rpc error"
+    pubkey = "03be3b0e9992153b1d5a6e1623670b6c3663f72ce6cf2e0dd39c0a373a7de5a3b7"
+    zbase = "d66bqz3qsku5fxtqsi37j11pci47ydxa95iusphutggz9ezaxt56neh77kxe5hyr41kwgkncgiu94p9ecxiexgpgsz8daoq4tw8kj8yx"
+
+    with pytest.raises(RpcError) as exception:
+        l1.rpc.checkmessage(msg, zbase)
+    err = exception.value
+    assert err.error['message'] == "pubkey not found in the graph"
+    assert err.error['data']['claimed_key'] == pubkey
+
+    check_result = l1.rpc.checkmessage(msg, zbase, pubkey=pubkey)
+    assert check_result["pubkey"] == pubkey
+    assert check_result["verified"] is True
