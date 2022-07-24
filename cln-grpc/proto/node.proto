@@ -47,11 +47,13 @@ service Node {
 	rpc TxSend(TxsendRequest) returns (TxsendResponse) {}
 	rpc Disconnect(DisconnectRequest) returns (DisconnectResponse) {}
 	rpc Feerates(FeeratesRequest) returns (FeeratesResponse) {}
+	rpc FundChannel(FundchannelRequest) returns (FundchannelResponse) {}
 	rpc GetRoute(GetrouteRequest) returns (GetrouteResponse) {}
 	rpc ListForwards(ListforwardsRequest) returns (ListforwardsResponse) {}
 	rpc ListPays(ListpaysRequest) returns (ListpaysResponse) {}
 	rpc Ping(PingRequest) returns (PingResponse) {}
 	rpc SignMessage(SignmessageRequest) returns (SignmessageResponse) {}
+	rpc Stop(StopRequest) returns (StopResponse) {}
 }
 
 message GetinfoRequest {
@@ -1138,6 +1140,29 @@ message FeeratesOnchain_fee_estimates {
 	uint64 htlc_success_satoshis = 5;
 }
 
+message FundchannelRequest {
+	bytes id = 9;
+	AmountOrAll amount = 1;
+	optional Feerate feerate = 2;
+	optional bool announce = 3;
+	optional uint32 minconf = 10;
+	optional Amount push_msat = 5;
+	optional string close_to = 6;
+	optional Amount request_amt = 7;
+	optional string compact_lease = 8;
+	repeated Outpoint utxos = 11;
+	optional uint32 mindepth = 12;
+}
+
+message FundchannelResponse {
+	bytes tx = 1;
+	bytes txid = 2;
+	uint32 outnum = 3;
+	bytes channel_id = 4;
+	optional bytes close_to = 5;
+	optional uint32 mindepth = 6;
+}
+
 message GetrouteRequest {
 	bytes id = 1;
 	Amount amount_msat = 9;
@@ -1261,4 +1286,10 @@ message SignmessageResponse {
 	bytes signature = 1;
 	bytes recid = 2;
 	string zbase = 3;
+}
+
+message StopRequest {
+}
+
+message StopResponse {
 }

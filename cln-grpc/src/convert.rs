@@ -854,6 +854,20 @@ impl From<&responses::FeeratesResponse> for pb::FeeratesResponse {
 }
 
 #[allow(unused_variables)]
+impl From<&responses::FundchannelResponse> for pb::FundchannelResponse {
+    fn from(c: &responses::FundchannelResponse) -> Self {
+        Self {
+            tx: hex::decode(&c.tx).unwrap(), // Rule #2 for type hex
+            txid: hex::decode(&c.txid).unwrap(), // Rule #2 for type txid
+            outnum: c.outnum.clone(), // Rule #2 for type u32
+            channel_id: hex::decode(&c.channel_id).unwrap(), // Rule #2 for type hex
+            close_to: c.close_to.as_ref().map(|v| hex::decode(&v).unwrap()), // Rule #2 for type hex?
+            mindepth: c.mindepth.clone(), // Rule #2 for type u32?
+        }
+    }
+}
+
+#[allow(unused_variables)]
 impl From<&responses::GetrouteRoute> for pb::GetrouteRoute {
     fn from(c: &responses::GetrouteRoute) -> Self {
         Self {
@@ -946,6 +960,14 @@ impl From<&responses::SignmessageResponse> for pb::SignmessageResponse {
             signature: hex::decode(&c.signature).unwrap(), // Rule #2 for type hex
             recid: hex::decode(&c.recid).unwrap(), // Rule #2 for type hex
             zbase: c.zbase.clone(), // Rule #2 for type string
+        }
+    }
+}
+
+#[allow(unused_variables)]
+impl From<&responses::StopResponse> for pb::StopResponse {
+    fn from(c: &responses::StopResponse) -> Self {
+        Self {
         }
     }
 }
@@ -1425,6 +1447,25 @@ impl From<&pb::FeeratesRequest> for requests::FeeratesRequest {
 }
 
 #[allow(unused_variables)]
+impl From<&pb::FundchannelRequest> for requests::FundchannelRequest {
+    fn from(c: &pb::FundchannelRequest) -> Self {
+        Self {
+            id: cln_rpc::primitives::Pubkey::from_slice(&c.id).unwrap(), // Rule #1 for type pubkey
+            amount: c.amount.as_ref().unwrap().into(), // Rule #1 for type msat_or_all
+            feerate: c.feerate.as_ref().map(|a| a.into()), // Rule #1 for type feerate?
+            announce: c.announce.clone(), // Rule #1 for type boolean?
+            minconf: c.minconf.clone(), // Rule #1 for type u32?
+            push_msat: c.push_msat.as_ref().map(|a| a.into()), // Rule #1 for type msat?
+            close_to: c.close_to.clone(), // Rule #1 for type string?
+            request_amt: c.request_amt.as_ref().map(|a| a.into()), // Rule #1 for type msat?
+            compact_lease: c.compact_lease.clone(), // Rule #1 for type string?
+            utxos: Some(c.utxos.iter().map(|s| s.into()).collect()), // Rule #4
+            mindepth: c.mindepth.clone(), // Rule #1 for type u32?
+        }
+    }
+}
+
+#[allow(unused_variables)]
 impl From<&pb::GetrouteRequest> for requests::GetrouteRequest {
     fn from(c: &pb::GetrouteRequest) -> Self {
         Self {
@@ -1478,6 +1519,14 @@ impl From<&pb::SignmessageRequest> for requests::SignmessageRequest {
     fn from(c: &pb::SignmessageRequest) -> Self {
         Self {
             message: c.message.clone(), // Rule #1 for type string
+        }
+    }
+}
+
+#[allow(unused_variables)]
+impl From<&pb::StopRequest> for requests::StopRequest {
+    fn from(c: &pb::StopRequest) -> Self {
+        Self {
         }
     }
 }

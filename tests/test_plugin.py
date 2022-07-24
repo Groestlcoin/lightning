@@ -109,7 +109,7 @@ def test_option_types(node_factory):
     }, may_fail=True, start=False)
 
     # the node should fail after start, and we get a stderr msg
-    n.daemon.start(wait_for_initialized=False)
+    n.daemon.start(wait_for_initialized=False, stderr_redir=True)
     assert n.daemon.wait() == 1
     wait_for(lambda: n.daemon.is_in_stderr('bool_opt: ! does not parse as type bool'))
 
@@ -122,7 +122,7 @@ def test_option_types(node_factory):
     }, may_fail=True, start=False)
 
     # the node should fail after start, and we get a stderr msg
-    n.daemon.start(wait_for_initialized=False)
+    n.daemon.start(wait_for_initialized=False, stderr_redir=True)
     assert n.daemon.wait() == 1
     assert n.daemon.is_in_stderr('--int_opt: notok does not parse as type int')
 
@@ -136,7 +136,7 @@ def test_option_types(node_factory):
     }, may_fail=True, start=False)
 
     # the node should fail after start, and we get a stderr msg
-    n.daemon.start(wait_for_initialized=False)
+    n.daemon.start(wait_for_initialized=False, stderr_redir=True)
     assert n.daemon.wait() == 1
     assert n.daemon.is_in_stderr("--flag_opt: doesn't allow an argument")
 
@@ -1522,7 +1522,7 @@ def test_libplugin(node_factory):
     l1.stop()
     l1.daemon.opts["name-deprecated"] = "test_opt"
 
-    l1.daemon.start(wait_for_initialized=False)
+    l1.daemon.start(wait_for_initialized=False, stderr_redir=True)
     # Will exit with failure code.
     assert l1.daemon.wait() == 1
     assert l1.daemon.is_in_stderr(r"name-deprecated: deprecated option")
@@ -1669,7 +1669,7 @@ def test_bitcoin_backend(node_factory, bitcoind):
     # We don't start if we haven't all the required methods registered.
     plugin = os.path.join(os.getcwd(), "tests/plugins/bitcoin/part1.py")
     l1.daemon.opts["plugin"] = plugin
-    l1.daemon.start(wait_for_initialized=False)
+    l1.daemon.start(wait_for_initialized=False, stderr_redir=True)
     l1.daemon.wait_for_log("Missing a Bitcoin plugin command")
     # Will exit with failure code.
     assert l1.daemon.wait() == 1
@@ -2094,7 +2094,7 @@ def test_important_plugin(node_factory):
                               may_fail=True, expect_fail=True,
                               allow_broken_log=True, start=False)
 
-    n.daemon.start(wait_for_initialized=False)
+    n.daemon.start(wait_for_initialized=False, stderr_redir=True)
     # Will exit with failure code.
     assert n.daemon.wait() == 1
     assert n.daemon.is_in_stderr(r"Failed to register .*nonexistent: No such file or directory")
@@ -2559,6 +2559,14 @@ def test_commando(node_factory, executor):
         fut.result(10)
 
     rune = l1.rpc.commando_rune()['rune']
+
+    # Bad rune fails
+    with pytest.raises(RpcError, match="Not authorized: Not derived from master"):
+        l2.rpc.call(method='commando',
+                    payload={'peer_id': l1.info['id'],
+                             'rune': 'VXY4AAkrPyH2vzSvOHnI7PDVfS6O04bRQLUCIUFJD5Y9NjQmbWV0aG9kPWludm9pY2UmcmF0ZT0yMZ==',
+                             'method': 'listpeers'})
+
     # This works
     res = l2.rpc.call(method='commando',
                       payload={'peer_id': l1.info['id'],
@@ -2796,3 +2804,36 @@ def test_commando_rune(node_factory):
                              'rune': rune['rune'],
                              'method': cmd,
                              'params': params})
+
+
+@pytest.mark.slow_test
+def test_commando_stress(node_factory, executor):
+    """Stress test to slam commando with many large queries"""
+    nodes = node_factory.get_nodes(5)
+
+    rune = nodes[0].rpc.commando_rune()['rune']
+    for n in nodes[1:]:
+        n.connect(nodes[0])
+
+    futs = []
+    for i in range(1000):
+        node = random.choice(nodes[1:])
+        futs.append(executor.submit(node.rpc.call, method='commando',
+                                    payload={'peer_id': nodes[0].info['id'],
+                                             'rune': rune,
+                                             'method': 'invoice',
+                                             'params': {'amount_msat': 'any',
+                                                        'label': 'label{}'.format(i),
+                                                        'description': 'A' * 200000,
+                                                        'deschashonly': True}}))
+    discards = 0
+    for f in futs:
+        try:
+            f.result(TIMEOUT)
+        except RpcError as e:
+            assert(e.error['code'] == 0x4c50)
+            assert(e.error['message'] == "Invalid JSON")
+            discards += 1
+
+    # Should have exactly one discard msg from each discard
+    nodes[0].daemon.wait_for_logs([r"New cmd from .*, replacing old"] * discards)

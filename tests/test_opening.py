@@ -623,8 +623,10 @@ def test_rbf_reconnect_tx_construct(node_factory, bitcoind, chainparams):
 
     l1, l2 = node_factory.get_nodes(2,
                                     opts=[{'disconnect': disconnects,
-                                           'may_reconnect': True},
-                                          {'may_reconnect': True}])
+                                           'may_reconnect': True,
+                                           'dev-no-reconnect': None},
+                                          {'may_reconnect': True,
+                                           'dev-no-reconnect': None}])
 
     l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
     amount = 2**24
@@ -1388,6 +1390,8 @@ def test_zeroconf_forward(node_factory, bitcoind):
     l2.rpc.fundchannel(l3.info['id'], 10**6, mindepth=0)
     wait_for(lambda: l3.rpc.listincoming()['incoming'] != [])
 
+    # Make sure (esp in non-dev-mode) blockheights agree so we don't WIRE_EXPIRY_TOO_SOON...
+    sync_blockheight(bitcoind, [l1, l2, l3])
     inv = l3.rpc.invoice(42 * 10**6, 'inv1', 'desc')['bolt11']
     l1.rpc.pay(inv)
 

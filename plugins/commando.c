@@ -344,10 +344,11 @@ static const char *check_rune(const tal_t *ctx,
 	cinfo.params = params;
 	cinfo.usage = NULL;
 	strmap_init(&cinfo.cached_params);
-	err = rune_test(ctx, master_rune, rune, check_condition, &cinfo);
+	err = rune_test(tmpctx, master_rune, rune, check_condition, &cinfo);
 	/* Just in case they manage to make us speak non-JSON, escape! */
 	if (err)
-		err = json_escape(ctx, take(err))->s;
+		err = json_escape(ctx, err)->s;
+
 	strmap_clear(&cinfo.cached_params);
 
 	/* If it succeeded, *now* we increment any associated usage counter. */
@@ -451,8 +452,11 @@ static void handle_incmd(struct node_id *peer,
 
 	incmd = find_commando(incoming_commands, peer, NULL);
 	/* Don't let them buffer multiple commands: discard old. */
-	if (incmd && incmd->id != idnum)
+	if (incmd && incmd->id != idnum) {
+		plugin_log(plugin, LOG_DBG, "New cmd from %s, replacing old",
+			   node_id_to_hexstr(tmpctx, peer));
 		incmd = tal_free(incmd);
+	}
 
 	if (!incmd) {
 		incmd = tal(plugin, struct commando);
@@ -462,6 +466,10 @@ static void handle_incmd(struct node_id *peer,
 		incmd->contents = tal_arr(incmd, u8, 0);
 		tal_arr_expand(&incoming_commands, incmd);
 		tal_add_destructor2(incmd, destroy_commando, &incoming_commands);
+
+		/* More than 16 partial commands at once?  Free oldest */
+		if (tal_count(incoming_commands) > 16)
+			tal_free(incoming_commands[0]);
 	}
 
 	/* 1MB should be enough for anybody! */
@@ -700,6 +708,7 @@ static struct command_result *json_commando(struct command *cmd,
 	tal_free(peer);
 	tal_free(method);
 	tal_free(cparams);
+	tal_free(rune);
 
 	return send_more_cmd(cmd, NULL, NULL, outgoing);
 }
