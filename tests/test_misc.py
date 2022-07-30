@@ -1084,7 +1084,7 @@ def chan_active(node, scid, is_active):
     return [c['active'] for c in chans] == [is_active, is_active]
 
 
-@pytest.mark.developer("needs DEVELOPER=1")
+@pytest.mark.developer("needs DEVELOPER=1", "uses dev-fast-reconnect")
 @pytest.mark.openchannel('v2')
 @pytest.mark.openchannel('v1')
 def test_funding_reorg_private(node_factory, bitcoind):
@@ -1096,7 +1096,8 @@ def test_funding_reorg_private(node_factory, bitcoind):
             'allow_bad_gossip': True,
             # gossipd send lightning update for original channel.
             'allow_broken_log': True,
-            'allow_warning': True}
+            'allow_warning': True,
+            'dev-fast-reconnect': None}
     l1, l2 = node_factory.line_graph(2, fundchannel=False, opts=opts)
     l1.fundwallet(10000000)
     sync_blockheight(bitcoind, [l1])                # height 102
@@ -1132,7 +1133,7 @@ def test_funding_reorg_private(node_factory, bitcoind):
     l2.daemon.wait_for_log(r'Deleting channel')
 
 
-@pytest.mark.developer("needs DEVELOPER=1")
+@pytest.mark.developer("needs DEVELOPER=1", "uses --dev-fast-reconnect")
 @pytest.mark.openchannel('v1')
 @pytest.mark.openchannel('v2')
 def test_funding_reorg_remote_lags(node_factory, bitcoind):
@@ -1140,7 +1141,7 @@ def test_funding_reorg_remote_lags(node_factory, bitcoind):
     """
     # may_reconnect so channeld will restart; bad gossip can happen due to reorg
     opts = {'funding-confirms': 1, 'may_reconnect': True, 'allow_bad_gossip': True,
-            'allow_warning': True}
+            'allow_warning': True, 'dev-fast-reconnect': None}
     l1, l2 = node_factory.line_graph(2, fundchannel=False, opts=opts)
     l1.fundwallet(10000000)
     sync_blockheight(bitcoind, [l1])                # height 102
@@ -1384,11 +1385,10 @@ def test_feerates(node_factory):
     # Now try setting them, one at a time.
     # Set CONSERVATIVE/2 feerate, for max
     l1.set_feerates((15000, 0, 0, 0), True)
-    wait_for(lambda: len(l1.rpc.feerates('perkw')['perkw']) == 2)
+    wait_for(lambda: l1.rpc.feerates('perkw')['perkw']['max_acceptable'] == 15000 * 10)
     feerates = l1.rpc.feerates('perkw')
     assert feerates['warning_missing_feerates'] == 'Some fee estimates unavailable: groestlcoind startup?'
     assert 'perkb' not in feerates
-    assert feerates['perkw']['max_acceptable'] == 15000 * 10
     assert feerates['perkw']['min_acceptable'] == 253
 
     # Set ECONOMICAL/6 feerate, for unilateral_close and htlc_resolution
@@ -1716,9 +1716,11 @@ def test_bitcoind_fail_first(node_factory, bitcoind):
     """
     # Do not start the lightning node since we need to instrument bitcoind
     # first.
+    timeout = 5 if 5 < TIMEOUT // 3 else TIMEOUT // 3
     l1 = node_factory.get_node(start=False,
                                allow_broken_log=True,
-                               may_fail=True)
+                               may_fail=True,
+                               options={'bitcoin-retry-timeout': timeout})
 
     # Instrument bitcoind to fail some queries first.
     def mock_fail(*args):
@@ -1727,10 +1729,10 @@ def test_bitcoind_fail_first(node_factory, bitcoind):
     l1.daemon.rpcproxy.mock_rpc('getblockhash', mock_fail)
     l1.daemon.rpcproxy.mock_rpc('estimatesmartfee', mock_fail)
 
-    l1.daemon.start(wait_for_initialized=False)
+    l1.daemon.start(wait_for_initialized=False, stderr_redir=True)
     l1.daemon.wait_for_logs([r'getblockhash [a-z0-9]* exited with status 1',
                              r'Unable to estimate opening fees',
-                             r'BROKEN.*we have been retrying command for --bitcoin-retry-timeout=60 seconds'])
+                             r'BROKEN.*we have been retrying command for --bitcoin-retry-timeout={} seconds'.format(timeout)])
     # Will exit with failure code.
     assert l1.daemon.wait() == 1
 
@@ -2124,6 +2126,7 @@ def test_unix_socket_path_length(node_factory, bitcoind, directory, executor, db
     lightning_dir = os.path.join(directory, "anode" + "far" * 30 + "away")
     os.makedirs(lightning_dir)
     db = db_provider.get_db(lightning_dir, "test_unix_socket_path_length", 1)
+    db.provider = db_provider
 
     l1 = LightningNode(1, lightning_dir, bitcoind, executor, VALGRIND, db=db, port=reserve())
 

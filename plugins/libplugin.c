@@ -149,6 +149,8 @@ static void disable_request_cb(struct command *cmd, struct out_req *out)
 {
 	out->errcb = NULL;
 	out->cb = ignore_cb;
+	/* Called because cmd got free'd */
+	out->cmd = NULL;
 }
 
 /* FIXME: Move lightningd/jsonrpc to common/ ? */
@@ -1286,18 +1288,26 @@ void NORETURN plugin_exit(struct plugin *p, int exitcode)
 	exit(exitcode);
 }
 
+void NORETURN plugin_errv(struct plugin *p, const char *fmt, va_list ap)
+{
+	va_list ap2;
+
+	/* In case it gets consumed, make a copy. */
+	va_copy(ap2, ap);
+
+	plugin_logv(p, LOG_BROKEN, fmt, ap);
+	vfprintf(stderr, fmt, ap2);
+	plugin_exit(p, 1);
+	va_end(ap2);
+}
+
 void NORETURN plugin_err(struct plugin *p, const char *fmt, ...)
 {
 	va_list ap;
 
 	va_start(ap, fmt);
-	plugin_logv(p, LOG_BROKEN, fmt, ap);
+	plugin_errv(p, fmt, ap);
 	va_end(ap);
-	va_start(ap, fmt);
-	vfprintf(stderr, fmt, ap);
-	fprintf(stderr, "\n");
-	va_end(ap);
-	plugin_exit(p, 1);
 }
 
 void plugin_log(struct plugin *p, enum log_level l, const char *fmt, ...)

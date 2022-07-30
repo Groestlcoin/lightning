@@ -70,6 +70,16 @@ def test_pay(node_factory):
     payments = l1.rpc.listsendpays(inv)['payments']
     assert len(payments) == 1 and payments[0]['payment_preimage'] == preimage
 
+    # Check channels apy summary view of channel activity
+    apys_1 = l1.rpc.bkpr_channelsapy()['channels_apy']
+    apys_2 = l2.rpc.bkpr_channelsapy()['channels_apy']
+
+    assert apys_1[0]['channel_start_balance_msat'] == apys_2[0]['channel_start_balance_msat']
+    assert apys_1[0]['channel_start_balance_msat'] == apys_1[0]['our_start_balance_msat']
+    assert apys_2[0]['our_start_balance_msat'] == Millisatoshi(0)
+    assert apys_1[0]['routed_out_msat'] == apys_2[0]['routed_in_msat']
+    assert apys_1[0]['routed_in_msat'] == apys_2[0]['routed_out_msat']
+
 
 @pytest.mark.developer("needs to deactivate shadow routing")
 def test_pay_amounts(node_factory):
@@ -1112,6 +1122,15 @@ def test_forward(node_factory, bitcoind):
     l1.rpc.sendpay(route, rhash, payment_secret=inv['payment_secret'])
     l1.rpc.waitsendpay(rhash)
 
+    # Check that invoice payment and fee are tracked appropriately
+    l1.daemon.wait_for_log('coin_move .* [(]invoice[)]')
+    l1.rpc.bkpr_dumpincomecsv('koinly', 'koinly.csv')
+
+    koinly_path = os.path.join(l1.daemon.lightning_dir, TEST_NETWORK, 'koinly.csv')
+    koinly_csv = open(koinly_path, 'rb').read()
+    expected_line = r'0.00100000000,.*,,,0.00000001001,.*,invoice'
+    assert only_one(re.findall(expected_line, str(koinly_csv)))
+
 
 @pytest.mark.developer("needs --dev-fast-gossip")
 def test_forward_different_fees_and_cltv(node_factory, bitcoind):
@@ -1298,6 +1317,21 @@ def test_forward_pad_fees_and_cltv(node_factory, bitcoind):
     l1.rpc.sendpay(route, rhash, payment_secret=inv['payment_secret'])
     l1.rpc.waitsendpay(rhash)
     assert only_one(l3.rpc.listinvoices('test_forward_pad_fees_and_cltv')['invoices'])['status'] == 'paid'
+
+    # Do some checks of the bookkeeper's records
+    def _income_tagset(node, tagset):
+        incomes = node.rpc.bkpr_listincome()['income_events']
+        return [e for e in incomes if e['tag'] in tagset]
+
+    tags = ['invoice', 'invoice_fee']
+    wait_for(lambda: len(_income_tagset(l1, tags)) == 2)
+    incomes = _income_tagset(l1, tags)
+    # the balance on l3 should equal the invoice
+    bal = only_one(only_one(l3.rpc.bkpr_listbalances()['accounts'])['balances'])['balance_msat']
+    assert incomes[0]['tag'] == 'invoice'
+    assert Millisatoshi(bal) == incomes[0]['debit_msat']
+    inve = only_one([e for e in l1.rpc.bkpr_listaccountevents()['events'] if e['tag'] == 'invoice'])
+    assert inve['debit_msat'] == incomes[0]['debit_msat'] + incomes[1]['debit_msat']
 
 
 @pytest.mark.developer("needs DEVELOPER=1 for dev_ignore_htlcs")

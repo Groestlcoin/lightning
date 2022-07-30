@@ -3,6 +3,7 @@
  * saves and funding tx watching for a channel open */
 
 #include "config.h"
+#include <bitcoin/short_channel_id.h>
 #include <ccan/array_size/array_size.h>
 #include <ccan/cast/cast.h>
 #include <ccan/mem/mem.h>
@@ -1295,7 +1296,7 @@ wallet_commit_channel(struct lightningd *ld,
 	 * reconnect because no channels are active.  But the subd
 	 * just made it active! */
 	if (!any_active && channel->peer->connected == PEER_DISCONNECTED) {
-		try_reconnect(channel->peer, channel->peer, 1,
+		try_reconnect(channel->peer, channel->peer,
 			      &channel->peer->addr);
 	}
 
@@ -1748,7 +1749,9 @@ static void handle_channel_locked(struct subd *dualopend,
 			  CHANNELD_NORMAL,
 			  REASON_UNKNOWN,
 			  "Lockin complete");
-	channel_record_open(channel);
+	channel_record_open(channel,
+			    short_channel_id_blocknum(channel->scid),
+			    true);
 
 	/* Empty out the inflights */
 	wallet_channel_clear_inflights(dualopend->ld->wallet, channel);

@@ -934,8 +934,7 @@ def test_shutdown_awaiting_lockin(node_factory, bitcoind):
     chanid = l1.rpc.fundchannel(l2.info['id'], 10**6)['channel_id']
 
     # Technically, this is async to fundchannel.
-    l1.daemon.wait_for_log('sendrawtx exit 0')
-    bitcoind.generate_block(10)
+    bitcoind.generate_block(1, wait_for_mempool=1)
 
     l1.rpc.close(chanid)
 
@@ -951,9 +950,8 @@ def test_shutdown_awaiting_lockin(node_factory, bitcoind):
     # CLOSINGD_COMPLETE may come first).
     l1.daemon.wait_for_logs(['sendrawtx exit 0', ' to CLOSINGD_COMPLETE'])
     l2.daemon.wait_for_logs(['sendrawtx exit 0', ' to CLOSINGD_COMPLETE'])
-    assert bitcoind.rpc.getmempoolinfo()['size'] == 1
 
-    bitcoind.generate_block(1)
+    bitcoind.generate_block(1, wait_for_mempool=1)
     l1.daemon.wait_for_log(' to ONCHAIN')
     l2.daemon.wait_for_log(' to ONCHAIN')
 
@@ -2203,6 +2201,8 @@ def test_funding_while_offline(node_factory, bitcoind):
 @pytest.mark.developer
 @pytest.mark.openchannel('v1')
 @pytest.mark.openchannel('v2')
+@unittest.skipIf(os.environ.get("TEST_CHECK_DBSTMTS", None) == "1",
+                 "We kill l2, dblog plugin replay will be unreliable")
 def test_channel_persistence(node_factory, bitcoind, executor):
     # Start two nodes and open a channel (to remember). l2 will
     # mysteriously die while committing the first HTLC so we can
@@ -3243,11 +3243,12 @@ def test_feerate_spam(node_factory, chainparams):
         l1.daemon.wait_for_log('peer_out WIRE_UPDATE_FEE', timeout=5)
 
 
-@pytest.mark.developer("need dev-feerate")
+@pytest.mark.developer("need dev-feerate, dev-fast-reconnect")
 def test_feerate_stress(node_factory, executor):
     # Third node makes HTLC traffic less predictable.
     l1, l2, l3 = node_factory.line_graph(3, opts={'commit-time': 100,
-                                                  'may_reconnect': True})
+                                                  'may_reconnect': True,
+                                                  'dev-fast-reconnect': None})
 
     l1.pay(l2, 10**9 // 2)
     scid12 = l1.get_channel_scid(l2)
@@ -3357,12 +3358,11 @@ def test_wumbo_channels(node_factory, bitcoind):
 
     # Connect l3, get gossip.
     l3.rpc.connect(l1.info['id'], 'localhost', port=l1.port)
-    wait_for(lambda: len(l3.rpc.listnodes(l1.info['id'])['nodes']) == 1)
-    wait_for(lambda: 'features' in only_one(l3.rpc.listnodes(l1.info['id'])['nodes']))
 
-    # Make sure channel capacity is what we expected.
-    assert ([c['amount_msat'] for c in l3.rpc.listchannels()['channels']]
-            == [Millisatoshi(str(1 << 24) + "sat")] * 2)
+    # Make sure channel capacity is what we expected (might need to wait for
+    # both channel updates!
+    wait_for(lambda: [c['amount_msat'] for c in l3.rpc.listchannels()['channels']]
+             == [Millisatoshi(str(1 << 24) + "sat")] * 2)
 
     # Make sure channel features are right from channel_announcement
     assert ([c['features'] for c in l3.rpc.listchannels()['channels']]
@@ -4138,3 +4138,19 @@ def test_mutual_reconnect_race(node_factory, executor, bitcoind):
     wait_for(lambda: only_one(l1.rpc.listpeers(l2.info['id'])['peers'])['connected'])
     inv = l2.rpc.invoice(100000000, "invoice4", "invoice4")
     l1.rpc.pay(inv['bolt11'])
+
+
+def test_no_reconnect_awating_unilateral(node_factory, bitcoind):
+    l1, l2 = node_factory.line_graph(2, opts={'may_reconnect': True})
+    l2.stop()
+
+    # Close immediately.
+    l1.rpc.close(l2.info['id'], 1)
+
+    wait_for(lambda: only_one(only_one(l1.rpc.listpeers(l2.info['id'])['peers'])['channels'])['state'] == 'AWAITING_UNILATERAL')
+
+    # After switching to AWAITING_UNILATERAL it will *not* try to reconnect.
+    l1.daemon.wait_for_log("State changed from CHANNELD_SHUTTING_DOWN to AWAITING_UNILATERAL")
+    time.sleep(10)
+
+    assert not l1.daemon.is_in_log('Will try reconnect', start=l1.daemon.logsearch_start)

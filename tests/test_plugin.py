@@ -13,6 +13,7 @@ from utils import (
 )
 
 import ast
+import base64
 import concurrent.futures
 import json
 import os
@@ -2738,9 +2739,7 @@ def test_commando_rune(node_factory):
     # Replace rune3 with a more useful timestamp!
     expiry = int(time.time()) + 15
     rune3 = l1.rpc.commando_rune(restrictions="time<{}".format(expiry))
-    ratelimit_successes = ((rune9, "getinfo", {}),
-                           (rune8, "getinfo", {}),
-                           (rune8, "getinfo", {}))
+
     successes = ((rune1, "listpeers", {}),
                  (rune2, "listpeers", {}),
                  (rune2, "getinfo", {}),
@@ -2752,7 +2751,11 @@ def test_commando_rune(node_factory):
                  (rune6, "listpeers", [l2.info['id'], 'broken']),
                  (rune6, "listpeers", [l2.info['id']]),
                  (rune7, "listpeers", []),
-                 (rune7, "getinfo", {})) + ratelimit_successes
+                 (rune7, "getinfo", {}),
+                 (rune9, "getinfo", {}),
+                 (rune8, "getinfo", {}),
+                 (rune8, "getinfo", {}))
+
     failures = ((rune2, "withdraw", {}),
                 (rune2, "plugin", {'subcommand': 'list'}),
                 (rune3, "getinfo", {}),
@@ -2760,9 +2763,7 @@ def test_commando_rune(node_factory):
                 (rune5, "listpeers", {'id': l2.info['id'], 'level': 'io'}),
                 (rune6, "listpeers", [l2.info['id'], 'io']),
                 (rune7, "listpeers", [l2.info['id']]),
-                (rune7, "listpeers", {'id': l2.info['id']}),
-                (rune9, "getinfo", {}),
-                (rune8, "getinfo", {}))
+                (rune7, "listpeers", {'id': l2.info['id']}))
 
     for rune, cmd, params in successes:
         l2.rpc.call(method='commando',
@@ -2784,6 +2785,47 @@ def test_commando_rune(node_factory):
                                  'params': params})
         assert exc_info.value.error['code'] == 0x4c51
 
+    # Now, this can flake if we cross a minute boundary!  So wait until
+    # It succeeds again.
+    while True:
+        try:
+            l2.rpc.call(method='commando',
+                        payload={'peer_id': l1.info['id'],
+                                 'rune': rune8['rune'],
+                                 'method': 'getinfo',
+                                 'params': {}})
+            break
+        except RpcError as e:
+            assert e.error['code'] == 0x4c51
+        time.sleep(1)
+
+    # This fails immediately, since we've done one.
+    with pytest.raises(RpcError, match='Not authorized:') as exc_info:
+        l2.rpc.call(method='commando',
+                    payload={'peer_id': l1.info['id'],
+                             'rune': rune9['rune'],
+                             'method': 'getinfo',
+                             'params': {}})
+    assert exc_info.value.error['code'] == 0x4c51
+
+    # Two more succeed for rune8.
+    for _ in range(2):
+        l2.rpc.call(method='commando',
+                    payload={'peer_id': l1.info['id'],
+                             'rune': rune8['rune'],
+                             'method': 'getinfo',
+                             'params': {}})
+    assert exc_info.value.error['code'] == 0x4c51
+
+    # Now we've had 3 in one minute, this will fail.
+    with pytest.raises(RpcError, match='Not authorized:') as exc_info:
+        l2.rpc.call(method='commando',
+                    payload={'peer_id': l1.info['id'],
+                             'rune': rune8['rune'],
+                             'method': 'getinfo',
+                             'params': {}})
+    assert exc_info.value.error['code'] == 0x4c51
+
     # rune5 can only be used by l2:
     l3 = node_factory.get_node()
     l3.connect(l1)
@@ -2798,7 +2840,9 @@ def test_commando_rune(node_factory):
     # Now wait for ratelimit expiry, ratelimits should reset.
     time.sleep(61)
 
-    for rune, cmd, params in ratelimit_successes:
+    for rune, cmd, params in ((rune9, "getinfo", {}),
+                              (rune8, "getinfo", {}),
+                              (rune8, "getinfo", {})):
         l2.rpc.call(method='commando',
                     payload={'peer_id': l1.info['id'],
                              'rune': rune['rune'],
@@ -2806,7 +2850,6 @@ def test_commando_rune(node_factory):
                              'params': params})
 
 
-@pytest.mark.slow_test
 def test_commando_stress(node_factory, executor):
     """Stress test to slam commando with many large queries"""
     nodes = node_factory.get_nodes(5)
@@ -2835,5 +2878,28 @@ def test_commando_stress(node_factory, executor):
             assert(e.error['message'] == "Invalid JSON")
             discards += 1
 
-    # Should have exactly one discard msg from each discard
-    nodes[0].daemon.wait_for_logs([r"New cmd from .*, replacing old"] * discards)
+    # Should have at least one discard msg from each failure (we can have
+    # more, if they kept replacing each other, as happens!)
+    if discards > 0:
+        nodes[0].daemon.wait_for_logs([r"New cmd from .*, replacing old"] * discards)
+    else:
+        assert not nodes[0].daemon.is_in_log(r"New cmd from .*, replacing old")
+
+
+def test_commando_badrune(node_factory):
+    """Test invalid UTF-8 encodings in rune: used to make us kill the offers plugin which implements decode, as it gave bad utf8!"""
+    l1 = node_factory.get_node()
+    l1.rpc.decode('5zi6-ugA6hC4_XZ0R7snl5IuiQX4ugL4gm9BQKYaKUU9gCZtZXRob2RebGlzdHxtZXRob2ReZ2V0fG1ldGhvZD1zdW1tYXJ5Jm1ldGhvZC9saXN0ZGF0YXN0b3Jl')
+    rune = l1.rpc.commando_rune(restrictions="readonly")
+
+    binrune = base64.urlsafe_b64decode(rune['rune'])
+    # Mangle each part, try decode.  Skip most of the boring chars
+    # (just '|', '&', '#').
+    for i in range(32, len(binrune)):
+        for span in (range(0, 32), (124, 38, 35), range(127, 256)):
+            for c in span:
+                modrune = binrune[:i] + bytes([c]) + binrune[i + 1:]
+                try:
+                    l1.rpc.decode(base64.urlsafe_b64encode(modrune).decode('utf8'))
+                except RpcError:
+                    pass

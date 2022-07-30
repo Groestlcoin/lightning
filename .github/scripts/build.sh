@@ -18,6 +18,9 @@ export VALGRIND=${VALGRIND:-0}
 export FUZZING=${FUZZING:-0}
 export LIGHTNINGD_POSTGRES_NO_VACUUM=1
 
+# Fail if any commands fail.
+set -e
+
 pip3 install --user poetry
 poetry config virtualenvs.create false --local
 poetry install
@@ -85,7 +88,8 @@ then
     rm -rf gmp-6.1.2
 
     ./configure CC="$TARGET_HOST-gcc" --enable-static
-    make -j4 CC="$TARGET_HOST-gcc" > /dev/null
+
+    make -s -j32 CC="$TARGET_HOST-gcc"
 else
     ./configure
     eatmydata make -j4

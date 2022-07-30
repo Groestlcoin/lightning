@@ -226,6 +226,8 @@ static char *opt_add_addr_withtype(const char *arg,
 	assert(arg != NULL);
 	dns_ok = !ld->always_use_proxy && ld->config.use_dns;
 
+	/* Will be overridden in next call iff has port */
+	port = 0;
 	if (!separate_address_and_port(tmpctx, arg, &address, &port))
 		return tal_fmt(NULL, "Unable to parse address:port '%s'", arg);
 
@@ -691,6 +693,10 @@ static void dev_register_opts(struct lightningd *ld)
 	opt_register_noarg("--dev-no-reconnect", opt_set_invbool,
 			   &ld->reconnect,
 			   "Disable automatic reconnect-attempts by this node, but accept incoming");
+	opt_register_noarg("--dev-fast-reconnect", opt_set_bool,
+			   &ld->dev_fast_reconnect,
+			   "Make max default reconnect delay 3 (not 300) seconds");
+
 	opt_register_noarg("--dev-fail-on-subdaemon-fail", opt_set_bool,
 			   &ld->dev_subdaemon_fail, opt_hidden);
 	opt_register_arg("--dev-disconnect=<filename>", opt_subd_dev_disconnect,

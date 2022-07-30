@@ -2,7 +2,7 @@ from fixtures import *  # noqa: F401,F403
 from fixtures import TEST_NETWORK
 from pyln.client import RpcError, Millisatoshi
 from utils import (
-    only_one, wait_for, sync_blockheight, first_channel_id, calc_lease_fee
+    only_one, wait_for, sync_blockheight, first_channel_id, calc_lease_fee, check_coin_moves
 )
 
 from pathlib import Path
@@ -170,10 +170,12 @@ def test_v2_open_sigs_restart(node_factory, bitcoind):
     assert log
     psbt = re.search("psbt (.*)", log).group(1)
 
-    l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
     l1.daemon.wait_for_log('Peer has reconnected, state DUALOPEND_OPEN_INIT')
-    with pytest.raises(RpcError):
+    try:
+        # FIXME: why do we need to retry signed?
         l1.rpc.openchannel_signed(chan_id, psbt)
+    except RpcError:
+        pass
 
     l2.daemon.wait_for_log('Broadcasting funding tx')
     txid = l2.rpc.listpeers(l1.info['id'])['peers'][0]['channels'][0]['funding_txid']
@@ -219,10 +221,12 @@ def test_v2_open_sigs_restart_while_dead(node_factory, bitcoind):
     assert log
     psbt = re.search("psbt (.*)", log).group(1)
 
-    l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
     l1.daemon.wait_for_log('Peer has reconnected, state DUALOPEND_OPEN_INIT')
-    with pytest.raises(RpcError):
+    try:
+        # FIXME: why do we need to retry signed?
         l1.rpc.openchannel_signed(chan_id, psbt)
+    except RpcError:
+        pass
 
     l2.daemon.wait_for_log('Broadcasting funding tx')
     l2.daemon.wait_for_log('sendrawtx exit 0')
@@ -1308,7 +1312,7 @@ def test_zeroconf_open(bitcoind, node_factory):
     l2.rpc.pay(inv)
 
 
-def test_zeroconf_public(bitcoind, node_factory):
+def test_zeroconf_public(bitcoind, node_factory, chainparams):
     """Test that we transition correctly from zeroconf to public
 
     The differences being that a public channel MUST use the public
@@ -1317,18 +1321,21 @@ def test_zeroconf_public(bitcoind, node_factory):
 
     """
     plugin_path = Path(__file__).parent / "plugins" / "zeroconf-selective.py"
+    coin_mvt_plugin = Path(__file__).parent / "plugins" / "coin_movements.py"
 
     l1, l2, l3 = node_factory.get_nodes(3, opts=[
-        {},
+        {'plugin': str(coin_mvt_plugin)},
         {
             'plugin': str(plugin_path),
             'zeroconf-allow': '0266e4598d1d3c415f572a8488830b60f7e744ed9235eb0b1ba93283b315c03518'
         },
         {}
     ])
+    # Advances blockheight to 102
     l1.fundwallet(10**6)
+    push_msat = 20000 * 1000
     l1.connect(l2)
-    l1.rpc.fundchannel(l2.info['id'], 'all', mindepth=0)
+    l1.rpc.fundchannel(l2.info['id'], 'all', mindepth=0, push_msat=push_msat)
 
     # Wait for the update to be signed (might not be the most reliable
     # signal)
@@ -1337,12 +1344,32 @@ def test_zeroconf_public(bitcoind, node_factory):
 
     l1chan = l1.rpc.listpeers()['peers'][0]['channels'][0]
     l2chan = l2.rpc.listpeers()['peers'][0]['channels'][0]
+    channel_id = l1chan['channel_id']
 
     # We have no confirmation yet, so no `short_channel_id`
     assert('short_channel_id' not in l1chan)
     assert('short_channel_id' not in l2chan)
 
-    # Now add 1 confirmation, we should get a `short_channel_id`
+    # Channel is "proposed"
+    chan_val = 993198000 if chainparams['elements'] else 995673000
+    l1_mvts = [
+        {'type': 'chain_mvt', 'credit_msat': chan_val, 'debit_msat': 0, 'tags': ['channel_proposed', 'opener']},
+        {'type': 'channel_mvt', 'credit_msat': 0, 'debit_msat': 20000000, 'tags': ['pushed'], 'fees_msat': '0msat'},
+    ]
+    check_coin_moves(l1, l1chan['channel_id'], l1_mvts, chainparams)
+
+    # Check that the channel_open event has blockheight of zero
+    for n in [l1, l2]:
+        evs = n.rpc.bkpr_listaccountevents(channel_id)['events']
+        open_ev = only_one([e for e in evs if e['tag'] == 'channel_proposed'])
+        assert open_ev['blockheight'] == 0
+
+        # Call inspect, should have pending event in it
+        tx = only_one(n.rpc.bkpr_inspect(channel_id)['txs'])
+        assert 'blockheight' not in tx
+        assert only_one(tx['outputs'])['output_tag'] == 'channel_proposed'
+
+    # Now add 1 confirmation, we should get a `short_channel_id` (block 103)
     bitcoind.generate_block(1)
     l1.daemon.wait_for_log(r'Funding tx [a-f0-9]{64} depth 1 of 0')
     l2.daemon.wait_for_log(r'Funding tx [a-f0-9]{64} depth 1 of 0')
@@ -1352,6 +1379,25 @@ def test_zeroconf_public(bitcoind, node_factory):
     assert('short_channel_id' in l1chan)
     assert('short_channel_id' in l2chan)
 
+    # We also now have an 'open' event, the push event isn't re-recorded
+    l1_mvts += [
+        {'type': 'chain_mvt', 'credit_msat': chan_val, 'debit_msat': 0, 'tags': ['channel_open', 'opener']},
+    ]
+    check_coin_moves(l1, channel_id, l1_mvts, chainparams)
+
+    # Check that there is a channel_open event w/ real blockheight
+    for n in [l1, l2]:
+        evs = n.rpc.bkpr_listaccountevents(channel_id)['events']
+        # Still has the channel-proposed event
+        only_one([e for e in evs if e['tag'] == 'channel_proposed'])
+        open_ev = only_one([e for e in evs if e['tag'] == 'channel_open'])
+        assert open_ev['blockheight'] == 103
+
+        # Call inspect, should have open event in it
+        tx = only_one(n.rpc.bkpr_inspect(channel_id)['txs'])
+        assert tx['blockheight'] == 103
+        assert only_one(tx['outputs'])['output_tag'] == 'channel_open'
+
     # Now make it public, we should be switching over to the real
     # scid.
     bitcoind.generate_block(5)
@@ -1359,6 +1405,14 @@ def test_zeroconf_public(bitcoind, node_factory):
     # funding outpoint, scripts, etc.
     l3.connect(l1)
     wait_for(lambda: len(l3.rpc.listchannels()['channels']) == 2)
+
+    # Close the zerconf channel, check that we mark it as onchain_resolved ok
+    l1.rpc.close(l2.info['id'])
+    bitcoind.generate_block(1, wait_for_mempool=1)
+
+    # Channel should be marked resolved
+    for n in [l1, l2]:
+        wait_for(lambda: only_one([x for x in n.rpc.bkpr_listbalances()['accounts'] if x['account'] == channel_id])['account_resolved'])
 
 
 def test_zeroconf_forward(node_factory, bitcoind):
