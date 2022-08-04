@@ -19,12 +19,11 @@ jobs:
       with:
         envs: 'DEVELOPER COMPAT'
         usesh: true
-        release: 12.3
         prepare: |
           pkg install -y \
             wget \
-            py38-pip \
-            py38-sqlite3 \
+            py39-pip \
+            py39-sqlite3 \
             gmake \
             git \
             python \
@@ -39,7 +38,6 @@ jobs:
 
           pip install --user -U wheel pip mako==1.1.5 mrkd==0.1.6 mistune==0.8.4 jinja2==2.11.3 MarkupSafe==2.0.1
           ln -s /root/.local/bin/mrkd /usr/local/bin/mrkd
-
         run: |
           git clone https://github.com/lightningnetwork/lightning-rfc.git ../lightning-rfc
           # fatal: unsafe repository ('/Users/runner/work/lightning/lightning' is owned by someone else)
@@ -48,7 +46,6 @@ jobs:
           # Configure and build
           ./configure CC="$CC"
           gmake
-
     - name: Upload artifacts
       uses: actions/upload-artifact@v2
       with:
