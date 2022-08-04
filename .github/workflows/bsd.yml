@@ -19,6 +19,7 @@ jobs:
       with:
         envs: 'DEVELOPER COMPAT'
         usesh: true
+        release: 12.3
         prepare: |
           pkg install -y \
             wget \
