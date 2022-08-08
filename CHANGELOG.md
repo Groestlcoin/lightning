@@ -12,12 +12,17 @@ TODO: Insert version codename, and username of the contributor that named the re
 
 This release named by @adi2011.
 
+Developers please note the Great Msat Migration has begun:
+1. All JSON amount field names now end in "_msat" (others are deprecated)
+2. Their values are strings ending in "msat", but will soon be normal integers.
+3. You should accept both: set `allow-deprecated-apis=false` to test!
+
 ### Added
 
  - *NEW*: `commando` a new builtin plugin to send/recv peer commands over the lightning network, using runes. ([#5370])
- - *NEW*: New built-in plugin`bookkeeper` w/ commands `bkpr-listaccountevents`, `bkpr-listbalances, bkpr-listincome, bkpr-channelsapy, bkpr-dumpincomecsv, bkpr-inspect ([#5071])
- - *NEW*: Static channel backup, to enable smooth fund recovery in case of complete data loss ([#5422])
- - logging: `log-level=debug:<partial-nodeid>` supported to get debug-level logs for everything about a peer. ([#5349])
+ - *NEW*: New built-in plugin `bookkeeper` w/ commands `bkpr-listaccountevents`, `bkpr-listbalances`, `bkpr-listincome`, `bkpr-channelsapy`, `bkpr-dumpincomecsv`, `bkpr-inspect` ([#5071])
+ - *NEW*: Emergency channel backup ("static backup") which allows us to seek fund recovery from honest peers in case of complete data loss ([#5422])
+ - Config: `log-level=debug:<partial-nodeid>` supported to get debug-level logs for everything about a peer. ([#5349])
  - JSON-RPC: `connect` use the standard port derivation when the port is not specified. ([#5242])
  - JSON-RPC: `fetchinvoice` `changes` `amount_msat` ([#5306])
  - JSON-RPC: Added `mindepth` argument to specify the number of confirmations we require for `fundchannel` and `multifundchannel` ([#5275])
@@ -46,7 +51,7 @@ This release named by @adi2011.
  - `connectd`: give busy peers more time to respond to pings. ([#5347])
  - `gossipd`: now accepts spam gossip, but squelches it for ([#5239])
  - gossip: gossip\_store updated to version 10. ([#5239])
- - logging: `log-file` option specified multiple times opens multiple log files. ([#5281])
+ - Options: `log-file` option specified multiple times opens multiple log files. ([#5281])
  - JSON-RPC: `plugin start` now assumes relative path to default plugins dir if the path is not found in absolute context. i.e. lightning-cli plugin start my_plugin.py ([#5211])
  - JSON-RPC: `fundchannel`: now errors if you try to buy a liquidity ad but dont' have `experimental-dual-fund` enabled ([#5389])
  - JSON-RPC: "\_msat" fields can be raw numbers, not "123msat" strings (please handle both!) ([#5306])
@@ -61,7 +66,7 @@ Note: You should always set `allow-deprecated-apis=false` to test for changes.
  - JSON-RPC: `listtransactions` `msat` (use `amount_msat`) ([#5306])
  - JSON-RPC: checkmessage return an error when the pubkey is not specified and it is unknown in the network graph. ([#5252])
  - JSON-RPC: "_msat" fields as "123msat" strings (will be only numbers) ([#5306])
- - JSONRPC: `sendpay` `route` elements `msatoshi` (use `amount_msat`) ([#5306])
+ - JSON-RPC: `sendpay` `route` elements `msatoshi` (use `amount_msat`) ([#5306])
  - JSON-RPC: `pay`, `decode`, `decodepay`, `getroute`, `listinvoices`, `listpays` and `listsendpays` `msatoshi` fields (use `amount_msat`). ([#5306])
  - JSON-RPC: `getinfo` `msatoshi_fees_collected` field (use `fees_collected_msat`). ([#5306])
  - JSON-RPC: `listpeers` `channels`: `msatoshi_to_us`, `msatoshi_to_us_min`, `msatoshi_to_us_max`, `msatoshi_total`, `dust_limit_satoshis`, `our_channel_reserve_satoshis`, `their_channel_reserve_satoshis`, `spendable_msatoshi`, `receivable_msatoshi`, `in_msatoshi_offered`, `in_msatoshi_fulfilled`, `out_msatoshi_offered`, `out_msatoshi_fulfilled`, `max_htlc_value_in_flight_msat` and `htlc_minimum_msat` (use `to_us_msat`, `min_to_us_msat`, `max_to_us_msat`, `total_msat`, `dust_limit_msat`, `our_reserve_msat`, `their_reserve_msat`, `spendable_msat`, `receivable_msat`, `in_offered_msat`, `in_fulfilled_msat`, `out_offered_msat`, `out_fulfilled_msat`, `max_total_htlc_in_msat` and `minimum_htlc_in_msat`). ([#5306])
@@ -92,24 +97,17 @@ Note: You should always set `allow-deprecated-apis=false` to test for changes.
  - JSON-RPC: removed `listpeers` `channels` deprecated fields (deprecated v0.10.1) ([#5264])
  - JSON-RPC: removed `listpeers` `channels` `closer` now omitted, rather than `null` (deprecated v0.10.1) ([#5264])
  - libhsmd: Removed the `libhsmd_python` wrapper as it was unused ([#5415])
- - lightningd: removed `enable-autotor-v2-mode` option (deprecated v0.10.1) ([#5264])
+ - Options: removed `enable-autotor-v2-mode` option (deprecated v0.10.1) ([#5264])
 
 
 ### Fixed
 
  - `connectd`: various crashes and issues fixed by simplification and rewrite. ([#5261])
  - `connectd`: Port of a DNS announcement can be 0 if unspecified ([#5434])
- - `connectd`: no longer crashes when peers reconnect. ([#5300])
- - `connectd`: occasional crash when we reconnect to a peer quickly. ([#5340])
- - `connectd`: reduce initial CPU load when connecting to peers. ([#5328])
- - `connectd`: large memory usage with many peers fixed. ([#5312])
  - `dualopend`: Issue if the number of outputs decreases in a dualopen RBF or splice. ([#5378])
  - `channeld`: Enforce our own `minimum_depth` beyond just confirming ([#5275])
- - routing: Fixed an issue where we would exclude the entire channel if either direction was disabled, or we hadn't seen an update yet. ([#5286])
- - topology: Under some circumstances we were considering the limits on the wrong direction for a channel ([#5286])
  - logging: `log-prefix` now correctly prefixes *all* log messages. ([#5349])
  - logging: `log-level` `io` shows JSONRPC output, as well as input. ([#5306])
- - interop: treat LND "internal error" as warnings, not force close events (as we did in v0.10). ([#5326])
  - PSBT: Fix signature encoding to comply with BIP-0171. ([#5307])
  - signmessage: improve the UX of the rpc command when zbase is not a valid one ([#5297])
  - JSON-RPC: Adds dynamically detected public IP addresses to `getinfo` ([#5244])
@@ -119,11 +117,6 @@ Note: You should always set `allow-deprecated-apis=false` to test for changes.
  - Plugins: plugins would hang indefinitely despite `lightningd` closing the connection ([#5362])
  - Upgrade docker base image from Debian buster to bullseye to work with glibc 2.29+ #5276 ([#5278])
  - docker: The docker images are now built with the rust plugins `cln-grpc` ([#5270])
-
-
-### EXPERIMENTAL
-
- - None.
 
 [#4988]: https://github.com/ElementsProject/lightning/pull/4988
 [#5062]: https://github.com/ElementsProject/lightning/pull/5062
@@ -143,17 +136,11 @@ Note: You should always set `allow-deprecated-apis=false` to test for changes.
 [#5278]: https://github.com/ElementsProject/lightning/pull/5278
 [#5279]: https://github.com/ElementsProject/lightning/pull/5279
 [#5281]: https://github.com/ElementsProject/lightning/pull/5281
-[#5286]: https://github.com/ElementsProject/lightning/pull/5286
 [#5297]: https://github.com/ElementsProject/lightning/pull/5297
-[#5300]: https://github.com/ElementsProject/lightning/pull/5300
 [#5303]: https://github.com/ElementsProject/lightning/pull/5303
 [#5306]: https://github.com/ElementsProject/lightning/pull/5306
 [#5307]: https://github.com/ElementsProject/lightning/pull/5307
-[#5312]: https://github.com/ElementsProject/lightning/pull/5312
-[#5326]: https://github.com/ElementsProject/lightning/pull/5326
-[#5328]: https://github.com/ElementsProject/lightning/pull/5328
 [#5330]: https://github.com/ElementsProject/lightning/pull/5330
-[#5340]: https://github.com/ElementsProject/lightning/pull/5340
 [#5344]: https://github.com/ElementsProject/lightning/pull/5344
 [#5347]: https://github.com/ElementsProject/lightning/pull/5347
 [#5349]: https://github.com/ElementsProject/lightning/pull/5349
@@ -173,6 +160,31 @@ Note: You should always set `allow-deprecated-apis=false` to test for changes.
 [#5475]: https://github.com/ElementsProject/lightning/pull/5475
 [#5477]: https://github.com/ElementsProject/lightning/pull/5477
 
+
+## [0.11.2] - 2022-06-24: Simon's Carefully Chosen Release Name III
+
+Regressions since 0.10.2 which could not wait for the 0.12 release,
+which especially hurt larger nodes.
+
+### Fixed
+
+ - Protocol: treat LND "internal error" as warnings, not force close events (like v0.10) ([#5326])
+ - connectd: no longer occasional crashes when peers reconnect. ([#5300])
+ - connectd: another crash fix on trying to reconnect to disconnecting peer. ([#5340])
+ - topology: Under some circumstances we were considering the limits on the wrong direction for a channel ([#5286])
+ - routing: Fixed an issue where we would exclude the entire channel if either direction was disabled, or we hadn't seen an update yet. ([#5286])
+ - connectd: large memory usage with many peers fixed. ([#5312])
+ - connectd: reduce initial CPU load when connecting to peers. ([#5328])
+ - lightnind: fix failed startup "Could not load channels from the database" if old TORv2 addresses were present. ([#5331])
+
+[#5286]: https://github.com/ElementsProject/lightning/pull/5286
+[#5300]: https://github.com/ElementsProject/lightning/pull/5300
+[#5312]: https://github.com/ElementsProject/lightning/pull/5312
+[#5326]: https://github.com/ElementsProject/lightning/pull/5326
+[#5328]: https://github.com/ElementsProject/lightning/pull/5328
+[#5331]: https://github.com/ElementsProject/lightning/pull/5331
+[#5340]: https://github.com/ElementsProject/lightning/pull/5340
+[0.11.2]: https://github.com/ElementsProject/lightning/releases/tag/v0.11.2
 
 ## [0.11.1] - 2022-05-13: Simon's Carefully Chosen Release Name II
 
