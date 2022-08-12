@@ -474,7 +474,8 @@ static struct command_result *json_list_balances(struct command *cmd,
 					  accts[i]->name,
 					  true,
 					  false, /* don't skip ignored */
-					  &balances);
+					  &balances,
+					  NULL);
 
 		if (err)
 			plugin_err(cmd->plugin,
@@ -888,7 +889,7 @@ listpeers_multi_done(struct command *cmd,
 
 		db_begin_transaction(db);
 		err = account_get_balance(tmpctx, db, info->acct->name,
-					  false, false, &balances);
+					  false, false, &balances, NULL);
 		db_commit_transaction(db);
 
 		if (err)
@@ -910,7 +911,6 @@ listpeers_multi_done(struct command *cmd,
 		if (err)
 			plugin_err(cmd->plugin, err);
 
-		plugin_log(cmd->plugin, LOG_DBG, "Snapshot balances updated");
 		log_journal_entry(info->acct,
 				  info->currency,
 				  info->timestamp - 1,
@@ -1001,6 +1001,7 @@ static struct command_result *json_balance_snapshot(struct command *cmd,
 		struct acct_balance **balances, *bal;
 		struct amount_msat snap_balance, credit_diff, debit_diff;
 		char *acct_name, *currency;
+		bool exists;
 
 		err = json_scan(cmd, buf, acct_tok,
 				"{account_id:%"
@@ -1029,7 +1030,8 @@ static struct command_result *json_balance_snapshot(struct command *cmd,
 					  /* Ignore non-clightning
 					   * balances items */
 					  true,
-					  &balances);
+					  &balances,
+					  &exists);
 
 		if (err)
 			plugin_err(cmd->plugin,
@@ -1056,7 +1058,8 @@ static struct command_result *json_balance_snapshot(struct command *cmd,
 				   "Unable to find_diff for amounts: %s",
 				   err);
 
-		if (!amount_msat_zero(credit_diff)
+		if (!exists
+		    || !amount_msat_zero(credit_diff)
 		    || !amount_msat_zero(debit_diff)) {
 			struct account *acct;
 			struct channel_event *ev;
@@ -1328,7 +1331,7 @@ listpeers_done(struct command *cmd, const char *buf,
 					info->ev->timestamp)) {
 		db_begin_transaction(db);
 		err = account_get_balance(tmpctx, db, info->acct->name,
-					  false, false, &balances);
+					  false, false, &balances, NULL);
 		db_commit_transaction(db);
 
 		if (err)
@@ -1645,6 +1648,7 @@ parse_and_log_channel_move(struct command *cmd,
 	e->timestamp = timestamp;
 	e->tag = mvt_tag_str(tags[0]);
 	e->desc = tal_steal(e, desc);
+	e->rebalance_id = NULL;
 
 	/* Go find the account for this event */
 	db_begin_transaction(db);
@@ -1656,7 +1660,6 @@ parse_and_log_channel_move(struct command *cmd,
 			   acct_name);
 
 	log_channel_event(db, acct, e);
-	db_commit_transaction(db);
 
 	/* Check for invoice desc data, necessary */
 	if (e->payment_id) {
@@ -1664,6 +1667,12 @@ parse_and_log_channel_move(struct command *cmd,
 			if (tags[i] != INVOICE)
 				continue;
 
+			/* We only do rebalance checks for debits,
+			 * the credit event always arrives first */
+			if (!amount_msat_zero(e->debit))
+				maybe_record_rebalance(db, e);
+
+			db_commit_transaction(db);
 			/* Keep memleak happy */
 			tal_steal(tmpctx, e);
 			return lookup_invoice_desc(cmd, e->credit,
@@ -1671,6 +1680,7 @@ parse_and_log_channel_move(struct command *cmd,
 		}
 	}
 
+	db_commit_transaction(db);
 	return notification_handled(cmd);
 }
 
