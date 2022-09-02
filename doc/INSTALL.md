@@ -1,18 +1,19 @@
 Install
 =======
 
-1. [Library Requirements](#library-requirements)
-2. [Ubuntu](#to-build-on-ubuntu)
-3. [Fedora](#to-build-on-fedora)
-4. [FreeBSD](#to-build-on-freebsd)
-5. [OpenBSD](#to-build-on-openbsd)
-6. [NixOS](#to-build-on-nixos)
-7. [macOS](#to-build-on-macos)
-8. [Android](#to-cross-compile-for-android)
-9. [Raspberry Pi](#to-cross-compile-for-raspberry-pi)
-10. [Armbian](#to-compile-for-armbian)
-11. [Alpine](#to-compile-for-alpine)
-12. [Additional steps](#additional-steps)
+- [Library Requirements](#library-requirements)
+- [Ubuntu](#to-build-on-ubuntu)
+- [Fedora](#to-build-on-fedora)
+- [FreeBSD](#to-build-on-freebsd)
+- [OpenBSD](#to-build-on-openbsd)
+- [NixOS](#to-build-on-nixos)
+- [macOS](#to-build-on-macos)
+- [Arch Linux](#to-build-on-arch-linux)
+- [Android](#to-cross-compile-for-android)
+- [Raspberry Pi](#to-cross-compile-for-raspberry-pi)
+- [Armbian](#to-compile-for-armbian)
+- [Alpine](#to-compile-for-alpine)
+- [Additional steps](#additional-steps)
 
 Library Requirements
 --------------------
@@ -256,6 +257,37 @@ need to include `testnet=1`
     groestlcoind &
     ./lightningd/lightningd &
     ./cli/lightning-cli help
+
+To Build on Arch Linux
+---------------------
+
+Install dependencies:
+
+```
+pacman --sync autoconf automake gcc git make python-pip
+pip install --user poetry
+```
+
+Clone Core Lightning:
+
+```
+$ git clone https://github.com/ElementsProject/lightning.git
+$ cd lightning
+```
+
+Build Core Lightning:
+
+```
+python -m poetry install
+./configure
+python -m poetry run make
+```
+
+Launch Core Lightning:
+
+```
+./lightningd/lightningd
+```
 
 To cross-compile for Android
 --------------------
