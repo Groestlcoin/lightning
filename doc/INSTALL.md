@@ -271,7 +271,7 @@ pip install --user poetry
 Clone Core Lightning:
 
 ```
-$ git clone https://github.com/ElementsProject/lightning.git
+$ git clone https://github.com/Groestlcoin/lightning.git
 $ cd lightning
 ```
 
@@ -403,7 +403,7 @@ apk add ca-certificates alpine-sdk autoconf automake git libtool \
 ```
 Clone lightning:
 ```
-git clone https://github.com/ElementsProject/lightning.git
+git clone https://github.com/Groestlcoin/lightning.git
 cd lightning
 git submodule update --init --recursive
 ```
