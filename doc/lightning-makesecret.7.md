@@ -18,6 +18,7 @@ RETURN VALUE
 
 [comment]: # (GENERATE-FROM-SCHEMA-START)
 On success, an object is returned, containing:
+
 - **secret** (secret): the pseudorandom key derived from HSM_secret (always 64 characters)
 
 [comment]: # (GENERATE-FROM-SCHEMA-END)
@@ -41,4 +42,4 @@ RESOURCES
 
 Main web site: <https://github.com/ElementsProject/lightning>
 
-[comment]: # ( SHA256STAMP:1bd94ffa8440041efafe93440d9828be6baca199b0f5cb73220e4482582bf01d)
+[comment]: # ( SHA256STAMP:47f98983bc74e75b5e9ad55ebc84771a7819717e8e41f2398d0e0227a8670044)

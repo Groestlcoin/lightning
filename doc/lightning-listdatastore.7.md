@@ -20,6 +20,7 @@ RETURN VALUE
 
 [comment]: # (GENERATE-FROM-SCHEMA-START)
 On success, an object containing **datastore** is returned.  It is an array of objects, where each object contains:
+
 - **key** (array of strings):
   - Part of the key added to the datastore
 - **generation** (u64, optional): The number of times this has been updated
@@ -46,4 +47,4 @@ RESOURCES
 
 Main web site: <https://github.com/ElementsProject/lightning>
 
-[comment]: # ( SHA256STAMP:6c6f4c08a88b2a8c8cdc4c36783da86d8e8de0d5ee39261f3304e0eb41f0eb41)
+[comment]: # ( SHA256STAMP:45448ccd8947127b2008b4b7d8ab30bb348a45c9ddbced2c690d8b08a102d058)

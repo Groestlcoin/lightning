@@ -29,6 +29,7 @@ RETURN VALUE
 
 [comment]: # (GENERATE-FROM-SCHEMA-START)
 On success, an object is returned, containing:
+
 - **verified** (boolean): whether the signature was valid (always *true*)
 - **pubkey** (pubkey): the *pubkey* parameter, or the pubkey found by looking for known nodes
 
@@ -49,4 +50,4 @@ RESOURCES
 
 Main web site: <https://github.com/ElementsProject/lightning>
 
-[comment]: # ( SHA256STAMP:733247e44d555f9c480a684ceb30440f4f33daf5755253249b5c7b9269c96e49)
+[comment]: # ( SHA256STAMP:9642945217c12b5ce41af5aef0547a42b6db5baa97ed88e6fde91345bb9a75f3)

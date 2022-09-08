@@ -43,7 +43,7 @@ RUN wget -qO /opt/tini "https://github.com/krallin/tini/releases/download/v0.18.
 FROM debian:buster-slim as builder
 
 ENV LIGHTNINGD_VERSION=master
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates autoconf automake build-essential gettext git libtool python3 python3-pip python3-setuptools python3-mako wget gnupg dirmngr git \
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates autoconf automake build-essential gettext git libtool python3 python3-pip python3-setuptools python3-mako wget gnupg dirmngr git lowdown \
   libc6-arm64-cross gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
 
 ENV target_host=aarch64-linux-gnu
@@ -86,7 +86,6 @@ RUN git clone --recursive /tmp/lightning . && \
 
 ARG DEVELOPER=0
 ENV PYTHON_VERSION=3
-RUN pip3 install mrkd
 RUN ./configure --prefix=/tmp/lightning_install --enable-static && make -j3 DEVELOPER=${DEVELOPER} && make install
 
 FROM arm64v8/debian:buster-slim as final

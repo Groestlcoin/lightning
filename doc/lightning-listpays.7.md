@@ -18,9 +18,10 @@ RETURN VALUE
 
 [comment]: # (GENERATE-FROM-SCHEMA-START)
 On success, an object containing **pays** is returned.  It is an array of objects, where each object contains:
-- **payment_hash** (hex): the hash of the *payment_preimage* which will prove payment (always 64 characters)
+
+- **payment\_hash** (hex): the hash of the *payment_preimage* which will prove payment (always 64 characters)
 - **status** (string): status of the payment (one of "pending", "failed", "complete")
-- **created_at** (u64): the UNIX timestamp showing when this payment was initiated
+- **created\_at** (u64): the UNIX timestamp showing when this payment was initiated
 - **destination** (pubkey, optional): the final destination of the payment if known
 - **label** (string, optional): the label, if given to sendpay
 - **bolt11** (string, optional): the bolt11 string (if pay supplied one)
@@ -28,14 +29,17 @@ On success, an object containing **pays** is returned.  It is an array of object
 - **bolt12** (string, optional): the bolt12 string (if supplied for pay: **experimental-offers** only).
 
 If **status** is "pending" or "complete":
-  - **amount_sent_msat** (msat): the amount we actually sent, including fees
-  - **amount_msat** (msat, optional): the amount the destination received, if known
+
+  - **amount\_sent\_msat** (msat): the amount we actually sent, including fees
+  - **amount\_msat** (msat, optional): the amount the destination received, if known
 
 If **status** is "complete":
+
   - **preimage** (hex): proof of payment (always 64 characters)
-  - **number_of_parts** (u64, optional): the number of parts for a successful payment (only if more than one).
+  - **number\_of\_parts** (u64, optional): the number of parts for a successful payment (only if more than one).
 
 If **status** is "failed":
+
   - **erroronion** (hex, optional): the error onion returned on failure, if any.
 
 [comment]: # (GENERATE-FROM-SCHEMA-END)
@@ -57,4 +61,4 @@ RESOURCES
 
 Main web site: <https://github.com/ElementsProject/lightning>
 
-[comment]: # ( SHA256STAMP:ec7234aa1ec9979cdc71a5bfe861296ba90efdf30236922a822b2ecab6fd9635)
+[comment]: # ( SHA256STAMP:fd723be0ea9b4d6722adad5d325de6cf9c53e1842281205a82ee74ab702a17bd)

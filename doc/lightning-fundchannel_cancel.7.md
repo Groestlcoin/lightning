@@ -27,6 +27,7 @@ RETURN VALUE
 
 [comment]: # (GENERATE-FROM-SCHEMA-START)
 On success, an object is returned, containing:
+
 - **cancelled** (string): A message indicating it was cancelled by RPC
 
 [comment]: # (GENERATE-FROM-SCHEMA-END)
@@ -59,4 +60,4 @@ RESOURCES
 
 Main web site: <https://github.com/ElementsProject/lightning>
 
-[comment]: # ( SHA256STAMP:a670eb1f4475ad33b3fc20994205adbf12fad8bb93e5e805e0b8a8ea1db15136)
+[comment]: # ( SHA256STAMP:6e9501860847adfa98cf725e65297322428986f6345aeb04cd0ece150780ec66)

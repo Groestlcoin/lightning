@@ -27,11 +27,13 @@ RETURN VALUE
 
 [comment]: # (GENERATE-FROM-SCHEMA-START)
 On success, an object is returned, containing:
+
 - **enabled** (boolean): whether invoice autocleaning is active
 
 If **enabled** is *true*:
-  - **expired_by** (u64): how long an invoice must be expired (seconds) before we delete it
-  - **cycle_seconds** (u64): how long an invoice must be expired (seconds) before we delete it
+
+  - **expired\_by** (u64): how long an invoice must be expired (seconds) before we delete it
+  - **cycle\_seconds** (u64): how long an invoice must be expired (seconds) before we delete it
 
 [comment]: # (GENERATE-FROM-SCHEMA-END)
 
@@ -50,4 +52,4 @@ RESOURCES
 
 Main web site: <https://github.com/ElementsProject/lightning>
 
-[comment]: # ( SHA256STAMP:c5aedf100597dd0bd1bbbdf82964327035cd49df00d7b0aef6454e3b1ef39dbc)
+[comment]: # ( SHA256STAMP:06bb1ef610c0f82d3d370f468575f2d6e837a11473acd1267baab829aa505052)

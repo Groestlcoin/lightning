@@ -34,6 +34,7 @@ RETURN VALUE
 
 [comment]: # (GENERATE-FROM-SCHEMA-START)
 On success, an object is returned, containing:
+
 - **# version** (string, optional): Special field indicating the current version
 - **plugins** (array of objects, optional):
   - **path** (string): Full path of the plugin
@@ -214,4 +215,4 @@ RESOURCES
 ---------
 
 Main web site: <https://github.com/ElementsProject/lightning>
-[comment]: # ( SHA256STAMP:999502771ada48f32011ea4df2443a2a3385d27377d8e55ec82cf283f9acd0a6)
+[comment]: # ( SHA256STAMP:633de58c810a3d0692e4fe7c58265cf4eec1fe85dffc0139a9af1b23936b61e8)

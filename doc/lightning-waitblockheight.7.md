@@ -21,6 +21,7 @@ RETURN VALUE
 
 [comment]: # (GENERATE-FROM-SCHEMA-START)
 On success, an object is returned, containing:
+
 - **blockheight** (u32): The current block height (>= *blockheight* parameter)
 
 [comment]: # (GENERATE-FROM-SCHEMA-END)
@@ -38,4 +39,4 @@ RESOURCES
 
 Main web site: <https://github.com/ElementsProject/lightning>
 
-[comment]: # ( SHA256STAMP:c0440c779f4274b2e2bf4c9e5889a3ef9855c9e9a698d5a50dd8d80eb35c0683)
+[comment]: # ( SHA256STAMP:4419a83c7852353e07eaa8ac3e6786c6b1d714a9a3d981fc78adfe4a73008514)

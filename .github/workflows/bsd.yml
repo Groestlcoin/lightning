@@ -35,10 +35,10 @@ jobs:
             bash \
             gettext \
             sqlite3 \
+            lowdown \
             curl
 
-          pip install --user -U wheel pip mako==1.1.5 mrkd==0.1.6 mistune==0.8.4 jinja2==2.11.3 MarkupSafe==2.0.1
-          ln -s /root/.local/bin/mrkd /usr/local/bin/mrkd
+          pip install --user -U wheel pip mako==1.1.5 mistune==0.8.4 jinja2==2.11.3 MarkupSafe==2.0.1
         run: |
           PATH=/root/.local/bin:$PATH
           git clone https://github.com/lightningnetwork/lightning-rfc.git ../lightning-rfc
