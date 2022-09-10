@@ -5,8 +5,6 @@ export GROESTLCOIN_VERSION=2.20.1
 export RUST_VERSION=nightly
 export TZ="Europe/London"
 
-sudo useradd -ms /bin/bash tester
-
 sudo apt-get update -qq
 
 sudo apt-get -qq install --no-install-recommends --allow-unauthenticated -yy \
@@ -52,9 +50,6 @@ sudo apt-get -qq install --no-install-recommends --allow-unauthenticated -yy \
      xsltproc \
      zlib1g-dev
 
-
-echo "tester ALL=(root) NOPASSWD:ALL" | sudo tee /etc/sudoers.d/tester
-sudo chmod 0440 /etc/sudoers.d/tester
 
 (
     cd /tmp/ || exit 1
