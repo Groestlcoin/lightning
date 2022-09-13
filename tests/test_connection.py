@@ -669,9 +669,9 @@ def test_reconnect_gossiping(node_factory):
 @pytest.mark.openchannel('v1')
 @pytest.mark.openchannel('v2')
 def test_reconnect_no_update(node_factory, executor, bitcoind):
-    """Test that funding_locked is retransmitted on reconnect if new channel
+    """Test that channel_ready is retransmitted on reconnect if new channel
 
-    This tests if the `funding_locked` is sent if we receive a
+    This tests if the `channel_ready` is sent if we receive a
     `channel_reestablish` message with `next_commitment_number` == 1
     and our `next_commitment_number` == 1.
 
@@ -679,7 +679,7 @@ def test_reconnect_no_update(node_factory, executor, bitcoind):
     reconnects. See comments for details.
 
     """
-    disconnects = ["-WIRE_FUNDING_LOCKED", "-WIRE_SHUTDOWN"]
+    disconnects = ["-WIRE_CHANNEL_READY", "-WIRE_SHUTDOWN"]
     # Allow bad gossip because it might receive WIRE_CHANNEL_UPDATE before
     # announcement of the disconnection
     l1 = node_factory.get_node(may_reconnect=True, allow_bad_gossip=True)
@@ -689,14 +689,14 @@ def test_reconnect_no_update(node_factory, executor, bitcoind):
     l1.rpc.connect(l2.info["id"], "localhost", l2.port)
 
     # LightningNode.fundchannel will fund the channel and generate a
-    # block. The block triggers the funding_locked message, which
+    # block. The block triggers the channel_ready message, which
     # causes a disconnect. The retransmission is then caused by the
     # automatic retry.
     fundchannel_exec = executor.submit(l1.fundchannel, l2, 10**6, False)
     if l1.config('experimental-dual-fund'):
-        l1.daemon.wait_for_log(r"dualopend.* Retransmitting funding_locked for channel")
+        l1.daemon.wait_for_log(r"dualopend.* Retransmitting channel_ready for channel")
     else:
-        l1.daemon.wait_for_log(r"channeld.* Retransmitting funding_locked for channel")
+        l1.daemon.wait_for_log(r"channeld.* Retransmitting channel_ready for channel")
     sync_blockheight(bitcoind, [l1, l2])
     fundchannel_exec.result()
     l1.stop()
@@ -706,7 +706,7 @@ def test_reconnect_no_update(node_factory, executor, bitcoind):
     # Close will trigger the -WIRE_SHUTDOWN and we then wait for the
     # automatic reconnection to trigger the retransmission.
     l1.rpc.close(l2.info['id'], 0)
-    l2.daemon.wait_for_log(r"channeld.* Retransmitting funding_locked for channel")
+    l2.daemon.wait_for_log(r"channeld.* Retransmitting channel_ready for channel")
     l1.daemon.wait_for_log(r"CLOSINGD_COMPLETE")
 
 
@@ -715,8 +715,8 @@ def test_reconnect_no_update(node_factory, executor, bitcoind):
 @pytest.mark.openchannel('v2')
 def test_reconnect_normal(node_factory):
     # Should reconnect fine even if locked message gets lost.
-    disconnects = ['-WIRE_FUNDING_LOCKED',
-                   '+WIRE_FUNDING_LOCKED']
+    disconnects = ['-WIRE_CHANNEL_READY',
+                   '+WIRE_CHANNEL_READY']
     l1 = node_factory.get_node(disconnect=disconnects,
                                may_reconnect=True)
     l2 = node_factory.get_node(may_reconnect=True)
@@ -913,7 +913,7 @@ def test_reconnect_remote_sends_no_sigs(node_factory):
     # l2 will now uses (REMOTE's) announcement_signatures it has stored
     wait_for(lambda: only_one(l2.rpc.listpeers()['peers'][0]['channels'])['status'] == [
         'CHANNELD_NORMAL:Reconnected, and reestablished.',
-        'CHANNELD_NORMAL:Funding transaction locked. Channel announced.'])
+        'CHANNELD_NORMAL:Channel ready for use. Channel announced.'])
 
     # But l2 still sends its own sigs on reconnect
     l2.daemon.wait_for_logs([r'peer_out WIRE_ANNOUNCEMENT_SIGNATURES',
@@ -2234,7 +2234,7 @@ def test_channel_persistence(node_factory, bitcoind, executor):
     # Fire off a sendpay request, it'll get interrupted by a restart
     executor.submit(l1.pay, l2, 10000)
     # Wait for it to be committed to, i.e., stored in the DB
-    l1.daemon.wait_for_log('peer_in WIRE_FUNDING_LOCKED')
+    l1.daemon.wait_for_log('peer_in WIRE_CHANNEL_READY')
     l1.daemon.wait_for_log('peer_in WIRE_COMMITMENT_SIGNED')
 
     # Stop l2, l1 will reattempt to connect

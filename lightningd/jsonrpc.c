@@ -664,11 +664,6 @@ static void rpc_command_hook_serialize(struct rpc_command_hook_payload *p,
 	char *key;
 	json_object_start(s, "rpc_command");
 
-#ifdef COMPAT_V081
-	if (deprecated_apis)
-		json_add_tok(s, "rpc_command", p->request, p->buffer);
-#endif
-
 	json_for_each_obj(i, tok, p->request) {
 		key = tal_strndup(NULL, p->buffer + tok->start,
 				  tok->end - tok->start);
@@ -682,7 +677,7 @@ static void replace_command(struct rpc_command_hook_payload *p,
 			    const char *buffer,
 			    const jsmntok_t *replacetok)
 {
-	const jsmntok_t *method = NULL, *params = NULL;
+	const jsmntok_t *method = NULL, *params = NULL, *jsonrpc;
 	const char *bad;
 
 	/* Must contain "method", "params" and "id" */
@@ -714,14 +709,10 @@ static void replace_command(struct rpc_command_hook_payload *p,
 		goto fail;
 	}
 
-	// deprecated phase to give the possibility to all to migrate and stay safe
-	// from this more restrictive change.
-	if (!deprecated_apis) {
-		const jsmntok_t *jsonrpc = json_get_member(buffer, replacetok, "jsonrpc");
-		if (!jsonrpc || jsonrpc->type != JSMN_STRING || !json_tok_streq(buffer, jsonrpc, "2.0")) {
-			bad = "jsonrpc: \"2.0\" must be specified in the request";
-			goto fail;
-		}
+	jsonrpc = json_get_member(buffer, replacetok, "jsonrpc");
+	if (!jsonrpc || jsonrpc->type != JSMN_STRING || !json_tok_streq(buffer, jsonrpc, "2.0")) {
+		bad = "jsonrpc: \"2.0\" must be specified in the request";
+		goto fail;
 	}
 
 	was_pending(command_exec(p->cmd->jcon, p->cmd, buffer, replacetok,
@@ -858,7 +849,7 @@ REGISTER_PLUGIN_HOOK(rpc_command,
 static struct command_result *
 parse_request(struct json_connection *jcon, const jsmntok_t tok[])
 {
-	const jsmntok_t *method, *id, *params;
+	const jsmntok_t *method, *id, *params, *jsonrpc;
 	struct command *c;
 	struct rpc_command_hook_payload *rpc_hook;
 	bool completed;
@@ -886,13 +877,11 @@ parse_request(struct json_connection *jcon, const jsmntok_t tok[])
 
 	// Adding a deprecated phase to make sure that all the Core Lightning wrapper
 	// can migrate all the frameworks
-	if (!deprecated_apis) {
-		const jsmntok_t *jsonrpc = json_get_member(jcon->buffer, tok, "jsonrpc");
+	jsonrpc = json_get_member(jcon->buffer, tok, "jsonrpc");
 
-		if (!jsonrpc || jsonrpc->type != JSMN_STRING || !json_tok_streq(jcon->buffer, jsonrpc, "2.0")) {
-			json_command_malformed(jcon, "null", "jsonrpc: \"2.0\" must be specified in the request");
-			return NULL;
-		}
+	if (!jsonrpc || jsonrpc->type != JSMN_STRING || !json_tok_streq(jcon->buffer, jsonrpc, "2.0")) {
+		json_command_malformed(jcon, "null", "jsonrpc: \"2.0\" must be specified in the request");
+		return NULL;
 	}
 
 	/* Allocate the command off of the `jsonrpc` object and not
@@ -931,11 +920,6 @@ parse_request(struct json_connection *jcon, const jsmntok_t tok[])
 				    "Command %.*s is deprecated",
 				    json_tok_full_len(method),
 				    json_tok_full(jcon->buffer, method));
-	}
-
-	if (jcon->ld->state == LD_STATE_SHUTDOWN) {
-		return command_fail(c, LIGHTNINGD_SHUTDOWN,
-				    "lightningd is shutting down");
 	}
 
 	rpc_hook = tal(c, struct rpc_command_hook_payload);
@@ -1268,8 +1252,21 @@ void jsonrpc_listen(struct jsonrpc *jsonrpc, struct lightningd *ld)
 
 	if (listen(fd, 128) != 0)
 		err(1, "Listening on '%s'", rpc_filename);
-	jsonrpc->rpc_listener = io_new_listener(
-		ld->rpc_filename, fd, incoming_jcon_connected, ld);
+
+	/* All conns will be tal children of jsonrpc: good for freeing later! */
+	jsonrpc->rpc_listener
+		= io_new_listener(jsonrpc, fd, incoming_jcon_connected, ld);
+}
+
+void jsonrpc_stop_listening(struct jsonrpc *jsonrpc)
+{
+	jsonrpc->rpc_listener = tal_free(jsonrpc->rpc_listener);
+}
+
+void jsonrpc_stop_all(struct lightningd *ld)
+{
+	/* Closes all conns. */
+	ld->jsonrpc = tal_free(ld->jsonrpc);
 }
 
 static struct command_result *param_command(struct command *cmd,

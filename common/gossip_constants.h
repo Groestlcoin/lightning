@@ -32,7 +32,7 @@
 
 /* BOLT #7:
  *
- * - MUST NOT send `announcement_signatures` messages until `funding_locked`
+ * - MUST NOT send `announcement_signatures` messages until `channel_ready`
  *   has been sent and received AND the funding transaction has at least six
  *   confirmations.
  */
@@ -62,7 +62,7 @@
 /* BOLT #7:
  *
  * A node:
- *   - if a channel's oldest `channel_update`s `timestamp` is older than two weeks
+ *   - if a channel's latest `channel_update`s `timestamp` is older than two weeks
  *   (1209600 seconds):
  *     - MAY prune the channel.
  *     - MAY ignore the channel.

@@ -581,11 +581,6 @@ static const char *plugin_response_handle(struct plugin *plugin,
 			"Received a JSON-RPC response for non-existent request");
 	}
 
-	/* Ignore responses when shutting down */
-	if (plugin->plugins->ld->state == LD_STATE_SHUTDOWN) {
-		return NULL;
-	}
-
 	/* We expect the request->cb to copy if needed */
 	pd = plugin_detect_destruction(plugin);
 	request->response_cb(plugin->buffer, toks, idtok, request->response_cb_arg);
@@ -1205,11 +1200,9 @@ static const char *plugin_rpcmethod_add(struct plugin *plugin,
 		cmd->verbose = cmd->description;
 	if (usagetok)
 		usage = json_strdup(tmpctx, buffer, usagetok);
-	else if (!deprecated_apis) {
+	else
 		return tal_fmt(plugin,
 			    "\"usage\" not provided by plugin");
-	} else
-		usage = "[params]";
 
 	if (deptok) {
 		if (!json_to_bool(buffer, deptok, &cmd->deprecated))
@@ -1886,9 +1879,6 @@ plugin_populate_init_request(struct plugin *plugin, struct jsonrpc_request *req)
 		json_add_address(req->stream, "proxy", ld->proxyaddr);
 		json_add_bool(req->stream, "torv3-enabled", true);
 		json_add_bool(req->stream, "always_use_proxy", ld->always_use_proxy);
-		if (deprecated_apis)
-			json_add_bool(req->stream, "use_proxy_always",
-				      ld->always_use_proxy);
 	}
 	json_object_start(req->stream, "feature_set");
 	for (enum feature_place fp = 0; fp < NUM_FEATURE_PLACE; fp++) {
@@ -2123,9 +2113,6 @@ void plugins_set_builtin_plugins_dir(struct plugins *plugins,
 void shutdown_plugins(struct lightningd *ld)
 {
 	struct plugin *p, *next;
-
-	/* The next io_loop does not need db access, close it. */
-	ld->wallet->db = tal_free(ld->wallet->db);
 
 	/* Tell them all to shutdown; if they care. */
 	list_for_each_safe(&ld->plugins->plugins, p, next, list) {

@@ -195,7 +195,6 @@ static char *opt_set_accept_extra_tlv_types(const char *arg,
 }
 #endif
 
-#if EXPERIMENTAL_FEATURES /* BOLT7 DNS RFC #911 */
 /* Returns the number of wireaddr types already announced */
 static size_t num_announced_types(enum wire_addr_type type, struct lightningd *ld)
 {
@@ -210,7 +209,6 @@ static size_t num_announced_types(enum wire_addr_type type, struct lightningd *l
 	}
 	return num;
 }
-#endif
 
 static char *opt_add_addr_withtype(const char *arg,
 				   struct lightningd *ld,
@@ -237,7 +235,7 @@ static char *opt_add_addr_withtype(const char *arg,
 	    || ala != ADDR_ANNOUNCE) {
 		if (!parse_wireaddr_internal(arg, &wi, ld->portnum,
 					     wildcard_ok, dns_ok, false,
-					     deprecated_apis, &err_msg)) {
+					     &err_msg)) {
 			return tal_fmt(NULL, "Unable to parse address '%s': %s", arg, err_msg);
 		}
 
@@ -257,7 +255,6 @@ static char *opt_add_addr_withtype(const char *arg,
 		tal_arr_expand(&ld->proposed_wireaddr, wi);
 	}
 
-#if EXPERIMENTAL_FEATURES /* BOLT7 DNS RFC #911 */
 	/* Add ADDR_TYPE_DNS to announce DNS hostnames */
 	if (is_dnsaddr(address) && ala & ADDR_ANNOUNCE) {
 		/* BOLT-hostnames #7:
@@ -282,7 +279,6 @@ static char *opt_add_addr_withtype(const char *arg,
 		tal_arr_expand(&ld->proposed_listen_announce, ADDR_ANNOUNCE);
 		tal_arr_expand(&ld->proposed_wireaddr, wi);
 	}
-#endif
 
 	return NULL;
 
@@ -318,8 +314,7 @@ static char *opt_add_addr(const char *arg, struct lightningd *ld)
 	struct wireaddr_internal addr;
 
 	/* handle in case you used the addr option with an .onion */
-	if (parse_wireaddr_internal(arg, &addr, 0, true, false, true,
-				    deprecated_apis, NULL)) {
+	if (parse_wireaddr_internal(arg, &addr, 0, true, false, true, NULL)) {
 		if (addr.itype == ADDR_INTERNAL_WIREADDR &&
 		    addr.u.wireaddr.type == ADDR_TYPE_TOR_V3) {
 				log_unusual(ld->log, "You used `--addr=%s` option with an .onion address, please use"
@@ -365,8 +360,7 @@ static char *opt_add_bind_addr(const char *arg, struct lightningd *ld)
 	struct wireaddr_internal addr;
 
 	/* handle in case you used the bind option with an .onion */
-	if (parse_wireaddr_internal(arg, &addr, 0, true, false, true,
-				    deprecated_apis, NULL)) {
+	if (parse_wireaddr_internal(arg, &addr, 0, true, false, true, NULL)) {
 		if (addr.itype == ADDR_INTERNAL_WIREADDR &&
 		    addr.u.wireaddr.type == ADDR_TYPE_TOR_V3) {
 				log_unusual(ld->log, "You used `--bind-addr=%s` option with an .onion address,"

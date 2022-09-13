@@ -839,11 +839,11 @@ static struct peer *wallet_peer_load(struct wallet *w, const u64 dbid)
 	/* This can happen for peers last seen on Torv2! */
 	addrstr = db_col_strdup(tmpctx, stmt, "address");
 	if (!parse_wireaddr_internal(addrstr, &addr, chainparams_get_ln_port(chainparams),
-				     false, false, true, true, NULL)) {
+				     false, false, true, NULL)) {
 		log_unusual(w->log, "Unparsable peer address %s: replacing",
 			    addrstr);
 		parse_wireaddr_internal("127.0.0.1:1", &addr, chainparams_get_ln_port(chainparams),
-					false, false, true, true, NULL);
+					false, false, true, NULL);
 	}
 
 	/* FIXME: save incoming in db! */
@@ -1922,7 +1922,7 @@ void wallet_channel_save(struct wallet *w, struct channel *chan)
 	db_bind_int(stmt, 11, chan->funding.n);
 	db_bind_amount_sat(stmt, 12, &chan->funding_sats);
 	db_bind_amount_sat(stmt, 13, &chan->our_funds);
-	db_bind_int(stmt, 14, chan->remote_funding_locked);
+	db_bind_int(stmt, 14, chan->remote_channel_ready);
 	db_bind_amount_msat(stmt, 15, &chan->push);
 	db_bind_amount_msat(stmt, 16, &chan->our_msat);
 
@@ -4485,18 +4485,20 @@ struct amount_msat wallet_total_forward_fees(struct wallet *w)
 	return total;
 }
 
-bool string_to_forward_status(const char *status_str, enum forward_status *status)
+bool string_to_forward_status(const char *status_str,
+			      size_t len,
+			      enum forward_status *status)
 {
-	if (streq(status_str, "offered")) {
+	if (memeqstr(status_str, len, "offered")) {
 		*status = FORWARD_OFFERED;
 		return true;
-	} else if (streq(status_str, "settled")) {
+	} else if (memeqstr(status_str, len, "settled")) {
 		*status = FORWARD_SETTLED;
 		return true;
-	} else if (streq(status_str, "failed")) {
+	} else if (memeqstr(status_str, len, "failed")) {
 		*status = FORWARD_FAILED;
 		return true;
-	} else if (streq(status_str, "local_failed")) {
+	} else if (memeqstr(status_str, len, "local_failed")) {
 		*status = FORWARD_LOCAL_FAILED;
 		return true;
 	}
