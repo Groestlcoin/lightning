@@ -3260,6 +3260,12 @@ static struct wallet_payment *wallet_stmt2payment(const tal_t *ctx,
 	} else
 		payment->local_offer_id = NULL;
 
+	if (!db_col_is_null(stmt, "completed_at")) {
+		payment->completed_at = tal(payment, u32);
+		*payment->completed_at = db_col_int(stmt, "completed_at");
+	} else
+		payment->completed_at = NULL;
+
 	payment->groupid = db_col_u64(stmt, "groupid");
 
 	return payment;
@@ -3298,6 +3304,7 @@ wallet_payment_by_hash(const tal_t *ctx, struct wallet *wallet,
 					     ", partid"
 					     ", local_offer_id"
 					     ", groupid"
+					     ", completed_at"
 					     " FROM payments"
 					     " WHERE payment_hash = ?"
 					     " AND partid = ? AND groupid=?"));
@@ -3321,6 +3328,10 @@ void wallet_payment_set_status(struct wallet *wallet,
 {
 	struct db_stmt *stmt;
 	struct wallet_payment *payment;
+	u32 completed_at = 0;
+
+	if (newstatus != PAYMENT_PENDING)
+		completed_at = time_now().ts.tv_sec;
 
 	/* We can only fail an unstored payment! */
 	payment = find_unstored_payment(wallet, payment_hash, partid);
@@ -3331,13 +3342,18 @@ void wallet_payment_set_status(struct wallet *wallet,
 	}
 
 	stmt = db_prepare_v2(wallet->db,
-			     SQL("UPDATE payments SET status=? "
+			     SQL("UPDATE payments SET status=?, completed_at=? "
 				 "WHERE payment_hash=? AND partid=? AND groupid=?"));
 
 	db_bind_int(stmt, 0, wallet_payment_status_in_db(newstatus));
-	db_bind_sha256(stmt, 1, payment_hash);
-	db_bind_u64(stmt, 2, partid);
-	db_bind_u64(stmt, 3, groupid);
+	if (completed_at != 0) {
+		db_bind_u64(stmt, 1, completed_at);
+	} else {
+		db_bind_null(stmt, 1);
+	}
+	db_bind_sha256(stmt, 2, payment_hash);
+	db_bind_u64(stmt, 3, partid);
+	db_bind_u64(stmt, 4, groupid);
 	db_exec_prepared_v2(take(stmt));
 
 	if (preimage) {
@@ -3535,6 +3551,7 @@ wallet_payment_list(const tal_t *ctx,
 				      ", partid"
 				      ", local_offer_id"
 				      ", groupid"
+				      ", completed_at"
 				      " FROM payments"
 				      " WHERE"
 				      "  (payment_hash = ? OR 1=?) AND"
@@ -3602,6 +3619,7 @@ wallet_payments_by_offer(const tal_t *ctx,
 					     ", partid"
 					     ", local_offer_id"
 					     ", groupid"
+					     ", completed_at"
 					     " FROM payments"
 					     " WHERE local_offer_id = ?;"));
 	db_bind_sha256(stmt, 0, local_offer_id);

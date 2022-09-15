@@ -762,6 +762,68 @@ static struct rune_restr **readonly_restrictions(const tal_t *ctx)
 	return restrs;
 }
 
+static struct rune_altern *rune_altern_from_json(const tal_t *ctx,
+						 const char *buffer,
+						 const jsmntok_t *tok)
+{
+	struct rune_altern *alt;
+	size_t condoff;
+	/* We still need to unescape here, for \\ -> \.  JSON doesn't
+	 * allow unnecessary \ */
+	const char *unescape;
+	struct json_escape *e = json_escape_string_(tmpctx,
+						    buffer + tok->start,
+						    tok->end - tok->start);
+	unescape = json_escape_unescape(tmpctx, e);
+	if (!unescape)
+		return NULL;
+
+	condoff = rune_altern_fieldname_len(unescape, strlen(unescape));
+	if (!rune_condition_is_valid(unescape[condoff]))
+		return NULL;
+
+	alt = tal(ctx, struct rune_altern);
+	alt->fieldname = tal_strndup(alt, unescape, condoff);
+	alt->condition = unescape[condoff];
+	alt->value = tal_strdup(alt, unescape + condoff + 1);
+	return alt;
+}
+
+static struct rune_restr *rune_restr_from_json(const tal_t *ctx,
+					       const char *buffer,
+					       const jsmntok_t *tok)
+{
+	const jsmntok_t *t;
+	size_t i;
+	struct rune_restr *restr;
+
+	/* \| is not valid JSON, so they use \\|: undo it! */
+	if (deprecated_apis && tok->type == JSMN_STRING) {
+		const char *unescape;
+		struct json_escape *e = json_escape_string_(tmpctx,
+							    buffer + tok->start,
+							    tok->end - tok->start);
+		unescape = json_escape_unescape(tmpctx, e);
+		if (!unescape)
+			return NULL;
+		return rune_restr_from_string(ctx, unescape, strlen(unescape));
+	}
+
+	restr = tal(ctx, struct rune_restr);
+	/* FIXME: after deprecation removed, allow singletons again! */
+	if (tok->type != JSMN_ARRAY)
+		return NULL;
+
+	restr->alterns = tal_arr(restr, struct rune_altern *, tok->size);
+	json_for_each_arr(i, t, tok) {
+		restr->alterns[i] = rune_altern_from_json(restr->alterns,
+							  buffer, t);
+		if (!restr->alterns[i])
+			return tal_free(restr);
+	}
+	return restr;
+}
+
 static struct command_result *param_restrictions(struct command *cmd,
 						 const char *name,
 						 const char *buffer,
@@ -776,21 +838,18 @@ static struct command_result *param_restrictions(struct command *cmd,
 
 		*restrs = tal_arr(cmd, struct rune_restr *, tok->size);
 		json_for_each_arr(i, t, tok) {
-			(*restrs)[i] = rune_restr_from_string(*restrs,
-							      buffer + t->start,
-							      t->end - t->start);
-			if (!(*restrs)[i])
+			(*restrs)[i] = rune_restr_from_json(*restrs, buffer, t);
+			if (!(*restrs)[i]) {
 				return command_fail_badparam(cmd, name, buffer, t,
-							     "not a valid restriction");
+							     "not a valid restriction (should be array)");
+			}
 		}
 	} else {
 		*restrs = tal_arr(cmd, struct rune_restr *, 1);
-		(*restrs)[0] = rune_restr_from_string(*restrs,
-						      buffer + tok->start,
-						      tok->end - tok->start);
+		(*restrs)[0] = rune_restr_from_json(*restrs, buffer, tok);
 		if (!(*restrs)[0])
 			return command_fail_badparam(cmd, name, buffer, tok,
-						     "not a valid restriction");
+						     "not a valid restriction (should be array)");
 	}
 	return NULL;
 }

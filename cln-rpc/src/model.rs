@@ -1409,6 +1409,8 @@ pub mod responses {
 	    pub destination: Option<Pubkey>,
 	    #[serde(alias = "created_at")]
 	    pub created_at: u64,
+	    #[serde(alias = "completed_at", skip_serializing_if = "Option::is_none")]
+	    pub completed_at: Option<u64>,
 	    #[serde(alias = "amount_sent_msat")]
 	    pub amount_sent_msat: Amount,
 	    #[serde(alias = "label", skip_serializing_if = "Option::is_none")]
@@ -2327,6 +2329,8 @@ pub mod responses {
 	    pub destination: Option<Pubkey>,
 	    #[serde(alias = "created_at")]
 	    pub created_at: u64,
+	    #[serde(alias = "completed_at", skip_serializing_if = "Option::is_none")]
+	    pub completed_at: Option<f64>,
 	    #[serde(alias = "amount_sent_msat")]
 	    pub amount_sent_msat: Amount,
 	    #[serde(alias = "label", skip_serializing_if = "Option::is_none")]
@@ -2725,6 +2729,8 @@ pub mod responses {
 	    pub destination: Option<Pubkey>,
 	    #[serde(alias = "created_at")]
 	    pub created_at: u64,
+	    #[serde(alias = "completed_at", skip_serializing_if = "Option::is_none")]
+	    pub completed_at: Option<u64>,
 	    #[serde(alias = "label", skip_serializing_if = "Option::is_none")]
 	    pub label: Option<String>,
 	    #[serde(alias = "bolt11", skip_serializing_if = "Option::is_none")]
@@ -2733,10 +2739,10 @@ pub mod responses {
 	    pub description: Option<String>,
 	    #[serde(alias = "bolt12", skip_serializing_if = "Option::is_none")]
 	    pub bolt12: Option<String>,
-	    #[serde(alias = "amount_msat", skip_serializing_if = "Option::is_none")]
-	    pub amount_msat: Option<Amount>,
-	    #[serde(alias = "amount_sent_msat", skip_serializing_if = "Option::is_none")]
-	    pub amount_sent_msat: Option<Amount>,
+	    #[serde(alias = "preimage", skip_serializing_if = "Option::is_none")]
+	    pub preimage: Option<String>,
+	    #[serde(alias = "number_of_parts", skip_serializing_if = "Option::is_none")]
+	    pub number_of_parts: Option<u64>,
 	    #[serde(alias = "erroronion", skip_serializing_if = "Option::is_none")]
 	    pub erroronion: Option<String>,
 	}
