@@ -32,7 +32,7 @@ enum plugin_restartability {
 
 struct out_req {
 	/* The unique id of this request. */
-	u64 id;
+	const char *id;
 	/* The command which is why we're calling this rpc. */
 	struct command *cmd;
 	/* The request stream. */
@@ -51,7 +51,7 @@ struct out_req {
 };
 
 struct command {
-	u64 *id;
+	const char *id;
 	const char *methodname;
 	bool usage_only;
 	struct plugin *plugin;

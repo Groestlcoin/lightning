@@ -145,6 +145,13 @@ static void destroy_jcon(struct json_connection *jcon)
 	tal_free(jcon->log);
 }
 
+struct log *command_log(struct command *cmd)
+{
+	if (cmd->jcon)
+		return cmd->jcon->log;
+	return cmd->ld->log;
+}
+
 static struct command_result *json_help(struct command *cmd,
 					const char *buffer,
 					const jsmntok_t *obj UNNEEDED,
@@ -192,9 +199,7 @@ static struct command_result *json_stop(struct command *cmd,
 	jout = json_out_new(tmpctx);
 	json_out_start(jout, NULL, '{');
 	json_out_addstr(jout, "jsonrpc", "2.0");
-	/* id may be a string or number, so copy direct. */
-	memcpy(json_out_member_direct(jout, "id", strlen(cmd->id)),
-	       cmd->id, strlen(cmd->id));
+	json_out_add(jout, "id", cmd->id_is_string, "%s", cmd->id);
 	json_out_addstr(jout, "result", "Shutdown complete");
 	json_out_end(jout, '}');
 	json_out_finished(jout);
@@ -533,7 +538,10 @@ void json_notify_fmt(struct command *cmd,
 	json_add_string(js, "jsonrpc", "2.0");
 	json_add_string(js, "method", "message");
 	json_object_start(js, "params");
-	json_add_string(js, "id", cmd->id);
+	if (cmd->id_is_string)
+		json_add_string(js, "id", cmd->id);
+	else
+		json_add_jsonstr(js, "id", cmd->id, strlen(cmd->id));
 	json_add_string(js, "level", log_level_name(level));
 	json_add_string(js, "message", tal_vfmt(tmpctx, fmt, ap));
 	json_object_end(js);
@@ -578,7 +586,10 @@ static struct json_stream *json_start(struct command *cmd)
 
 	json_object_start(js, NULL);
 	json_add_string(js, "jsonrpc", "2.0");
-	json_add_jsonstr(js, "id", cmd->id, strlen(cmd->id));
+	if (cmd->id_is_string)
+		json_add_string(js, "id", cmd->id);
+	else
+		json_add_jsonstr(js, "id", cmd->id, strlen(cmd->id));
 	return js;
 }
 
@@ -892,9 +903,8 @@ parse_request(struct json_connection *jcon, const jsmntok_t tok[])
 	c->ld = jcon->ld;
 	c->pending = false;
 	c->json_stream = NULL;
-	c->id = tal_strndup(c,
-			    json_tok_full(jcon->buffer, id),
-			    json_tok_full_len(id));
+	c->id_is_string = (id->type == JSMN_STRING);
+	c->id = json_strdup(c, jcon->buffer, id);
 	c->mode = CMD_NORMAL;
 	list_add_tail(&jcon->commands, &c->list);
 	tal_add_destructor(c, destroy_command);
@@ -908,6 +918,10 @@ parse_request(struct json_connection *jcon, const jsmntok_t tok[])
 		return command_fail(c, JSONRPC2_INVALID_REQUEST,
 				    "Expected string for method");
 	}
+
+	/* Debug was too chatty, so we use IO here, even though we're
+	 * actually just logging the id */
+	log_io(jcon->log, LOG_IO_IN, NULL, c->id, NULL, 0);
 
 	c->json_cmd = find_cmd(jcon->ld->jsonrpc, jcon->buffer, method);
 	if (!c->json_cmd) {
@@ -935,7 +949,7 @@ parse_request(struct json_connection *jcon, const jsmntok_t tok[])
 	rpc_hook->custom_buffer = NULL;
 
 	db_begin_transaction(jcon->ld->wallet->db);
-	completed = plugin_hook_call_rpc_command(jcon->ld, rpc_hook);
+	completed = plugin_hook_call_rpc_command(jcon->ld, c->id, rpc_hook);
 	db_commit_transaction(jcon->ld->wallet->db);
 
 	/* If it's deferred, mark it (otherwise, it's completed) */
@@ -1309,7 +1323,9 @@ void jsonrpc_notification_end(struct jsonrpc_notification *n)
 }
 
 struct jsonrpc_request *jsonrpc_request_start_(
-    const tal_t *ctx, const char *method, struct log *log,
+    const tal_t *ctx, const char *method,
+    const char *id_prefix, struct log *log,
+    bool add_header,
     void (*notify_cb)(const char *buffer,
 		      const jsmntok_t *methodtok,
 		      const jsmntok_t *paramtoks,
@@ -1321,24 +1337,32 @@ struct jsonrpc_request *jsonrpc_request_start_(
 {
 	struct jsonrpc_request *r = tal(ctx, struct jsonrpc_request);
 	static u64 next_request_id = 0;
-	r->id = next_request_id++;
+	if (id_prefix)
+		r->id = tal_fmt(r, "%s/cln:%s#%"PRIu64,
+				id_prefix, method, next_request_id);
+	else
+		r->id = tal_fmt(r, "cln:%s#%"PRIu64, method, next_request_id);
+	if (taken(id_prefix))
+		tal_free(id_prefix);
+	next_request_id++;
 	r->notify_cb = notify_cb;
 	r->response_cb = response_cb;
 	r->response_cb_arg = response_cb_arg;
-	r->method = NULL;
+	r->method = tal_strdup(r, method);
 	r->stream = new_json_stream(r, NULL, log);
 
-	/* If no method is specified we don't prefill the JSON-RPC
-	 * request with the header. This serves as an escape hatch to
-	 * get a raw request, but get a valid request-id assigned. */
-	if (method != NULL) {
-		r->method = tal_strdup(r, method);
+	/* Disabling this serves as an escape hatch for plugin code to
+	 * get a raw request to paste into, but get a valid request-id
+	 * assigned. */
+	if (add_header) {
 		json_object_start(r->stream, NULL);
 		json_add_string(r->stream, "jsonrpc", "2.0");
-		json_add_u64(r->stream, "id", r->id);
+		json_add_string(r->stream, "id", r->id);
 		json_add_string(r->stream, "method", method);
 		json_object_start(r->stream, "params");
 	}
+	if (log)
+		log_io(log, LOG_IO_OUT, NULL, r->id, NULL, 0);
 
 	return r;
 }

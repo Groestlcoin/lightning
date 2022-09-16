@@ -478,7 +478,7 @@ void invoice_try_pay(struct lightningd *ld,
 	payload->set = set;
 	tal_add_destructor2(set, invoice_payload_remove_set, payload);
 
-	plugin_hook_call_invoice_payment(ld, payload);
+	plugin_hook_call_invoice_payment(ld, NULL, payload);
 }
 
 static bool hsm_sign_b11(const u5 *u5bytes,
@@ -1250,7 +1250,8 @@ static struct command_result *json_invoice(struct command *cmd,
 		info->b11->fallbacks = tal_steal(info->b11, fallback_scripts);
 
 	req = jsonrpc_request_start(info, "listincoming",
-				    cmd->ld->log,
+				    cmd->id,
+				    command_log(cmd),
 				    NULL, listincoming_done,
 				    info);
 	jsonrpc_request_end(req);
