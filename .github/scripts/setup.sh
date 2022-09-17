@@ -2,7 +2,7 @@
 
 export DEBIAN_FRONTEND=noninteractive
 export GROESTLCOIN_VERSION=2.20.1
-export RUST_VERSION=nightly
+export RUST_VERSION=stable
 sudo useradd -ms /bin/bash tester
 sudo apt-get update -qq
 
