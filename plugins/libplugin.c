@@ -297,6 +297,8 @@ struct command_result *command_finished(struct command *cmd,
 struct command_result *WARN_UNUSED_RESULT
 command_still_pending(struct command *cmd)
 {
+	if (cmd)
+		notleak_with_children(cmd);
 	return &pending;
 }
 
@@ -389,14 +391,14 @@ command_success(struct command *cmd, const struct json_out *result)
 }
 
 struct command_result *command_done_err(struct command *cmd,
-					errcode_t code,
+					enum jsonrpc_errcode code,
 					const char *errmsg,
 					const struct json_out *data)
 {
 	struct json_stream *js = jsonrpc_stream_start(cmd);
 
 	json_object_start(js, "error");
-	json_add_errcode(js, "code", code);
+	json_add_jsonrpc_errcode(js, "code", code);
 	json_add_string(js, "message", errmsg);
 
 	if (data)
@@ -442,7 +444,7 @@ struct command_result *forward_result(struct command *cmd,
 
 /* Called by param() directly if it's malformed. */
 struct command_result *command_fail(struct command *cmd,
-				    errcode_t code, const char *fmt, ...)
+				    enum jsonrpc_errcode code, const char *fmt, ...)
 {
 	va_list ap;
 	struct command_result *res;
@@ -728,6 +730,8 @@ send_outreq(struct plugin *plugin, const struct out_req *req)
 
 	ld_rpc_send(plugin, req->js);
 
+	if (req->cmd != NULL)
+		notleak_with_children(req->cmd);
 	return &pending;
 }
 
@@ -1350,16 +1354,20 @@ static void memleak_check(struct plugin *plugin, struct command *cmd)
 {
 	struct htable *memtable;
 
-	memtable = memleak_find_allocations(tmpctx, cmd, cmd);
+	memtable = memleak_start(tmpctx);
+
+	/* cmd in use right now */
+	memleak_ptr(memtable, cmd);
+	memleak_ignore_children(memtable, cmd);
 
 	/* Now delete plugin and anything it has pointers to. */
-	memleak_remove_region(memtable, plugin, sizeof(*plugin));
+	memleak_scan_obj(memtable, plugin);
 
 	/* Memleak needs some help to see into strmaps */
-	memleak_remove_strmap(memtable, &plugin->out_reqs);
+	memleak_scan_strmap(memtable, &plugin->out_reqs);
 
 	/* We know usage strings are referred to. */
-	memleak_remove_strmap(memtable, &cmd->plugin->usagemap);
+	memleak_scan_strmap(memtable, &cmd->plugin->usagemap);
 
 	if (plugin->mark_mem)
 		plugin->mark_mem(plugin, memtable);

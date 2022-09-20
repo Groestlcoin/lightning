@@ -782,9 +782,6 @@ static struct command_result *sendrawtransaction(struct command *cmd,
 	} else
 		highfeesarg = NULL;
 
-	/* Keep memleak happy! */
-	tal_free(allowhighfees);
-
 	start_bitcoin_cli(NULL, cmd, process_sendrawtransaction, true,
 			  BITCOIND_HIGH_PRIO, NULL,
 			  "sendrawtransaction",
@@ -927,7 +924,7 @@ static void wait_and_check_bitcoind(struct plugin *p)
 #if DEVELOPER
 static void memleak_mark_bitcoind(struct plugin *p, struct htable *memtable)
 {
-	memleak_remove_region(memtable, bitcoind, sizeof(*bitcoind));
+	memleak_scan_obj(memtable, bitcoind);
 }
 #endif
 

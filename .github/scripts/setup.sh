@@ -1,5 +1,5 @@
 #!/bin/bash
-
+set -e
 export DEBIAN_FRONTEND=noninteractive
 export GROESTLCOIN_VERSION=2.20.1
 export RUST_VERSION=stable
