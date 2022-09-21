@@ -812,6 +812,8 @@ static const struct config testnet_config = {
 	.connection_timeout_secs = 60,
 
 	.exp_offers = IFEXPERIMENTAL(true, false),
+
+	.allowdustreserve = false,
 };
 
 /* aka. "Dude, where's my coins?" */
@@ -876,6 +878,8 @@ static const struct config mainnet_config = {
 	.connection_timeout_secs = 60,
 
 	.exp_offers = IFEXPERIMENTAL(true, false),
+
+	.allowdustreserve = false,
 };
 
 
@@ -1171,6 +1175,10 @@ static void register_opts(struct lightningd *ld)
 	opt_register_arg("--autolisten", opt_set_bool_arg, opt_show_bool,
 			 &ld->autolisten,
 			 "If true, listen on default port and announce if it seems to be a public interface");
+
+	opt_register_arg("--dev-allowdustreserve", opt_set_bool_arg, opt_show_bool,
+			 &ld->config.allowdustreserve,
+			 "If true, we allow the `fundchannel` RPC command and the `openchannel` plugin hook to set a reserve that is below the dust limit.");
 
 	opt_register_arg("--proxy", opt_add_proxy_addr, NULL,
 			ld,"Set a socks v5 proxy IP address and port");

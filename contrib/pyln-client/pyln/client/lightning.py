@@ -334,7 +334,7 @@ class UnixDomainSocketRpc(object):
         if cmdprefix is None:
             cmdprefix = self.cmdprefix
         if cmdprefix:
-            this_id = cmdprefix + '/' + this_id
+            this_id = f'{cmdprefix}/{this_id}'
         return this_id
 
     def call(self, method, payload=None, cmdprefix=None):
@@ -729,7 +729,8 @@ class LightningRpc(UnixDomainSocketRpc):
     def fundchannel(self, node_id, amount, feerate=None, announce=True,
                     minconf=None, utxos=None, push_msat=None, close_to=None,
                     request_amt=None, compact_lease=None,
-                    mindepth: Optional[int] = None):
+                    mindepth: Optional[int] = None,
+                    reserve: Optional[str] = None):
         """
         Fund channel with {id} using {amount} satoshis with feerate
         of {feerate} (uses default feerate if unset).
@@ -755,6 +756,7 @@ class LightningRpc(UnixDomainSocketRpc):
             "request_amt": request_amt,
             "compact_lease": compact_lease,
             "mindepth": mindepth,
+            "reserve": reserve,
         }
         return self.call("fundchannel", payload)
 
