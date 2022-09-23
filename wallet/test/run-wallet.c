@@ -616,6 +616,11 @@ struct command_result *param_short_channel_id(struct command *cmd UNNEEDED,
 					      const jsmntok_t *tok UNNEEDED,
 					      struct short_channel_id **scid UNNEEDED)
 { fprintf(stderr, "param_short_channel_id called!\n"); abort(); }
+/* Generated stub for param_u64 */
+struct command_result *param_u64(struct command *cmd UNNEEDED, const char *name UNNEEDED,
+				 const char *buffer UNNEEDED, const jsmntok_t *tok UNNEEDED,
+				 uint64_t **num UNNEEDED)
+{ fprintf(stderr, "param_u64 called!\n"); abort(); }
 /* Generated stub for parse_onionpacket */
 struct onionpacket *parse_onionpacket(const tal_t *ctx UNNEEDED,
 				      const u8 *src UNNEEDED,
@@ -977,9 +982,9 @@ static struct wallet *create_test_wallet(struct lightningd *ld, const tal_t *ctx
 				  w->bip32_base) == WALLY_OK);
 
 	CHECK_MSG(w->db, "Failed opening the db");
+	w->db->data_version = 0;
 	db_begin_transaction(w->db);
 	db_migrate(ld, w->db, bip32_base);
-	w->db->data_version = 0;
 	db_commit_transaction(w->db);
 	CHECK_MSG(!wallet_err, wallet_err);
 	w->max_channel_dbid = 0;

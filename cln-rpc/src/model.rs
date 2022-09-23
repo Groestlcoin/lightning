@@ -219,7 +219,7 @@ pub mod requests {
 	    #[serde(alias = "fee_negotiation_step", skip_serializing_if = "Option::is_none")]
 	    pub fee_negotiation_step: Option<String>,
 	    #[serde(alias = "wrong_funding", skip_serializing_if = "Option::is_none")]
-	    pub wrong_funding: Option<String>,
+	    pub wrong_funding: Option<Outpoint>,
 	    #[serde(alias = "force_lease_closed", skip_serializing_if = "Option::is_none")]
 	    pub force_lease_closed: Option<bool>,
 	    #[serde(alias = "feerange", skip_serializing_if = "crate::is_none_or_empty")]
@@ -1910,8 +1910,8 @@ pub mod responses {
 	pub struct ListsendpaysPayments {
 	    #[serde(alias = "id")]
 	    pub id: u64,
-	    #[serde(alias = "groupid", skip_serializing_if = "Option::is_none")]
-	    pub groupid: Option<u64>,
+	    #[serde(alias = "groupid")]
+	    pub groupid: u64,
 	    #[serde(alias = "payment_hash")]
 	    pub payment_hash: Sha256,
 	    // Path `ListSendPays.payments[].status`
@@ -2673,6 +2673,8 @@ pub mod responses {
 	pub struct ListforwardsForwards {
 	    #[serde(alias = "in_channel")]
 	    pub in_channel: ShortChannelId,
+	    #[serde(alias = "in_htlc_id")]
+	    pub in_htlc_id: u64,
 	    #[serde(alias = "in_msat")]
 	    pub in_msat: Amount,
 	    // Path `ListForwards.forwards[].status`
@@ -2682,8 +2684,8 @@ pub mod responses {
 	    pub received_time: f64,
 	    #[serde(alias = "out_channel", skip_serializing_if = "Option::is_none")]
 	    pub out_channel: Option<ShortChannelId>,
-	    #[serde(alias = "payment_hash", skip_serializing_if = "Option::is_none")]
-	    pub payment_hash: Option<String>,
+	    #[serde(alias = "out_htlc_id", skip_serializing_if = "Option::is_none")]
+	    pub out_htlc_id: Option<u64>,
 	    #[serde(skip_serializing_if = "Option::is_none")]
 	    pub style: Option<ListforwardsForwardsStyle>,
 	    #[serde(alias = "fee_msat", skip_serializing_if = "Option::is_none")]

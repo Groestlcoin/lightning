@@ -424,18 +424,42 @@ the outgoing is redeemed.
 might need to redeem this on-chain, so this is the number of blocks we
 have to do that.
 
-### Invoice control options:
+* **accept-htlc-tlv-types**=*types*
 
-* **autocleaninvoice-cycle**=*SECONDS* [plugin `autoclean`]
+  Normally HTLC onions which contain unknown even fields are rejected.
+This option specifies that these (comma-separated) types are to be
+accepted, and ignored.
 
-  Perform cleanup of expired invoices every *SECONDS* seconds, or disable
-if 0. Usually unpaid expired invoices are uninteresting, and just take
-up space in the database.
+### Cleanup control options:
 
-* **autocleaninvoice-expired-by**=*SECONDS* [plugin `autoclean`]
+* **autoclean-cycle**=*SECONDS* [plugin `autoclean`]
 
-  Control how long invoices must have been expired before they are cleaned
-(if *autocleaninvoice-cycle* is non-zero).
+  Perform search for things to clean every *SECONDS* seconds (default
+3600, or 1 hour, which is usually sufficient).
+
+* **autoclean-succeededforwards-age**=*SECONDS* [plugin `autoclean`]
+
+  How old successful forwards (`settled` in listforwards `status`) have to be before deletion (default 0, meaning never).
+
+* **autoclean-failedforwards-age**=*SECONDS* [plugin `autoclean`]
+
+  How old failed forwards (`failed` or `local_failed` in listforwards `status`) have to be before deletion (default 0, meaning never).
+
+* **autoclean-succeededpays-age**=*SECONDS* [plugin `autoclean`]
+
+  How old successful payments (`complete` in listpays `status`) have to be before deletion (default 0, meaning never).
+
+* **autoclean-failedpays-age**=*SECONDS* [plugin `autoclean`]
+
+  How old failed payment attempts (`failed` in listpays `status`) have to be before deletion (default 0, meaning never).
+
+* **autoclean-paidinvoices-age**=*SECONDS* [plugin `autoclean`]
+
+  How old invoices which were paid (`paid` in listinvoices `status`) have to be before deletion (default 0, meaning never).
+
+* **autoclean-expiredinvoices-age**=*SECONDS* [plugin `autoclean`]
+
+  How old invoices which were not paid (and cannot be) (`expired` in listinvoices `status`) before deletion (default 0, meaning never).
 
 ### Payment control options:
 

@@ -504,7 +504,7 @@ impl From<&responses::ListsendpaysPayments> for pb::ListsendpaysPayments {
     fn from(c: &responses::ListsendpaysPayments) -> Self {
         Self {
             id: c.id.clone(), // Rule #2 for type u64
-            groupid: c.groupid.clone(), // Rule #2 for type u64?
+            groupid: c.groupid.clone(), // Rule #2 for type u64
             payment_hash: c.payment_hash.clone().to_vec(), // Rule #2 for type hash
             status: c.status as i32,
             amount_msat: c.amount_msat.map(|f| f.into()), // Rule #2 for type msat?
@@ -897,11 +897,12 @@ impl From<&responses::ListforwardsForwards> for pb::ListforwardsForwards {
     fn from(c: &responses::ListforwardsForwards) -> Self {
         Self {
             in_channel: c.in_channel.to_string(), // Rule #2 for type short_channel_id
+            in_htlc_id: c.in_htlc_id.clone(), // Rule #2 for type u64
             in_msat: Some(c.in_msat.into()), // Rule #2 for type msat
             status: c.status as i32,
             received_time: c.received_time.clone(), // Rule #2 for type number
             out_channel: c.out_channel.as_ref().map(|v| v.to_string()), // Rule #2 for type short_channel_id?
-            payment_hash: c.payment_hash.as_ref().map(|v| hex::decode(&v).unwrap()), // Rule #2 for type hex?
+            out_htlc_id: c.out_htlc_id.clone(), // Rule #2 for type u64?
             style: c.style.map(|v| v as i32),
             fee_msat: c.fee_msat.map(|f| f.into()), // Rule #2 for type msat?
             out_msat: c.out_msat.map(|f| f.into()), // Rule #2 for type msat?
@@ -1080,7 +1081,7 @@ impl From<&pb::CloseRequest> for requests::CloseRequest {
             unilateraltimeout: c.unilateraltimeout.clone(), // Rule #1 for type u32?
             destination: c.destination.clone(), // Rule #1 for type string?
             fee_negotiation_step: c.fee_negotiation_step.clone(), // Rule #1 for type string?
-            wrong_funding: c.wrong_funding.clone().map(|v| hex::encode(v)), // Rule #1 for type txid?
+            wrong_funding: c.wrong_funding.as_ref().map(|a| a.into()), // Rule #1 for type outpoint?
             force_lease_closed: c.force_lease_closed.clone(), // Rule #1 for type boolean?
             feerange: Some(c.feerange.iter().map(|s| s.into()).collect()), // Rule #4
         }
