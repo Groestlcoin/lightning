@@ -5,7 +5,7 @@ ENV DEBIAN_FRONTEND noninteractive
 ENV GROESTLCOIN_VERSION 2.20.1
 
 RUN useradd -ms /bin/bash tester
-RUN mkdir /build /lightning-rfc && chown tester -R /build /lightning-rfc
+RUN mkdir /build /bolts && chown tester -R /build /bolts
 WORKDIR /build
 
 RUN apt-get -qq update && \

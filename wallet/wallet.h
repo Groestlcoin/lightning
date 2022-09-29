@@ -164,8 +164,8 @@ bool string_to_forward_status(const char *status_str, size_t len,
 /* /!\ This is a DB ENUM, please do not change the numbering of any
  * already defined elements (adding is ok) /!\ */
 enum forward_style {
-	FORWARD_STYLE_LEGACY = ONION_V0_PAYLOAD,
-	FORWARD_STYLE_TLV = ONION_TLV_PAYLOAD,
+	FORWARD_STYLE_LEGACY = 0,
+	FORWARD_STYLE_TLV = 1,
 	FORWARD_STYLE_UNKNOWN = 2, /* Not actually in db, safe to renumber! */
 };
 
@@ -1389,7 +1389,7 @@ const struct forwarding *wallet_forwarded_payments_get(struct wallet *w,
  */
 bool wallet_forward_delete(struct wallet *w,
 			   const struct short_channel_id *chan_in,
-			   u64 htlc_id,
+			   const u64 *htlc_id,
 			   enum forward_status state);
 
 /**

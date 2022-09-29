@@ -41,7 +41,7 @@ jobs:
           pip install --user -U wheel pip mako==1.1.5 mistune==0.8.4 jinja2==2.11.3 MarkupSafe==2.0.1
         run: |
           PATH=/root/.local/bin:$PATH
-          git clone https://github.com/lightningnetwork/lightning-rfc.git ../lightning-rfc
+          git clone https://github.com/lightning/bolts.git ../bolts
           # fatal: unsafe repository ('/Users/runner/work/lightning/lightning' is owned by someone else)
           git config --global --add safe.directory $GITHUB_WORKSPACE
 

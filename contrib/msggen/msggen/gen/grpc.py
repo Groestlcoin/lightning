@@ -302,8 +302,8 @@ class GrpcConverterGenerator(IGenerator):
                     'u16?': f'c.{name}.map(|v| v.into())',
                     'msat': f'Some(c.{name}.into())',
                     'msat?': f'c.{name}.map(|f| f.into())',
-                    'pubkey': f'c.{name}.to_vec()',
-                    'pubkey?': f'c.{name}.map(|v| v.to_vec())',
+                    'pubkey': f'c.{name}.serialize().to_vec()',
+                    'pubkey?': f'c.{name}.map(|v| v.serialize().to_vec())',
                     'hex': f'hex::decode(&c.{name}).unwrap()',
                     'hex?': f'c.{name}.map(|v| hex::decode(v).unwrap())',
                     'txid': f'hex::decode(&c.{name}).unwrap()',
@@ -349,6 +349,9 @@ class GrpcConverterGenerator(IGenerator):
         use cln_rpc::model::{responses,requests};
         use crate::pb;
         use std::str::FromStr;
+        use bitcoin_hashes::sha256::Hash as Sha256;
+        use bitcoin_hashes::Hash;
+        use cln_rpc::primitives::PublicKey;
 
         """)
 
@@ -418,8 +421,8 @@ class GrpcUnconverterGenerator(GrpcConverterGenerator):
                     'hex': f'hex::encode(&c.{name})',
                     'hex?': f'c.{name}.map(|v| hex::encode(v))',
                     'txid?': f'c.{name}.map(|v| hex::encode(v))',
-                    'pubkey': f'cln_rpc::primitives::Pubkey::from_slice(&c.{name}).unwrap()',
-                    'pubkey?': f'c.{name}.map(|v| cln_rpc::primitives::Pubkey::from_slice(&v[..]).unwrap())',
+                    'pubkey': f'PublicKey::from_slice(&c.{name}).unwrap()',
+                    'pubkey?': f'c.{name}.map(|v| PublicKey::from_slice(&v).unwrap())',
                     'msat': f'c.{name}.unwrap().into()',
                     'msat?': f'c.{name}.map(|a| a.into())',
                     'msat_or_all': f'c.{name}.unwrap().into()',
@@ -434,8 +437,8 @@ class GrpcUnconverterGenerator(GrpcConverterGenerator):
                     'short_channel_id?': f'c.{name}.map(|v| cln_rpc::primitives::ShortChannelId::from_str(&v).unwrap())',
                     'secret': f'c.{name}.try_into().unwrap()',
                     'secret?': f'c.{name}.map(|v| v.try_into().unwrap())',
-                    'hash': f'c.{name}.try_into().unwrap()',
-                    'hash?': f'c.{name}.map(|v| v.try_into().unwrap())',
+                    'hash': f'Sha256::from_slice(&c.{name}).unwrap()',
+                    'hash?': f'c.{name}.map(|v| Sha256::from_slice(&v).unwrap())',
                     'txid': f'hex::encode(&c.{name})',
                 }.get(
                     typ,

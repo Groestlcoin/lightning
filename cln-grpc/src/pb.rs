@@ -1,4 +1,5 @@
 tonic::include_proto!("cln");
+use bitcoin_hashes::Hash;
 use std::str::FromStr;
 
 use cln_rpc::primitives::{
@@ -21,7 +22,7 @@ impl From<Amount> for JAmount {
 impl From<JOutpoint> for Outpoint {
     fn from(a: JOutpoint) -> Self {
         Outpoint {
-            txid: a.txid,
+            txid: a.txid.to_vec(),
             outnum: a.outnum,
         }
     }
@@ -30,7 +31,7 @@ impl From<JOutpoint> for Outpoint {
 impl From<Outpoint> for JOutpoint {
     fn from(a: Outpoint) -> Self {
         JOutpoint {
-            txid: a.txid,
+            txid: bitcoin_hashes::sha256::Hash::from_slice(&a.txid).unwrap(),
             outnum: a.outnum,
         }
     }
@@ -105,7 +106,7 @@ impl From<AmountOrAny> for JAmountOrAny {
 impl From<RouteHop> for cln_rpc::primitives::Routehop {
     fn from(c: RouteHop) -> Self {
         Self {
-            id: cln_rpc::primitives::Pubkey::from_slice(&c.id).unwrap(),
+            id: cln_rpc::primitives::PublicKey::from_slice(&c.id).unwrap(),
             scid: cln_rpc::primitives::ShortChannelId::from_str(&c.short_channel_id).unwrap(),
             feebase: c.feebase.unwrap().into(),
             feeprop: c.feeprop,
