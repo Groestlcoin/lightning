@@ -15,10 +15,10 @@ jobs:
       fail-fast: true
     steps:
       - name: Checkout
-        uses: actions/checkout@v2.0.0
+        uses: actions/checkout@v3
 
       - name: Set up Python 3.7
-        uses: actions/setup-python@v2
+        uses: actions/setup-python@v3
         with:
           python-version: 3.7
 
@@ -43,7 +43,7 @@ jobs:
           bash -x .github/scripts/build.sh
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v3
         with:
           name: clightning-${{ github.sha }}-ubuntu20.04
           path: |
@@ -53,6 +53,6 @@ jobs:
           retention-days: 7
 
       - name: Download artifacts
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v3
         with:
           name: clightning-${{ github.sha }}-ubuntu20.04

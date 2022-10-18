@@ -12,7 +12,7 @@ jobs:
       EXPERIMENTAL_FEATURES: 0
       COMPAT: 1
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v3
     - name: Build
       id: test
       uses: vmactions/freebsd-vm@v0
@@ -49,7 +49,7 @@ jobs:
           ./configure CC="$CC"
           gmake
     - name: Upload artifacts
-      uses: actions/upload-artifact@v2
+      uses: actions/upload-artifact@v3
       with:
         name: clightning-${{ github.sha }}-freebsd
         path: |
@@ -59,6 +59,6 @@ jobs:
         retention-days: 7
 
     - name: Download artifacts
-      uses: actions/download-artifact@v2
+      uses: actions/download-artifact@v3
       with:
         name: clightning-${{ github.sha }}-freebsd

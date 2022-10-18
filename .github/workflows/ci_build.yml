@@ -11,7 +11,7 @@ jobs:
         include:
           - { OS: alpine }
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
       - name: Integration testing
         run: |
           docker build -f contrib/docker/Dockerfile.${{matrix.OS}} -t clightning-${{matrix.OS}} .
