@@ -18,9 +18,10 @@ jobs:
 
       - name: Install dependencies
         run: |
-          export PATH="/usr/local/opt:/Users/runner/.local/bin:/Users/runner/Library/Python/3.11/bin:$PATH"
+          export PATH="/usr/local/opt:/Users/runner/.local/bin:/Users/runner/Library/Python/3.10/bin:$PATH"
+
           export GROESTLCOIN_VERSION=2.20.1
-          brew install wget python autoconf automake libtool python3 gmp gnu-sed gettext libsodium
+          brew install wget autoconf automake libtool python@3.10 gmp gnu-sed gettext libsodium
 
           (
             cd /tmp/
@@ -29,12 +30,11 @@ jobs:
             sudo mv groestlcoin-$GROESTLCOIN_VERSION/bin/* /usr/local/bin
           )
 
-          pip3 install --user poetry
-          poetry config virtualenvs.create false --local
-          poetry install
-
+          python3.10 -m pip install -U --user poetry wheel pip
+          python3.10 -m poetry install
+          python3.10 -m pip install -U --user mako
+          
           ln -s /usr/local/Cellar/gettext/0.20.1/bin/xgettext /usr/local/opt
-          export PATH="/usr/local/opt:$PATH"
 
       - name: Build
         env:
@@ -50,14 +50,14 @@ jobs:
           TEST_GROUP_COUNT: ${{ matrix.TEST_GROUP_COUNT }}
           TEST_GROUP: ${{ matrix.TEST_GROUP }}
         run: |
-          export PATH="/usr/local/opt:/Users/runner/.local/bin:/Users/runner/Library/Python/3.11/bin:$PATH"
+          export PATH="/usr/local/opt:/Users/runner/.local/bin:/Users/runner/Library/Python/3.10/bin:/usr/local/opt:$PATH"
           export LDFLAGS="-L/usr/local/opt/sqlite/lib"
           export CPPFLAGS="-I/usr/local/opt/sqlite/include"
           export CFLAGS="-Wno-error -Wno-nullability-completeness -Wno-expansion-to-defined -Wno-builtin-requires-header"
           export CXXFLAGS="-Wno-error -Wno-nullability-completeness -Wno-expansion-to-defined -Wno-builtin-requires-header"
 
-          ./configure
-          make
+          python3.10 -m poetry run ./configure
+          python3.10 -m poetry run make
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v3
