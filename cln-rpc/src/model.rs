@@ -209,8 +209,8 @@ pub mod requests {
 	    pub payment_secret: Option<Secret>,
 	    #[serde(alias = "partid", skip_serializing_if = "Option::is_none")]
 	    pub partid: Option<u16>,
-	    #[serde(alias = "localofferid", skip_serializing_if = "Option::is_none")]
-	    pub localofferid: Option<String>,
+	    #[serde(alias = "localinvreqid", skip_serializing_if = "Option::is_none")]
+	    pub localinvreqid: Option<String>,
 	    #[serde(alias = "groupid", skip_serializing_if = "Option::is_none")]
 	    pub groupid: Option<u64>,
 	}
@@ -622,8 +622,8 @@ pub mod requests {
 	    pub amount_msat: Option<Amount>,
 	    #[serde(alias = "destination", skip_serializing_if = "Option::is_none")]
 	    pub destination: Option<PublicKey>,
-	    #[serde(alias = "localofferid", skip_serializing_if = "Option::is_none")]
-	    pub localofferid: Option<Sha256>,
+	    #[serde(alias = "localinvreqid", skip_serializing_if = "Option::is_none")]
+	    pub localinvreqid: Option<Sha256>,
 	    #[serde(alias = "groupid", skip_serializing_if = "Option::is_none")]
 	    pub groupid: Option<u64>,
 	}
@@ -711,8 +711,8 @@ pub mod requests {
 	    pub maxdelay: Option<u16>,
 	    #[serde(alias = "exemptfee", skip_serializing_if = "Option::is_none")]
 	    pub exemptfee: Option<Amount>,
-	    #[serde(alias = "localofferid", skip_serializing_if = "Option::is_none")]
-	    pub localofferid: Option<String>,
+	    #[serde(alias = "localinvreqid", skip_serializing_if = "Option::is_none")]
+	    pub localinvreqid: Option<String>,
 	    #[serde(alias = "exclude", skip_serializing_if = "crate::is_none_or_empty")]
 	    pub exclude: Option<Vec<String>>,
 	    #[serde(alias = "maxfee", skip_serializing_if = "Option::is_none")]
@@ -1831,6 +1831,8 @@ pub mod responses {
 	    CONFIRMED,
 	    #[serde(rename = "spent")]
 	    SPENT,
+	    #[serde(rename = "immature")]
+	    IMMATURE,
 	}
 
 	impl TryFrom<i32> for ListfundsOutputsStatus {
@@ -1840,6 +1842,7 @@ pub mod responses {
 	    0 => Ok(ListfundsOutputsStatus::UNCONFIRMED),
 	    1 => Ok(ListfundsOutputsStatus::CONFIRMED),
 	    2 => Ok(ListfundsOutputsStatus::SPENT),
+	    3 => Ok(ListfundsOutputsStatus::IMMATURE),
 	            o => Err(anyhow::anyhow!("Unknown variant {} for enum ListfundsOutputsStatus", o)),
 	        }
 	    }
@@ -2255,8 +2258,8 @@ pub mod responses {
 	    pub payment_preimage: Option<Secret>,
 	    #[serde(alias = "local_offer_id", skip_serializing_if = "Option::is_none")]
 	    pub local_offer_id: Option<String>,
-	    #[serde(alias = "payer_note", skip_serializing_if = "Option::is_none")]
-	    pub payer_note: Option<String>,
+	    #[serde(alias = "invreq_payer_note", skip_serializing_if = "Option::is_none")]
+	    pub invreq_payer_note: Option<String>,
 	}
 
 	impl TryFrom<Response> for CreateinvoiceResponse {
@@ -2393,8 +2396,8 @@ pub mod responses {
 	    pub expires_at: u64,
 	    #[serde(alias = "local_offer_id", skip_serializing_if = "Option::is_none")]
 	    pub local_offer_id: Option<String>,
-	    #[serde(alias = "payer_note", skip_serializing_if = "Option::is_none")]
-	    pub payer_note: Option<String>,
+	    #[serde(alias = "invreq_payer_note", skip_serializing_if = "Option::is_none")]
+	    pub invreq_payer_note: Option<String>,
 	}
 
 	impl TryFrom<Response> for DelinvoiceResponse {
@@ -2513,8 +2516,8 @@ pub mod responses {
 	    pub bolt12: Option<String>,
 	    #[serde(alias = "local_offer_id", skip_serializing_if = "Option::is_none")]
 	    pub local_offer_id: Option<String>,
-	    #[serde(alias = "payer_note", skip_serializing_if = "Option::is_none")]
-	    pub payer_note: Option<String>,
+	    #[serde(alias = "invreq_payer_note", skip_serializing_if = "Option::is_none")]
+	    pub invreq_payer_note: Option<String>,
 	    #[serde(alias = "pay_index", skip_serializing_if = "Option::is_none")]
 	    pub pay_index: Option<u64>,
 	    #[serde(alias = "amount_received_msat", skip_serializing_if = "Option::is_none")]
