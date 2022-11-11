@@ -19,7 +19,7 @@ jobs:
       with:
         envs: 'DEVELOPER COMPAT'
         usesh: true
-        sync: sshfs
+        mem: 2048
         prepare: |
           pkg install -y \
             wget \
