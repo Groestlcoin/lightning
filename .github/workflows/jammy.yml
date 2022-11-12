@@ -6,6 +6,11 @@ jobs:
     name: Build on Ubuntu 22.04
     runs-on: ubuntu-22.04
     timeout-minutes: 300
+    env:
+      DEVELOPER: 1
+      VALGRIND: 0
+      EXPERIMENTAL_FEATURES: 0
+      COMPAT: 1
     strategy:
       fail-fast: true
     steps:
@@ -23,12 +28,17 @@ jobs:
 
       - name: Build
         env:
-          VALGRIND: 0
-          DEVELOPER: 0
-          EXPERIMENTAL_FEATURES: 0
-          COMPILER: clang
-          COMPAT: 1
-          DB: sqlite3
+          VALGRIND: ${{ matrix.VALGRIND }}
+          DEVELOPER: ${{ matrix.DEVELOPER }}
+          EXPERIMENTAL_FEATURES: ${{ matrix.EXPERIMENTAL_FEATURES }}
+          COMPILER: ${{ matrix.COMPILER }}
+          ARCH: ${{ matrix.ARCH }}
+          COMPAT: ${{ matrix.COMPAT }}
+          COPTFLAGS: ${{ matrix.COPTFLAGS }}
+          NETWORK: ${{ matrix.NETWORK }}
+          TEST_CMD: ${{ matrix.TEST_CMD }}
+          TEST_GROUP_COUNT: ${{ matrix.TEST_GROUP_COUNT }}
+          TEST_GROUP: ${{ matrix.TEST_GROUP }}
         run: |
           bash -x .github/scripts/build.sh
 
@@ -37,10 +47,14 @@ jobs:
         with:
           name: clightning-${{ github.sha }}-ubuntu22.04
           path: |
-            /usr/bin/lightningd
-            /usr/bin/lightning-cli
-            /usr/bin/lightning-hsmtool
-            /usr/libexec/c-lightning
+            /usr/local/bin/lightningd
+            /usr/local/bin/lightning-cli
+            /usr/local/bin/lightning-hsmtool
+            /usr/local/libexec/c-lightning
+            /usr/local/share/man/man1
+            /usr/local/share/man/man5
+            /usr/local/share/man/man7
+            /usr/local/share/man/man8
             /usr/share/doc/c-lightning
           if-no-files-found: error
           retention-days: 7

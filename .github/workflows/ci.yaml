@@ -47,8 +47,15 @@ jobs:
         with:
           name: clightning-${{ github.sha }}-ubuntu20.04
           path: |
-            lightningd/lightningd
-            cli/lightning-cli
+            /usr/local/bin/lightningd
+            /usr/local/bin/lightning-cli
+            /usr/local/bin/lightning-hsmtool
+            /usr/local/libexec/c-lightning
+            /usr/local/share/man/man1
+            /usr/local/share/man/man5
+            /usr/local/share/man/man7
+            /usr/local/share/man/man8
+            /usr/share/doc/c-lightning
           if-no-files-found: error
           retention-days: 7
 
