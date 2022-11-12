@@ -33,7 +33,7 @@ jobs:
           python3.10 -m pip install -U --user poetry wheel pip
           python3.10 -m poetry install
           python3.10 -m pip install -U --user mako
-          
+
           ln -s /usr/local/Cellar/gettext/0.20.1/bin/xgettext /usr/local/opt
 
       - name: Build
@@ -58,14 +58,22 @@ jobs:
 
           python3.10 -m poetry run ./configure
           python3.10 -m poetry run make
+          python3.10 -m poetry run make install
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v3
         with:
           name: clightning-${{ github.sha }}-macos
           path: |
-            lightningd/lightningd
-            cli/lightning-cli
+            /usr/local/bin/lightningd
+            /usr/local/bin/lightning-cli
+            /usr/local/bin/lightning-hsmtool
+            /usr/local/libexec/c-lightning
+            /usr/local/share/man/man1
+            /usr/local/share/man/man5
+            /usr/local/share/man/man7
+            /usr/local/share/man/man8
+            /usr/local/share/doc/c-lightning
           if-no-files-found: error
           retention-days: 7
 

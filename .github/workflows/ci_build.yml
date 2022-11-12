@@ -1,10 +1,11 @@
-name: CI Compilation testing
+name: CI Alpine
 
 on: [push, pull_request]
 
 jobs:
   test:
     runs-on: ubuntu-latest
+    name: Build on Alpine
     strategy:
       fail-fast: false
       matrix:

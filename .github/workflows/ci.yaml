@@ -55,7 +55,7 @@ jobs:
             /usr/local/share/man/man5
             /usr/local/share/man/man7
             /usr/local/share/man/man8
-            /usr/share/doc/c-lightning
+            /usr/local/share/doc/c-lightning
           if-no-files-found: error
           retention-days: 7
 
