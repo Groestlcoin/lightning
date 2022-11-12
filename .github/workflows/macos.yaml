@@ -58,7 +58,7 @@ jobs:
 
           python3.10 -m poetry run ./configure
           python3.10 -m poetry run make
-          python3.10 -m poetry run make install
+          sudo python3.10 -m poetry run make install
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v3
