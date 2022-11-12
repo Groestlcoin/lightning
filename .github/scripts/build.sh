@@ -90,6 +90,7 @@ then
     ./configure CC="$TARGET_HOST-gcc" --enable-static
 
     make -s -j32 CC="$TARGET_HOST-gcc"
+    sudo make install
 else
     ./configure
     eatmydata make -j4

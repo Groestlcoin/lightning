@@ -47,8 +47,12 @@ jobs:
         with:
           name: clightning-${{ github.sha }}-ubuntu22.04
           path: |
-            lightningd/lightningd
-            cli/lightning-cli
+            /usr/bin/lightningd
+            /usr/bin/lightning-cli
+            /usr/bin/lightning-hsmtool
+            /usr/libexec/c-lightning
+            /usr/share/man/
+            /usr/share/doc/c-lightning
           if-no-files-found: error
           retention-days: 7
 
