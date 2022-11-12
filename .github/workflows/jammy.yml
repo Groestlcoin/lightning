@@ -6,11 +6,6 @@ jobs:
     name: Build on Ubuntu 22.04
     runs-on: ubuntu-22.04
     timeout-minutes: 300
-    env:
-      DEVELOPER: 1
-      VALGRIND: 0
-      EXPERIMENTAL_FEATURES: 0
-      COMPAT: 1
     strategy:
       fail-fast: true
     steps:
@@ -28,17 +23,13 @@ jobs:
 
       - name: Build
         env:
-          VALGRIND: ${{ matrix.VALGRIND }}
-          DEVELOPER: ${{ matrix.DEVELOPER }}
-          EXPERIMENTAL_FEATURES: ${{ matrix.EXPERIMENTAL_FEATURES }}
-          COMPILER: ${{ matrix.COMPILER }}
-          ARCH: ${{ matrix.ARCH }}
-          COMPAT: ${{ matrix.COMPAT }}
-          COPTFLAGS: ${{ matrix.COPTFLAGS }}
-          NETWORK: ${{ matrix.NETWORK }}
-          TEST_CMD: ${{ matrix.TEST_CMD }}
-          TEST_GROUP_COUNT: ${{ matrix.TEST_GROUP_COUNT }}
-          TEST_GROUP: ${{ matrix.TEST_GROUP }}
+          VALGRIND: 0
+          DEVELOPER: 0
+          EXPERIMENTAL_FEATURES: 0
+          COMPILER: clang
+          COMPAT: 1
+          TARGET_HOST: aarch64-linux-gnu
+          DB: sqlite3
         run: |
           bash -x .github/scripts/build.sh
 

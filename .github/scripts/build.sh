@@ -94,5 +94,5 @@ then
 else
     ./configure
     eatmydata make -j4
-    make install
+    sudo make install
 fi
