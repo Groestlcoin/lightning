@@ -1,10 +1,10 @@
 ---
-name: CI Ubuntu focal
+name: CI Ubuntu jammy
 on: [push, pull_request]
 jobs:
   smoke-test:
-    name: Build on Ubuntu 20.04
-    runs-on: ubuntu-20.04
+    name: Build on Ubuntu 22.04
+    runs-on: ubuntu-22.04
     timeout-minutes: 300
     env:
       DEVELOPER: 1
@@ -45,7 +45,7 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v3
         with:
-          name: clightning-${{ github.sha }}-ubuntu20.04
+          name: clightning-${{ github.sha }}-ubuntu22.04
           path: |
             lightningd/lightningd
             cli/lightning-cli
@@ -55,4 +55,4 @@ jobs:
       - name: Download artifacts
         uses: actions/download-artifact@v3
         with:
-          name: clightning-${{ github.sha }}-ubuntu20.04
+          name: clightning-${{ github.sha }}-ubuntu22.04
