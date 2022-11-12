@@ -28,7 +28,6 @@ jobs:
           EXPERIMENTAL_FEATURES: 0
           COMPILER: clang
           COMPAT: 1
-          TARGET_HOST: aarch64-linux-gnu
           DB: sqlite3
         run: |
           bash -x .github/scripts/build.sh
