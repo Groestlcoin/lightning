@@ -19,7 +19,7 @@ jobs:
       with:
         envs: 'DEVELOPER COMPAT'
         usesh: true
-        mem: 2048
+        mem: 4096
         prepare: |
           pkg install -y \
             wget \
