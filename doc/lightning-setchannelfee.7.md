@@ -12,13 +12,13 @@ DESCRIPTION
 The **setchannelfee** RPC command sets channel specific routing fees as
 defined in BOLT \#7. The channel has to be in normal or awaiting state.
 This can be checked by **listpeers** reporting a *state* of
-CHANNELD\_NORMAL, CHANNELD\_AWAITING\_LOCKIN or DUALOPEND_AWAITING_LOCKIN for the channel.
+CHANNELD\_NORMAL, CHANNELD\_AWAITING\_LOCKIN or DUALOPEND\_AWAITING\_LOCKIN for the channel.
 
 *id* is required and should contain a scid (short channel ID), channel
 id or peerid (pubkey) of the channel to be modified. If *id* is set to
 "all", the fees for all channels are updated that are in state
 CHANNELD\_NORMAL, CHANNELD\_AWAITING\_LOCKIN or
-DUALOPEND_AWAITING_LOCKIN.  If *id* is a peerid, all channels with the
+DUALOPEND\_AWAITING\_LOCKIN.  If *id* is a peerid, all channels with the
 peer in those states are changed.
 
 *base* is an optional value in millisatoshi that is added as base fee to
@@ -49,12 +49,12 @@ RETURN VALUE
 [comment]: # (GENERATE-FROM-SCHEMA-START)
 On success, an object is returned, containing:
 
-- **base** (u32): The fee_base_msat value
-- **ppm** (u32): The fee_proportional_millionths value
+- **base** (u32): The fee\_base\_msat value
+- **ppm** (u32): The fee\_proportional\_millionths value
 - **channels** (array of objects): channel(s) whose rate is now set:
-  - **peer\_id** (pubkey): The node_id of the peer
-  - **channel\_id** (hex): The channel_id of the channel (always 64 characters)
-  - **short\_channel\_id** (short\_channel\_id, optional): the short_channel_id (if locked in)
+  - **peer\_id** (pubkey): The node\_id of the peer
+  - **channel\_id** (hex): The channel\_id of the channel (always 64 characters)
+  - **short\_channel\_id** (short\_channel\_id, optional): the short\_channel\_id (if locked in)
 
 [comment]: # (GENERATE-FROM-SCHEMA-END)
 
@@ -83,4 +83,4 @@ RESOURCES
 
 Main web site: <https://github.com/ElementsProject/lightning>
 
-[comment]: # ( SHA256STAMP:a7f079e9a25ee5f4c3d8bf3ed2c61d2f807eae99e6bfe02b0737a9692aca503b)
+[comment]: # ( SHA256STAMP:f4de7a0b01820a22b9b8f20e2cce249d3b0d2be10346e745e1066b101a37df3d)
