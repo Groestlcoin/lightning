@@ -40,6 +40,8 @@ jobs:
           TEST_GROUP_COUNT: ${{ matrix.TEST_GROUP_COUNT }}
           TEST_GROUP: ${{ matrix.TEST_GROUP }}
         run: |
+          echo $PROTOC
+          which protoc
           bash -x .github/scripts/build.sh
 
       - name: Upload artifacts
