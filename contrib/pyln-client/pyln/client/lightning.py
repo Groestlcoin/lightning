@@ -162,9 +162,13 @@ class Millisatoshi:
         return self.millisatoshis
 
     def __lt__(self, other: 'Millisatoshi') -> bool:
+        if isinstance(other, int):
+            return self.millisatoshis < other
         return self.millisatoshis < other.millisatoshis
 
     def __le__(self, other: 'Millisatoshi') -> bool:
+        if isinstance(other, int):
+            return self.millisatoshis <= other
         return self.millisatoshis <= other.millisatoshis
 
     def __eq__(self, other: object) -> bool:
@@ -176,9 +180,13 @@ class Millisatoshi:
             return False
 
     def __gt__(self, other: 'Millisatoshi') -> bool:
+        if isinstance(other, int):
+            return self.millisatoshis > other
         return self.millisatoshis > other.millisatoshis
 
     def __ge__(self, other: 'Millisatoshi') -> bool:
+        if isinstance(other, int):
+            return self.millisatoshis >= other
         return self.millisatoshis >= other.millisatoshis
 
     def __add__(self, other: 'Millisatoshi') -> 'Millisatoshi':
