@@ -23,8 +23,7 @@ fi
 # IPV4: 0391c8d0e27fe61ed8cb8784aeae5848bd8b193ea5720dea32ca2694a326fe41f9@104.236.133.196
 # IPV4: 03046e1650b0e67925d260f4888f809598af6cef58fbfc6446fbd4fddf1828ca3d@104.236.130.222
 
-NUM=$(grep -c '^# IPV4:' "$0")
-PEERS=$(grep '^# IPV4:' "$0" | head -n $(($(date +%s) % (NUM - 3) )) | tail -n 3 | cut -d' ' -f3-)
+PEERS=$(grep '^# IPV4:' "$0" | sort -R | tail -n 3 | cut -d' ' -f3-)
 
 for p in $PEERS; do
     echo "Trying to connect to random peer $p..."

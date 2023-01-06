@@ -59,7 +59,7 @@ Clone lightning:
 
 Checkout a release tag:
 
-    git checkout v0.11.2
+    git checkout v22.11.1
 
 For development or running tests, get additional dependencies:
 
@@ -142,7 +142,7 @@ $ cd lightning
 
 Checkout a release tag:
 ```
-$ git checkout v0.11.2
+$ git checkout v22.11.1
 ```
 
 Build and install lightning:
@@ -245,7 +245,7 @@ Clone lightning:
 
 Checkout a release tag:
 
-    $ git checkout v0.11.2
+    $ git checkout v22.11.1
 
 Build lightning:
 
@@ -369,9 +369,9 @@ Obtain and install cross-compiled versions of sqlite3, gmp and zlib:
 
 Download and build zlib:
 
-    wget https://zlib.net/zlib-1.2.12.tar.gz
-    tar xvf zlib-1.2.12.tar.gz
-    cd zlib-1.2.12
+    wget https://zlib.net/fossils/zlib-1.2.13.tar.gz
+    tar xvf zlib-1.2.13.tar.gz
+    cd zlib-1.2.13
     ./configure --prefix=$QEMU_LD_PREFIX
     make
     make install
