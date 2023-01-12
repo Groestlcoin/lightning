@@ -172,19 +172,32 @@ static void disable_request_cb(struct command *cmd, struct out_req *out)
 	out->cmd = NULL;
 }
 
-static const char *get_json_id(const tal_t *ctx,
-			       struct plugin *plugin,
-			       const char *cmd_id,
-			       const char *method)
+const char *json_id_prefix(const tal_t *ctx, const struct command *cmd)
 {
-	if (cmd_id)
-		return tal_fmt(ctx, "%s/%s:%s#%"PRIu64,
-			       cmd_id,
-			       plugin->id, method,
-			       plugin->next_outreq_id++);
-	return tal_fmt(ctx, "%s:%s#%"PRIu64,
-		       plugin->id, method,
-		       plugin->next_outreq_id++);
+	if (!cmd)
+		return "";
+
+	/* Notifications have no cmd->id, use methodname */
+	if (!cmd->id)
+		return tal_fmt(ctx, "%s/", cmd->methodname);
+
+	/* Strip quotes! */
+	if (strstarts(cmd->id, "\"")) {
+		assert(strlen(cmd->id) >= 2);
+		assert(strends(cmd->id, "\""));
+		return tal_fmt(ctx, "%.*s/",
+			       (int)strlen(cmd->id) - 2, cmd->id + 1);
+	}
+	return tal_fmt(ctx, "%s/", cmd->id);
+}
+
+static const char *append_json_id(const tal_t *ctx,
+				  struct plugin *plugin,
+				  const char *method,
+				  const char *prefix)
+{
+	return tal_fmt(ctx, "\"%s%s:%s#%"PRIu64"\"",
+		       prefix, plugin->id, method, plugin->next_outreq_id++);
 }
 
 static void destroy_out_req(struct out_req *out_req, struct plugin *plugin)
@@ -197,6 +210,7 @@ static void destroy_out_req(struct out_req *out_req, struct plugin *plugin)
 struct out_req *
 jsonrpc_request_start_(struct plugin *plugin, struct command *cmd,
 		       const char *method,
+		       const char *id_prefix,
 		       struct command_result *(*cb)(struct command *command,
 						    const char *buf,
 						    const jsmntok_t *result,
@@ -210,7 +224,7 @@ jsonrpc_request_start_(struct plugin *plugin, struct command *cmd,
 	struct out_req *out;
 
 	out = tal(cmd, struct out_req);
-	out->id = get_json_id(out, plugin, cmd ? cmd->id : NULL, method);
+	out->id = append_json_id(out, plugin, method, id_prefix);
 	out->cmd = cmd;
 	out->cb = cb;
 	out->errcb = errcb;
@@ -225,7 +239,7 @@ jsonrpc_request_start_(struct plugin *plugin, struct command *cmd,
 	out->js = new_json_stream(NULL, cmd, NULL);
 	json_object_start(out->js, NULL);
 	json_add_string(out->js, "jsonrpc", "2.0");
-	json_add_string(out->js, "id", out->id);
+	json_add_id(out->js, out->id);
 	json_add_string(out->js, "method", method);
 	if (out->errcb)
 		json_object_start(out->js, "params");
@@ -251,7 +265,7 @@ static struct json_stream *jsonrpc_stream_start(struct command *cmd)
 
 	json_object_start(js, NULL);
 	json_add_string(js, "jsonrpc", "2.0");
-	json_add_string(js, "id", cmd->id);
+	json_add_id(js, cmd->id);
 
 	return js;
 }
@@ -548,10 +562,12 @@ static const jsmntok_t *sync_req(const tal_t *ctx,
 	const jsmntok_t *contents;
 	int reqlen;
 	struct json_out *jout = json_out_new(tmpctx);
+	const char *id = append_json_id(tmpctx, plugin, method, "init/");
 
 	json_out_start(jout, NULL, '{');
 	json_out_addstr(jout, "jsonrpc", "2.0");
-	json_out_addstr(jout, "id", get_json_id(tmpctx, plugin, "init", method));
+	/* Copy in id *literally* */
+	memcpy(json_out_member_direct(jout, "id", strlen(id)), id, strlen(id));
 	json_out_addstr(jout, "method", method);
 	json_out_add_splice(jout, "params", params);
 	if (taken(params))
@@ -810,8 +826,8 @@ static void handle_rpc_reply(struct plugin *plugin, const jsmntok_t *toks)
 		return;
 
 	out = strmap_getn(&plugin->out_reqs,
-			  buf + idtok->start,
-			  idtok->end - idtok->start);
+			  json_tok_full(buf, idtok),
+			  json_tok_full_len(idtok));
 	if (!out) {
 		/* This can actually happen, if they free req! */
 		plugin_log(plugin, LOG_DBG, "JSON reply with unknown id '%.*s'",
@@ -1376,7 +1392,7 @@ struct json_stream *plugin_notify_start(struct command *cmd, const char *method)
 	json_add_string(js, "method", method);
 
 	json_object_start(js, "params");
-	json_add_string(js, "id", cmd->id);
+	json_add_id(js, cmd->id);
 
 	return js;
 }

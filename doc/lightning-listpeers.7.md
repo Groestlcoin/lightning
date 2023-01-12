@@ -74,8 +74,8 @@ On success, an object containing **peers** is returned.  It is an array of objec
   - **funding** (object, optional):
     - **local\_funds\_msat** (msat): Amount of channel we funded
     - **remote\_funds\_msat** (msat): Amount of channel they funded
-    - **local\_msat** (msat, optional): Amount of channel we funded (deprecated)
-    - **remote\_msat** (msat, optional): Amount of channel they funded (deprecated)
+    - **local\_msat** (msat, optional): Amount of channel we funded **deprecated, removal in v23.05**
+    - **remote\_msat** (msat, optional): Amount of channel they funded **deprecated, removal in v23.05**
     - **pushed\_msat** (msat, optional): Amount pushed from opener to peer
     - **fee\_paid\_msat** (msat, optional): Amount we paid peer at open
     - **fee\_rcvd\_msat** (msat, optional): Amount we were paid by peer at open
@@ -399,4 +399,4 @@ Main web site: <https://github.com/ElementsProject/lightning> Lightning
 RFC site (BOLT \#9):
 <https://github.com/lightning/bolts/blob/master/09-features.md>
 
-[comment]: # ( SHA256STAMP:faff728119e12d98202be265991e8b2c17dfa1a611bc52586c662fe8bfdccf53)
+[comment]: # ( SHA256STAMP:c84136fcca3d0295cd1612873a54a074f3e8b6ae9cc643489cab6fb7376d66f6)

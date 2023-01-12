@@ -1539,7 +1539,7 @@ def test_libplugin(node_factory):
     # Test hooks and notifications (add plugin, so we can test hook id)
     l2 = node_factory.get_node(options={"plugin": plugin, 'log-level': 'io'})
     l2.connect(l1)
-    l2.daemon.wait_for_log(r": {}:connect#[0-9]*/cln:peer_connected#[0-9]*\[OUT\]".format(myname))
+    l2.daemon.wait_for_log(r': "{}:connect#[0-9]*/cln:peer_connected#[0-9]*"\[OUT\]'.format(myname))
 
     l1.daemon.wait_for_log("{} peer_connected".format(l2.info["id"]))
     l1.daemon.wait_for_log("{} connected".format(l2.info["id"]))
@@ -2608,7 +2608,8 @@ def test_plugin_shutdown(node_factory):
 
 
 def test_commando(node_factory, executor):
-    l1, l2 = node_factory.line_graph(2, fundchannel=False)
+    l1, l2 = node_factory.line_graph(2, fundchannel=False,
+                                     opts={'log-level': 'io'})
 
     # Nothing works until we've issued a rune.
     fut = executor.submit(l2.rpc.call, method='commando',
@@ -2634,6 +2635,11 @@ def test_commando(node_factory, executor):
     assert len(res['peers']) == 1
     assert res['peers'][0]['id'] == l2.info['id']
 
+    # Check JSON id is as expected (unfortunately pytest does not use a reliable name
+    # for itself: with -k it calls itself `-c` here, instead of `pytest`).
+    l2.daemon.wait_for_log(r'plugin-commando: "[^:/]*:commando#[0-9]*/cln:commando#[0-9]*"\[OUT\]')
+    l1.daemon.wait_for_log(r'jsonrpc#[0-9]*: "[^:/]*:commando#[0-9]*/cln:commando#[0-9]*/commando:listpeers#[0-9]*"\[IN\]')
+
     res = l2.rpc.call(method='commando',
                       payload={'peer_id': l1.info['id'],
                                'rune': rune,
@@ -2641,6 +2647,14 @@ def test_commando(node_factory, executor):
                                'params': {'id': l2.info['id']}})
     assert len(res['peers']) == 1
     assert res['peers'][0]['id'] == l2.info['id']
+
+    # Filter test
+    res = l2.rpc.call(method='commando',
+                      payload={'peer_id': l1.info['id'],
+                               'rune': rune,
+                               'method': 'listpeers',
+                               'filter': {'peers': [{'id': True}]}})
+    assert res == {'peers': [{'id': l2.info['id']}]}
 
     with pytest.raises(RpcError, match='missing required parameter'):
         l2.rpc.call(method='commando',

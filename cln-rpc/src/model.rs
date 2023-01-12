@@ -1261,9 +1261,9 @@ pub mod requests {
 	    #[serde(alias = "id")]
 	    pub id: PublicKey,
 	    #[serde(alias = "len", skip_serializing_if = "Option::is_none")]
-	    pub len: Option<f64>,
+	    pub len: Option<u16>,
 	    #[serde(alias = "pongbytes", skip_serializing_if = "Option::is_none")]
-	    pub pongbytes: Option<f64>,
+	    pub pongbytes: Option<u16>,
 	}
 
 	impl From<PingRequest> for Request {
@@ -1613,8 +1613,10 @@ pub mod responses {
 
 	#[derive(Clone, Debug, Deserialize, Serialize)]
 	pub struct ListpeersPeersChannelsFunding {
+	    #[deprecated]
 	    #[serde(alias = "local_msat", skip_serializing_if = "Option::is_none")]
 	    pub local_msat: Option<Amount>,
+	    #[deprecated]
 	    #[serde(alias = "remote_msat", skip_serializing_if = "Option::is_none")]
 	    pub remote_msat: Option<Amount>,
 	    #[serde(alias = "pushed_msat", skip_serializing_if = "Option::is_none")]
