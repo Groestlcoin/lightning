@@ -809,8 +809,6 @@ pub mod requests {
 	pub enum NewaddrAddresstype {
 	    #[serde(rename = "bech32")]
 	    BECH32,
-	    #[serde(rename = "p2sh-segwit")]
-	    P2SH_SEGWIT,
 	    #[serde(rename = "all")]
 	    ALL,
 	}
@@ -820,8 +818,7 @@ pub mod requests {
 	    fn try_from(c: i32) -> Result<NewaddrAddresstype, anyhow::Error> {
 	        match c {
 	    0 => Ok(NewaddrAddresstype::BECH32),
-	    1 => Ok(NewaddrAddresstype::P2SH_SEGWIT),
-	    2 => Ok(NewaddrAddresstype::ALL),
+	    1 => Ok(NewaddrAddresstype::ALL),
 	            o => Err(anyhow::anyhow!("Unknown variant {} for enum NewaddrAddresstype", o)),
 	        }
 	    }
@@ -1808,8 +1805,9 @@ pub mod responses {
 	    pub connected: bool,
 	    #[serde(alias = "log", skip_serializing_if = "crate::is_none_or_empty")]
 	    pub log: Option<Vec<ListpeersPeersLog>>,
-	    #[serde(alias = "channels")]
-	    pub channels: Vec<ListpeersPeersChannels>,
+	    #[deprecated]
+	    #[serde(alias = "channels", skip_serializing_if = "crate::is_none_or_empty")]
+	    pub channels: Option<Vec<ListpeersPeersChannels>>,
 	    #[serde(alias = "netaddr", skip_serializing_if = "crate::is_none_or_empty")]
 	    pub netaddr: Option<Vec<String>>,
 	    #[serde(alias = "remote_addr", skip_serializing_if = "Option::is_none")]
@@ -3164,6 +3162,7 @@ pub mod responses {
 	pub struct NewaddrResponse {
 	    #[serde(alias = "bech32", skip_serializing_if = "Option::is_none")]
 	    pub bech32: Option<String>,
+	    #[deprecated]
 	    #[serde(alias = "p2sh-segwit", skip_serializing_if = "Option::is_none")]
 	    pub p2sh_segwit: Option<String>,
 	}

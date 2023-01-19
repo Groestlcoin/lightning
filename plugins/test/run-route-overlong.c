@@ -122,9 +122,6 @@ void json_object_start(struct json_stream *ks UNNEEDED, const char *fieldname UN
 /* Generated stub for json_strdup */
 char *json_strdup(const tal_t *ctx UNNEEDED, const char *buffer UNNEEDED, const jsmntok_t *tok UNNEEDED)
 { fprintf(stderr, "json_strdup called!\n"); abort(); }
-/* Generated stub for json_to_bool */
-bool json_to_bool(const char *buffer UNNEEDED, const jsmntok_t *tok UNNEEDED, bool *b UNNEEDED)
-{ fprintf(stderr, "json_to_bool called!\n"); abort(); }
 /* Generated stub for json_to_createonion_response */
 struct createonion_response *json_to_createonion_response(const tal_t *ctx UNNEEDED,
 							  const char *buffer UNNEEDED,
@@ -133,11 +130,11 @@ struct createonion_response *json_to_createonion_response(const tal_t *ctx UNNEE
 /* Generated stub for json_to_int */
 bool json_to_int(const char *buffer UNNEEDED, const jsmntok_t *tok UNNEEDED, int *num UNNEEDED)
 { fprintf(stderr, "json_to_int called!\n"); abort(); }
-/* Generated stub for json_to_listpeers_result */
-struct listpeers_result *json_to_listpeers_result(const tal_t *ctx UNNEEDED,
-						  const char *buffer UNNEEDED,
-						  const jsmntok_t *tok UNNEEDED)
-{ fprintf(stderr, "json_to_listpeers_result called!\n"); abort(); }
+/* Generated stub for json_to_listpeers_channels */
+struct listpeers_channel **json_to_listpeers_channels(const tal_t *ctx UNNEEDED,
+						      const char *buffer UNNEEDED,
+						      const jsmntok_t *tok UNNEEDED)
+{ fprintf(stderr, "json_to_listpeers_channels called!\n"); abort(); }
 /* Generated stub for json_to_msat */
 bool json_to_msat(const char *buffer UNNEEDED, const jsmntok_t *tok UNNEEDED,
 		  struct amount_msat *msat UNNEEDED)

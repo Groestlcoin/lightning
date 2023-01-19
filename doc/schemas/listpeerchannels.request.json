@@ -4,12 +4,9 @@
   "required": [],
   "additionalProperties": false,
   "properties": {
-    "addresstype": {
-      "type": "string",
-      "enum": [
-        "bech32",
-        "all"
-      ]
+    "id": {
+      "type": "pubkey",
+      "description": "If supplied, limits the channels to just the peer with the given ID, if it exists."
     }
   }
 }

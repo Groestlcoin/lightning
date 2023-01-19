@@ -695,7 +695,9 @@ struct amount_msat channel_amount_receivable(const struct channel *channel)
 
 static void json_add_channel(struct lightningd *ld,
 			     struct json_stream *response, const char *key,
-			     const struct channel *channel)
+			     const struct channel *channel,
+			     /* Only set for listpeerchannels */
+			     const struct peer *peer)
 {
 	struct channel_stats channel_stats;
 	struct amount_msat funding_msat;
@@ -704,6 +706,10 @@ static void json_add_channel(struct lightningd *ld,
 	u32 feerate;
 
 	json_object_start(response, key);
+	if (peer) {
+		json_add_node_id(response, "peer_id", &peer->id);
+		json_add_bool(response, "peer_connected", peer->connected == PEER_CONNECTED);
+	}
 	json_add_string(response, "state", channel_state_name(channel));
 	if (channel->last_tx && !invalid_last_tx(channel->last_tx)) {
 		struct bitcoin_txid txid;
@@ -1935,16 +1941,18 @@ static void json_add_peer(struct lightningd *ld,
 		json_add_hex_talarr(response, "features", p->their_features);
 	}
 
-	json_array_start(response, "channels");
-	json_add_uncommitted_channel(response, p->uncommitted_channel);
+	if (deprecated_apis) {
+		json_array_start(response, "channels");
+		json_add_uncommitted_channel(response, p->uncommitted_channel, NULL);
 
-	list_for_each(&p->channels, channel, list) {
-		if (channel_unsaved(channel))
-			json_add_unsaved_channel(response, channel);
-		else
-			json_add_channel(ld, response, NULL, channel);
+		list_for_each(&p->channels, channel, list) {
+			if (channel_unsaved(channel))
+				json_add_unsaved_channel(response, channel, NULL);
+			else
+				json_add_channel(ld, response, NULL, channel, NULL);
+		}
+		json_array_end(response);
 	}
-	json_array_end(response);
 
 	if (ll)
 		json_add_log(response, ld->log_book, &p->id, *ll);
@@ -2041,6 +2049,60 @@ static const struct json_command staticbackup_command = {
 /* Comment added to satisfice AUTODATA */
 AUTODATA(json_command, &staticbackup_command);
 
+static void json_add_peerchannels(struct lightningd *ld,
+				  struct json_stream *response,
+				  const struct peer *peer)
+{
+	struct channel *channel;
+
+	json_add_uncommitted_channel(response, peer->uncommitted_channel, peer);
+	list_for_each(&peer->channels, channel, list) {
+		if (channel_unsaved(channel))
+			json_add_unsaved_channel(response, channel, peer);
+		else
+			json_add_channel(ld, response, NULL, channel, peer);
+	}
+}
+
+static struct command_result *json_listpeerchannels(struct command *cmd,
+						    const char *buffer,
+						    const jsmntok_t *obj UNNEEDED,
+						    const jsmntok_t *params)
+{
+	struct node_id *peer_id;
+	struct peer *peer;
+	struct json_stream *response;
+
+	/* FIME: filter by status */
+	if (!param(cmd, buffer, params,
+		   p_opt("id", param_node_id, &peer_id),
+		   NULL))
+		return command_param_failed();
+
+	response = json_stream_success(cmd);
+	json_array_start(response, "channels");
+
+	if (peer_id) {
+		peer = peer_by_id(cmd->ld, peer_id);
+		if (peer)
+			json_add_peerchannels(cmd->ld, response, peer);
+	} else {
+		list_for_each(&cmd->ld->peers, peer, list)
+			json_add_peerchannels(cmd->ld, response, peer);
+	}
+
+	json_array_end(response);
+
+	return command_success(cmd, response);
+}
+
+static const struct json_command listpeerchannels_command = {
+	"listpeerchannels",
+	"network",
+	json_listpeerchannels,
+	"Show channels with direct peers."
+};
+AUTODATA(json_command, &listpeerchannels_command);
 
 struct command_result *
 command_find_channel(struct command *cmd,

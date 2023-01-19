@@ -520,7 +520,6 @@ def test_withdraw_misc(node_factory, bitcoind, chainparams):
     dont_spend_outputs(l1, out['txid'])
 
     # Now send some money to l2.
-    # lightningd uses P2SH-P2WPKH
     waddr = l2.rpc.newaddr('bech32')['bech32']
     out = l1.rpc.withdraw(waddr, amount)
     bitcoind.generate_block(1)
@@ -1199,7 +1198,7 @@ def test_blockchaintrack(node_factory, bitcoind):
     """Check that we track the blockchain correctly across reorgs
     """
     l1 = node_factory.get_node(random_hsm=True)
-    addr = l1.rpc.newaddr(addresstype='all')['p2sh-segwit']
+    addr = l1.rpc.newaddr(addresstype='all')['bech32']
 
     ######################################################################
     # First failure scenario: rollback on startup doesn't work,
@@ -1214,7 +1213,7 @@ def test_blockchaintrack(node_factory, bitcoind):
     time.sleep(1)  # mempool is still unpredictable
     bitcoind.generate_block(1)
 
-    l1.daemon.wait_for_log(r'Owning output.* \(P2SH\).* CONFIRMED')
+    l1.daemon.wait_for_log(r'Owning output.* CONFIRMED')
     outputs = l1.rpc.listfunds()['outputs']
     assert len(outputs) == 1
 
@@ -1268,7 +1267,7 @@ def test_funding_reorg_private(node_factory, bitcoind):
     bitcoind.generate_block(1)                      # height 106
 
     daemon = 'DUALOPEND' if l1.config('experimental-dual-fund') else 'CHANNELD'
-    wait_for(lambda: only_one(l1.rpc.listpeers()['peers'][0]['channels'])['status']
+    wait_for(lambda: only_one(l1.rpc.listpeerchannels()['channels'])['status']
              == ['{}_AWAITING_LOCKIN:Funding needs 1 more confirmations to be ready.'.format(daemon)])
     bitcoind.generate_block(1)                      # height 107
     l1.wait_channel_active('106x1x0')
@@ -1325,7 +1324,7 @@ def test_funding_reorg_remote_lags(node_factory, bitcoind):
     bitcoind.generate_block(1)
     l1.daemon.wait_for_log(r'Peer transient failure .* short_channel_id changed to 104x1x0 \(was 103x1x0\)')
 
-    wait_for(lambda: only_one(l2.rpc.listpeers()['peers'][0]['channels'])['status'] == [
+    wait_for(lambda: only_one(l2.rpc.listpeerchannels()['channels'])['status'] == [
         'CHANNELD_NORMAL:Reconnected, and reestablished.',
         'CHANNELD_NORMAL:Channel ready for use. They need our announcement signatures.'])
 
@@ -1335,7 +1334,7 @@ def test_funding_reorg_remote_lags(node_factory, bitcoind):
     wait_for(lambda: chan_active(l2, '104x1x0', True))
     assert l2.rpc.listchannels('103x1x0')['channels'] == []
 
-    wait_for(lambda: only_one(l2.rpc.listpeers()['peers'][0]['channels'])['status'] == [
+    wait_for(lambda: only_one(l2.rpc.listpeerchannels()['channels'])['status'] == [
         'CHANNELD_NORMAL:Reconnected, and reestablished.',
         'CHANNELD_NORMAL:Channel ready for use. Channel announced.'])
 
@@ -1857,14 +1856,11 @@ def test_bad_onion_immediate_peer(node_factory, bitcoind):
 
 def test_newaddr(node_factory, chainparams):
     l1 = node_factory.get_node()
-    p2sh = l1.rpc.newaddr('p2sh-segwit')
-    assert 'bech32' not in p2sh
-    assert p2sh['p2sh-segwit'].startswith(chainparams['p2sh_prefix'])
     bech32 = l1.rpc.newaddr('bech32')
     assert 'p2sh-segwit' not in bech32
     assert bech32['bech32'].startswith(chainparams['bip173_prefix'])
     both = l1.rpc.newaddr('all')
-    assert both['p2sh-segwit'].startswith(chainparams['p2sh_prefix'])
+    assert 'p2sh-segwit' not in both
     assert both['bech32'].startswith(chainparams['bip173_prefix'])
 
 
@@ -2663,7 +2659,7 @@ def test_listforwards_and_listhtlcs(node_factory, bitcoind):
     # Once channels are gone, htlcs are gone.
     for n in (l1, l2, l3, l4):
         # They might reconnect, but still will have no channels
-        wait_for(lambda: all(p['channels'] == [] for p in n.rpc.listpeers()['peers']))
+        wait_for(lambda: n.rpc.listpeerchannels()['channels'] == [])
         assert n.rpc.listhtlcs() == {'htlcs': []}
 
     # But forwards are not forgotten!
@@ -2974,7 +2970,7 @@ def test_field_filter(node_factory, chainparams):
     l1, l2 = node_factory.get_nodes(2)
 
     addr1 = l1.rpc.newaddr('bech32')['bech32']
-    addr2 = l1.rpc.newaddr('p2sh-segwit')['p2sh-segwit']
+    addr2 = '2MxqzNANJNAdMjHQq8ZLkwzooxAFiRzXvEz' if not chainparams['elements'] else 'XGx1E2JSTLZLmqYMAo3CGpsco85aS7so33'
     inv = l1.rpc.invoice(123000, 'label', 'description', 3700, [addr1, addr2])
 
     # Simple case: single field
