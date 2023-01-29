@@ -71,7 +71,9 @@
 
 static void destroy_peer(struct peer *peer)
 {
-	list_del_from(&peer->ld->peers, &peer->list);
+	peer_node_id_map_del(peer->ld->peers, peer);
+	if (peer->dbid)
+		peer_dbid_map_del(peer->ld->peers_by_dbid, peer);
 }
 
 static void peer_update_features(struct peer *peer,
@@ -79,6 +81,14 @@ static void peer_update_features(struct peer *peer,
 {
 	tal_free(peer->their_features);
 	peer->their_features = tal_dup_talarr(peer, u8, their_features);
+}
+
+void peer_set_dbid(struct peer *peer, u64 dbid)
+{
+	assert(!peer->dbid);
+	assert(dbid);
+	peer->dbid = dbid;
+	peer_dbid_map_add(peer->ld->peers_by_dbid, peer);
 }
 
 struct peer *new_peer(struct lightningd *ld, u64 dbid,
@@ -106,7 +116,9 @@ struct peer *new_peer(struct lightningd *ld, u64 dbid,
 	peer->ignore_htlcs = false;
 #endif
 
-	list_add_tail(&ld->peers, &peer->list);
+	peer_node_id_map_add(ld->peers, peer);
+	if (dbid)
+		peer_dbid_map_add(ld->peers_by_dbid, peer);
 	tal_add_destructor(peer, destroy_peer);
 	return peer;
 }
@@ -131,6 +143,7 @@ void maybe_delete_peer(struct peer *peer)
 		/* This isn't sufficient to keep it in db! */
 		if (peer->dbid != 0) {
 			wallet_peer_delete(peer->ld->wallet, peer->dbid);
+			peer_dbid_map_del(peer->ld->peers_by_dbid, peer);
 			peer->dbid = 0;
 		}
 		return;
@@ -177,22 +190,12 @@ static void peer_channels_cleanup(struct lightningd *ld,
 
 struct peer *find_peer_by_dbid(struct lightningd *ld, u64 dbid)
 {
-	struct peer *p;
-
-	list_for_each(&ld->peers, p, list)
-		if (p->dbid == dbid)
-			return p;
-	return NULL;
+	return peer_dbid_map_get(ld->peers_by_dbid, dbid);
 }
 
 struct peer *peer_by_id(struct lightningd *ld, const struct node_id *id)
 {
-	struct peer *p;
-
-	list_for_each(&ld->peers, p, list)
-		if (node_id_eq(&p->id, id))
-			return p;
-	return NULL;
+	return peer_node_id_map_get(ld->peers, id);
 }
 
 struct peer *peer_from_json(struct lightningd *ld,
@@ -333,8 +336,11 @@ void resend_closing_transactions(struct lightningd *ld)
 {
 	struct peer *peer;
 	struct channel *channel;
+	struct peer_node_id_map_iter it;
 
-	list_for_each(&ld->peers, peer, list) {
+	for (peer = peer_node_id_map_first(ld->peers, &it);
+	     peer;
+	     peer = peer_node_id_map_next(ld->peers, &it)) {
 		list_for_each(&peer->channels, channel, list) {
 			if (channel->state == CLOSINGD_COMPLETE)
 				drop_to_chain(ld, channel, true);
@@ -1299,16 +1305,10 @@ static void update_remote_addr(struct lightningd *ld,
 			       const struct wireaddr *remote_addr,
 			       const struct node_id peer_id)
 {
-	u16 public_port;
-
 	/* failsafe to prevent privacy leakage. */
-	if (ld->always_use_proxy || ld->config.disable_ip_discovery)
+	if (ld->always_use_proxy ||
+	    ld->config.ip_discovery == OPT_AUTOBOOL_FALSE)
 		return;
-
-	/* Peers will have likey reported our dynamic outbound TCP port.
-	 * Best guess is that we use default port for the selected network,
-	 * until we add a commandline switch to override this. */
-	public_port = chainparams_get_ln_port(chainparams);
 
 	switch (remote_addr->type) {
 	case ADDR_TYPE_IPV4:
@@ -1327,7 +1327,7 @@ static void update_remote_addr(struct lightningd *ld,
 		if (wireaddr_eq_without_port(ld->remote_addr_v4, remote_addr)) {
 			ld->discovered_ip_v4 = tal_dup(ld, struct wireaddr,
 						       ld->remote_addr_v4);
-			ld->discovered_ip_v4->port = public_port;
+			ld->discovered_ip_v4->port = ld->config.ip_discovery_port;
 			subd_send_msg(ld->gossip, towire_gossipd_discovered_ip(
 							  tmpctx,
 							  ld->discovered_ip_v4));
@@ -1350,7 +1350,7 @@ static void update_remote_addr(struct lightningd *ld,
 		if (wireaddr_eq_without_port(ld->remote_addr_v6, remote_addr)) {
 			ld->discovered_ip_v6 = tal_dup(ld, struct wireaddr,
 						       ld->remote_addr_v6);
-			ld->discovered_ip_v6->port = public_port;
+			ld->discovered_ip_v6->port = ld->config.ip_discovery_port;
 			subd_send_msg(ld->gossip, towire_gossipd_discovered_ip(
 							  tmpctx,
 							  ld->discovered_ip_v6));
@@ -1982,8 +1982,13 @@ static struct command_result *json_listpeers(struct command *cmd,
 		if (peer)
 			json_add_peer(cmd->ld, response, peer, ll);
 	} else {
-		list_for_each(&cmd->ld->peers, peer, list)
+		struct peer_node_id_map_iter it;
+
+		for (peer = peer_node_id_map_first(cmd->ld->peers, &it);
+		     peer;
+		     peer = peer_node_id_map_next(cmd->ld->peers, &it)) {
 			json_add_peer(cmd->ld, response, peer, ll);
+		}
 	}
 	json_array_end(response);
 
@@ -2021,20 +2026,23 @@ static struct command_result *json_staticbackup(struct command *cmd,
 	struct json_stream *response;
 	struct peer *peer;
 	struct channel *channel;
+	struct peer_node_id_map_iter it;
 
 	if (!param(cmd, buffer, params, NULL))
-        return command_param_failed();
+		return command_param_failed();
 
 	response = json_stream_success(cmd);
 
 	json_array_start(response, "scb");
-
-	list_for_each(&cmd->ld->peers, peer, list)
+	for (peer = peer_node_id_map_first(cmd->ld->peers, &it);
+	     peer;
+	     peer = peer_node_id_map_next(cmd->ld->peers, &it)) {
 		list_for_each(&peer->channels, channel, list){
 			if (!channel->scb)
 				continue;
 			json_add_scb(cmd, NULL, response, channel);
 		}
+	}
 	json_array_end(response);
 
 	return command_success(cmd, response);
@@ -2087,8 +2095,13 @@ static struct command_result *json_listpeerchannels(struct command *cmd,
 		if (peer)
 			json_add_peerchannels(cmd->ld, response, peer);
 	} else {
-		list_for_each(&cmd->ld->peers, peer, list)
+		struct peer_node_id_map_iter it;
+
+		for (peer = peer_node_id_map_first(cmd->ld->peers, &it);
+		     peer;
+		     peer = peer_node_id_map_next(cmd->ld->peers, &it)) {
 			json_add_peerchannels(cmd->ld, response, peer);
+		}
 	}
 
 	json_array_end(response);
@@ -2115,7 +2128,11 @@ command_find_channel(struct command *cmd,
 	struct peer *peer;
 
 	if (json_tok_channel_id(buffer, tok, &cid)) {
-		list_for_each(&ld->peers, peer, list) {
+		struct peer_node_id_map_iter it;
+
+		for (peer = peer_node_id_map_first(ld->peers, &it);
+		     peer;
+		     peer = peer_node_id_map_next(ld->peers, &it)) {
 			list_for_each(&peer->channels, (*channel), list) {
 				if (!channel_active(*channel))
 					continue;
@@ -2189,8 +2206,11 @@ void setup_peers(struct lightningd *ld)
 	struct peer *p;
 	/* Avoid thundering herd: after first five, delay by 1 second. */
 	int delay = -5;
+	struct peer_node_id_map_iter it;
 
-	list_for_each(&ld->peers, p, list) {
+	for (p = peer_node_id_map_first(ld->peers, &it);
+	     p;
+	     p = peer_node_id_map_next(ld->peers, &it)) {
 		setup_peer(p, delay > 0 ? delay : 0);
 		delay++;
 	}
@@ -2201,13 +2221,16 @@ struct htlc_in_map *load_channels_from_wallet(struct lightningd *ld)
 {
 	struct peer *peer;
 	struct htlc_in_map *unconnected_htlcs_in = tal(ld, struct htlc_in_map);
+	struct peer_node_id_map_iter it;
 
 	/* Load channels from database */
 	if (!wallet_init_channels(ld->wallet))
 		fatal("Could not load channels from the database");
 
 	/* First we load the incoming htlcs */
-	list_for_each(&ld->peers, peer, list) {
+	for (peer = peer_node_id_map_first(ld->peers, &it);
+	     peer;
+	     peer = peer_node_id_map_next(ld->peers, &it)) {
 		struct channel *channel;
 
 		list_for_each(&peer->channels, channel, list) {
@@ -2223,7 +2246,9 @@ struct htlc_in_map *load_channels_from_wallet(struct lightningd *ld)
 	htlc_in_map_copy(unconnected_htlcs_in, ld->htlcs_in);
 
 	/* Now we load the outgoing HTLCs, so we can connect them. */
-	list_for_each(&ld->peers, peer, list) {
+	for (peer = peer_node_id_map_first(ld->peers, &it);
+	     peer;
+	     peer = peer_node_id_map_next(ld->peers, &it)) {
 		struct channel *channel;
 
 		list_for_each(&peer->channels, channel, list) {
@@ -2310,6 +2335,7 @@ static struct command_result *json_getinfo(struct command *cmd,
 	unsigned int pending_channels = 0, active_channels = 0,
 		     inactive_channels = 0, num_peers = 0;
 	size_t count_announceable;
+	struct peer_node_id_map_iter it;
 
 	if (!param(cmd, buffer, params, NULL))
 		return command_param_failed();
@@ -2320,7 +2346,9 @@ static struct command_result *json_getinfo(struct command *cmd,
 	json_add_hex_talarr(response, "color", cmd->ld->rgb);
 
 	/* Add some peer and channel stats */
-	list_for_each(&cmd->ld->peers, peer, list) {
+	for (peer = peer_node_id_map_first(cmd->ld->peers, &it);
+	     peer;
+	     peer = peer_node_id_map_next(cmd->ld->peers, &it)) {
 		num_peers++;
 
 		list_for_each(&peer->channels, channel, list) {
@@ -2348,10 +2376,10 @@ static struct command_result *json_getinfo(struct command *cmd,
 		for (size_t i = 0; i < count_announceable; i++)
 			json_add_address(response, NULL, cmd->ld->announceable+i);
 
-		/* Currently, IP discovery will only be announced by gossipd,
-		 * if we don't already have usable addresses.
-		 * See `create_node_announcement` in `gossip_generation.c`. */
-		if (count_announceable == 0) {
+		/* Add discovered IPs if we announce them.
+		 * Also see `create_node_announcement` in `gossip_generation.c`. */
+		if ((cmd->ld->config.ip_discovery == OPT_AUTOBOOL_AUTO && count_announceable == 0) ||
+		     cmd->ld->config.ip_discovery == OPT_AUTOBOOL_TRUE) {
 			if (cmd->ld->discovered_ip_v4 != NULL &&
 					!wireaddr_arr_contains(
 						cmd->ld->announceable,
@@ -2720,7 +2748,11 @@ static struct command_result *json_setchannel(struct command *cmd,
 
 	/* If the users requested 'all' channels we need to iterate */
 	if (channels == NULL) {
-		list_for_each(&cmd->ld->peers, peer, list) {
+		struct peer_node_id_map_iter it;
+
+		for (peer = peer_node_id_map_first(cmd->ld->peers, &it);
+		     peer;
+		     peer = peer_node_id_map_next(cmd->ld->peers, &it)) {
 			struct channel *channel;
 			list_for_each(&peer->channels, channel, list) {
 				if (channel->state != CHANNELD_NORMAL &&
@@ -3095,8 +3127,11 @@ static void dualopend_memleak_req_done(struct subd *dualopend,
 void peer_dev_memleak(struct lightningd *ld, struct leak_detect *leaks)
 {
 	struct peer *p;
+	struct peer_node_id_map_iter it;
 
-	list_for_each(&ld->peers, p, list) {
+	for (p = peer_node_id_map_first(ld->peers, &it);
+	     p;
+	     p = peer_node_id_map_next(ld->peers, &it)) {
 		struct channel *c;
 		if (p->uncommitted_channel && p->uncommitted_channel->open_daemon) {
 			struct subd *openingd = p->uncommitted_channel->open_daemon;

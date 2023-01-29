@@ -361,13 +361,17 @@ RPC call lightning-setchannel(7).
 channels. If you want to change the `htlc_maximum_msat` for existing channels,
 use the RPC call lightning-setchannel(7).
 
-* **disable-ip-discovery**
+* **announce-addr-discovered**=*BOOL*
 
-  Turn off public IP discovery to send `node_announcement` updates that contain
-the discovered IP with TCP port 9735 as announced address. If unset and you
-open TCP port 9735 on your router towords your node, your node will remain
-connectable on changing IP addresses.  Note: Will always be disabled if you use
-'always-use-proxy'.
+  Explicitly control the usage of discovered public IPs in `node_announcement` updates.
+  Default: 'auto' - Only if we don't have anything else to announce.
+  Note: You also need to open TCP port 9735 on your router towords your node.
+  Note: Will always be disabled if you use 'always-use-proxy'.
+
+* **announce-addr-discovered-port**
+  Sets the public TCP port to use for announcing dynamically discovered IPs.
+  If unset, this defaults to the selected networks lightning port,
+  which is 9735 on mainnet.
 
 ### Lightning channel and HTLC options
 

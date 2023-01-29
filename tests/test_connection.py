@@ -73,7 +73,8 @@ def test_remote_addr(node_factory, bitcoind):
     # don't announce anything per se
     opts = {'may_reconnect': True,
             'dev-allow-localhost': None,
-            'dev-no-reconnect': None}
+            'dev-no-reconnect': None,
+            'announce-addr-discovered': True}
     l1, l2, l3 = node_factory.get_nodes(3, opts)
 
     # Disable announcing local autobind addresses with dev-allow-localhost.
@@ -155,10 +156,59 @@ def test_remote_addr_disabled(node_factory, bitcoind):
         l1 --> [l2] <-- l3
     """
     opts = {'dev-allow-localhost': None,
-            'disable-ip-discovery': None,
+            'announce-addr-discovered': False,
             'may_reconnect': True,
             'dev-no-reconnect': None}
     l1, l2, l3 = node_factory.get_nodes(3, opts=[opts, opts, opts])
+
+    # l1->l2
+    l2.rpc.connect(l1.info['id'], 'localhost', l1.port)
+    l2.daemon.wait_for_log("Peer says it sees our address as: 127.0.0.1:[0-9]{5}")
+    l1.fundchannel(l2)
+    bitcoind.generate_block(6)
+    l1.daemon.wait_for_log(f"Received node_announcement for node {l2.info['id']}")
+    # l2->l3
+    l2.rpc.connect(l3.info['id'], 'localhost', l3.port)
+    l2.daemon.wait_for_log("Peer says it sees our address as: 127.0.0.1:[0-9]{5}")
+    l2.fundchannel(l3)
+    bitcoind.generate_block(6)
+    l3.daemon.wait_for_log(f"Received node_announcement for node {l2.info['id']}")
+
+    # restart both and wait for channels to be ready
+    l1.restart()
+    l2.rpc.connect(l1.info['id'], 'localhost', l1.port)
+    l2.daemon.wait_for_log(f"{l1.info['id']}.*Already have funding locked in")
+    l3.restart()
+    l2.rpc.connect(l3.info['id'], 'localhost', l3.port)
+    l2.daemon.wait_for_log(f"{l3.info['id']}.*Already have funding locked in")
+
+    # if ip discovery would have been enabled, we would have send an updated
+    # node_annoucement by now. Check we didn't...
+    bitcoind.generate_block(6)  # ugly, but we need to wait for gossip...
+    assert not l2.daemon.is_in_log("Update our node_announcement for discovered address")
+
+
+@pytest.mark.developer("needs DEVELOPER=1 for fast gossip and --dev-allow-localhost for local remote_addr")
+def test_remote_addr_port(node_factory, bitcoind):
+    """Check address discovery (BOLT1 #917) can be done with non-default TCP ports
+       We perform logic tests on L2, setup same as above:
+         l1 --> [l2] <-- l3
+    """
+    port = 1234
+    opts = {'dev-allow-localhost': None,
+            'may_reconnect': True,
+            'dev-no-reconnect': None,
+            'announce-addr-discovered-port': port}
+    l1, l2, l3 = node_factory.get_nodes(3, opts=[opts, opts, opts])
+
+    # Disable announcing local autobind addresses with dev-allow-localhost.
+    # We need to have l2 opts 'bind-addr' to the (generated) value of 'addr'.
+    # So we stop, set 'bind-addr' option, delete 'addr' and restart first.
+    l2.stop()
+    l2.daemon.opts['bind-addr'] = l2.daemon.opts['addr']
+    del l2.daemon.opts['addr']
+    l2.start()
+    assert len(l2.rpc.getinfo()['address']) == 0
 
     # l1->l2
     l2.rpc.connect(l1.info['id'], 'localhost', l1.port)
@@ -182,7 +232,12 @@ def test_remote_addr_disabled(node_factory, bitcoind):
 
     # if ip discovery would have been enabled, we would have send an updated
     # node_annoucement by now. Check we didn't...
-    assert not l2.daemon.is_in_log("Update our node_announcement for discovered address")
+    assert l2.daemon.wait_for_log("Update our node_announcement for discovered address")
+    info = l2.rpc.getinfo()
+    assert len(info['address']) == 1
+    assert info['address'][0]['type'] == 'ipv4'
+    assert info['address'][0]['address'] == '127.0.0.1'
+    assert info['address'][0]['port'] == port
 
 
 def test_connect_standard_addr(node_factory):
