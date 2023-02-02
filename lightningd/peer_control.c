@@ -283,9 +283,6 @@ static void sign_and_send_last(struct lightningd *ld,
 	sign_last_tx(channel, last_tx, last_sig);
 	bitcoin_txid(last_tx, &txid);
 	wallet_transaction_add(ld->wallet, last_tx->wtx, 0, 0);
-	wallet_transaction_annotate(ld->wallet, &txid,
-				    channel->last_tx_type,
-				    channel->dbid);
 
 	/* Keep broadcasting until we say stop (can fail due to dup,
 	 * if they beat us to the broadcast). */
@@ -1739,8 +1736,7 @@ static void update_channel_from_inflight(struct lightningd *ld,
 	psbt_copy = clone_psbt(channel, inflight->last_tx->psbt);
 	channel_set_last_tx(channel,
 			    bitcoin_tx_with_psbt(channel, psbt_copy),
-			    &inflight->last_sig,
-			    TX_CHANNEL_UNILATERAL);
+			    &inflight->last_sig);
 
 	/* Update the reserve */
 	channel_update_reserve(channel,
@@ -2369,10 +2365,10 @@ static struct command_result *json_getinfo(struct command *cmd,
 	json_add_num(response, "num_inactive_channels", inactive_channels);
 
 	/* Add network info */
+	json_array_start(response, "address");
 	if (cmd->ld->listen) {
 		/* These are the addresses we're announcing */
 		count_announceable = tal_count(cmd->ld->announceable);
-		json_array_start(response, "address");
 		for (size_t i = 0; i < count_announceable; i++)
 			json_add_address(response, NULL, cmd->ld->announceable+i);
 
@@ -2400,8 +2396,9 @@ static struct command_result *json_getinfo(struct command *cmd,
 		for (size_t i = 0; i < tal_count(cmd->ld->binding); i++)
 			json_add_address_internal(response, NULL,
 					cmd->ld->binding+i);
-		json_array_end(response);
 	}
+	json_array_end(response);
+
 	json_add_string(response, "version", version());
 	json_add_num(response, "blockheight", cmd->ld->blockheight);
 	json_add_string(response, "network", chainparams->network_name);

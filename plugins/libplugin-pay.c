@@ -380,8 +380,12 @@ static void channel_hints_update(struct payment *p,
 	if (estimated_capacity != NULL)
 		newhint.estimated_capacity = *estimated_capacity;
 
+	/* This happens if we get a temporary channel failure: we don't know
+	 * htlc capacity here, so assume it's not a problem. */
 	if (htlc_budget != NULL)
 		newhint.htlc_budget = *htlc_budget;
+	else
+		newhint.htlc_budget = 20;
 
 	tal_arr_expand(&root->channel_hints, newhint);
 
@@ -1671,7 +1675,8 @@ static void payment_add_blindedpath(const tal_t *ctx,
 {
 	/* It's a bit of a weird API for us, so we convert it back to
 	 * the struct tlv_tlv_payload */
-	u8 **tlvs = blinded_onion_hops(tmpctx, final_amt, final_cltv, bpath);
+	u8 **tlvs = blinded_onion_hops(tmpctx, final_amt, final_cltv,
+				       final_amt, bpath);
 
 	for (size_t i = 0; i < tal_count(tlvs); i++) {
 		const u8 *cursor = tlvs[i];
