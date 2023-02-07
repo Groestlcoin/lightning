@@ -1049,10 +1049,10 @@ static char *opt_set_websocket_port(const char *arg, struct lightningd *ld)
 
 static char *opt_set_dual_fund(struct lightningd *ld)
 {
-	/* Dual funding implies anchor outputs */
+	/* Dual funding implies static remotkey */
 	feature_set_or(ld->our_features,
 		       take(feature_set_for_feature(NULL,
-						    OPTIONAL_FEATURE(OPT_ANCHOR_OUTPUTS))));
+						    OPTIONAL_FEATURE(OPT_STATIC_REMOTEKEY))));
 	feature_set_or(ld->our_features,
 		       take(feature_set_for_feature(NULL,
 						    OPTIONAL_FEATURE(OPT_DUAL_FUND))));
@@ -1648,6 +1648,9 @@ static void add_config(struct lightningd *ld,
 	} else if (opt->type & OPT_HASARG) {
 		if (opt->desc == opt_hidden) {
 			/* Ignore hidden options (deprecated) */
+		} else if (opt->show == (void *)opt_show_charp) {
+			/* Don't truncate! */
+			answer = tal_strdup(tmpctx, *(char **)opt->u.carg);
 		} else if (opt->show) {
 			opt->show(buf, opt->u.carg);
 			strcpy(buf + OPT_SHOW_LEN - 1, "...");
@@ -1659,14 +1662,7 @@ static void add_config(struct lightningd *ld,
 				json_add_primitive(response, name0, buf);
 				return;
 			}
-
-			/* opt_show_charp surrounds with "", strip them */
-			if (strstarts(buf, "\"")) {
-				char *end = strrchr(buf, '"');
-				memmove(end, end + 1, strlen(end));
-				answer = buf + 1;
-			} else
-				answer = buf;
+			answer = buf;
 		} else if (opt->cb_arg == (void *)opt_set_talstr
 			   || opt->cb_arg == (void *)opt_set_charp
 			   || is_restricted_print_if_nonnull(opt->cb_arg)) {

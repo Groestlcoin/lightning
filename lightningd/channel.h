@@ -54,6 +54,9 @@ struct channel_inflight {
 	/* We save this data so we can do nice accounting;
 	 * on the channel we slot it into the 'push' field */
 	struct amount_msat lease_fee;
+
+	/* Amount requested to lease for this open */
+	struct amount_sat lease_amt;
 };
 
 struct open_attempt {
@@ -351,7 +354,8 @@ new_inflight(struct channel *channel,
 	     const u32 lease_chan_max_msat,
 	     const u16 lease_chan_max_ppt,
 	     const u32 lease_blockheight_start,
-	     const struct amount_msat lease_fee);
+	     const struct amount_msat lease_fee,
+	     const struct amount_sat lease_amt);
 
 /* Given a txid, find an inflight channel stub. Returns NULL if none found */
 struct channel_inflight *channel_inflight_find(struct channel *channel,
@@ -374,9 +378,6 @@ void channel_set_owner(struct channel *channel, struct subd *owner);
 /* Channel has failed, but can try again. */
 void channel_fail_transient(struct channel *channel,
 			    const char *fmt, ...) PRINTF_FMT(2,3);
-/* Channel has failed, but can try again after a minute. */
-void channel_fail_transient_delayreconnect(struct channel *channel,
-					   const char *fmt,...) PRINTF_FMT(2,3);
 
 /* Channel has failed, give up on it. */
 void channel_fail_permanent(struct channel *channel,

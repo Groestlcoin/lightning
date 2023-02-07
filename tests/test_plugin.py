@@ -742,8 +742,11 @@ def test_openchannel_hook_chaining(node_factory, bitcoind):
     # the third plugin must now not be called anymore
     assert not l2.daemon.is_in_log("reject on principle")
 
-    wait_for(lambda: l1.rpc.listpeers()['peers'] == [])
-    l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
+    if not EXPERIMENTAL_DUAL_FUND:
+        wait_for(lambda: l1.rpc.listpeers()['peers'] == [])
+        l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
+    else:
+        assert only_one(l1.rpc.listpeers()['peers'])['connected']
     # 100000sat is good for hook_accepter, so it should fail 'on principle'
     # at third hook openchannel_reject.py
     with pytest.raises(RpcError, match=r'reject on principle'):
@@ -1606,15 +1609,10 @@ def test_plugin_feature_announce(node_factory):
         wait_for_announce=True
     )
 
-    extra = []
-    if l1.config('experimental-dual-fund'):
-        extra.append(21)  # option-anchor-outputs
-        extra.append(29)  # option-dual-fund
-
     # Check the featurebits we've set in the `init` message from
     # feature-test.py.
     assert l1.daemon.is_in_log(r'\[OUT\] 001000022100....{}'
-                               .format(expected_peer_features(extra=[201] + extra)))
+                               .format(expected_peer_features(extra=[201])))
 
     # Check the invoice featurebit we set in feature-test.py
     inv = l1.rpc.invoice(123, 'lbl', 'desc')['bolt11']
@@ -1623,7 +1621,7 @@ def test_plugin_feature_announce(node_factory):
 
     # Check the featurebit set in the `node_announcement`
     node = l1.rpc.listnodes(l1.info['id'])['nodes'][0]
-    assert node['features'] == expected_node_features(extra=[203] + extra)
+    assert node['features'] == expected_node_features(extra=[203])
 
 
 def test_hook_chaining(node_factory):
@@ -3294,6 +3292,9 @@ def test_sql(node_factory, bitcoind):
     ret = l2.rpc.sql("SELECT * FROM forwards;")
     assert ret == {'rows': []}
 
+    # Test that we correctly clean up subtables!
+    assert len(l2.rpc.sql("SELECT * from peerchannels_features")['rows']) == len(l2.rpc.sql("SELECT * from peerchannels_features")['rows'])
+
     # This should create a forward through l2
     l1.rpc.pay(l3.rpc.invoice(amount_msat=12300, label='inv1', description='description')['bolt11'])
 
@@ -3798,12 +3799,13 @@ def test_sql(node_factory, bitcoind):
                   'number': 'REAL',
                   'short_channel_id': 'TEXT'}
 
-    # Check schemas match.
+    # Check schemas match (each one has rowid at start)
+    rowidcol = {'name': 'rowid', 'type': 'u64'}
     for table, schema in expected_schemas.items():
         res = only_one(l2.rpc.listsqlschemas(table)['schemas'])
         assert res['tablename'] == table
         assert res.get('indices') == schema.get('indices')
-        sqlcolumns = [{'name': c['name'], 'type': sqltypemap[c['type']]} for c in schema['columns']]
+        sqlcolumns = [{'name': c['name'], 'type': sqltypemap[c['type']]} for c in [rowidcol] + schema['columns']]
         assert res['columns'] == sqlcolumns
 
     # Make sure we didn't miss any
@@ -3827,7 +3829,11 @@ def test_sql(node_factory, bitcoind):
 
     for table, schema in expected_schemas.items():
         ret = l2.rpc.sql("SELECT * FROM {};".format(table))
-        assert len(ret['rows'][0]) == len(schema['columns'])
+        assert len(ret['rows'][0]) == 1 + len(schema['columns'])
+
+        # First column is always rowid!
+        for row in ret['rows']:
+            assert row[0] > 0
 
         for col in schema['columns']:
             val = only_one(l2.rpc.sql("SELECT {} FROM {};".format(col['name'], table))['rows'][0])

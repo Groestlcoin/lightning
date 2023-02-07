@@ -135,7 +135,8 @@ new_inflight(struct channel *channel,
 	     const secp256k1_ecdsa_signature *lease_commit_sig,
 	     const u32 lease_chan_max_msat, const u16 lease_chan_max_ppt,
 	     const u32 lease_blockheight_start,
-	     const struct amount_msat lease_fee)
+	     const struct amount_msat lease_fee,
+	     const struct amount_sat lease_amt)
 {
 	struct wally_psbt *last_tx_psbt_clone;
 	struct channel_inflight *inflight
@@ -169,6 +170,7 @@ new_inflight(struct channel *channel,
 	inflight->lease_chan_max_msat = lease_chan_max_msat;
 	inflight->lease_chan_max_ppt = lease_chan_max_ppt;
 	inflight->lease_fee = lease_fee;
+	inflight->lease_amt = lease_amt;
 
 	list_add_tail(&channel->inflights, &inflight->list);
 	tal_add_destructor(inflight, destroy_inflight);
@@ -250,11 +252,10 @@ struct channel *new_unsaved_channel(struct peer *peer,
 	/* BOLT-7b04b1461739c5036add61782d58ac490842d98b #9
 	 * | 222/223 | `option_dual_fund`
 	 * | Use v2 of channel open, enables dual funding
-	 * | IN9
-	 * | `option_anchor_outputs`    */
+	 * | IN9 */
 	channel->static_remotekey_start[LOCAL]
 		= channel->static_remotekey_start[REMOTE] = 0;
-	channel->type = channel_type_anchor_outputs(channel);
+
 	channel->future_per_commitment_point = NULL;
 
 	channel->lease_commit_sig = NULL;
@@ -970,15 +971,6 @@ static void channel_err(struct channel *channel, const char *why)
 	}
 #endif
 	channel_set_owner(channel, NULL);
-}
-
-void channel_fail_transient_delayreconnect(struct channel *channel, const char *fmt, ...)
-{
-	va_list ap;
-
-	va_start(ap, fmt);
-	channel_err(channel, tal_vfmt(tmpctx, fmt, ap));
-	va_end(ap);
 }
 
 void channel_fail_transient(struct channel *channel, const char *fmt, ...)
