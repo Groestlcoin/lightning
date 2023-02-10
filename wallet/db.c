@@ -946,6 +946,8 @@ static struct migration dbmigrations[] = {
     {SQL("ALTER TABLE payments ADD COLUMN local_invreq_id BLOB DEFAULT NULL REFERENCES invoicerequests(invreq_id);"), NULL},
     /* FIXME: Remove payments local_offer_id column! */
     {SQL("ALTER TABLE channel_funding_inflights ADD COLUMN lease_satoshi BIGINT;"), NULL},
+    {SQL("ALTER TABLE channels ADD require_confirm_inputs_remote INTEGER DEFAULT 0;"), NULL},
+    {SQL("ALTER TABLE channels ADD require_confirm_inputs_local INTEGER DEFAULT 0;"), NULL},
 };
 
 /**
@@ -956,6 +958,7 @@ static bool db_migrate(struct lightningd *ld, struct db *db,
 {
 	/* Attempt to read the version from the database */
 	int current, orig, available;
+	char *err_msg;
 	struct db_stmt *stmt;
 	const struct migration_context mc = {
 	    .bip32_base = bip32_base,
@@ -967,16 +970,22 @@ static bool db_migrate(struct lightningd *ld, struct db *db,
 
 	if (current == -1)
 		log_info(ld->log, "Creating database");
-	else if (available < current)
-		db_fatal("Refusing to migrate down from version %u to %u",
+	else if (available < current) {
+		err_msg = tal_fmt(tmpctx, "Refusing to migrate down from version %u to %u",
 			 current, available);
-	else if (current != available) {
+		log_info(ld->log, "%s", err_msg);
+		db_fatal("%s", err_msg);
+	} else if (current != available) {
 		if (ld->db_upgrade_ok && *ld->db_upgrade_ok == false) {
-			db_fatal("Refusing to upgrade db from version %u to %u (database-upgrade=false)",
+			err_msg = tal_fmt(tmpctx, "Refusing to upgrade db from version %u to %u (database-upgrade=false)",
 				 current, available);
+			log_info(ld->log, "%s", err_msg);
+			db_fatal("%s", err_msg);
 		} else if (!ld->db_upgrade_ok && !is_released_version()) {
-			db_fatal("Refusing to irreversibly upgrade db from version %u to %u in non-final version %s (use --database-upgrade=true to override)",
-				 current, available, version());
+			err_msg = tal_fmt(tmpctx, "Refusing to irreversibly upgrade db from version %u to %u in non-final version %s (use --database-upgrade=true to override)",
+					    current, available, version());
+			log_info(ld->log, "%s", err_msg);
+			db_fatal("%s", err_msg);
 		}
 		log_info(ld->log, "Updating database from version %u to %u",
 			 current, available);
