@@ -1,7 +1,7 @@
 #!/bin/bash
 
 export DEBIAN_FRONTEND=noninteractive
-export GROESTLCOIN_VERSION=2.20.1
+export GROESTLCOIN_VERSION=24.0.1
 export RUST_VERSION=nightly
 export TZ="Europe/London"
 

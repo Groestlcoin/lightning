@@ -2,7 +2,7 @@ FROM ubuntu:18.04
 MAINTAINER Christian Decker <decker.christian@gmail.com>
 
 ENV DEBIAN_FRONTEND noninteractive
-ENV GROESTLCOIN_VERSION 2.20.1
+ENV GROESTLCOIN_VERSION 24.0.1
 
 RUN useradd -ms /bin/bash tester
 RUN mkdir /build /bolts && chown tester -R /build /bolts
