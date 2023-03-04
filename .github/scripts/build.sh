@@ -21,7 +21,7 @@ export LIGHTNINGD_POSTGRES_NO_VACUUM=1
 # Fail if any commands fail.
 set -e
 
-pip3 install --user poetry
+pip3 install --user poetry==1.3.2
 poetry config virtualenvs.create false --local
 poetry install
 
