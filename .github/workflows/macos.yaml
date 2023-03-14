@@ -51,8 +51,6 @@ jobs:
           TEST_GROUP: ${{ matrix.TEST_GROUP }}
         run: |
           export PATH="/usr/local/opt:/Users/runner/.local/bin:/Users/runner/Library/Python/3.10/bin:/usr/local/opt:$PATH"
-          export LDFLAGS="-L/usr/local/opt/sqlite/lib"
-          export CPPFLAGS="-I/usr/local/opt/sqlite/include"
           export CFLAGS="-Wno-error -Wno-nullability-completeness -Wno-expansion-to-defined -Wno-builtin-requires-header"
           export CXXFLAGS="-Wno-error -Wno-nullability-completeness -Wno-expansion-to-defined -Wno-builtin-requires-header"
 
