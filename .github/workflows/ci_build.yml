@@ -6,6 +6,7 @@ jobs:
   test:
     runs-on: ubuntu-latest
     name: Build on Alpine
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:

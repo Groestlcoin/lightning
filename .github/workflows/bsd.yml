@@ -6,6 +6,7 @@ jobs:
   testfreebsd:
     runs-on: macos-12
     name: Build on FreeBSD
+    timeout-minutes: 120
     env:
       DEVELOPER: 1
       VALGRIND: 0
