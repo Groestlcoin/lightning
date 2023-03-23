@@ -466,7 +466,7 @@ static void sign_our_inputs(struct utxo **utxos, struct wally_psbt *psbt)
 			struct privkey privkey;
 			struct pubkey pubkey;
 
-			if (!wally_tx_input_spends(&psbt->tx->inputs[j],
+			if (!wally_psbt_input_spends(&psbt->inputs[j],
 						   &utxo->outpoint))
 				continue;
 
@@ -499,7 +499,7 @@ static void sign_our_inputs(struct utxo **utxos, struct wally_psbt *psbt)
 					    sizeof(privkey.secret.data),
 					    EC_FLAG_GRIND_R) != WALLY_OK) {
 				tal_wally_end(psbt);
-				hsmd_status_broken(
+				hsmd_status_failed(STATUS_FAIL_INTERNAL_ERROR,
 				    "Received wally_err attempting to "
 				    "sign utxo with key %s. PSBT: %s",
 				    type_to_string(tmpctx, struct pubkey,

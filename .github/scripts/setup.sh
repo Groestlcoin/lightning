@@ -55,11 +55,11 @@ sudo chmod 0440 /etc/sudoers.d/tester
 (
     cd /tmp/ || exit 1
     wget https://github.com/Groestlcoin/groestlcoin/releases/download/v$GROESTLCOIN_VERSION/groestlcoin-24.0.1-x86_64-linux-gnu.tar.gz
-    tar -xvzf groestlcoin-$GROESTLCOIN_VERSION-x86_64-linux-gnu.tar.gz
-    sudo mv groestlcoin-$GROESTLCOIN_VERSION/bin/* /usr/local/bin
+    tar -xvzf groestlcoin-${GROESTLCOIN_VERSION}-x86_64-linux-gnu.tar.gz
+    sudo mv groestlcoin-${GROESTLCOIN_VERSION}/bin/* /usr/local/bin
     rm -rf \
-       groestlcoin-$GROESTLCOIN_VERSION-x86_64-linux-gnu.tar.gz \
-       groestlcoin-$GROESTLCOIN_VERSION
+       groestlcoin-${GROESTLCOIN_VERSION}-x86_64-linux-gnu.tar.gz \
+       groestlcoin-${GROESTLCOIN_VERSION}
 )
 
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- \
