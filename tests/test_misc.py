@@ -293,14 +293,15 @@ def test_htlc_sig_persistence(node_factory, bitcoind, executor):
     l1.start()
 
     assert l1.daemon.is_in_log(r'Loaded 1 HTLC signatures from DB')
-    l1.daemon.wait_for_logs([
-        r'Peer permanent failure in CHANNELD_NORMAL: Funding transaction spent',
-        r'Propose handling THEIR_UNILATERAL/OUR_HTLC by OUR_HTLC_TIMEOUT_TO_US'
-    ])
+
+    # Could happen in either order!
+    l1.daemon.wait_for_log(r'Peer permanent failure in CHANNELD_NORMAL: Funding transaction spent')
+
+    _, txid, blocks = l1.wait_for_onchaind_tx('OUR_HTLC_TIMEOUT_TO_US',
+                                              'THEIR_UNILATERAL/OUR_HTLC')
+    assert blocks == 5
     bitcoind.generate_block(5)
-    l1.daemon.wait_for_log("Broadcasting OUR_HTLC_TIMEOUT_TO_US")
-    time.sleep(3)
-    bitcoind.generate_block(1)
+    bitcoind.generate_block(1, wait_for_mempool=txid)
     l1.daemon.wait_for_logs([
         r'Owning output . (\d+)sat .SEGWIT. txid',
     ])
@@ -357,22 +358,28 @@ def test_htlc_out_timeout(node_factory, bitcoind, executor):
     l2.daemon.wait_for_log(' to ONCHAIN')
 
     # L1 will timeout HTLC immediately
-    l1.daemon.wait_for_logs(['Propose handling OUR_UNILATERAL/OUR_HTLC by OUR_HTLC_TIMEOUT_TX .* after 0 blocks',
-                             'Propose handling OUR_UNILATERAL/DELAYED_OUTPUT_TO_US by OUR_DELAYED_RETURN_TO_WALLET .* after 5 blocks'])
+    ((_, _, blocks1), (_, txid, blocks2)) = \
+        l1.wait_for_onchaind_txs(('OUR_DELAYED_RETURN_TO_WALLET',
+                                  'OUR_UNILATERAL/DELAYED_OUTPUT_TO_US'),
+                                 ('OUR_HTLC_TIMEOUT_TX',
+                                  'OUR_UNILATERAL/OUR_HTLC'))
+    assert blocks1 == 4
+    # We hit deadline (we give 1 block grace), then mined another.
+    assert blocks2 == -2
 
-    l1.daemon.wait_for_log('sendrawtx exit 0')
-    bitcoind.generate_block(1)
+    bitcoind.generate_block(1, wait_for_mempool=txid)
 
-    l1.daemon.wait_for_log('Propose handling OUR_HTLC_TIMEOUT_TX/DELAYED_OUTPUT_TO_US by OUR_DELAYED_RETURN_TO_WALLET .* after 5 blocks')
+    rawtx, txid, blocks = l1.wait_for_onchaind_tx('OUR_DELAYED_RETURN_TO_WALLET',
+                                                  'OUR_HTLC_TIMEOUT_TX/DELAYED_OUTPUT_TO_US')
+    assert blocks == 4
     bitcoind.generate_block(4)
+
     # It should now claim both the to-local and htlc-timeout-tx outputs.
-    l1.daemon.wait_for_logs(['Broadcasting OUR_DELAYED_RETURN_TO_WALLET',
-                             'Broadcasting OUR_DELAYED_RETURN_TO_WALLET',
-                             'sendrawtx exit 0',
+    l1.daemon.wait_for_logs(['sendrawtx exit 0.*{}'.format(rawtx),
                              'sendrawtx exit 0'])
 
     # Now, 100 blocks it should be done.
-    bitcoind.generate_block(100)
+    bitcoind.generate_block(100, wait_for_mempool=txid)
     l1.daemon.wait_for_log('onchaind complete, forgetting peer')
     l2.daemon.wait_for_log('onchaind complete, forgetting peer')
 
@@ -422,16 +429,18 @@ def test_htlc_in_timeout(node_factory, bitcoind, executor):
     l1.daemon.wait_for_log(' to ONCHAIN')
 
     # L2 will collect HTLC (iff no shadow route)
-    l2.daemon.wait_for_log('Propose handling OUR_UNILATERAL/THEIR_HTLC by OUR_HTLC_SUCCESS_TX .* after 0 blocks')
-    l2.daemon.wait_for_log('sendrawtx exit 0')
-    bitcoind.generate_block(1)
-    l2.daemon.wait_for_log('Propose handling OUR_HTLC_SUCCESS_TX/DELAYED_OUTPUT_TO_US by OUR_DELAYED_RETURN_TO_WALLET .* after 5 blocks')
+    _, txid, blocks = l2.wait_for_onchaind_tx('OUR_HTLC_SUCCESS_TX',
+                                              'OUR_UNILATERAL/THEIR_HTLC')
+    assert blocks == 0
+    bitcoind.generate_block(1, wait_for_mempool=txid)
+    rawtx, txid, blocks = l2.wait_for_onchaind_tx('OUR_DELAYED_RETURN_TO_WALLET',
+                                                  'OUR_HTLC_SUCCESS_TX/DELAYED_OUTPUT_TO_US')
+    assert blocks == 4
     bitcoind.generate_block(4)
-    l2.daemon.wait_for_log('Broadcasting OUR_DELAYED_RETURN_TO_WALLET')
-    l2.daemon.wait_for_log('sendrawtx exit 0')
+    l2.daemon.wait_for_log('sendrawtx exit 0.*{}'.format(rawtx))
 
     # Now, 100 blocks it should be both done.
-    bitcoind.generate_block(100)
+    bitcoind.generate_block(100, wait_for_mempool=txid)
     l1.daemon.wait_for_log('onchaind complete, forgetting peer')
     l2.daemon.wait_for_log('onchaind complete, forgetting peer')
 
@@ -1883,8 +1892,10 @@ def test_bitcoind_fail_first(node_factory, bitcoind):
     def mock_fail(*args):
         raise ValueError()
 
+    # If any of these succeed, they reset fail timeout.
     l1.daemon.rpcproxy.mock_rpc('getblockhash', mock_fail)
     l1.daemon.rpcproxy.mock_rpc('estimatesmartfee', mock_fail)
+    l1.daemon.rpcproxy.mock_rpc('getmempoolinfo', mock_fail)
 
     l1.daemon.start(wait_for_initialized=False, stderr_redir=True)
     l1.daemon.wait_for_logs([r'getblockhash [a-z0-9]* exited with status 1',
@@ -1896,6 +1907,94 @@ def test_bitcoind_fail_first(node_factory, bitcoind):
     # Now unset the mock, so calls go through again
     l1.daemon.rpcproxy.mock_rpc('getblockhash', None)
     l1.daemon.rpcproxy.mock_rpc('estimatesmartfee', None)
+
+
+@unittest.skipIf(TEST_NETWORK == 'liquid-regtest', "Fees on elements are different")
+def test_bitcoind_feerate_floor(node_factory, bitcoind):
+    """Don't return a feerate less than minrelaytxfee/mempoolnifee."""
+    l1 = node_factory.get_node()
+
+    anchors = EXPERIMENTAL_FEATURES
+    assert l1.rpc.feerates('perkb') == {
+        "perkb": {
+            "opening": 30000,
+            "mutual_close": 15000,
+            "unilateral_close": 44000,
+            "delayed_to_us": 30000,
+            "htlc_resolution": 44000,
+            "penalty": 30000,
+            "min_acceptable": 7500,
+            "max_acceptable": 600000
+        },
+        "onchain_fee_estimates": {
+            "opening_channel_satoshis": 5265,
+            "mutual_close_satoshis": 2523,
+            "unilateral_close_satoshis": 6578,
+            "htlc_timeout_satoshis": 7326 if anchors else 7293,
+            "htlc_success_satoshis": 7766 if anchors else 7733,
+        }
+    }
+
+    l1.daemon.rpcproxy.mock_rpc('getmempoolinfo',
+                                {
+                                    "mempoolminfee": 0.00010001,
+                                    "minrelaytxfee": 0.00020001
+                                })
+    l1.restart()
+    assert l1.rpc.feerates('perkb') == {
+        "perkb": {
+            "opening": 30000,
+            # This has increased (rounded up)
+            "mutual_close": 20004,
+            "unilateral_close": 44000,
+            "delayed_to_us": 30000,
+            "htlc_resolution": 44000,
+            "penalty": 30000,
+            # This has increased (rounded up!)
+            "min_acceptable": 20004,
+            "max_acceptable": 600000
+        },
+        "onchain_fee_estimates": {
+            "opening_channel_satoshis": 5265,
+            # This increases too
+            "mutual_close_satoshis": 3365,
+            "unilateral_close_satoshis": 6578,
+            "htlc_timeout_satoshis": 7326 if anchors else 7293,
+            "htlc_success_satoshis": 7766 if anchors else 7733,
+        }
+    }
+
+    l1.daemon.rpcproxy.mock_rpc('getmempoolinfo',
+                                {
+                                    "mempoolminfee": 0.00030001,
+                                    "minrelaytxfee": 0.00010001
+                                })
+    l1.restart()
+    assert l1.rpc.feerates('perkb') == {
+        "perkb": {
+            # This has increased (rounded up!)
+            "opening": 30004,
+            # This has increased (rounded up!)
+            "mutual_close": 30004,
+            "unilateral_close": 44000,
+            # This has increased (rounded up!)
+            "delayed_to_us": 30004,
+            "htlc_resolution": 44000,
+            # This has increased (rounded up!)
+            "penalty": 30004,
+            # This has increased (rounded up!)
+            "min_acceptable": 30004,
+            "max_acceptable": 600000
+        },
+        "onchain_fee_estimates": {
+            "opening_channel_satoshis": 5265,
+            # This increases too
+            "mutual_close_satoshis": 5048,
+            "unilateral_close_satoshis": 6578,
+            "htlc_timeout_satoshis": 7326 if anchors else 7293,
+            "htlc_success_satoshis": 7766 if anchors else 7733,
+        }
+    }
 
 
 @pytest.mark.developer("needs --dev-force-bip32-seed")
@@ -1982,6 +2081,7 @@ def test_list_features_only(node_factory):
                 ]
     if EXPERIMENTAL_FEATURES:
         expected += ['option_anchor_outputs/odd']
+        expected += ['option_route_blinding/odd']
         expected += ['option_shutdown_anysegwit/odd']
         expected += ['option_quiesce/odd']
         expected += ['option_onion_messages/odd']
@@ -1990,6 +2090,7 @@ def test_list_features_only(node_factory):
         expected += ['option_zeroconf/odd']
         expected += ['supports_open_accept_channel_type']
     else:
+        expected += ['option_route_blinding/odd']
         expected += ['option_shutdown_anysegwit/odd']
         expected += ['option_channel_type/odd']
         expected += ['option_scid_alias/odd']
@@ -3102,3 +3203,67 @@ def test_hsm_capabilities(node_factory):
     l1 = node_factory.get_node()
     # This appears before the start message, so it'll already be present.
     assert l1.daemon.is_in_log(r"hsmd: capability \+WIRE_HSMD_CHECK_PUBKEY")
+
+
+@pytest.mark.skip(reason="Fails by intention for creating test gossip stores")
+def test_create_gossip_mesh(node_factory, bitcoind):
+    """
+    Feel free to modify this test and remove the '@pytest.mark.skip' above.
+    Run it to get a customized gossip store. It fails on purpose, see below.
+
+    This builds a small mesh
+
+      l1--l2--l3
+      |   |   |
+      l4--l5--l6
+      |   |   |
+      l7--l8--l9
+    """
+    nodes = node_factory.get_nodes(9)
+    nodeids = [n.info['id'] for n in nodes]
+
+    [l1, l2, l3, l4, l5, l6, l7, l8, l9] = nodes
+    scid12, _ = l1.fundchannel(l2, wait_for_active=False, connect=True)
+    scid14, _ = l1.fundchannel(l4, wait_for_active=False, connect=True)
+    scid23, _ = l2.fundchannel(l3, wait_for_active=False, connect=True)
+    scid25, _ = l2.fundchannel(l5, wait_for_active=False, connect=True)
+    scid36, _ = l3.fundchannel(l6, wait_for_active=False, connect=True)
+    scid45, _ = l4.fundchannel(l5, wait_for_active=False, connect=True)
+    scid47, _ = l4.fundchannel(l7, wait_for_active=False, connect=True)
+    scid56, _ = l5.fundchannel(l6, wait_for_active=False, connect=True)
+    scid58, _ = l5.fundchannel(l8, wait_for_active=False, connect=True)
+    scid69, _ = l6.fundchannel(l9, wait_for_active=False, connect=True)
+    scid78, _ = l7.fundchannel(l8, wait_for_active=False, connect=True)
+    scid89, _ = l8.fundchannel(l9, wait_for_active=False, connect=True)
+    bitcoind.generate_block(10)
+
+    scids = [scid12, scid14, scid23, scid25, scid36, scid45, scid47, scid56,
+             scid58, scid69, scid78, scid89]
+
+    # waits for all nodes to have all scids gossip active
+    for n in nodes:
+        for scid in scids:
+            n.wait_channel_active(scid)
+
+    print("nodeids", nodeids)
+    print("scids", scids)
+    assert False, "Test failed on purpose, grab the gossip store from /tmp/ltests-..."
+
+
+def test_fast_shutdown(node_factory):
+    l1 = node_factory.get_node(start=False)
+
+    l1.daemon.start(wait_for_initialized=False)
+
+    start_time = time.time()
+    # Keep trying until this succeeds (socket may not exist yet!)
+    while True:
+        if time.time() > start_time + TIMEOUT:
+            raise ValueError("Timeout while waiting for stop to work!")
+        try:
+            l1.rpc.stop()
+        except FileNotFoundError:
+            continue
+        except ConnectionRefusedError:
+            continue
+        break

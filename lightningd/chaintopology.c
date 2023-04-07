@@ -8,7 +8,6 @@
 #include <common/htlc_tx.h>
 #include <common/json_command.h>
 #include <common/json_param.h>
-#include <common/memleak.h>
 #include <common/timeout.h>
 #include <common/type_to_string.h>
 #include <db/exec.h>
@@ -155,6 +154,7 @@ static void rebroadcast_txs(struct chain_topology *topo)
 	struct txs_to_broadcast *txs;
 	struct outgoing_tx *otx;
 	struct outgoing_tx_map_iter it;
+	tal_t *cleanup_ctx = tal(NULL, char);
 
 	txs = tal(topo, struct txs_to_broadcast);
 	txs->cmd_id = tal_arr(txs, const char *, 0);
@@ -167,10 +167,23 @@ static void rebroadcast_txs(struct chain_topology *topo)
 		if (wallet_transaction_height(topo->ld->wallet, &otx->txid))
 			continue;
 
-		tal_arr_expand(&txs->txs, tal_strdup(txs, otx->hextx));
+		/* Don't send ones which aren't ready yet.  Note that if the
+		 * minimum block is N, we broadcast it when we have block N-1! */
+		if (get_block_height(topo) + 1 < otx->minblock)
+			continue;
+
+		/* Don't free from txmap inside loop! */
+		if (otx->refresh
+		    && !otx->refresh(otx->channel, &otx->tx, otx->refresh_arg)) {
+			tal_steal(cleanup_ctx, otx);
+			continue;
+		}
+
+		tal_arr_expand(&txs->txs, fmt_bitcoin_tx(txs->txs, otx->tx));
 		tal_arr_expand(&txs->cmd_id,
 			       otx->cmd_id ? tal_strdup(txs, otx->cmd_id) : NULL);
 	}
+	tal_free(cleanup_ctx);
 
 	/* Let this do the dirty work. */
 	txs->cursor = (size_t)-1;
@@ -202,8 +215,8 @@ static void broadcast_done(struct bitcoind *bitcoind,
 	/* No longer needs to be disconnected if channel dies. */
 	tal_del_destructor2(otx->channel, clear_otx_channel, otx);
 
-	if (otx->failed_or_success) {
-		otx->failed_or_success(otx->channel, success, msg);
+	if (otx->finished) {
+		otx->finished(otx->channel, success, msg);
 		tal_free(otx);
 	} else if (we_broadcast(bitcoind->ld->topology, &otx->txid)) {
 		log_debug(
@@ -215,39 +228,61 @@ static void broadcast_done(struct bitcoind *bitcoind,
 	} else {
 		/* For continual rebroadcasting, until channel freed. */
 		tal_steal(otx->channel, otx);
-		outgoing_tx_map_add(bitcoind->ld->topology->outgoing_txs, notleak(otx));
+		outgoing_tx_map_add(bitcoind->ld->topology->outgoing_txs, otx);
 		tal_add_destructor2(otx, destroy_outgoing_tx, bitcoind->ld->topology);
 	}
 }
 
-void broadcast_tx(struct chain_topology *topo,
-		  struct channel *channel, const struct bitcoin_tx *tx,
-		  const char *cmd_id, bool allowhighfees,
-		  void (*failed)(struct channel *channel,
-				 bool success,
-				 const char *err))
+void broadcast_tx_(struct chain_topology *topo,
+		   struct channel *channel, const struct bitcoin_tx *tx,
+		   const char *cmd_id, bool allowhighfees, u32 minblock,
+		   void (*finished)(struct channel *channel,
+				    bool success,
+				    const char *err),
+		   bool (*refresh)(struct channel *channel,
+				   const struct bitcoin_tx **tx,
+				   void *arg),
+		   void *refresh_arg)
 {
 	/* Channel might vanish: topo owns it to start with. */
 	struct outgoing_tx *otx = tal(topo, struct outgoing_tx);
-	const u8 *rawtx = linearize_tx(otx, tx);
 
 	otx->channel = channel;
 	bitcoin_txid(tx, &otx->txid);
-	otx->hextx = tal_hex(otx, rawtx);
-	otx->failed_or_success = failed;
+	otx->tx = clone_bitcoin_tx(otx, tx);
+	otx->minblock = minblock;
+	otx->finished = finished;
+	otx->refresh = refresh;
+	otx->refresh_arg = refresh_arg;
+	if (taken(otx->refresh_arg))
+		tal_steal(otx, otx->refresh_arg);
 	if (cmd_id)
 		otx->cmd_id = tal_strdup(otx, cmd_id);
 	else
 		otx->cmd_id = NULL;
-	tal_free(rawtx);
-	tal_add_destructor2(channel, clear_otx_channel, otx);
 
+	/* Note that if the minimum block is N, we broadcast it when
+	 * we have block N-1! */
+	if (get_block_height(topo) + 1 < otx->minblock) {
+		log_debug(topo->log, "Deferring broadcast of txid %s until block %u",
+			  type_to_string(tmpctx, struct bitcoin_txid, &otx->txid),
+			  otx->minblock - 1);
+
+		/* For continual rebroadcasting, until channel freed. */
+		tal_steal(otx->channel, otx);
+		outgoing_tx_map_add(topo->outgoing_txs, otx);
+		tal_add_destructor2(otx, destroy_outgoing_tx, topo);
+		return;
+	}
+
+	tal_add_destructor2(channel, clear_otx_channel, otx);
 	log_debug(topo->log, "Broadcasting txid %s%s%s",
 		  type_to_string(tmpctx, struct bitcoin_txid, &otx->txid),
 		  cmd_id ? " for " : "", cmd_id ? cmd_id : "");
 
 	wallet_transaction_add(topo->ld->wallet, tx->wtx, 0, 0);
-	bitcoind_sendrawtx(topo->bitcoind, otx->cmd_id, otx->hextx,
+	bitcoind_sendrawtx(topo->bitcoind, otx->cmd_id,
+			   fmt_bitcoin_tx(tmpctx, otx->tx),
 			   allowhighfees,
 			   broadcast_done, otx);
 }
@@ -308,9 +343,9 @@ static void watch_for_utxo_reconfirmation(struct chain_topology *topo,
 		if (find_txwatch(topo, &unconfirmed[i]->outpoint.txid, NULL))
 			continue;
 
-		notleak(watch_txid(topo, topo, NULL,
-				   &unconfirmed[i]->outpoint.txid,
-				   closeinfo_txid_confirmed));
+		watch_txid(topo, topo, NULL,
+			   &unconfirmed[i]->outpoint.txid,
+			   closeinfo_txid_confirmed);
 	}
 }
 
@@ -357,7 +392,7 @@ static void update_feerates(struct bitcoind *bitcoind,
 
 		/* Initial smoothed feerate is the polled feerate */
 		if (!old_feerates[i]) {
-            notify_feerate_changed = true;
+			notify_feerate_changed = true;
 			old_feerates[i] = feerate;
 			init_feerate_history(topo, i, feerate);
 

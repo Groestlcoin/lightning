@@ -18,7 +18,6 @@ import logging
 import lzma
 import math
 import os
-import psutil  # type: ignore
 import random
 import re
 import shutil
@@ -838,7 +837,7 @@ class LightningNode(object):
         )
 
     def connect(self, remote_node):
-        self.rpc.connect(remote_node.info['id'], '127.0.0.1', remote_node.daemon.port)
+        self.rpc.connect(remote_node.info['id'], '127.0.0.1', remote_node.port)
 
     def is_connected(self, remote_node):
         return remote_node.info['id'] in [p['id'] for p in self.rpc.listpeers()['peers']]
@@ -846,6 +845,7 @@ class LightningNode(object):
     def openchannel(self, remote_node, capacity=FUNDAMOUNT, addrtype="bech32", confirm=True, wait_for_announce=True, connect=True):
         addr, wallettxid = self.fundwallet(10 * capacity, addrtype)
 
+        # connect if necessary
         if connect and not self.is_connected(remote_node):
             self.connect(remote_node)
 
@@ -868,7 +868,7 @@ class LightningNode(object):
             self.daemon.wait_for_log('Owning output .* txid {} CONFIRMED'.format(txid))
         return addr, txid
 
-    def fundbalancedchannel(self, remote_node, total_capacity, announce=True):
+    def fundbalancedchannel(self, remote_node, total_capacity=FUNDAMOUNT, announce=True):
         '''
         Creates a perfectly-balanced channel, as all things should be.
         '''
@@ -892,7 +892,9 @@ class LightningNode(object):
         else:
             chan_capacity = total_capacity
 
-        self.rpc.connect(remote_node.info['id'], 'localhost', remote_node.port)
+        # connect if necessary
+        if not self.is_connected(remote_node):
+            self.connect(remote_node)
 
         res = self.rpc.fundchannel(remote_node.info['id'], chan_capacity, feerate='slow', minconf=0, announce=announce, push_msat=Millisatoshi(chan_capacity * 500))
         blockid = self.bitcoin.generate_block(1, wait_for_mempool=res['txid'])[0]
@@ -973,11 +975,6 @@ class LightningNode(object):
 
         self.start()
 
-    def fund_channel(self, l2, amount, wait_for_active=True, announce_channel=True):
-        warnings.warn("LightningNode.fund_channel is deprecated in favor of "
-                      "LightningNode.fundchannel", category=DeprecationWarning)
-        return self.fundchannel(l2, amount, wait_for_active, announce_channel)
-
     def fundchannel(self, l2, amount=FUNDAMOUNT, wait_for_active=True,
                     announce_channel=True, **kwargs):
         # Give yourself some funds to work with
@@ -998,6 +995,10 @@ class LightningNode(object):
 
         # Now we should.
         wait_for(lambda: has_funds_on_addr(addr))
+
+        # connect if necessary
+        if not self.is_connected(l2):
+            self.connect(l2)
 
         # Now go ahead and open a channel
         res = self.rpc.fundchannel(l2.info['id'], amount,
@@ -1204,6 +1205,29 @@ class LightningNode(object):
         self.daemon.wait_for_log('peer_out WIRE_UPDATE_FEE')
         assert(self.rpc.feerates('perkw')['perkw']['opening'] == rate)
 
+    def wait_for_onchaind_txs(self, *args):
+        """Wait for onchaind to ask lightningd to create one or more txs.  Each arg is a pair of typename, resolvename.  Returns tuples of the rawtx, txid and number of blocks delay for each pair.
+        """
+        # Could happen in any order.
+        needle = self.daemon.logsearch_start
+        ret = ()
+        for (name, resolve) in args:
+            self.daemon.logsearch_start = needle
+            r = self.daemon.wait_for_log('Telling lightningd about {} to resolve {}'
+                                         .format(name, resolve))
+            blocks = int(re.search(r'\(([-0-9]*) more blocks\)', r).group(1))
+
+            # The next 'Broadcast for onchaind' will be the tx.
+            # Now grab the corresponding broadcast lightningd did, to get actual tx:
+            r = self.daemon.wait_for_log('Broadcast for onchaind tx')
+            rawtx = re.search(r'.* tx ([0-9a-fA-F]*)', r).group(1)
+            txid = self.bitcoin.rpc.decoderawtransaction(rawtx, True)['txid']
+            ret = ret + ((rawtx, txid, blocks),)
+        return ret
+
+    def wait_for_onchaind_tx(self, name, resolve):
+        return self.wait_for_onchaind_txs((name, resolve))[0]
+
     def wait_for_onchaind_broadcast(self, name, resolve=None):
         """Wait for onchaind to drop tx name to resolve (if any)"""
         if resolve:
@@ -1328,57 +1352,11 @@ def flock(directory: Path):
     fname.unlink()
 
 
-class Throttler(object):
-    """Throttles the creation of system-processes to avoid overload.
-
-    There is no reason to overload the system with too many processes
-    being spawned or run at the same time. It causes timeouts by
-    aggressively preempting processes and swapping if the memory limit is
-    reached. In order to reduce this loss of performance we provide a
-    `wait()` method which will serialize the creation of processes, but
-    also delay if the system load is too high.
-
-    Notice that technically we are throttling too late, i.e., we react
-    to an overload, but chances are pretty good that some other
-    already running process is about to terminate, and so the overload
-    is short-lived. We throttle when the process object is first
-    created, not when restarted, in order to avoid delaying running
-    tests, which could cause more timeouts.
-
-    """
-    def __init__(self, directory: str, target: float = 90):
-        """If specified we try to stick to a load of target (in percent).
-        """
-        self.target = target
-        self.current_load = self.target  # Start slow
-        psutil.cpu_percent()  # Prime the internal load metric
-        self.directory = directory
-
-    def wait(self):
-        start_time = time.time()
-        with flock(self.directory):
-            # We just got the lock, assume someone else just released it
-            self.current_load = 100
-            while self.load() >= self.target:
-                time.sleep(1)
-
-            self.current_load = 100  # Back off slightly to avoid triggering right away
-        print("Throttler delayed startup for {} seconds".format(time.time() - start_time))
-
-    def load(self):
-        """An exponential moving average of the load
-        """
-        decay = 0.5
-        load = psutil.cpu_percent()
-        self.current_load = decay * load + (1 - decay) * self.current_load
-        return self.current_load
-
-
 class NodeFactory(object):
     """A factory to setup and start `lightningd` daemons.
     """
     def __init__(self, request, testname, bitcoind, executor, directory,
-                 db_provider, node_cls, throttler, jsonschemas):
+                 db_provider, node_cls, jsonschemas):
         if request.node.get_closest_marker("slow_test") and SLOW_MACHINE:
             self.valgrind = False
         else:
@@ -1393,7 +1371,6 @@ class NodeFactory(object):
         self.lock = threading.Lock()
         self.db_provider = db_provider
         self.node_cls = node_cls
-        self.throttler = throttler
         self.jsonschemas = jsonschemas
 
     def split_options(self, opts):
@@ -1461,7 +1438,6 @@ class NodeFactory(object):
                  bkpr_dbfile=None, feerates=(15000, 11000, 7500, 3750),
                  start=True, wait_for_bitcoind_sync=True, may_fail=False,
                  expect_fail=False, cleandir=True, **kwargs):
-        self.throttler.wait()
         node_id = self.get_node_id() if not node_id else node_id
         port = reserve_unused_port()
 
