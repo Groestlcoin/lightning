@@ -611,8 +611,8 @@ bool psbt_finalize(struct wally_psbt *psbt)
 		const struct wally_map_item *iws;
 
 		iws = wally_map_get_integer(&input->psbt_fields, /* PSBT_IN_WITNESS_SCRIPT */ 0x05);
-		if (!iws || !is_anchor_witness_script(iws->value,
-					      iws->value_len))
+		if (!iws || !is_to_remote_anchored_witness_script(iws->value,
+								  iws->value_len))
 			continue;
 
 		if (input->signatures.num_items != 1)
@@ -737,12 +737,24 @@ struct wally_psbt *psbt_from_bytes(const tal_t *ctx, const u8 *bytes,
 
 void towire_wally_psbt(u8 **pptr, const struct wally_psbt *psbt)
 {
+	struct wally_psbt *psbt_copy;
+
 	/* Let's include the PSBT bytes */
 	size_t bytes_written;
-	const u8 *pbt_bytes = psbt_get_bytes(NULL, psbt, &bytes_written);
+	const u8 *psbt_bytes = psbt_get_bytes(NULL, psbt, &bytes_written);
+
+	/* When sending to other processes, set to v0 for compat */
+	psbt_copy = psbt_from_bytes(NULL, psbt_bytes, bytes_written);
+	tal_free(psbt_bytes);
+    if (!is_elements(chainparams))
+		psbt_set_version(psbt_copy, 0);
+
+	const u8 *psbt_bytes_copy = psbt_get_bytes(NULL, psbt_copy, &bytes_written);
+
 	towire_u32(pptr, bytes_written);
-	towire_u8_array(pptr, pbt_bytes, bytes_written);
-	tal_free(pbt_bytes);
+	towire_u8_array(pptr, psbt_bytes_copy, bytes_written);
+	tal_free(psbt_bytes_copy);
+	tal_free(psbt_copy);
 }
 
 struct wally_psbt *fromwire_wally_psbt(const tal_t *ctx,
@@ -772,6 +784,9 @@ struct wally_psbt *fromwire_wally_psbt(const tal_t *ctx,
 	}
 	tal_free(tmpbuf);
 #endif
+
+	/* Internally we always operate on v2 */
+	psbt_set_version(psbt, 2);
 
 	return psbt;
 }

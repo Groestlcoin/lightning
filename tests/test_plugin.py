@@ -1337,7 +1337,8 @@ def test_forward_event_notification(node_factory, bitcoind, executor):
     assert blocks == 5
     bitcoind.generate_block(5)
 
-    bitcoind.generate_block(1, wait_for_mempool=txid)
+    # Could be RBF!
+    l2.mine_txid_or_rbf(txid)
     l2.daemon.wait_for_log('Resolved THEIR_UNILATERAL/OUR_HTLC by our proposal OUR_HTLC_TIMEOUT_TO_US')
     l5.daemon.wait_for_log('Ignoring output.*: OUR_UNILATERAL/THEIR_HTLC')
 
@@ -1743,10 +1744,8 @@ def test_bcli(node_factory, bitcoind, chainparams):
 
     # Failure case of feerate is tested in test_misc.py
     estimates = l1.rpc.call("estimatefees")
-    for est in ["opening", "mutual_close", "unilateral_close", "delayed_to_us",
-                "htlc_resolution", "penalty", "min_acceptable",
-                "max_acceptable"]:
-        assert est in estimates
+    assert 'feerate_floor' in estimates
+    assert [f['blocks'] for f in estimates['feerates']] == [2, 6, 12, 100]
 
     resp = l1.rpc.call("getchaininfo")
     assert resp["chain"] == chainparams['name']

@@ -86,11 +86,11 @@ def test_bitcoin_failure(node_factory, bitcoind):
     l1.daemon.rpcproxy.mock_rpc('getblockhash', crash_bitcoincli)
 
     # This should cause both estimatefee and getblockhash fail
-    l1.daemon.wait_for_logs(['Unable to estimate .* fee',
+    l1.daemon.wait_for_logs(['Unable to estimate any fees',
                              'getblockhash .* exited with status 1'])
 
     # And they should retry!
-    l1.daemon.wait_for_logs(['Unable to estimate .* fee',
+    l1.daemon.wait_for_logs(['Unable to estimate any fees',
                              'getblockhash .* exited with status 1'])
 
     # Restore, then it should recover and get blockheight.
@@ -1524,8 +1524,7 @@ def test_feerates(node_factory):
     l1.start()
 
     # All estimation types
-    types = ["opening", "mutual_close", "unilateral_close", "delayed_to_us",
-             "htlc_resolution", "penalty"]
+    types = ["opening", "mutual_close", "unilateral_close", "penalty"]
 
     # Try parsing the feerates, won't work because can't estimate
     for t in types:
@@ -1533,21 +1532,26 @@ def test_feerates(node_factory):
             feerate = l1.rpc.parsefeerate(t)
 
     # Query feerates (shouldn't give any!)
-    wait_for(lambda: len(l1.rpc.feerates('perkw')['perkw']) == 2)
+    wait_for(lambda: len(l1.rpc.feerates('perkw')['perkw']) == 4)
     feerates = l1.rpc.feerates('perkw')
     assert feerates['warning_missing_feerates'] == 'Some fee estimates unavailable: groestlcoind startup?'
     assert 'perkb' not in feerates
     assert feerates['perkw']['max_acceptable'] == 2**32 - 1
     assert feerates['perkw']['min_acceptable'] == 253
+    assert feerates['perkw']['min_acceptable'] == 253
+    assert feerates['perkw']['floor'] == 253
+    assert feerates['perkw']['estimates'] == []
     for t in types:
         assert t not in feerates['perkw']
 
-    wait_for(lambda: len(l1.rpc.feerates('perkb')['perkb']) == 2)
     feerates = l1.rpc.feerates('perkb')
     assert feerates['warning_missing_feerates'] == 'Some fee estimates unavailable: groestlcoind startup?'
     assert 'perkw' not in feerates
     assert feerates['perkb']['max_acceptable'] == (2**32 - 1)
     assert feerates['perkb']['min_acceptable'] == 253 * 4
+    # Note: This is floored at the FEERATE_FLOOR constant (253)
+    assert feerates['perkb']['floor'] == 1012
+    assert feerates['perkb']['estimates'] == []
     for t in types:
         assert t not in feerates['perkb']
 
@@ -1556,56 +1560,87 @@ def test_feerates(node_factory):
     l1.set_feerates((15000, 0, 0, 0), True)
     wait_for(lambda: l1.rpc.feerates('perkw')['perkw']['max_acceptable'] == 15000 * 10)
     feerates = l1.rpc.feerates('perkw')
-    assert feerates['warning_missing_feerates'] == 'Some fee estimates unavailable: groestlcoind startup?'
+    # We only get the warning if *no* feerates are avail.
+    assert 'warning_missing_feerates' not in feerates
     assert 'perkb' not in feerates
-    assert feerates['perkw']['min_acceptable'] == 253
+    # With only one data point, this is a terrible guess!
+    assert feerates['perkw']['min_acceptable'] == 15000 // 2
+    assert feerates['perkw']['estimates'] == [{'blockcount': 2,
+                                               'feerate': 15000,
+                                               'smoothed_feerate': 15000}]
 
     # Set ECONOMICAL/6 feerate, for unilateral_close and htlc_resolution
     l1.set_feerates((15000, 11000, 0, 0), True)
-    wait_for(lambda: len(l1.rpc.feerates('perkw')['perkw']) == 4)
     feerates = l1.rpc.feerates('perkw')
     assert feerates['perkw']['unilateral_close'] == 11000
-    assert feerates['perkw']['htlc_resolution'] == 11000
-    assert feerates['warning_missing_feerates'] == 'Some fee estimates unavailable: groestlcoind startup?'
+    assert 'warning_missing_feerates' not in feerates
     assert 'perkb' not in feerates
     assert feerates['perkw']['max_acceptable'] == 15000 * 10
-    assert feerates['perkw']['min_acceptable'] == 253
+    # With only two data points, this is a terrible guess!
+    assert feerates['perkw']['min_acceptable'] == 11000 // 2
+    assert feerates['perkw']['estimates'] == [{'blockcount': 2,
+                                               'feerate': 15000,
+                                               'smoothed_feerate': 15000},
+                                              {'blockcount': 6,
+                                               'feerate': 11000,
+                                               'smoothed_feerate': 11000}]
 
     # Set ECONOMICAL/12 feerate, for all but min (so, no mutual_close feerate)
     l1.set_feerates((15000, 11000, 6250, 0), True)
-    wait_for(lambda: len(l1.rpc.feerates('perkb')['perkb']) == len(types) - 1 + 2)
     feerates = l1.rpc.feerates('perkb')
     assert feerates['perkb']['unilateral_close'] == 11000 * 4
-    assert feerates['perkb']['htlc_resolution'] == 11000 * 4
-    assert 'mutual_close' not in feerates['perkb']
+    # We dont' extrapolate, so it uses the same for mutual_close
+    assert feerates['perkb']['mutual_close'] == 6250 * 4
     for t in types:
         if t not in ("unilateral_close", "htlc_resolution", "mutual_close"):
             assert feerates['perkb'][t] == 25000
-    assert feerates['warning_missing_feerates'] == 'Some fee estimates unavailable: groestlcoind startup?'
+    assert 'warning_missing_feerates' not in feerates
     assert 'perkw' not in feerates
     assert feerates['perkb']['max_acceptable'] == 15000 * 4 * 10
-    assert feerates['perkb']['min_acceptable'] == 253 * 4
+    # With only three data points, this is a terrible guess!
+    assert feerates['perkb']['min_acceptable'] == 6250 // 2 * 4
+    assert feerates['perkb']['estimates'] == [{'blockcount': 2,
+                                               'feerate': 15000 * 4,
+                                               'smoothed_feerate': 15000 * 4},
+                                              {'blockcount': 6,
+                                               'feerate': 11000 * 4,
+                                               'smoothed_feerate': 11000 * 4},
+                                              {'blockcount': 12,
+                                               'feerate': 6250 * 4,
+                                               'smoothed_feerate': 6250 * 4}]
 
     # Set ECONOMICAL/100 feerate for min and mutual_close
     l1.set_feerates((15000, 11000, 6250, 5000), True)
     wait_for(lambda: len(l1.rpc.feerates('perkw')['perkw']) >= len(types) + 2)
     feerates = l1.rpc.feerates('perkw')
     assert feerates['perkw']['unilateral_close'] == 11000
-    assert feerates['perkw']['htlc_resolution'] == 11000
     assert feerates['perkw']['mutual_close'] == 5000
     for t in types:
         if t not in ("unilateral_close", "htlc_resolution", "mutual_close"):
             assert feerates['perkw'][t] == 25000 // 4
-    assert 'warning' not in feerates
+    assert 'warning_missing_feerates' not in feerates
     assert 'perkb' not in feerates
     assert feerates['perkw']['max_acceptable'] == 15000 * 10
     assert feerates['perkw']['min_acceptable'] == 5000 // 2
+    assert feerates['perkw']['estimates'] == [{'blockcount': 2,
+                                               'feerate': 15000,
+                                               'smoothed_feerate': 15000},
+                                              {'blockcount': 6,
+                                               'feerate': 11000,
+                                               'smoothed_feerate': 11000},
+                                              {'blockcount': 12,
+                                               'feerate': 6250,
+                                               'smoothed_feerate': 6250},
+                                              {'blockcount': 100,
+                                               'feerate': 5000,
+                                               'smoothed_feerate': 5000}]
 
     assert len(feerates['onchain_fee_estimates']) == 5
     assert feerates['onchain_fee_estimates']['opening_channel_satoshis'] == feerates['perkw']['opening'] * 702 // 1000
     assert feerates['onchain_fee_estimates']['mutual_close_satoshis'] == feerates['perkw']['mutual_close'] * 673 // 1000
     assert feerates['onchain_fee_estimates']['unilateral_close_satoshis'] == feerates['perkw']['unilateral_close'] * 598 // 1000
-    htlc_feerate = feerates["perkw"]["htlc_resolution"]
+    # htlc resolution currently uses 6 block estimate
+    htlc_feerate = [f['feerate'] for f in feerates['perkw']['estimates'] if f['blockcount'] == 6][0]
     htlc_timeout_cost = feerates["onchain_fee_estimates"]["htlc_timeout_satoshis"]
     htlc_success_cost = feerates["onchain_fee_estimates"]["htlc_success_satoshis"]
 
@@ -1899,7 +1934,7 @@ def test_bitcoind_fail_first(node_factory, bitcoind):
 
     l1.daemon.start(wait_for_initialized=False, stderr_redir=True)
     l1.daemon.wait_for_logs([r'getblockhash [a-z0-9]* exited with status 1',
-                             r'Unable to estimate opening fees',
+                             r'Unable to estimate any fees',
                              r'BROKEN.*we have been retrying command for --bitcoin-retry-timeout={} seconds'.format(timeout)])
     # Will exit with failure code.
     assert l1.daemon.wait() == 1
@@ -1911,7 +1946,7 @@ def test_bitcoind_fail_first(node_factory, bitcoind):
 
 @unittest.skipIf(TEST_NETWORK == 'liquid-regtest', "Fees on elements are different")
 def test_bitcoind_feerate_floor(node_factory, bitcoind):
-    """Don't return a feerate less than minrelaytxfee/mempoolnifee."""
+    """Don't return a feerate less than minrelaytxfee/mempoolminfee."""
     l1 = node_factory.get_node()
 
     anchors = EXPERIMENTAL_FEATURES
@@ -1920,11 +1955,22 @@ def test_bitcoind_feerate_floor(node_factory, bitcoind):
             "opening": 30000,
             "mutual_close": 15000,
             "unilateral_close": 44000,
-            "delayed_to_us": 30000,
-            "htlc_resolution": 44000,
             "penalty": 30000,
             "min_acceptable": 7500,
-            "max_acceptable": 600000
+            "max_acceptable": 600000,
+            "floor": 1012,
+            "estimates": [{"blockcount": 2,
+                           "feerate": 60000,
+                           "smoothed_feerate": 60000},
+                          {"blockcount": 6,
+                           "feerate": 44000,
+                           "smoothed_feerate": 44000},
+                          {"blockcount": 12,
+                           "feerate": 30000,
+                           "smoothed_feerate": 30000},
+                          {"blockcount": 100,
+                           "feerate": 15000,
+                           "smoothed_feerate": 15000}],
         },
         "onchain_fee_estimates": {
             "opening_channel_satoshis": 5265,
@@ -1947,12 +1993,23 @@ def test_bitcoind_feerate_floor(node_factory, bitcoind):
             # This has increased (rounded up)
             "mutual_close": 20004,
             "unilateral_close": 44000,
-            "delayed_to_us": 30000,
-            "htlc_resolution": 44000,
             "penalty": 30000,
-            # This has increased (rounded up!)
+            # This has increased (rounded up)
             "min_acceptable": 20004,
-            "max_acceptable": 600000
+            "max_acceptable": 600000,
+            "floor": 20004,
+            "estimates": [{"blockcount": 2,
+                           "feerate": 60000,
+                           "smoothed_feerate": 60000},
+                          {"blockcount": 6,
+                           "feerate": 44000,
+                           "smoothed_feerate": 44000},
+                          {"blockcount": 12,
+                           "feerate": 30000,
+                           "smoothed_feerate": 30000},
+                          {"blockcount": 100,
+                           "feerate": 20004,
+                           "smoothed_feerate": 20004}],
         },
         "onchain_fee_estimates": {
             "opening_channel_satoshis": 5265,
@@ -1978,13 +2035,25 @@ def test_bitcoind_feerate_floor(node_factory, bitcoind):
             "mutual_close": 30004,
             "unilateral_close": 44000,
             # This has increased (rounded up!)
-            "delayed_to_us": 30004,
-            "htlc_resolution": 44000,
-            # This has increased (rounded up!)
             "penalty": 30004,
-            # This has increased (rounded up!)
+            # This has increased (rounded up)
             "min_acceptable": 30004,
-            "max_acceptable": 600000
+            "max_acceptable": 600000,
+            "floor": 30004,
+            "estimates": [{"blockcount": 2,
+                           "feerate": 60000,
+                           "smoothed_feerate": 60000},
+                          {"blockcount": 6,
+                           "feerate": 44000,
+                           "smoothed_feerate": 44000},
+                          # This has increased (rounded up!)
+                          {"blockcount": 12,
+                           "feerate": 30004,
+                           "smoothed_feerate": 30004},
+                          # This has increased (rounded up!)
+                          {"blockcount": 100,
+                           "feerate": 30004,
+                           "smoothed_feerate": 30004}],
         },
         "onchain_fee_estimates": {
             "opening_channel_satoshis": 5265,
@@ -2653,15 +2722,24 @@ def test_restorefrompeer(node_factory, bitcoind):
 
 def test_commitfee_option(node_factory):
     """Sanity check for the --commit-fee startup option."""
-    l1, l2 = node_factory.get_nodes(2, opts=[{"commit-fee": "200"}, {}])
+    l1, l2 = node_factory.get_nodes(2, opts=[{"commit-fee": "200",
+                                              "start": False},
+                                             {"start": False}])
 
+    # set_feerates multiplies this by 4 to get perkb; but we divide.
     mock_wu = 5000
     for l in [l1, l2]:
-        l.set_feerates((0, mock_wu, 0, 0), True)
-    l1_commit_fees = l1.rpc.call("estimatefees")["unilateral_close"]
-    l2_commit_fees = l2.rpc.call("estimatefees")["unilateral_close"]
+        l.set_feerates((0, mock_wu, 0, 0), False)
+        l.start()
 
-    assert l1_commit_fees == 2 * l2_commit_fees == 2 * 4 * mock_wu  # WU->VB
+    # plugin gives same results:
+    assert l1.rpc.call("estimatefees") == l2.rpc.call("estimatefees")
+
+    # But feerates differ.
+    l1_commit_fees = l1.rpc.feerates("perkw")['perkw']['unilateral_close']
+    l2_commit_fees = l2.rpc.feerates("perkw")['perkw']['unilateral_close']
+
+    assert l1_commit_fees == 2 * l2_commit_fees == 2 * mock_wu
 
 
 def test_listtransactions(node_factory):
@@ -2894,15 +2972,29 @@ def test_force_feerates(node_factory):
     l1 = node_factory.get_node(options={'force-feerates': 1111})
     assert l1.rpc.listconfigs()['force-feerates'] == '1111'
 
+    # Note that estimates are still valid here, despite "force-feerates"
+    estimates = [{"blockcount": 2,
+                  "feerate": 15000,
+                  "smoothed_feerate": 15000},
+                 {"blockcount": 6,
+                  "feerate": 11000,
+                  "smoothed_feerate": 11000},
+                 {"blockcount": 12,
+                  "feerate": 7500,
+                  "smoothed_feerate": 7500},
+                 {"blockcount": 100,
+                  "feerate": 3750,
+                  "smoothed_feerate": 3750}]
+
     assert l1.rpc.feerates('perkw')['perkw'] == {
         "opening": 1111,
         "mutual_close": 1111,
         "unilateral_close": 1111,
-        "delayed_to_us": 1111,
-        "htlc_resolution": 1111,
         "penalty": 1111,
         "min_acceptable": 1875,
-        "max_acceptable": 150000}
+        "max_acceptable": 150000,
+        "estimates": estimates,
+        "floor": 253}
 
     l1.stop()
     l1.daemon.opts['force-feerates'] = '1111/2222'
@@ -2913,11 +3005,11 @@ def test_force_feerates(node_factory):
         "opening": 1111,
         "mutual_close": 2222,
         "unilateral_close": 2222,
-        "delayed_to_us": 2222,
-        "htlc_resolution": 2222,
         "penalty": 2222,
         "min_acceptable": 1875,
-        "max_acceptable": 150000}
+        "max_acceptable": 150000,
+        "estimates": estimates,
+        "floor": 253}
 
     l1.stop()
     l1.daemon.opts['force-feerates'] = '1111/2222/3333/4444/5555/6666'
@@ -2928,11 +3020,11 @@ def test_force_feerates(node_factory):
         "opening": 1111,
         "mutual_close": 2222,
         "unilateral_close": 3333,
-        "delayed_to_us": 4444,
-        "htlc_resolution": 5555,
         "penalty": 6666,
         "min_acceptable": 1875,
-        "max_acceptable": 150000}
+        "max_acceptable": 150000,
+        "estimates": estimates,
+        "floor": 253}
 
 
 def test_datastore_escapeing(node_factory):
@@ -3203,6 +3295,50 @@ def test_hsm_capabilities(node_factory):
     l1 = node_factory.get_node()
     # This appears before the start message, so it'll already be present.
     assert l1.daemon.is_in_log(r"hsmd: capability \+WIRE_HSMD_CHECK_PUBKEY")
+
+
+def test_feerate_arg(node_factory):
+    """Make sure our variants of feerate argument work!"""
+    l1 = node_factory.get_node()
+
+    # These are the get_node() defaults
+    by_blocks = {2: 15000,
+                 6: 11000,
+                 12: 7500,
+                 100: 3750}
+
+    # Literal values:
+    fees = {"9999perkw": 9999,
+            "10000perkb": 10000 // 4,
+            10000: 10000 // 4}
+
+    fees["urgent"] = by_blocks[6]
+    fees["normal"] = by_blocks[12]
+    fees["slow"] = by_blocks[100]
+
+    fees["opening"] = by_blocks[12]
+    fees["mutual_close"] = by_blocks[100]
+    fees["penalty"] = by_blocks[12]
+    fees["unilateral_close"] = by_blocks[6]
+
+    fees["2blocks"] = by_blocks[2]
+    fees["6blocks"] = by_blocks[6]
+    fees["12blocks"] = by_blocks[12]
+    fees["100blocks"] = by_blocks[100]
+
+    # Simple interpolation
+    fees["9blocks"] = (by_blocks[6] + by_blocks[12]) // 2
+
+    for fee, expect in fees.items():
+        # Put arg in assertion, so it gets printed on failure!
+        assert (l1.rpc.parsefeerate(fee), fee) == ({'perkw': expect}, fee)
+
+    # More thorough interpolation
+    for block in range(12, 100):
+        # y = y1 + (x-x1)(y2-y1)/(x2-x1)
+        fee = by_blocks[12] + (block - 12) * (by_blocks[100] - by_blocks[12]) // (100 - 12)
+        # Rounding error is a thing!
+        assert abs(l1.rpc.parsefeerate(f"{block}blocks")['perkw'] - fee) <= 1
 
 
 @pytest.mark.skip(reason="Fails by intention for creating test gossip stores")
