@@ -222,7 +222,7 @@ SQL_LISTRPCS_SCHEMAS := $(foreach l,$(SQL_LISTRPCS),doc/schemas/$l.schema.json)
 # make invalid JSON. Grr!
 # But these simple removals drop us from 100k to 29k.
 plugins/sql-schema_gen.h: plugins/Makefile $(SQL_LISTRPCS_SCHEMAS)
-	@$(call VERBOSE,GEN $@, (SEP=""; echo -n '"{'; for f in $(SQL_LISTRPCS); do echo -n "$$SEP\\\"$$f\\\":"; sed -e s/\"description\":\ *\".\*\"/\"\":\"\"/ -e s/\".*\":\ *{}/\"\":{}/ -e s/\"/\\\\\"/g < doc/schemas/$$f.schema.json | tr -d ' \n'; SEP=","; done; echo '}"') > $@)
+	@$(call VERBOSE,GEN $@, (SEP=""; echo '"{'; for f in $(SQL_LISTRPCS); do echo "$$SEP\\\"$$f\\\":"; sed -e s/\"description\":\ *\".\*\"/\"\":\"\"/ -e s/\".*\":\ *{}/\"\":{}/ -e s/\"/\\\\\"/g < doc/schemas/$$f.schema.json; SEP=","; done; echo '}"') | tr -d ' \n' > $@)
 
 plugins/sql.o: plugins/sql-schema_gen.h
 plugins/sql: $(PLUGIN_SQL_OBJS) $(PLUGIN_LIB_OBJS) $(PLUGIN_COMMON_OBJS) $(JSMN_OBJS) common/gossip_store.o gossipd/gossip_store_wiregen.o
@@ -244,5 +244,10 @@ target/${RUST_PROFILE}/cln-grpc: ${CLN_PLUGIN_SRC}
 ifneq ($(RUST),0)
 DEFAULT_TARGETS += $(CLN_PLUGIN_EXAMPLES) plugins/cln-grpc
 endif
+
+clean: plugins-clean
+plugins-clean:
+	$(RM) $(PLUGINS) $(CLN_PLUGIN_EXAMPLES)
+	$(RM) plugins/sql-schema_gen.h
 
 include plugins/test/Makefile
