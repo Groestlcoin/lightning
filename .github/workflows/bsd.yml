@@ -10,7 +10,6 @@ jobs:
     env:
       DEVELOPER: 1
       VALGRIND: 0
-      EXPERIMENTAL_FEATURES: 0
       COMPAT: 1
     steps:
     - uses: actions/checkout@v3
@@ -18,7 +17,7 @@ jobs:
       id: test
       uses: vmactions/freebsd-vm@v0
       with:
-        envs: 'DEVELOPER COMPAT'
+        envs: 'DEVELOPER VALGRIND COMPAT'
         usesh: true
         mem: 4096
         prepare: |
@@ -33,7 +32,6 @@ jobs:
             autoconf \
             automake \
             libtool \
-            gmp \
             bash \
             gettext \
             sqlite3 \
