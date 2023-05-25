@@ -5,7 +5,7 @@ on: [push, pull_request]
 jobs:
   test:
     runs-on: ubuntu-latest
-    name: Build on Alpine
+    name: Build
     timeout-minutes: 120
     strategy:
       fail-fast: false

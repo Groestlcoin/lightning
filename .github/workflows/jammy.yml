@@ -1,24 +1,37 @@
 ---
-name: CI Ubuntu jammy
+name: CI Ubuntu 22.04
 on: [push, pull_request]
 jobs:
-  smoke-test:
-    name: Build on Ubuntu 22.04
+  testjammy:
+    name: Jammy ${{ matrix.cfg }}
     runs-on: ubuntu-22.04
     timeout-minutes: 300
-    env:
-      DEVELOPER: 1
-      VALGRIND: 0
-      EXPERIMENTAL_FEATURES: 0
-      COMPAT: 1
     strategy:
       fail-fast: true
+      matrix:
+        include:
+          - CFG: gcc-dev1
+            DEVELOPER: 1
+            TEST_DB_PROVIDER: sqlite3
+            COMPILER: gcc
+          - CFG: gcc-dev0
+            DEVELOPER: 0
+            TEST_DB_PROVIDER: postgres
+            COMPILER: gcc
+          - CFG: clang-dev1
+            DEVELOPER: 1
+            TEST_DB_PROVIDER: sqlite3
+            COMPILER: clang
+          - CFG: clang-dev0
+            DEVELOPER: 0
+            TEST_DB_PROVIDER: postgres
+            COMPILER: clang
     steps:
       - name: Checkout
         uses: actions/checkout@v3
 
       - name: Set up Python 3.7
-        uses: actions/setup-python@v3
+        uses: actions/setup-python@v4
         with:
           python-version: 3.7
 
@@ -28,17 +41,10 @@ jobs:
 
       - name: Build
         env:
-          VALGRIND: ${{ matrix.VALGRIND }}
           DEVELOPER: ${{ matrix.DEVELOPER }}
-          EXPERIMENTAL_FEATURES: ${{ matrix.EXPERIMENTAL_FEATURES }}
           COMPILER: ${{ matrix.COMPILER }}
-          ARCH: ${{ matrix.ARCH }}
-          COMPAT: ${{ matrix.COMPAT }}
-          COPTFLAGS: ${{ matrix.COPTFLAGS }}
-          NETWORK: ${{ matrix.NETWORK }}
-          TEST_CMD: ${{ matrix.TEST_CMD }}
-          TEST_GROUP_COUNT: ${{ matrix.TEST_GROUP_COUNT }}
-          TEST_GROUP: ${{ matrix.TEST_GROUP }}
+          COMPAT: 1
+          CFG: ${{ matrix.CFG }}
         run: |
           bash -x .github/scripts/build.sh
 
