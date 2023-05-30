@@ -17,32 +17,20 @@ static void psbt_destroy(struct wally_psbt *psbt)
 	wally_psbt_free(psbt);
 }
 
-static struct wally_psbt *init_psbt(const tal_t *ctx, size_t num_inputs, size_t num_outputs)
+struct wally_psbt *create_psbt(const tal_t *ctx, size_t num_inputs, size_t num_outputs, u32 locktime)
 {
-	int wally_err;
+	const u32 init_flags = is_elements(chainparams) ? WALLY_PSBT_INIT_PSET : 0;
 	struct wally_psbt *psbt;
+	int wally_err;
 
 	tal_wally_start();
-	if (is_elements(chainparams))
-		wally_err = wally_psbt_init_alloc(2, num_inputs, num_outputs, 0, WALLY_PSBT_INIT_PSET, &psbt);
-	else
-		wally_err = wally_psbt_init_alloc(2, num_inputs, num_outputs, 0, 0, &psbt);
+	wally_err = wally_psbt_init_alloc(2, num_inputs, num_outputs, 0, init_flags, &psbt);
 	assert(wally_err == WALLY_OK);
+	wally_psbt_set_fallback_locktime(psbt, locktime);
 	/* By default we are modifying them internally; allow it */
 	wally_psbt_set_tx_modifiable_flags(psbt, WALLY_PSBT_TXMOD_INPUTS | WALLY_PSBT_TXMOD_OUTPUTS);
 	tal_add_destructor(psbt, psbt_destroy);
 	tal_wally_end_onto(ctx, psbt, struct wally_psbt);
-
-	return psbt;
-}
-
-/* FIXME extremely thin wrapper; remove? */
-struct wally_psbt *create_psbt(const tal_t *ctx, size_t num_inputs, size_t num_outputs, u32 locktime)
-{
-	struct wally_psbt *psbt;
-
-	psbt = init_psbt(ctx, num_inputs, num_outputs);
-	wally_psbt_set_fallback_locktime(psbt, locktime);
 
 	return psbt;
 }
@@ -66,9 +54,8 @@ struct wally_psbt *new_psbt(const tal_t *ctx, const struct wally_tx *wtx)
 
 	tal_wally_start();
 
-	/* locktime set in create_psbt for now */
+	/* locktime and modifiable flags are set in create_psbt */
 	wally_psbt_set_tx_version(psbt, wtx->version);
-	wally_psbt_set_tx_modifiable_flags(psbt, WALLY_PSBT_TXMOD_INPUTS | WALLY_PSBT_TXMOD_OUTPUTS);
 
 	for (size_t i = 0; i < wtx->num_inputs; i++) {
 		wally_err = wally_psbt_add_tx_input_at(psbt, i, 0, &wtx->inputs[i]);
@@ -200,13 +187,9 @@ struct wally_psbt_output *psbt_append_output(struct wally_psbt *psbt,
 					     const u8 *script,
 					     struct amount_sat amount)
 {
-	struct wally_psbt_output *out;
-	struct wally_tx_output *tx_out = wally_tx_output(NULL, script, amount);
-
-	out = psbt_add_output(psbt, tx_out, psbt->num_outputs);
-	wally_tx_output_free(tx_out);
-	return out;
+	return psbt_insert_output(psbt, script, amount, psbt->num_outputs);
 }
+
 struct wally_psbt_output *psbt_insert_output(struct wally_psbt *psbt,
 					     const u8 *script,
 					     struct amount_sat amount,
