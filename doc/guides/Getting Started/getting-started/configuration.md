@@ -10,12 +10,12 @@ updatedAt: "2023-02-21T13:26:18.280Z"
 
 ## Using a configuration file
 
-To use a configuration file, create a file named `config` within your top-level lightning directory or network subdirectory (eg. `~/.lightning/config` or `~/.lightning/bitcoin/config`).
+To use a configuration file, create a file named `config` within your top-level lightning directory or network subdirectory (eg. `~/.lightning/config` or `~/.lightning/groestlcoin/config`).
 
 When `lightningd` starts up it usually reads a general configuration file (default: `$HOME/.lightning/config`) then a network-specific configuration file (default: `$HOME/.lightning/testnet/config`).  This can be changed using `--conf` and `--lightning-dir`.
 
-> 📘 
-> 
+> 📘
+>
 > General configuration files are processed first, then network-specific ones, then command line options: later options override earlier ones except _addr_ options and _log-level_ with subsystems, which accumulate.
 
 `include` followed by a filename includes another configuration file at that point, relative to the current configuration file.
@@ -59,16 +59,16 @@ The [`lightning-listconfigs`](ref:lightning-listconfigs) command will output a v
   version.  If you really want to upgrade to a non-release version, you can  
   set this to _true_ (or _false_ to never allow a non-reversible upgrade!).
 
-### Bitcoin control options:
+### Groestlcoin control options:
 
 **network**=_NETWORK_
 
-- Select the network parameters (_bitcoin_, _testnet_, _signet_, or _regtest_).  
+- Select the network parameters (_groestlcoin_, _testnet_, _signet_, or _regtest_).  
   This is not valid within the per-network configuration file.
 
 - **mainnet**
 
-  Alias for _network=bitcoin_.
+  Alias for _network=groestlcoin_.
 
 - **testnet**
 
@@ -78,33 +78,33 @@ The [`lightning-listconfigs`](ref:lightning-listconfigs) command will output a v
 
   Alias for _network=signet_.
 
-- **bitcoin-cli**=_PATH_ [plugin `bcli`]
+- **groestlcoin-cli**=_PATH_ [plugin `bcli`]
 
-  The name of _bitcoin-cli_ executable to run.
+  The name of _groestlcoin-cli_ executable to run.
 
-- **bitcoin-datadir**=_DIR_ [plugin `bcli`]
+- **groestlcoin-datadir**=_DIR_ [plugin `bcli`]
 
-  _-datadir_ argument to supply to bitcoin-cli(1).
+  _-datadir_ argument to supply to groestlcoin-cli(1).
 
-- **bitcoin-rpcuser**=_USER_ [plugin `bcli`]
+- **groestlcoin-rpcuser**=_USER_ [plugin `bcli`]
 
-  The RPC username for talking to bitcoind(1).
+  The RPC username for talking to groestlcoind(1).
 
-- **bitcoin-rpcpassword**=_PASSWORD_ [plugin `bcli`]
+- **groestlcoin-rpcpassword**=_PASSWORD_ [plugin `bcli`]
 
-  The RPC password for talking to bitcoind(1).
+  The RPC password for talking to groestlcoind(1).
 
-- **bitcoin-rpcconnect**=_HOST_ [plugin `bcli`]
+- **groestlcoin-rpcconnect**=_HOST_ [plugin `bcli`]
 
-  The bitcoind(1) RPC host to connect to.
+  The groestlcoind(1) RPC host to connect to.
 
-- **bitcoin-rpcport**=_PORT_ [plugin `bcli`]
+- **groestlcoin-rpcport**=_PORT_ [plugin `bcli`]
 
-  The bitcoind(1) RPC port to connect to.
+  The groestlcoind(1) RPC port to connect to.
 
-- **bitcoin-retry-timeout**=_SECONDS_ [plugin `bcli`]
+- **groestlcoin-retry-timeout**=_SECONDS_ [plugin `bcli`]
 
-  Number of seconds to keep trying a bitcoin-cli(1) command. If the  
+  Number of seconds to keep trying a groestlcoin-cli(1) command. If the  
   command keeps failing after this time, exit with a fatal error.
 
 - **rescan**=_BLOCKS_
@@ -209,9 +209,9 @@ The [`lightning-listconfigs`](ref:lightning-listconfigs) command will output a v
   Identify the location of the wallet. This is a fully qualified data source name, including a scheme such as `sqlite3` or `postgres` followed by the connection parameters.
 
   The default wallet corresponds to the following DSN:  
-    `--wallet=sqlite3://$HOME/.lightning/bitcoin/lightningd.sqlite31`
+    `--wallet=sqlite3://$HOME/.lightning/groestlcoin/lightningd.sqlite31`
 
-  For the `sqlite3` scheme, you can specify a single backup database file by separating it with a `:` character, like so:  `--wallet=sqlite3://$HOME/.lightning/bitcoin/lightningd.sqlite3:/backup/lightningd.sqlite3`
+  For the `sqlite3` scheme, you can specify a single backup database file by separating it with a `:` character, like so:  `--wallet=sqlite3://$HOME/.lightning/groestlcoin/lightningd.sqlite3:/backup/lightningd.sqlite3`
 
   The following is an example of a postgresql wallet DSN:
 
@@ -273,9 +273,9 @@ The [`lightning-listconfigs`](ref:lightning-listconfigs) command will output a v
 - **force-feerates**==_VALUES_
 
   Networks like regtest and testnet have unreliable fee estimates: we usually treat them as the minimum (253 sats/kw) if we can't get them.  
-  This allows override of one or more of our standard feerates (see [`lightning-feerates`](ref:lightning-feerates)).  Up to 5 values, separated by '/' can be provided: if fewer are provided, then the final value is used for the remainder.  The values are in per-kw (roughly 1/4 of bitcoind's per-kb values), and the order is "opening", "mutual_close", "unilateral_close", "delayed_to_us", "htlc_resolution", and "penalty".
+  This allows override of one or more of our standard feerates (see [`lightning-feerates`](ref:lightning-feerates)).  Up to 5 values, separated by '/' can be provided: if fewer are provided, then the final value is used for the remainder.  The values are in per-kw (roughly 1/4 of groestlcoind's per-kb values), and the order is "opening", "mutual_close", "unilateral_close", "delayed_to_us", "htlc_resolution", and "penalty".
 
-  You would usually put this option in the per-chain config file, to avoid setting it on Bitcoin mainnet!  e.g. `~rusty/.lightning/regtest/config`.
+  You would usually put this option in the per-chain config file, to avoid setting it on Groestlcoin mainnet!  e.g. `~rusty/.lightning/regtest/config`.
 
 - **htlc-minimum-msat**=_MILLISATOSHI_
 
@@ -376,7 +376,7 @@ Note: prior to v22.11, forwards for channels which were closed were not easily d
 
 ### Networking options
 
-Note that for simple setups, the implicit _autolisten_ option does the right thing: for the mainnet (bitcoin) network it will try to bind to port 9735 on IPv4 and IPv6, and will announce it to peers if it seems like a public address (and other default ports for other networks, as described below).
+Note that for simple setups, the implicit _autolisten_ option does the right thing: for the mainnet (groestlcoin) network it will try to bind to port 9735 on IPv4 and IPv6, and will announce it to peers if it seems like a public address (and other default ports for other networks, as described below).
 
 Core Lightning also support IPv4/6 address discovery behind NAT routers. If your node detects an new public address, it will update its announcement. For this to work you need to forward the default TCP port 9735 to your node. IP discovery is only active if no other addresses are announced.
 
@@ -390,7 +390,7 @@ You can instead use _addr_ to override this (eg. to change the port), or precise
   If 'PORT' is not specified, the default port 9735 is used for mainnet (testnet: 19735, signet: 39735, regtest: 19846). If we can determine a public IP address from the resulting binding,  
   the address is announced.
 
-  If the argument begins with 'autotor:' then it is followed by the IPv4 or IPv6 address of the Tor control port (default port 9051), and this will be used to configure a Tor hidden service for port 9735 in case of mainnet (bitcoin) network whereas other networks (testnet,  
+  If the argument begins with 'autotor:' then it is followed by the IPv4 or IPv6 address of the Tor control port (default port 9051), and this will be used to configure a Tor hidden service for port 9735 in case of mainnet (groestlcoin) network whereas other networks (testnet,  
   signet, regtest) will set the same default ports they use for non-Tor addresses (see above).  
   The Tor hidden service will be configured to point to the first IPv4 or IPv6 address we bind to and is by default unique to your node's id.
 

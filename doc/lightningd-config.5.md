@@ -68,18 +68,18 @@ exit with an error rather than upgrade, unless this is an official released
 version.  If you really want to upgrade to a non-release version, you can
 set this to *true* (or *false* to never allow a non-reversible upgrade!).
 
-### Bitcoin control options:
+### Groestlcoin control options:
 
-Bitcoin control options:
+Groestlcoin control options:
 
 * **network**=*NETWORK*
 
-  Select the network parameters (*bitcoin*, *testnet*, *signet*, or *regtest*).
+  Select the network parameters (*groestlcoin*, *testnet*, *signet*, or *regtest*).
 This is not valid within the per-network configuration file.
 
 * **mainnet**
 
-  Alias for *network=bitcoin*.
+  Alias for *network=groestlcoin*.
 
 * **regtest**
 
@@ -93,33 +93,33 @@ This is not valid within the per-network configuration file.
 
   Alias for *network=signet*.
 
-* **bitcoin-cli**=*PATH* [plugin `bcli`]
+* **groestlcoin-cli**=*PATH* [plugin `bcli`]
 
-  The name of *bitcoin-cli* executable to run.
+  The name of *groestlcoin-cli* executable to run.
 
-* **bitcoin-datadir**=*DIR* [plugin `bcli`]
+* **groestlcoin-datadir**=*DIR* [plugin `bcli`]
 
-  *-datadir* argument to supply to bitcoin-cli(1).
+  *-datadir* argument to supply to groestlcoin-cli(1).
 
-* **bitcoin-rpcuser**=*USER* [plugin `bcli`]
+* **groestlcoin-rpcuser**=*USER* [plugin `bcli`]
 
-  The RPC username for talking to bitcoind(1).
+  The RPC username for talking to groestlcoind(1).
 
-* **bitcoin-rpcpassword**=*PASSWORD* [plugin `bcli`]
+* **groestlcoin-rpcpassword**=*PASSWORD* [plugin `bcli`]
 
-  The RPC password for talking to bitcoind(1).
+  The RPC password for talking to groestlcoind(1).
 
-* **bitcoin-rpcconnect**=*HOST* [plugin `bcli`]
+* **groestlcoin-rpcconnect**=*HOST* [plugin `bcli`]
 
-  The bitcoind(1) RPC host to connect to.
+  The groestlcoind(1) RPC host to connect to.
 
-* **bitcoin-rpcport**=*PORT* [plugin `bcli`]
+* **groestlcoin-rpcport**=*PORT* [plugin `bcli`]
 
-  The bitcoind(1) RPC port to connect to.
+  The groestlcoind(1) RPC port to connect to.
 
-* **bitcoin-retry-timeout**=*SECONDS* [plugin `bcli`]
+* **groestlcoin-retry-timeout**=*SECONDS* [plugin `bcli`]
 
-  Number of seconds to keep trying a bitcoin-cli(1) command. If the
+  Number of seconds to keep trying a groestlcoin-cli(1) command. If the
 command keeps failing after this time, exit with a fatal error.
 
 * **rescan**=*BLOCKS*
@@ -246,11 +246,11 @@ name, including a scheme such as `sqlite3` or `postgres` followed by the
 connection parameters.
 
   The default wallet corresponds to the following DSN:
-  `--wallet=sqlite3://$HOME/.lightning/bitcoin/lightningd.sqlite31`
+  `--wallet=sqlite3://$HOME/.lightning/groestlcoin/lightningd.sqlite31`
 
   For the `sqlite3` scheme, you can specify a single backup database file
 by separating it with a `:` character, like so:
-  `--wallet=sqlite3://$HOME/.lightning/bitcoin/lightningd.sqlite3:/backup/lightningd.sqlite3`
+  `--wallet=sqlite3://$HOME/.lightning/groestlcoin/lightningd.sqlite3:/backup/lightningd.sqlite3`
 
   The following is an example of a postgresql wallet DSN:
 
@@ -346,12 +346,12 @@ usually treat them as the minimum (253 sats/kw) if we can't get them.
 This allows override of one or more of our standard feerates (see
 lightning-feerates(7)).  Up to 5 values, separated by '/' can be
 provided: if fewer are provided, then the final value is used for the
-remainder.  The values are in per-kw (roughly 1/4 of bitcoind's per-kb
+remainder.  The values are in per-kw (roughly 1/4 of groestlcoind's per-kb
 values), and the order is "opening", "mutual\_close", "unilateral\_close",
 "delayed\_to\_us", "htlc\_resolution", and "penalty".
 
   You would usually put this option in the per-chain config file, to avoid
-setting it on Bitcoin mainnet!  e.g. `~rusty/.lightning/regtest/config`.
+setting it on Groestlcoin mainnet!  e.g. `~rusty/.lightning/regtest/config`.
 
 * **htlc-minimum-msat**=*MILLISATOSHI*
 
@@ -486,7 +486,7 @@ network.
 ### Networking options
 
 Note that for simple setups, the implicit *autolisten* option does the
-right thing: for the mainnet (bitcoin) network it will try to bind to
+right thing: for the mainnet (groestlcoin) network it will try to bind to
 port 9735 on IPv4 and IPv6, and will announce it to peers if it seems
 like a public address (and other default ports for other networks,
 as described below).
@@ -519,7 +519,7 @@ the address is announced.
   If the argument begins with 'autotor:' then it is followed by the
 IPv4 or IPv6 address of the Tor control port (default port 9051),
 and this will be used to configure a Tor hidden service for port 9735
-in case of mainnet (bitcoin) network whereas other networks (testnet,
+in case of mainnet (groestlcoin) network whereas other networks (testnet,
 signet, regtest) will set the same default ports they use for non-Tor
 addresses (see above).
 The Tor hidden service will be configured to point to the

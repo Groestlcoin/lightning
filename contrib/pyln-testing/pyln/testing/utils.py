@@ -608,11 +608,11 @@ class LightningD(TailableProc):
                                                  else "false"),
             'network': TEST_NETWORK,
             'ignore-fee-limits': 'false',
-            'bitcoin-rpcuser': BITCOIND_CONFIG['rpcuser'],
-            'bitcoin-rpcpassword': BITCOIND_CONFIG['rpcpassword'],
+            'groestlcoin-rpcuser': BITCOIND_CONFIG['rpcuser'],
+            'groestlcoin-rpcpassword': BITCOIND_CONFIG['rpcpassword'],
 
             # Make sure we don't touch any existing config files in the user's $HOME
-            'bitcoin-datadir': lightning_dir,
+            'groestlcoin-datadir': lightning_dir,
         }
 
         if grpc_port is not None:

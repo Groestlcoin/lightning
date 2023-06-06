@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-This registers part of the Bitcoin backend methods.
+This registers part of the Groestlcoin backend methods.
 We only use it for testing startup and we don't care about the actual values.
 """
 import time
@@ -30,9 +30,9 @@ def getchaininfo(plugin, **kwargs):
 
 
 # We don't use these options, but it allows us to get to the expected failure.
-plugin.add_option("bitcoin-rpcuser", "", "")
-plugin.add_option("bitcoin-rpcpassword", "", "")
-plugin.add_option("bitcoin-rpcport", "", "")
-plugin.add_option("bitcoin-datadir", "", "")
+plugin.add_option("groestlcoin-rpcuser", "", "")
+plugin.add_option("groestlcoin-rpcpassword", "", "")
+plugin.add_option("groestlcoin-rpcport", "", "")
+plugin.add_option("groestlcoin-datadir", "", "")
 
 plugin.run()

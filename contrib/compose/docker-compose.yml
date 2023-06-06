@@ -24,9 +24,9 @@ services:
     environment:
       LIGHTNINGD_NETWORK: ${NETWORK:-regtest}
       LIGHTNINGD_OPT: |
-        bitcoin-datadir=/etc/groestlcoin
-        bitcoin-rpcconnect=groestlcoind
-        bitcoin-rpcport=43782
+        groestlcoin-datadir=/etc/groestlcoin
+        groestlcoin-rpcconnect=groestlcoind
+        groestlcoin-rpcport=43782
         log-level=debug
         announce-addr=${HOST}:9737
         bind-addr=0.0.0.0:9735
@@ -52,7 +52,7 @@ services:
     - "9876:${SPARK_WALLET_PORT}"
     volumes:
     - "clightning_groestlcoin_datadir:/etc/lightning"
-  
+
 volumes:
   clightning_groestlcoin_datadir:
   groestlcoin_datadir:
