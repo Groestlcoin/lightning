@@ -51,7 +51,7 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v3
         with:
-          name: clightning-${{ github.sha }}-ubuntu20.04
+          name: clightning-${{ github.sha }}-ubuntu20.04-${{ matrix.DEVELOPER }}-${{ matrix.COMPILER }}
           path: |
             /usr/local/bin/lightningd
             /usr/local/bin/lightning-cli
@@ -68,4 +68,4 @@ jobs:
       - name: Download artifacts
         uses: actions/download-artifact@v3
         with:
-          name: clightning-${{ github.sha }}-ubuntu20.04
+          name: clightning-${{ github.sha }}-ubuntu20.04-${{ matrix.DEVELOPER }}-${{ matrix.COMPILER }}
