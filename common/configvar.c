@@ -1,10 +1,10 @@
+#include <stddef.h>
 #include "config.h"
 #include <assert.h>
 #include <ccan/cast/cast.h>
 #include <ccan/tal/str/str.h>
 #include <common/configvar.h>
 #include <common/utils.h>
-#include <stddef.h>
 
 struct configvar *configvar_new(const tal_t *ctx,
 				enum configvar_src src,
