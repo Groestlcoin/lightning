@@ -1,4 +1,3 @@
-#include <stddef.h>
 #include "config.h"
 #include <assert.h>
 #include <ccan/cast/cast.h>
