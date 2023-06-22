@@ -1401,7 +1401,13 @@ def test_funding_external_wallet_corners(node_factory, bitcoind):
     assert len(l1.rpc.listpeers()['peers']) == 0
 
     # on reconnect, channel should get destroyed
-    l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
+    # FIXME: if peer disconnects too fast, we get
+    # "disconnected during connection"
+    try:
+        l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
+    except RpcError as err:
+        assert "disconnected during connection" in err.error
+
     l1.daemon.wait_for_log('Unknown channel .* for WIRE_CHANNEL_REESTABLISH')
     wait_for(lambda: len(l1.rpc.listpeers()['peers']) == 0)
     wait_for(lambda: len(l2.rpc.listpeers()['peers']) == 0)
@@ -4392,6 +4398,30 @@ def test_peer_disconnected_reflected_in_channel_state(node_factory):
 
     wait_for(lambda: only_one(l1.rpc.listpeers(l2.info['id'])['peers'])['connected'] is False)
     wait_for(lambda: only_one(l1.rpc.listpeerchannels(l2.info['id'])['channels'])['peer_connected'] is False)
+
+
+def test_peer_disconnected_has_featurebits(node_factory):
+    """
+    Make sure that if a node is restarted, it still remembers feature
+    bits from a peer it has a channel with but isn't connected to
+    """
+    l1, l2 = node_factory.line_graph(2)
+
+    expected_features = expected_peer_features()
+
+    l1_features = only_one(l2.rpc.listpeers()['peers'])['features']
+    l2_features = only_one(l1.rpc.listpeers()['peers'])['features']
+    assert l1_features == expected_features
+    assert l2_features == expected_features
+
+    l1.stop()
+    l2.stop()
+
+    # Ensure we persisted feature bits and return them even when disconnected
+    l1.start()
+
+    wait_for(lambda: only_one(l1.rpc.listpeers(l2.info['id'])['peers'])['connected'] is False)
+    wait_for(lambda: only_one(l1.rpc.listpeers()['peers'])['features'] == expected_features)
 
 
 @pytest.mark.developer("needs dev-no-reconnect")
