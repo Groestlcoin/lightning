@@ -45,7 +45,7 @@ jobs:
           python3 -m pip install -r requirements.txt
           ./configure CC="$COMPILER"
 
-          make -j $(nproc
+          make -j $(nproc)
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v3
