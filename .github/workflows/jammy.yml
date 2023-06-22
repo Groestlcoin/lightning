@@ -12,19 +12,12 @@ jobs:
         include:
           - CFG: gcc-dev1
             DEVELOPER: 1
-            TEST_DB_PROVIDER: sqlite3
             COMPILER: gcc
           - CFG: gcc-dev0
             DEVELOPER: 0
-            TEST_DB_PROVIDER: postgres
             COMPILER: gcc
           - CFG: clang-dev1
             DEVELOPER: 1
-            TEST_DB_PROVIDER: sqlite3
-            COMPILER: clang
-          - CFG: clang-dev0
-            DEVELOPER: 0
-            TEST_DB_PROVIDER: postgres
             COMPILER: clang
     steps:
       - name: Checkout
@@ -46,12 +39,18 @@ jobs:
           COMPAT: 1
           CFG: ${{ matrix.CFG }}
         run: |
-          bash -x .github/scripts/build.sh
+          set -e
+          pip3 install --user pip wheel poetry
+          poetry export -o requirements.txt --with dev --without-hashes
+          python3 -m pip install -r requirements.txt
+          ./configure CC="$COMPILER"
+
+          make -j $(nproc
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v3
         with:
-          name: clightning-${{ github.sha }}-ubuntu22.04-${{ matrix.DEVELOPER }}-${{ matrix.COMPILER }}
+          name: cln-${{ github.sha }}-ubuntu22.04-${{ matrix.DEVELOPER }}-${{ matrix.COMPILER }}
           path: |
             /usr/local/bin/lightningd
             /usr/local/bin/lightning-cli
@@ -68,4 +67,4 @@ jobs:
       - name: Download artifacts
         uses: actions/download-artifact@v3
         with:
-          name: clightning-${{ github.sha }}-ubuntu22.04-${{ matrix.DEVELOPER }}-${{ matrix.COMPILER }}
+          name: cln-${{ github.sha }}-ubuntu22.04-${{ matrix.DEVELOPER }}-${{ matrix.COMPILER }}
