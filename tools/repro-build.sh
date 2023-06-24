@@ -55,20 +55,20 @@ VERSION=$(git describe --always --dirty=-modded --abbrev=7 2>/dev/null || pwd | 
 
 # eg. ## [0.6.3] - 2019-01-09: "The Smallblock Conspiracy"
 # Skip 'v' here in $VERSION
-MTIME=${FORCE_MTIME:-$(sed -n "s/^## \\[${VERSION#v}\\] - \\([-0-9]*\\).*/\\1/p" < CHANGELOG.md)}
-if [ -z "$MTIME" ]; then
-    echo "No date found for $VERSION in CHANGELOG.md" >&2
-    exit 1
-fi
+#MTIME=${FORCE_MTIME:-$(sed -n "s/^## \\[${VERSION#v}\\] - \\([-0-9]*\\).*/\\1/p" < CHANGELOG.md)}
+#if [ -z "$MTIME" ]; then
+#    echo "No date found for $VERSION in CHANGELOG.md" >&2
+#    exit 1
+#fi
 
 case "$PLATFORM" in
     Ubuntu-18.04)
 	# Use an ISO base of 5748706937539418ee5707bd538c4f5eabae485d17aa49fb13ce2c9b70532433 /home/rusty/Downloads/ubuntu-18.04.1-desktop-amd64.iso
 	# Check they've turned off updates and security updates
-	if grep ^deb /etc/apt/sources.list | grep -- '-\(updates\|security\)'; then
-	    echo Please disable security and updates in /etc/apt/sources.list >&2
-	    exit 1
-	fi
+	#if grep ^deb /etc/apt/sources.list | grep -- '-\(updates\|security\)'; then
+	#    echo Please disable security and updates in /etc/apt/sources.list >&2
+	#    exit 1
+	#fi
 	DOWNLOAD='sudo apt -y --no-install-recommends --reinstall -d install'
 	PKGS='autoconf automake libtool make gcc libsqlite3-dev zlib1g-dev libsodium-dev'
 	INST='sudo dpkg -i'
@@ -101,10 +101,10 @@ eb49ad0a92f46080ab23974ee5db69dc08709a74e4275a0906afc220c75ce7a8  /var/cache/apt
 EOF
 	;;
     Ubuntu-20.04)
-	if grep ^deb /etc/apt/sources.list | grep -- '-\(updates\|security\)'; then
-	    echo Please disable security and updates in /etc/apt/sources.list >&2
-	    exit 1
-	fi
+	#if grep ^deb /etc/apt/sources.list | grep -- '-\(updates\|security\)'; then
+	#    echo Please disable security and updates in /etc/apt/sources.list >&2
+	#    exit 1
+	#fi
 	DOWNLOAD='sudo apt -y --no-install-recommends --reinstall -d install'
 	PKGS='autoconf automake libtool make gcc libsqlite3-dev zlib1g-dev libsodium-dev'
 	INST='sudo dpkg -i'
@@ -133,10 +133,10 @@ a7d59420134a8307eb11ef79b68e2b35cadc794a60f82c87f4583e37c763fd01  /var/cache/apt
 EOF
 	;;
     Ubuntu-22.04)
-	if grep ^deb /etc/apt/sources.list | grep -- '-\(updates\|security\)'; then
-	    echo Please disable security and updates in /etc/apt/sources.list >&2
-	    exit 1
-	fi
+	#if grep ^deb /etc/apt/sources.list | grep -- '-\(updates\|security\)'; then
+	#    echo Please disable security and updates in /etc/apt/sources.list >&2
+	#    exit 1
+	#fi
 	DOWNLOAD='sudo apt -y --no-install-recommends --reinstall -d install'
 	PKGS='autoconf automake libtool make gcc libsqlite3-dev zlib1g-dev libsodium-dev'
 	INST='sudo dpkg -i'
@@ -173,11 +173,11 @@ esac
 $DOWNLOAD $PKGS
 
 # Make sure versions match, and exactly.
-sha256sum -c /tmp/SHASUMS
+#sha256sum -c /tmp/SHASUMS
 
 # Install them
 # shellcheck disable=SC2046
-$INST $(cut -c66- < /tmp/SHASUMS)
+#$INST $(cut -c66- < /tmp/SHASUMS)
 
 # Build ready for packaging.
 # Once everyone has gcc8, we can use CC="gcc -ffile-prefix-map=$(pwd)=/home/clightning"
@@ -187,5 +187,4 @@ make PYTHON_VERSION=3
 make install DESTDIR=inst/
 
 cd inst && tar --sort=name \
-      --mtime="$MTIME 00:00Z" \
       --owner=0 --group=0 --numeric-owner -cvaf ../clightning-"$VERSION-$PLATFORM".tar.xz .

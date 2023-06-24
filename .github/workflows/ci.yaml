@@ -1,70 +1,41 @@
 ---
-name: CI Ubuntu 20.04
+name: CI Ubuntu
 on: [push, pull_request]
 jobs:
-  testfocal:
-    name: Focal ${{ matrix.cfg }}
-    runs-on: ubuntu-20.04
-    timeout-minutes: 300
+  build:
+    runs-on: ${{ matrix.os }}
     strategy:
-      fail-fast: true
       matrix:
-        include:
-          - CFG: gcc-dev1
-            DEVELOPER: 1
-            COMPILER: gcc
-          - CFG: gcc-dev0
-            DEVELOPER: 0
-            COMPILER: gcc
-          - CFG: clang-dev1
-            DEVELOPER: 1
-            COMPILER: clang
+        os: ['Ubuntu-22.04', 'Ubuntu-20.04']
     steps:
       - name: Checkout
         uses: actions/checkout@v3
-
       - name: Set up Python 3.7
         uses: actions/setup-python@v4
         with:
           python-version: 3.7
-
       - name: Install dependencies
         run: |
           bash -x .github/scripts/setup.sh
-
       - name: Build
-        env:
-          DEVELOPER: ${{ matrix.DEVELOPER }}
-          COMPILER: ${{ matrix.COMPILER }}
-          COMPAT: 1
-          CFG: ${{ matrix.CFG }}
         run: |
           set -e
           pip3 install --user pip wheel poetry
-          poetry export -o requirements.txt --with dev --without-hashes
+          poetry export -o requirements.txt --without-hashes
           python3 -m pip install -r requirements.txt
-          ./configure CC="$COMPILER"
-
+          ./configure --prefix=/usr
           make -j $(nproc)
-
+          make install DESTDIR=inst RUST_PROFILE=release
+          cd inst/ && tar --sort=name --owner=0 --group=0 --numeric-owner -cvaf ../clightning-v-${{ matrix.os }}.tar.xz .
       - name: Upload artifacts
         uses: actions/upload-artifact@v3
         with:
-          name: cln-${{ github.sha }}-ubuntu20.04-${{ matrix.DEVELOPER }}-${{ matrix.COMPILER }}
+          name: clightning-${{ github.sha }}-${{ matrix.os }}
           path: |
-            /usr/local/bin/lightningd
-            /usr/local/bin/lightning-cli
-            /usr/local/bin/lightning-hsmtool
-            /usr/local/libexec/c-lightning
-            /usr/local/share/man/man1
-            /usr/local/share/man/man5
-            /usr/local/share/man/man7
-            /usr/local/share/man/man8
-            /usr/local/share/doc/c-lightning
+            clightning-v-${{ matrix.os }}.tar.xz
           if-no-files-found: error
           retention-days: 7
-
       - name: Download artifacts
         uses: actions/download-artifact@v3
         with:
-          name: cln-${{ github.sha }}-ubuntu20.04-${{ matrix.DEVELOPER }}-${{ matrix.COMPILER }}
+          name: clightning-${{ github.sha }}-${{ matrix.os }}

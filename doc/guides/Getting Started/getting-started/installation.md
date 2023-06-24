@@ -14,19 +14,19 @@ If you're on Ubuntu:
 sudo apt-get install -y software-properties-common
 sudo add-apt-repository -u ppa:lightningnetwork/ppa
 sudo apt-get install lightningd snapd
-sudo snap install bitcoin-core
-sudo ln -s /snap/bitcoin-core/current/bin/bitcoin{d,-cli} /usr/local/bin/
+sudo snap install groestlcoin-core
+sudo ln -s /snap/groestlcoin-core/current/bin/groestlcoin{d,-cli} /usr/local/bin/
 ```
 
 
 
-Alternatively, you can install a pre-compiled binary from the [releases](https://github.com/ElementsProject/lightning/releases) page on GitHub. Core Lightning provides binaries for both Ubuntu and Fedora distributions. 
+Alternatively, you can install a pre-compiled binary from the [releases](https://github.com/ElementsProject/lightning/releases) page on GitHub. Core Lightning provides binaries for both Ubuntu and Fedora distributions.
 
 If you're on a different distribution or OS, you can compile the source by following the instructions from [Installing from Source](<>).
 
 # Docker
 
-To install the Docker image for the latest stable release: 
+To install the Docker image for the latest stable release:
 
 ```shell
 docker pull elementsproject/lightningd:latest
@@ -46,14 +46,14 @@ See all of the docker images for Core Lightning on [Docker Hub](https://hub.dock
 
 # Third-party apps
 
-For a GUI experience, you can install and use Core Lightning via a variety of third-party applications such as [Ride the Lightning](https://www.ridethelightning.info/), [Umbrel](https://getumbrel.com/), [BTCPayServer](https://btcpayserver.org/), [Raspiblitz](https://raspiblitz.org/), [Embassy](https://start9.com/). 
+For a GUI experience, you can install and use Core Lightning via a variety of third-party applications such as [Ride the Lightning](https://www.ridethelightning.info/), [Umbrel](https://getumbrel.com/), [BTCPayServer](https://btcpayserver.org/), [Raspiblitz](https://raspiblitz.org/), [Embassy](https://start9.com/).
 
-Core Lightning is also available on nixOS via the [nix-bitcoin](https://github.com/fort-nix/nix-bitcoin/) project.
+Core Lightning is also available on nixOS via the [nix-Groestlcoin](https://github.com/fort-nix/nix-bitcoin/) project.
 
 # Installing from source
 
-> 📘 
-> 
+> 📘
+>
 > To build Core Lightning in a reproducible way, follow the steps at [Reproducible builds for Core Lightning](doc:repro).
 
 ## Library Requirements
@@ -69,7 +69,7 @@ For actually doing development and running the tests, you will also need:
 - pip3: to install python-bitcoinlib
 - valgrind: for extra debugging checks
 
-You will also need a version of bitcoind with segregated witness and `estimatesmartfee` with `ECONOMICAL` mode support, such as the 0.16 or above.
+You will also need a version of groestlcoind with segregated witness and `estimatesmartfee` with `ECONOMICAL` mode support, such as the 0.16 or above.
 
 ## To Build on Ubuntu
 
@@ -88,14 +88,14 @@ pip3 install --user poetry
 
 
 
-If you don't have Bitcoin installed locally you'll need to install that as well. It's now available via [snapd](https://snapcraft.io/bitcoin-core).
+If you don't have Groestlcoin installed locally you'll need to install that as well. It's now available via [snapd](https://snapcraft.io/groestlcoin-core).
 
 ```shell
 sudo apt-get install snapd
-sudo snap install bitcoin-core
+sudo snap install groestlcoin-core
 # Snap does some weird things with binary names; you'll
 # want to add a link to them so everything works as expected
-sudo ln -s /snap/bitcoin-core/current/bin/bitcoin{d,-cli} /usr/local/bin/
+sudo ln -s /snap/groestlcoin-core/current/bin/groestlcoin{d,-cli} /usr/local/bin/
 ```
 
 
@@ -150,8 +150,8 @@ sudo make install
 
 
 
-> 📘 
-> 
+> 📘
+>
 > If you want disable Rust because you do not want use it or simple you do not want the grpc-plugin, you can use `./configure --disable-rust`.
 
 To build core lightning for development purpose you can use the following commands:
@@ -179,7 +179,7 @@ Optionally, add `-j$(nproc)` after `make` to speed up compilation. (e.g. `make -
 Running lightning:
 
 ```shell
-bitcoind &
+groestlcoind &
 ./lightningd/lightningd &
 ./cli/lightning-cli help
 ```
@@ -216,7 +216,7 @@ $ sudo dnf update -y && \
 
 
 
-Make sure you have [bitcoind](https://github.com/bitcoin/bitcoin) available to run.
+Make sure you have [groestlcoind](https://github.com/groestlcoin/groestlcoin) available to run.
 
 Clone lightning:
 
@@ -248,8 +248,8 @@ $lightning> sudo make install
 Running lightning (mainnet):
 
 ```shell
-$ bitcoind &
-$ lightningd --network=bitcoin
+$ groestlcoind &
+$ lightningd --network=groestlcoin
 ```
 
 
@@ -257,7 +257,7 @@ $ lightningd --network=bitcoin
 Running lightning on testnet:
 
 ```shell
-$ bitcoind -testnet &
+$ groestlcoind -testnet &
 $ lightningd --network=testnet
 ```
 
@@ -285,21 +285,21 @@ If you want to compile locally and fiddle with compile time options:
 
 See `/usr/ports/net-p2p/c-lightning/Makefile` for instructions on how to build from an arbitrary git commit, instead of the latest release tag.
 
-> 📘 
-> 
+> 📘
+>
 > Make sure you've set an utf-8 locale, e.g. `export LC_CTYPE=en_US.UTF-8`, otherwise manpage installation may fail.
 
 Running lightning:
 
-Configure bitcoind, if not already: add `rpcuser=<foo>` and `rpcpassword=<bar>` to `/usr/local/etc/bitcoin.conf`, maybe also `testnet=1`.
+Configure groestlcoind, if not already: add `rpcuser=<foo>` and `rpcpassword=<bar>` to `/usr/local/etc/groestlcoin.conf`, maybe also `testnet=1`.
 
-Configure lightningd: copy `/usr/local/etc/lightningd-bitcoin.conf.sample` to  
-`/usr/local/etc/lightningd-bitcoin.conf` and edit according to your needs.
+Configure lightningd: copy `/usr/local/etc/lightningd-groestlcoin.conf.sample` to  
+`/usr/local/etc/lightningd-groestlcoin.conf` and edit according to your needs.
 
 ```shell
-# service bitcoind start
+# service groestlcoind start
 # service lightningd start
-# lightning-cli --rpc-file /var/db/c-lightning/bitcoin/lightning-rpc --lightning-dir=/var/db/c-lightning help
+# lightning-cli --rpc-file /var/db/c-lightning/groestlcoin/lightning-rpc --lightning-dir=/var/db/c-lightning help
 ```
 
 
@@ -401,15 +401,15 @@ $ pip install poetry
 
 
 
-If you don't have bitcoind installed locally you'll need to install that as well:
+If you don't have groestlcoind installed locally you'll need to install that as well:
 
 ```shell
 $ brew install berkeley-db4 boost miniupnpc pkg-config libevent
-$ git clone https://github.com/bitcoin/bitcoin
-$ cd bitcoin
+$ git clone https://github.com/groestlcoin/groestlcoin
+$ cd groestlcoin
 $ ./autogen.sh
 $ ./configure
-$ make src/bitcoind src/bitcoin-cli && make install
+$ make src/groestlcoind src/groestlcoin-cli && make install
 ```
 
 
@@ -443,12 +443,12 @@ $ poetry run make
 
 Running lightning:
 
-> 📘 
-> 
-> Edit your `~/Library/Application\ Support/Bitcoin/bitcoin.conf`to include `rpcuser=<foo>` and `rpcpassword=<bar>` first, you may also need to include `testnet=1`.
+> 📘
+>
+> Edit your `~/Library/Application\ Support/Groestlcoin/groestlcoin.conf`to include `rpcuser=<foo>` and `rpcpassword=<bar>` first, you may also need to include `testnet=1`.
 
 ```shell
-bitcoind &
+groestlcoind &
 ./lightningd/lightningd &
 ./cli/lightning-cli help
 ```
@@ -638,7 +638,7 @@ For all the other Pi devices out there, consider using [Armbian](https://www.arm
 
 You can compile in `customize-image.sh` using the instructions for Ubuntu.
 
-A working example that compiles both bitcoind and Core Lightning for Armbian can  
+A working example that compiles both groestlcoind and Core Lightning for Armbian can  
 be found [here](https://github.com/Sjors/armbian-bitcoin-core).
 
 ## To compile for Alpine

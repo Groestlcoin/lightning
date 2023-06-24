@@ -1,0 +1,70 @@
+name: Ubuntu only release
+
+on: [push, pull_request]
+
+jobs:
+  bionic:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Builder image setup
+        run: sudo docker build -t cl-repro-bionic - < contrib/reprobuild/Dockerfile.bionic
+      - name: create release folder
+        run: mkdir release
+      - name: Building using the builder image
+        run: sudo docker run --rm -v $(pwd):/build -t cl-repro-bionic
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: clightning-${{ github.sha }}-Ubuntu-18.04
+          path: release/*.tar.xz
+          if-no-files-found: error
+          retention-days: 7
+      - name: Download artifacts
+        uses: actions/download-artifact@v3
+        with:
+          name: clightning-${{ github.sha }}-Ubuntu-18.04
+
+  focal:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Builder image setup
+        run: sudo docker build -t cl-repro-focal - < contrib/reprobuild/Dockerfile.focal
+      - name: create release folder
+        run: mkdir release
+      - name: Building using the builder image
+        run: sudo docker run --rm -v $(pwd):/build -t cl-repro-focal
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: clightning-${{ github.sha }}-Ubuntu-20.04
+          path: release/*.tar.xz
+          if-no-files-found: error
+          retention-days: 7
+      - name: Download artifacts
+        uses: actions/download-artifact@v3
+        with:
+          name: clightning-${{ github.sha }}-Ubuntu-20.04
+
+  jammy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Builder image setup
+        run: sudo docker build -t cl-repro-jammy - < contrib/reprobuild/Dockerfile.jammy
+      - name: create release folder
+        run: mkdir release
+      - name: Building using the builder image
+        run: sudo docker run --rm -v $(pwd):/build -t cl-repro-jammy
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: clightning-${{ github.sha }}-Ubuntu-22.04
+          path: release/*.tar.xz
+          if-no-files-found: error
+          retention-days: 7
+      - name: Download artifacts
+        uses: actions/download-artifact@v3
+        with:
+          name: clightning-${{ github.sha }}-Ubuntu-22.04

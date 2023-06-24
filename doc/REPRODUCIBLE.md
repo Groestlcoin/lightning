@@ -136,7 +136,7 @@ reproducible.
 The dockerfiles assume that the base image has the codename as its image name.
 
 
-[repro-dir]: https://github.com/ElementsProject/lightning/tree/master/contrib/reprobuild
+[repro-dir]: https://github.com/Groestlcoin/lightning/tree/master/contrib/reprobuild
 
 
 # Building using the builder image

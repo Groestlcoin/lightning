@@ -17,9 +17,9 @@ The steps involved in creating reproducible builds are:
 - Creation of a manifest (`SHA256SUMS` file containing the crytographic hashes of the binaries and packages)
 - Signing of the manifest by maintainers and volunteers that have reproduced the files in the manifest starting from the source.
 
-The bulk of these operations is handled by the [`repro-build.sh`](https://github.com/ElementsProject/lightning/blob/master/tools/repro-build.sh) script, but some manual operations are required to setup the build environment. Since a binary is built against platorm specific libraries we also need to replicate the steps once for each OS distribution and architecture, so the majority of this guide will describe how to set up those starting from a minimal trusted base. This minimal trusted base in most cases is the official installation medium from the OS provider.
+The bulk of these operations is handled by the [`repro-build.sh`](https://github.com/Groestlcoin/lightning/blob/master/tools/repro-build.sh) script, but some manual operations are required to setup the build environment. Since a binary is built against platorm specific libraries we also need to replicate the steps once for each OS distribution and architecture, so the majority of this guide will describe how to set up those starting from a minimal trusted base. This minimal trusted base in most cases is the official installation medium from the OS provider.
 
-Note: Since your signature certifies the integrity of the resulting binaries, please familiarize youself with both the [`repro-build.sh`](https://github.com/ElementsProject/lightning/blob/master/tools/repro-build.sh) script, as well as with the setup instructions for the build environments before signing anything.
+Note: Since your signature certifies the integrity of the resulting binaries, please familiarize youself with both the [`repro-build.sh`](https://github.com/Groestlcoin/lightning/blob/master/tools/repro-build.sh) script, as well as with the setup instructions for the build environments before signing anything.
 
 # Build Environment Setup
 
