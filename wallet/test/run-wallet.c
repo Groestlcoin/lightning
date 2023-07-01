@@ -73,11 +73,13 @@ void broadcast_tx_(struct chain_topology *topo UNNEEDED,
 		   struct channel *channel UNNEEDED,
 		   const struct bitcoin_tx *tx TAKES UNNEEDED,
 		   const char *cmd_id UNNEEDED, bool allowhighfees UNNEEDED, u32 minblock UNNEEDED,
-		   void (*finished)(struct channel * UNNEEDED,
+		   bool (*finished)(struct channel * UNNEEDED,
+				    const struct bitcoin_tx * UNNEEDED,
 				    bool success UNNEEDED,
-				    const char *err) UNNEEDED,
+				    const char *err UNNEEDED,
+				    void *) UNNEEDED,
 		   bool (*refresh)(struct channel * UNNEEDED, const struct bitcoin_tx ** UNNEEDED, void *) UNNEEDED,
-		   void *refresh_arg TAKES UNNEEDED)
+		   void *cbarg TAKES UNNEEDED)
 { fprintf(stderr, "broadcast_tx_ called!\n"); abort(); }
 /* Generated stub for channel_tell_depth */
 bool channel_tell_depth(struct lightningd *ld UNNEEDED,
@@ -111,6 +113,11 @@ struct command_result *command_success(struct command *cmd UNNEEDED,
 				       struct json_stream *response)
 
 { fprintf(stderr, "command_success called!\n"); abort(); }
+/* Generated stub for commit_tx_boost */
+bool commit_tx_boost(struct channel *channel UNNEEDED,
+		     const struct bitcoin_tx **tx UNNEEDED,
+		     struct anchor_details *adet UNNEEDED)
+{ fprintf(stderr, "commit_tx_boost called!\n"); abort(); }
 /* Generated stub for connect_any_cmd_id */
 const char *connect_any_cmd_id(const tal_t *ctx UNNEEDED,
 			       struct lightningd *ld UNNEEDED, const struct peer *peer UNNEEDED)
@@ -125,6 +132,11 @@ void connect_succeeded(struct lightningd *ld UNNEEDED, const struct peer *peer U
 		       bool incoming UNNEEDED,
 		       const struct wireaddr_internal *addr UNNEEDED)
 { fprintf(stderr, "connect_succeeded called!\n"); abort(); }
+/* Generated stub for create_anchor_details */
+struct anchor_details *create_anchor_details(const tal_t *ctx UNNEEDED,
+					     struct channel *channel UNNEEDED,
+					     const struct bitcoin_tx *tx UNNEEDED)
+{ fprintf(stderr, "create_anchor_details called!\n"); abort(); }
 /* Generated stub for create_onionreply */
 struct onionreply *create_onionreply(const tal_t *ctx UNNEEDED,
 				     const struct secret *shared_secret UNNEEDED,
@@ -222,7 +234,8 @@ bool htlc_is_trimmed(enum side htlc_owner UNNEEDED,
 		     u32 feerate_per_kw UNNEEDED,
 		     struct amount_sat dust_limit UNNEEDED,
 		     enum side side UNNEEDED,
-		     bool option_anchor_outputs UNNEEDED)
+		     bool option_anchor_outputs UNNEEDED,
+		     bool option_anchors_zero_fee_htlc_tx UNNEEDED)
 { fprintf(stderr, "htlc_is_trimmed called!\n"); abort(); }
 /* Generated stub for htlc_set_add */
 void htlc_set_add(struct lightningd *ld UNNEEDED,
@@ -1093,7 +1106,7 @@ static bool test_wallet_outputs(struct lightningd *ld, const tal_t *ctx)
 	u.close_info->channel_id = 42;
 	u.close_info->peer_id = id;
 	u.close_info->commitment_point = &pk;
-	u.close_info->option_anchor_outputs = false;
+	u.close_info->option_anchors = false;
 	/* Arbitrarily set scriptpubkey len to 20 */
 	u.scriptPubkey = tal_arr(w, u8, 20);
 	memset(u.scriptPubkey, 1, 20);
@@ -1118,7 +1131,7 @@ static bool test_wallet_outputs(struct lightningd *ld, const tal_t *ctx)
 	CHECK(u.close_info->channel_id == 42 &&
 	      pubkey_eq(u.close_info->commitment_point, &pk) &&
 	      node_id_eq(&u.close_info->peer_id, &id) &&
-	      u.close_info->option_anchor_outputs == false);
+	      u.close_info->option_anchors == false);
 
 	/* Attempt to reserve the utxo */
 	CHECK_MSG(wallet_update_output_status(w, &u.outpoint,
@@ -1151,7 +1164,7 @@ static bool test_wallet_outputs(struct lightningd *ld, const tal_t *ctx)
 	u.close_info->channel_id = 42;
 	u.close_info->peer_id = id;
 	u.close_info->commitment_point = NULL;
-	u.close_info->option_anchor_outputs = true;
+	u.close_info->option_anchors = true;
 	/* The blockheight has to be set for an option_anchor_output
 	 * closed UTXO to be spendable */
 	u32 *blockheight = tal(w, u32);
@@ -1205,7 +1218,7 @@ static bool test_wallet_outputs(struct lightningd *ld, const tal_t *ctx)
 	CHECK(u.close_info->channel_id == 42 &&
 	      u.close_info->commitment_point == NULL &&
 	      node_id_eq(&u.close_info->peer_id, &id) &&
-	      u.close_info->option_anchor_outputs == true &&
+	      u.close_info->option_anchors == true &&
 	      u.close_info->csv == 1);
 	/* Now un-reserve them */
 	tal_free(utxos);
@@ -1226,7 +1239,7 @@ static bool test_wallet_outputs(struct lightningd *ld, const tal_t *ctx)
 		CHECK(u.close_info->channel_id == 42 &&
 		      u.close_info->commitment_point == NULL &&
 		      node_id_eq(&u.close_info->peer_id, &id) &&
-		      u.close_info->option_anchor_outputs == true &&
+		      u.close_info->option_anchors == true &&
 		      u.close_info->csv > 0);
 	}
 	/* Now un-reserve them */

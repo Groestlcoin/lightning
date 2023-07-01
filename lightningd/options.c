@@ -20,7 +20,9 @@
 #include <common/wireaddr.h>
 #include <dirent.h>
 #include <errno.h>
+#include <hsmd/hsmd_wiregen.h>
 #include <lightningd/chaintopology.h>
+#include <lightningd/hsm_control.h>
 #include <lightningd/options.h>
 #include <lightningd/plugin.h>
 #include <lightningd/subd.h>
@@ -1118,6 +1120,35 @@ static char *opt_set_msat(const char *arg, struct amount_msat *amt)
 	return NULL;
 }
 
+static char *opt_set_sat(const char *arg, struct amount_sat *sat)
+{
+	struct amount_msat msat;
+	if (!parse_amount_msat(&msat, arg, strlen(arg)))
+		return tal_fmt(NULL, "Unable to parse millisatoshi '%s'", arg);
+	if (!amount_msat_to_sat(sat, msat))
+		return tal_fmt(NULL, "'%s' is not a whole number of sats", arg);
+	return NULL;
+}
+
+static char *opt_set_sat_nondust(const char *arg, struct amount_sat *sat)
+{
+	char *ret = opt_set_sat(arg, sat);
+	if (ret)
+		return ret;
+	if (amount_sat_less(*sat, chainparams->dust_limit))
+		return tal_fmt(tmpctx, "Option must be over dust limit!");
+	return NULL;
+}
+
+static bool opt_show_sat(char *buf, size_t len, const struct amount_sat *sat)
+{
+	struct amount_msat msat;
+	if (!amount_sat_to_msat(&msat, *sat))
+		abort();
+	return opt_show_u64(buf, len,
+			    &msat.millisatoshis); /* Raw: show sats number */
+}
+
 static char *opt_set_wumbo(struct lightningd *ld)
 {
 	feature_set_or(ld->our_features,
@@ -1188,6 +1219,15 @@ static char *opt_set_quiesce(struct lightningd *ld)
 	feature_set_or(ld->our_features,
 		       take(feature_set_for_feature(NULL,
 						    OPTIONAL_FEATURE(OPT_QUIESCE))));
+	return NULL;
+}
+
+static char *opt_set_anchor_zero_fee_htlc_tx(struct lightningd *ld)
+{
+	/* Requires static_remotekey, but we always set that */
+	feature_set_or(ld->our_features,
+		       take(feature_set_for_feature(NULL,
+						    OPTIONAL_FEATURE(OPT_ANCHORS_ZERO_FEE_HTLC_TX))));
 	return NULL;
 }
 
@@ -1288,6 +1328,10 @@ static void register_opts(struct lightningd *ld)
 				 opt_set_quiesce, ld,
 				 "experimental: Advertise ability to quiesce"
 				 " channels.");
+	opt_register_early_noarg("--experimental-anchors",
+				 opt_set_anchor_zero_fee_htlc_tx, ld,
+				 "EXPERIMENTAL: enable option_anchors_zero_fee_htlc_tx"
+				 " to open zero-fee-anchor channels");
 	clnopt_witharg("--announce-addr-dns", OPT_EARLY|OPT_SHOWBOOL,
 		       opt_set_bool_arg, opt_show_bool,
 		       &ld->announce_dns,
@@ -1416,6 +1460,9 @@ static void register_opts(struct lightningd *ld)
 	clnopt_witharg("--commit-fee", OPT_SHOWINT,
 		       opt_set_u64, opt_show_u64, &ld->config.commit_fee_percent,
 		       "Percentage of fee to request for their commitment");
+	clnopt_witharg("--min-emergency-msat", OPT_SHOWMSATS,
+		       opt_set_sat_nondust, opt_show_sat, &ld->emergency_sat,
+		       "Amount to leave in wallet for spending anchor closes");
 	clnopt_witharg("--subdaemon",
 		       OPT_MULTI,
 		       opt_subdaemon, NULL,
@@ -1784,10 +1831,8 @@ void add_config_deprecated(struct lightningd *ld,
 				      feature_offered(ld->our_features
 						      ->bits[INIT_FEATURE],
 						      OPT_QUIESCE));
-		} else {
-			/* Insert more decodes here! */
-			errx(1, "Unknown nonarg decode for %s", opt->names);
 		}
+		/* We ignore future additions, since these are deprecated anyway! */
 	} else if (opt->type & OPT_HASARG) {
 		if (opt->show == (void *)opt_show_charp) {
 			if (*(char **)opt->u.carg)
@@ -1889,10 +1934,8 @@ void add_config_deprecated(struct lightningd *ld,
 		} else if (strstarts(name, "dev-")) {
 			/* Ignore dev settings */
 #endif
-		} else {
-			/* Insert more decodes here! */
-			errx(1, "Unknown arg decode for %s", opt->names);
 		}
+		/* We ignore future additions, since these are deprecated anyway! */
 	}
 
 	if (answer) {

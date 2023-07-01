@@ -887,6 +887,10 @@ pub mod requests {
 	    pub min_witness_weight: Option<u32>,
 	    #[serde(skip_serializing_if = "Option::is_none")]
 	    pub excess_as_change: Option<bool>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub nonwrapped: Option<bool>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub opening_anchor_channel: Option<bool>,
 	}
 
 	impl From<FundpsbtRequest> for Request {
@@ -949,6 +953,8 @@ pub mod requests {
 	    pub min_witness_weight: Option<u32>,
 	    #[serde(skip_serializing_if = "Option::is_none")]
 	    pub excess_as_change: Option<bool>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub opening_anchor_channel: Option<bool>,
 	}
 
 	impl From<UtxopsbtRequest> for Request {
@@ -3875,6 +3881,8 @@ pub mod responses {
 	    pub mutual_close: Option<u32>,
 	    #[serde(skip_serializing_if = "Option::is_none")]
 	    pub unilateral_close: Option<u32>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub unilateral_anchor_close: Option<u32>,
 	    #[deprecated]
 	    #[serde(skip_serializing_if = "Option::is_none")]
 	    pub delayed_to_us: Option<u32>,
@@ -3909,6 +3917,8 @@ pub mod responses {
 	    pub mutual_close: Option<u32>,
 	    #[serde(skip_serializing_if = "Option::is_none")]
 	    pub unilateral_close: Option<u32>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub unilateral_anchor_close: Option<u32>,
 	    #[deprecated]
 	    #[serde(skip_serializing_if = "Option::is_none")]
 	    pub delayed_to_us: Option<u32>,
@@ -3924,6 +3934,8 @@ pub mod responses {
 	    pub opening_channel_satoshis: u64,
 	    pub mutual_close_satoshis: u64,
 	    pub unilateral_close_satoshis: u64,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub unilateral_close_nonanchor_satoshis: Option<u64>,
 	    pub htlc_timeout_satoshis: u64,
 	    pub htlc_success_satoshis: u64,
 	}
