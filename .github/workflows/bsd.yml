@@ -7,17 +7,12 @@ jobs:
     runs-on: macos-12
     name: Build on FreeBSD
     timeout-minutes: 120
-    env:
-      DEVELOPER: 1
-      VALGRIND: 0
-      COMPAT: 1
     steps:
     - uses: actions/checkout@v3
     - name: Build
       id: test
       uses: vmactions/freebsd-vm@v0
       with:
-        envs: 'DEVELOPER VALGRIND COMPAT'
         usesh: true
         mem: 4096
         prepare: |
@@ -46,7 +41,7 @@ jobs:
           git config --global --add safe.directory $GITHUB_WORKSPACE
 
           # Configure and build
-          ./configure CC="$CC"
+          ./configure CC="$CC" --enable-developer --disable-valgrind
           gmake
           gmake install
     - name: Upload artifacts

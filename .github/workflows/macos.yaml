@@ -33,16 +33,12 @@ jobs:
           ln -s /usr/local/Cellar/gettext/0.20.1/bin/xgettext /usr/local/opt
 
       - name: Build
-        env:
-          VALGRIND: 0
-          DEVELOPER: 1
-          COMPAT: 0
         run: |
           export PATH="/usr/local/opt:/Users/runner/.local/bin:/Users/runner/Library/Python/3.10/bin:/usr/local/opt:$PATH"
           export CFLAGS="-Wno-error -Wno-nullability-completeness -Wno-expansion-to-defined -Wno-builtin-requires-header"
           export CXXFLAGS="-Wno-error -Wno-nullability-completeness -Wno-expansion-to-defined -Wno-builtin-requires-header"
 
-          python3.10 -m poetry run ./configure
+          python3.10 -m poetry run ./configure --enable-developer --disable-valgrind --disable-compat
           python3.10 -m poetry run make
           sudo python3.10 -m poetry run make install
 
