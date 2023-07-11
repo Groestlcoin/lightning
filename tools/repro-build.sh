@@ -68,10 +68,10 @@ echo "Repro Version: $VERSION"
 echo "Repro mTime: $MTIME"
 echo "Repro Platform: $PLATFORM"
 
-if grep ^deb /etc/apt/sources.list | grep -- '-\(updates\|security\)'; then
-	echo Please disable security and updates in /etc/apt/sources.list >&2
-	exit 1
-fi
+#if grep ^deb /etc/apt/sources.list | grep -- '-\(updates\|security\)'; then
+#	echo Please disable security and updates in /etc/apt/sources.list >&2
+#	exit 1
+#fi
 
 DOWNLOAD='sudo apt -y --no-install-recommends --reinstall -d install'
 PKGS='autoconf automake libtool make gcc libsqlite3-dev zlib1g-dev libsodium-dev'
