@@ -176,7 +176,7 @@ $DOWNLOAD $PKGS
 # Once everyone has gcc8, we can use CC="gcc -ffile-prefix-map=$(pwd)=/home/clightning"
 ./configure --prefix=/usr CC="gcc -fdebug-prefix-map=$(pwd)=/home/clightning"
 # libwally wants "python".  Seems to work to force it here.
-make PYTHON_VERSION=3 VERSION="$VERSION"
+make PYTHON_VERSION=3 #VERSION="$VERSION"
 make install DESTDIR=inst/
 
 cd inst && tar --sort=name \
