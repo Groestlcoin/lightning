@@ -162,6 +162,34 @@ $ groestlcoind -testnet &
 $ lightningd --network=testnet
 ```
 
+To Build on FreeBSD
+-------------------
+
+OS version: FreeBSD 11.1-RELEASE or above
+
+```
+pkg install git python py39-pip gmake libtool gmp sqlite3 \
+            postgresql13-client gettext autotools
+https://github.com/Groestlcoin/lightning.git
+pip install --upgrade pip
+pip3 install mako
+./configure
+gmake -j$(nproc)
+gmake install
+```
+
+Running lightning:
+
+Configure groestlcoind, if not already: add `rpcuser=<foo>` and `rpcpassword=<bar>`
+to `/usr/local/etc/groestlcoin.conf`, maybe also `testnet=1`.
+
+Configure lightningd: copy `/usr/local/etc/lightningd-groestlcoin.conf.sample` to
+`/usr/local/etc/lightningd-groestlcoin.conf` and edit according to your needs.
+
+    # service groestlcoind start
+    # service lightningd start
+    # lightning-cli --rpc-file /var/db/c-lightning/groestlcoin/lightning-rpc --lightning-dir=/var/db/c-lightning help
+
 To Build on OpenBSD
 --------------------
 

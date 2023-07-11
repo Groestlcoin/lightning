@@ -39,20 +39,9 @@ Pruning (`prune=n` option in `groestlcoin.conf`) is partially supported, see [he
 
 There are 4 supported installation options:
 
- - Installation from the [Ubuntu PPA][ppa].
  - Installation of a pre-compiled binary from the [release page][releases] on GitHub.
  - Using one of the [provided docker images][dockerhub] on the Docker Hub.
  - Compiling the source code yourself as described in the [installation documentation](doc/INSTALL.md).
-
-For the impatient here's the gist of it for Ubuntu:
-
-```bash
-sudo apt-get install -y software-properties-common
-sudo add-apt-repository -u ppa:lightningnetwork/ppa
-sudo apt-get install lightningd snapd
-sudo snap install groestlcoin-core
-sudo ln -s /snap/groestlcoin-core/current/bin/groestlcoin{d,-cli} /usr/local/bin/
-```
 
 ### Starting `lightningd`
 
@@ -224,7 +213,6 @@ You should also configure with `--enable-developer` to get additional checks and
 [discord]: https://discord.gg/mE9s4rc5un
 [telegram]: https://t.me/lightningd
 [docs]: https://lightning.readthedocs.org
-[ppa]: https://launchpad.net/~lightningnetwork/+archive/ubuntu/ppa
 [releases]: https://github.com/ElementsProject/lightning/releases
 [dockerhub]: https://hub.docker.com/r/elementsproject/lightningd/
 [jsonrpcspec]: https://www.jsonrpc.org/specification

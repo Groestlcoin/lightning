@@ -63,7 +63,6 @@ WORKDIR /build
 
 CMD poetry export -o requirements.txt --without-hashes \
     && pip install -r requirements.txt\
-    && tools/build-release.sh zipfile \
     && mkdir -p /repro \
     && cd /repro \
     && unzip /build/release/*.zip \

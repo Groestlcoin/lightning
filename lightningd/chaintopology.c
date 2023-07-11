@@ -470,19 +470,11 @@ static void smooth_one_feerate(const struct chain_topology *topo,
 
 	/* But to avoid updating forever, only apply smoothing when its
 	 * effect is more then 10 percent */
-	if (abs((int)rate->rate - (int)feerate_smooth) > (0.1 * rate->rate)) {
+	if (abs((int)rate->rate - (int)feerate_smooth) > (0.1 * rate->rate))
 		rate->rate = feerate_smooth;
-		log_debug(topo->log,
-			  "... polled feerate estimate for %u blocks smoothed to %u (alpha=%.2f)",
-			  rate->blockcount, rate->rate, alpha);
-	}
 
-	if (rate->rate < get_feerate_floor(topo)) {
+	if (rate->rate < get_feerate_floor(topo))
 		rate->rate = get_feerate_floor(topo);
-		log_debug(topo->log,
-			  "... feerate estimate for %u blocks hit floor %u",
-			  rate->blockcount, rate->rate);
-	}
 
 	if (rate->rate != feerate_smooth)
 		log_debug(topo->log,
@@ -1142,7 +1134,19 @@ u32 feerate_min(struct lightningd *ld, bool *unknown)
 	if (unknown)
 		*unknown = false;
 
-	/* We can't allow less than feerate_floor, since that won't relay */
+        /* We allow the user to ignore the fee limits,
+	 * although this comes with inherent risks.
+	 *
+	 * By enabling this option, users are explicitly
+	 * made aware of the potential dangers.
+	 * There are situations, such as the one described in [1],
+	 * where it becomes necessary to bypass the fee limits to resolve
+	 * issues like a stuck channel.
+	 *
+	 * BTW experimental-anchors feature provides a solution to this problem.
+	 *
+	 * [1] https://github.com/ElementsProject/lightning/issues/6362
+	 * */
 	if (ld->config.ignore_fee_limits)
 		min = 1;
 	else {
@@ -1161,10 +1165,12 @@ u32 feerate_min(struct lightningd *ld, bool *unknown)
 
 		/* FIXME: This is what bcli used to do: halve the slow feerate! */
 		min /= 2;
+
+		/* We can't allow less than feerate_floor, since that won't relay */
+		if (min < get_feerate_floor(topo))
+			return get_feerate_floor(topo);
 	}
 
-	if (min < get_feerate_floor(topo))
-		return get_feerate_floor(topo);
 	return min;
 }
 

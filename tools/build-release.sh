@@ -5,12 +5,13 @@ set -e
 if [ "$1" = "--inside-docker" ]; then
     echo "Inside docker: starting build"
     VER="$2"
+    PLTFM="$3"
     git clone /src /build
     cd /build
     ./configure
-    make
-    make install DESTDIR=/"$VER" RUST_PROFILE=release
-    cd /"$VER" && tar cvfz /release/clightning-"$VER".tar.gz -- *
+    make VERSION="$VER"
+    make install DESTDIR=/"$VER-$PLTFM" RUST_PROFILE=release
+    cd /"$VER-$PLTFM" && tar cvfz /release/clightning-"$VER-$PLTFM".tar.gz -- *
     echo "Inside docker: build finished"
     exit 0
 fi
@@ -39,7 +40,6 @@ for arg; do
         echo "Usage: [--force-version=<ver>] [--force-unclean] [--force-mtime=YYYY-MM-DD] [--verify] [TARGETS]"
         echo Known targets: "$ALL_TARGETS"
 	    echo "Example: tools/build-release.sh"
-	    echo "Example: tools/build-release.sh --force-version=v23.05 --force-unclean --force-mtime=2023-05-01"
 	    echo "Example: tools/build-release.sh --force-version=v23.05 --force-unclean --force-mtime=2023-05-01 bin-Ubuntu sign"
 	    echo "Example: tools/build-release.sh --verify"
 	    echo "Example: tools/build-release.sh --force-version=v23.05 --force-unclean --force-mtime=2023-05-01 --verify"
@@ -65,6 +65,16 @@ echo "Tagged Version: $VERSION"
 VERSION=${FORCE_VERSION:-$VERSION}
 echo "Version: $VERSION"
 
+if [ "$VERSION" = "" ]; then
+    echo "No tagged version at HEAD?" >&2
+    exit 1
+fi
+
+# `status --porcelain -u no` suppressed modified!  Bug reported...
+if [ "$(git diff --name-only)" != "" ] && ! $FORCE_UNCLEAN; then
+    echo "Not a clean git directory" >&2
+    exit 1
+fi
 
 # Skip 'v' here in $VERSION
 #MTIME=${FORCE_MTIME:-$(sed -n "s/^## \\[.*${VERSION#v}\\] - \\([-0-9]*\\).*/\\1/p" < CHANGELOG.md)}
@@ -138,7 +148,7 @@ for target in $TARGETS; do
         DOCKERFILE=contrib/docker/Dockerfile.builder.fedora
         TAG=fedora
         docker build -f $DOCKERFILE -t $TAG .
-        docker run --rm=true -v "$(pwd)":/src:ro -v "$RELEASEDIR":/release $TAG /src/tools/build-release.sh --inside-docker "$VERSION-$platform"
+        docker run --rm=true -v "$(pwd)":/src:ro -v "$RELEASEDIR":/release $TAG /src/tools/build-release.sh --inside-docker "$VERSION" "$platform"
         docker run --rm=true -w /build $TAG rm -rf /"$VERSION-$platform" /build
         echo "Fedora Image Built"
         ;;
@@ -230,7 +240,7 @@ fi
 
 if [ -z "${TARGETS##* docker *}" ]; then
     echo "Building Docker Images"
-    for d in amd64 arm64v8; do
+    for d in amd64 arm64v8 arm32v7; do
         TMPDIR="$(mktemp -d /tmp/lightningd-docker-$d.XXXXXX)"
         SRCDIR="$(pwd)"
         echo "Bundling $d image in ${TMPDIR}"
@@ -239,13 +249,17 @@ if [ -z "${TARGETS##* docker *}" ]; then
         cd "${TMPDIR}"
         git checkout "v${BARE_VERSION}"
         case "$d" in
+            "arm32v7")
+                cp "${SRCDIR}/contrib/docker/Dockerfile.$d" "${TMPDIR}/"
+                docker buildx build --load --platform linux/arm64 -t "groestlcoin/lightningd:$VERSION-$d" -f Dockerfile.$d "${TMPDIR}"
+                ;;
             "arm64v8")
                 cp "${SRCDIR}/contrib/docker/Dockerfile.$d" "${TMPDIR}/"
-                docker buildx build --load --platform linux/arm64 -t "elementsproject/lightningd:$VERSION-$d" -f Dockerfile.$d "${TMPDIR}"
+                docker buildx build --load --platform linux/arm/v7 -t "groestlcoin/lightningd:$VERSION-$d" -f Dockerfile.$d "${TMPDIR}"
                 ;;
             *)
                 cp "${SRCDIR}/Dockerfile" "${TMPDIR}/"
-                docker buildx build --load --platform linux/amd64 -t elementsproject/lightningd:latest -f Dockerfile "${TMPDIR}"
+                docker buildx build --load --platform linux/amd64 -t groestlcoin/lightningd:latest -f Dockerfile "${TMPDIR}"
                 docker tag "groestlcoin/lightningd:latest" "groestlcoin/lightningd:$VERSION"
                 ;;
         esac
