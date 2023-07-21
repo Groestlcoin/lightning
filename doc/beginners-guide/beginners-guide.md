@@ -10,7 +10,7 @@ updatedAt: "2023-02-21T13:49:20.132Z"
 
 #### Regtest (local, fast-start) option
 
-If you want to experiment with `lightningd`, there's a script to set up a `bitcoind` regtest test network of two local lightning nodes, which provides a convenient `start_ln` helper. See the notes at the top of the `startup_regtest.sh` file for details on how to use it.
+If you want to experiment with `lightningd`, there's a script to set up a `groestlcoind` regtest test network of two local lightning nodes, which provides a convenient `start_ln` helper. See the notes at the top of the `startup_regtest.sh` file for details on how to use it.
 
 ```bash
 . contrib/startup_regtest.sh
@@ -28,23 +28,23 @@ Note that your local nodeset will be much faster/more responsive if you've confi
 
 #### Mainnet Option
 
-To test with real bitcoin,  you will need to have a local `bitcoind` node running:
+To test with real groestlcoin,  you will need to have a local `groestlcoind` node running:
 
 ```bash
-bitcoind -daemon
+groestlcoind -daemon
 ```
 
 
 
-Wait until `bitcoind` has synchronized with the network.
+Wait until `groestlcoind` has synchronized with the network.
 
-Make sure that you do not have `walletbroadcast=0` in your `~/.bitcoin/bitcoin.conf`, or you may run into trouble.  
-Notice that running `lightningd` against a pruned node may cause some issues if not managed carefully, see [pruning](doc:bitcoin-core##using-a-pruned-bitcoin-core-node) for more information.
+Make sure that you do not have `walletbroadcast=0` in your `~/.groestlcoin/groestlcoin.conf`, or you may run into trouble.  
+Notice that running `lightningd` against a pruned node may cause some issues if not managed carefully, see [pruning](doc:groestlcoin-core##using-a-pruned-groestlcoin-core-node) for more information.
 
 You can start `lightningd` with the following command:
 
 ```bash
-lightningd --network=bitcoin --log-level=debug
+lightningd --network=groestlcoin --log-level=debug
 ```
 
 
@@ -59,7 +59,7 @@ You can use `[lightning-cli](ref:lightning-cli) help` to print a table of RPC me
 
 Useful commands:
 
-- [lightning-newaddr](ref:lightning-newaddr): get a bitcoin address to deposit funds into your lightning node.
+- [lightning-newaddr](ref:lightning-newaddr): get a groestlcoin address to deposit funds into your lightning node.
 - [lightning-listfunds](ref:lightning-listfunds): see where your funds are.
 - [lightning-connect](ref:lightning-connect): connect to another lightning node.
 - [lightning-fundchannel](ref:lightning-fundchannel): create a channel to another connected node.

@@ -7,8 +7,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-      - name: Builder Bionic image setup
-        run: sudo docker build -t cl-repro-bionic - < contrib/reprobuild/Dockerfile.bionic
       - name: Builder focal image setup
         run: sudo docker build -t cl-repro-focal - < contrib/reprobuild/Dockerfile.focal
       - name: Builder jammy image setup

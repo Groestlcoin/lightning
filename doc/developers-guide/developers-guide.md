@@ -8,7 +8,7 @@ updatedAt: "2023-02-08T11:42:44.759Z"
 ---
 ## Using `startup_regtest.sh`
 
-The Core Lightning project provides a script `startup_regtest.sh` to simulate the Lightning Network in your local dev environment. The script starts up some local nodes with bitcoind, all running on regtest and makes it easier to test things out, by hand.
+The Core Lightning project provides a script `startup_regtest.sh` to simulate the Lightning Network in your local dev environment. The script starts up some local nodes with groestlcoind, all running on regtest and makes it easier to test things out, by hand.
 
 Navigate to `contrib` in your Core Lightning directory:
 

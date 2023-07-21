@@ -3,28 +3,6 @@ name: Ubuntu only release
 on: [push, pull_request]
 
 jobs:
-  bionic:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - name: Builder image setup
-        run: sudo docker build -t cl-repro-bionic - < contrib/reprobuild/Dockerfile.bionic
-      - name: create release folder
-        run: mkdir release
-      - name: Building using the builder image
-        run: sudo docker run --rm -v $(pwd):/build -t cl-repro-bionic
-      - name: Upload Artifact
-        uses: actions/upload-artifact@v3
-        with:
-          name: clightning-${{ github.sha }}-Ubuntu-18.04
-          path: release/*.tar.xz
-          if-no-files-found: error
-          retention-days: 7
-      - name: Download artifacts
-        uses: actions/download-artifact@v3
-        with:
-          name: clightning-${{ github.sha }}-Ubuntu-18.04
-
   focal:
     runs-on: ubuntu-latest
     steps:

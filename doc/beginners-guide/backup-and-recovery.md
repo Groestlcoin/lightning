@@ -17,12 +17,12 @@ But in Lightning, since _you_ are the only one storing all your financial inform
 This means that on Lightning, **you have to** responsibly back up your financial information yourself, using various processes and automation.
 
 The discussion below assumes that you know where you put your `$LIGHTNINGDIR`, and you know the directory structure within. By default your `$LIGHTNINGDIR` will be in `~/.lightning/${COIN}`. For example, if you are running `--mainnet`, it will be  
-`~/.lightning/bitcoin`.
+`~/.lightning/groestlcoin`.
 
 ## `hsm_secret`
 
 > 📘 Who should do this:
-> 
+>
 > Everyone.
 
 You need a copy of the `hsm_secret` file regardless of whatever backup strategy you use.
@@ -74,21 +74,21 @@ To recover in-channel funds, you need to use one or more of the other backup str
 ## SQLITE3 `--wallet=${main}:${backup}` And Remote NFS Mount
 
 > 📘 Who should do this:
-> 
+>
 > Casual users.
 
-> 🚧 
-> 
+> 🚧
+>
 > This technique is only supported after the version v0.10.2 (not included) or later.
-> 
+>
 > On earlier versions, the `:` character is not special and will be considered part of the path of the database file.
 
 When using the SQLITE3 backend (the default), you can specify a second database file to replicate to, by separating the second file with a single `:` character in the `--wallet` option, after the main database filename.
 
-For example, if the user running `lightningd` is named `user`, and you are on the Bitcoin mainnet with the default `${LIGHTNINGDIR}`, you can specify in your `config` file:
+For example, if the user running `lightningd` is named `user`, and you are on the Groestlcoin mainnet with the default `${LIGHTNINGDIR}`, you can specify in your `config` file:
 
 ```shell
-wallet=sqlite3:///home/user/.lightning/bitcoin/lightningd.sqlite3:/my/backup/lightningd.sqlite3
+wallet=sqlite3:///home/user/.lightning/groestlcoin/lightningd.sqlite3:/my/backup/lightningd.sqlite3
 ```
 
 
@@ -96,7 +96,7 @@ wallet=sqlite3:///home/user/.lightning/bitcoin/lightningd.sqlite3:/my/backup/lig
 Or via command line:
 
 ```
-lightningd --wallet=sqlite3:///home/user/.lightning/bitcoin/lightningd.sqlite3:/my/backup/lightningd.sqlite3
+lightningd --wallet=sqlite3:///home/user/.lightning/groestlcoin/lightningd.sqlite3:/my/backup/lightningd.sqlite3
 ```
 
 
@@ -122,8 +122,8 @@ At the minimum, set the backup to a different storage device.
 This is no better than just using RAID-1 (and the RAID-1 will probably be faster) but this is easier to set up --- just plug in a commodity USB flash disk (with metal casing, since a lot of writes are done and you need to dissipate the heat quickly) and use it as the backup location, without  
 repartitioning your OS disk, for example.
 
-> 📘 
-> 
+> 📘
+>
 > Do note that files are not stored encrypted, so you should really not do this with rented space ("cloud storage").
 
 To recover, simply get **all** the backup database files.  
@@ -141,7 +141,7 @@ However, if instead you are just replicating the database on another storage dev
 ## `backup` Plugin And Remote NFS Mount
 
 > 📘 Who should do this:
-> 
+>
 > Casual users.
 
 You can find the full source for the `backup` plugin here:  
@@ -166,8 +166,8 @@ The `backup` plugin requires Python 3.
 It is recommended that you use a network-mounted filesystem for the backup destination.  
 For example, if you have a NAS you can access remotely.
 
-> 📘 
-> 
+> 📘
+>
 > Do note that files are not stored encrypted, so you should really not do this with rented space ("cloud storage").
 
 Alternately, you _could_ put it in another storage device (e.g. USB flash disk) in the same physical location.
@@ -185,7 +185,7 @@ However, if instead you are just replicating the database on another storage dev
 ## Filesystem Redundancy
 
 > 📘 Who should do this:
-> 
+>
 > Filesystem nerds, data hoarders, home labs, enterprise users.
 
 You can set up a RAID-1 with multiple storage devices, and point the `$LIGHTNINGDIR` to the RAID-1 setup. That way, failure of one storage device will still let you recover funds.
@@ -262,7 +262,7 @@ of new storage devices to set up a new node.
 ## PostgreSQL Cluster
 
 > 📘 Who should do this:
-> 
+>
 > Enterprise users, whales.
 
 `lightningd` may also be compiled with PostgreSQL support.
@@ -311,8 +311,8 @@ To set up a cluster for a brand new node, follow this (external) [guide by @gabr
 
 The above guide assumes you are setting up a new node from scratch. It is also specific to PostgreSQL 12, and setting up for other versions **will** have differences; read the PostgreSQL manuals linked above.
 
-> 🚧 
-> 
+> 🚧
+>
 > If you want to continue a node that started using an SQLITE3 database, note that we do not support this. You should set up a new PostgreSQL node, move funds from the SQLITE3 node to the PostgreSQL node, then shut down the SQLITE3 node permanently.
 
 There are also more ways to set up PostgreSQL replication.  
@@ -322,8 +322,8 @@ In general, you should use [synchronous replication](https://www.postgresql.org/
 
 
 
-> 🚧 
-> 
+> 🚧
+>
 > Previous versions of this document recommended this technique, but we no longer do so.  
 > According to [issue 4857](https://github.com/ElementsProject/lightning/issues/4857), even with a 60-second timeout that we added in 0.10.2, this leads to constant crashing of `lightningd` in some situations. This section will be removed completely six months after 0.10.3. Consider using `--wallet=sqlite3://${main}:${backup}` above instead.
 
@@ -345,7 +345,7 @@ Then just restart `lightningd`.
 
 ```shell
 dbs:
- - path: /home/bitcoin/.lightning/bitcoin/lightningd.sqlite3
+ - path: /home/groestlcoin/.lightning/groestlcoin/lightningd.sqlite3
    replicas:
      - path: /media/storage/lightning_backup
 ```
@@ -359,13 +359,13 @@ $ sudo systemctl start litestream
 Restore:
 
 ```shell
-$ litestream restore -o /media/storage/lightning_backup  /home/bitcoin/restore_lightningd.sqlite3
+$ litestream restore -o /media/storage/lightning_backup  /home/groestlcoin/restore_lightningd.sqlite3
 ```
 
 Because Litestream only copies small changes and not the entire database (holding a read lock on the file while doing so), the 60-second timeout on locking should not be reached unless something has made your backup medium very very slow.
 
 Litestream has its own timer, so there is a tiny (but non-negligible) probability that `lightningd` updates the  
-database, then irrevocably commits to the update by sending revocation keys to the counterparty, and _then_ your main storage media crashes before Litestream can replicate the update. 
+database, then irrevocably commits to the update by sending revocation keys to the counterparty, and _then_ your main storage media crashes before Litestream can replicate the update.
 
 Treat this as a superior version of "Database File Backups" section below and prefer recovering via other backup methods first.
 
@@ -374,7 +374,7 @@ Treat this as a superior version of "Database File Backups" section below and pr
 ## Database File Backups
 
 > 📘 Who should do this:
-> 
+>
 > Those who already have at least one of the other backup methods, those who are #reckless.
 
 This is the least desirable backup strategy, as it _can_ lead to loss of all in-channel funds if you use it.  

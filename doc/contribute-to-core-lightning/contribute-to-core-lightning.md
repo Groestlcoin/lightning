@@ -74,7 +74,7 @@ Core Lightning state is persisted in `lightning-dir`. It is a sqlite database st
 You can run queries against this file like so:
 
 ```shell
-$ sqlite3 ~/.lightning/bitcoin/lightningd.sqlite3 \
+$ sqlite3 ~/.lightning/groestlcoin/lightningd.sqlite3 \
   "SELECT HEX(prev_out_tx), prev_out_index, status FROM outputs"
 ```
 
@@ -83,7 +83,7 @@ $ sqlite3 ~/.lightning/bitcoin/lightningd.sqlite3 \
 Or you can launch into the sqlite3 repl and check things out from there:
 
 ```shell
-$ sqlite3 ~/.lightning/bitcoin/lightningd.sqlite3
+$ sqlite3 ~/.lightning/groestlcoin/lightningd.sqlite3
 SQLite version 3.21.0 2017-10-24 18:55:49
 Enter ".help" for usage hints.
 sqlite> .tables
@@ -105,7 +105,7 @@ Make sure that clightning is not running when you query the database, as some qu
 Table `vars` contains global variables used by lightning node.
 
 ```shell
-$ sqlite3 ~/.lightning/bitcoin/lightningd.sqlite3
+$ sqlite3 ~/.lightning/groestlcoin/lightningd.sqlite3
 SQLite version 3.21.0 2017-10-24 18:55:49
 Enter ".help" for usage hints.
 sqlite> .headers on

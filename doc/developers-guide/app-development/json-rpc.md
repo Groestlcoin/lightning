@@ -5,8 +5,8 @@ hidden: false
 createdAt: "2023-02-07T12:53:11.917Z"
 updatedAt: "2023-02-21T13:50:10.086Z"
 ---
-> 📘 
-> 
+> 📘
+>
 > Used for applications running on the same system as CLN.
 
 ## Using `lightning-cli`

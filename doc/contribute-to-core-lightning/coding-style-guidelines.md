@@ -80,7 +80,7 @@ Avoid double-initialization of variables; it's better to set them when they're k
 
 ```c
 	bool is_foo;
-	
+
 	if (bar == foo)
 		is_foo = true;
 	else
@@ -170,4 +170,4 @@ In case you think the pull request is small enough not to require a changelog en
 
 Under some circumstances a feature may be removed even without deprecation warning if it was not part of a released version yet, or the removal is urgent.
 
-In order to ensure that each pull request has the required `Changelog-*:` line for the changelog our trusty @bitcoin-bot will check logs whenever a pull request is created or updated and search for the required line. If there is no such line it'll mark the pull request as `pending` to call out the need for an entry.
+In order to ensure that each pull request has the required `Changelog-*:` line for the changelog our trusty @groestlcoin-bot will check logs whenever a pull request is created or updated and search for the required line. If there is no such line it'll mark the pull request as `pending` to call out the need for an entry.
