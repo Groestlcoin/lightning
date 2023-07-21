@@ -134,10 +134,10 @@ struct lightningd {
 	/* Where each configuration setting came from */
 	struct configvar **configvars;
 
-	/* This log_book is owned by all the struct logs */
+	/* This log_book is owned by all the struct loggers */
 	struct log_book *log_book;
 	/* Log for general stuff. */
-	struct log *log;
+	struct logger *log;
 	const char **logfiles;
 
 	/* This is us. */
@@ -371,6 +371,9 @@ struct lightningd {
 
 	/* For anchors: how much do we keep for spending close txs? */
 	struct amount_sat emergency_sat;
+
+	/* runes! */
+	struct runes *runes;
 };
 
 /* Turning this on allows a tal allocation to return NULL, rather than aborting.

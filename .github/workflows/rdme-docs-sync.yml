@@ -1,0 +1,43 @@
+name: ReadMe GitHub Action 🦉
+
+on:
+  push:
+    # This workflow will run every time you push code to the following branch: `master` and includes a change to any files inside doc/
+    # Check out GitHub's docs for more info on configuring this:
+    # https://docs.github.com/actions/using-workflows/events-that-trigger-workflows
+    branches:
+      - master
+    paths:
+      - 'doc/'
+
+jobs:
+  rdme-docs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repo 📚
+        uses: actions/checkout@v3
+
+      - name: Sync doc/getting-started/ 🚀
+        uses: readmeio/rdme@v8
+        with:
+          rdme: docs doc/getting-started --key=${{ secrets.README_API_KEY }} --version=1
+            
+      - name: Sync doc/beginners-guide/ 🚀
+        uses: readmeio/rdme@v8
+        with:
+          rdme: docs doc/beginners-guide --key=${{ secrets.README_API_KEY }} --version=1
+      
+      - name: Sync doc/node-operators-guide/ 🚀
+        uses: readmeio/rdme@v8
+        with:
+          rdme: docs doc/node-operators-guide --key=${{ secrets.README_API_KEY }} --version=1
+      
+      - name: Sync doc/developers-guide/ 🚀
+        uses: readmeio/rdme@v8
+        with:
+          rdme: docs doc/developers-guide --key=${{ secrets.README_API_KEY }} --version=1
+      
+      - name: Sync doc/contributing-to-core-lightning/ 🚀
+        uses: readmeio/rdme@v8
+        with:
+          rdme: docs doc/contributing-to-core-lightning --key=${{ secrets.README_API_KEY }} --version=1
