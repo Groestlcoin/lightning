@@ -15,7 +15,7 @@ Core Lightning (previously c-lightning) is a lightweight, highly customizable an
     * [Pruning](#pruning)
     * [HD wallet encryption](#hd-wallet-encryption)
 	* [Developers](#developers)
-* [Documentation](https://lightning.readthedocs.io/)
+* [Documentation](https://docs.corelightning.org/docs)
 
 ## Project Status
 
@@ -75,7 +75,7 @@ Make sure that you do not have `walletbroadcast=0` in your `~/.groestlcoin/groes
 Notice that running `lightningd` against a pruned node may cause some issues if not managed carefully, see [below](#pruning) for more information.
 
 
-This creates a `.lightning/` subdirectory in your home directory: see `man -l doc/lightningd.8` (or https://lightning.readthedocs.io/) for more runtime options.
+This creates a `.lightning/` subdirectory in your home directory: see `man -l doc/lightningd.8` (or https://docs.corelightning.org/docs) for more runtime options.
 
 ### Using The JSON-RPC Interface
 
@@ -212,7 +212,7 @@ You should also configure with `--enable-developer` to get additional checks and
 [ml2]: https://lists.linuxfoundation.org/mailman/listinfo/lightning-dev
 [discord]: https://discord.gg/mE9s4rc5un
 [telegram]: https://t.me/lightningd
-[docs]: https://lightning.readthedocs.org
+[docs]: https://docs.corelightning.org/docs
 [releases]: https://github.com/ElementsProject/lightning/releases
 [dockerhub]: https://hub.docker.com/r/elementsproject/lightningd/
 [jsonrpcspec]: https://www.jsonrpc.org/specification

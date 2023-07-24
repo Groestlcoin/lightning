@@ -79,6 +79,9 @@ static void json_add_invoice_fields(struct json_stream *response,
 					 tinv->invreq_payer_note,
 					 tal_bytelen(tinv->invreq_payer_note));
 	}
+	json_add_u64(response, "created_index", inv->created_index);
+	if (inv->updated_index)
+		json_add_u64(response, "updated_index", inv->updated_index);
 }
 
 static void json_add_invoice(struct json_stream *response,
@@ -315,7 +318,8 @@ invoice_payment_hooks_done(struct invoice_payment_hook_payload *payload STEALS)
 	}
 
 	/* Paid or expired in the meantime. */
-	if (!invoices_resolve(ld->wallet->invoices, inv_dbid, payload->msat)) {
+	if (!invoices_resolve(ld->wallet->invoices, inv_dbid, payload->msat,
+			      payload->label)) {
 		htlc_set_fail(payload->set, take(failmsg_incorrect_or_unknown(
 							 NULL, ld, payload->set->htlcs[0])));
 		return;
@@ -881,6 +885,7 @@ invoice_complete(struct invoice_info *info,
 	json_add_string(response, "bolt11", details->invstring);
 	invoice_secret(&details->r, &payment_secret);
 	json_add_secret(response, "payment_secret", &payment_secret);
+	json_add_u64(response, "created_index", details->created_index);
 
 	notify_invoice_creation(info->cmd->ld, info->b11->msat,
 				info->payment_preimage, info->label);
@@ -1221,7 +1226,10 @@ static void json_add_invoices(struct json_stream *response,
 			      struct wallet *wallet,
 			      const struct json_escape *label,
 			      const struct sha256 *payment_hash,
-			      const struct sha256 *local_offer_id)
+			      const struct sha256 *local_offer_id,
+			      const enum wait_index *listindex,
+			      u64 liststart,
+			      const u32 *listlimit)
 {
 	const struct invoice_details *details;
 	u64 inv_dbid;
@@ -1243,7 +1251,9 @@ static void json_add_invoices(struct json_stream *response,
 	} else {
 		struct db_stmt *stmt;
 
-		for (stmt = invoices_first(wallet->invoices, &inv_dbid);
+		for (stmt = invoices_first(wallet->invoices,
+					   listindex, liststart, listlimit,
+					   &inv_dbid);
 		     stmt;
 		     stmt = invoices_next(wallet->invoices, stmt, &inv_dbid)) {
 			details = invoices_get_details(tmpctx,
@@ -1270,6 +1280,9 @@ static struct command_result *json_listinvoices(struct command *cmd,
 	struct wallet *wallet = cmd->ld->wallet;
 	const char *invstring;
 	struct sha256 *payment_hash, *offer_id;
+	enum wait_index *listindex;
+	u64 *liststart;
+	u32 *listlimit;
 	char *fail;
 
 	if (!param(cmd, buffer, params,
@@ -1277,6 +1290,9 @@ static struct command_result *json_listinvoices(struct command *cmd,
 		   p_opt("invstring", param_invstring, &invstring),
 		   p_opt("payment_hash", param_sha256, &payment_hash),
 		   p_opt("offer_id", param_sha256, &offer_id),
+		   p_opt("index", param_index, &listindex),
+		   p_opt_def("start", param_u64, &liststart, 0),
+		   p_opt("limit", param_u32, &listlimit),
 		   NULL))
 		return command_param_failed();
 
@@ -1286,6 +1302,14 @@ static struct command_result *json_listinvoices(struct command *cmd,
 				    "Can only specify one of"
 				    " {label}, {invstring}, {payment_hash}"
 				    " or {offer_id}");
+	}
+	if (*liststart != 0 && !listindex) {
+		return command_fail(cmd, JSONRPC2_INVALID_PARAMS,
+				    "Can only specify {start} with {index}");
+	}
+	if (listlimit && !listindex) {
+		return command_fail(cmd, JSONRPC2_INVALID_PARAMS,
+				    "Can only specify {limit} with {index}");
 	}
 
 	/* Extract the payment_hash from the invoice. */
@@ -1311,7 +1335,8 @@ static struct command_result *json_listinvoices(struct command *cmd,
 
 	response = json_stream_success(cmd);
 	json_array_start(response, "invoices");
-	json_add_invoices(response, wallet, label, payment_hash, offer_id);
+	json_add_invoices(response, wallet, label, payment_hash, offer_id,
+			  listindex, *liststart, listlimit);
 	json_array_end(response);
 	return command_success(cmd, response);
 }
@@ -1371,7 +1396,8 @@ static struct command_result *json_delinvoice(struct command *cmd,
 			return command_fail(cmd, INVOICE_NO_DESCRIPTION,
 					    "Invoice description already removed");
 
-		if (!invoices_delete_description(wallet->invoices, inv_dbid)) {
+		if (!invoices_delete_description(wallet->invoices, inv_dbid,
+						 details->label, details->description)) {
 			log_broken(cmd->ld->log,
 				   "Error attempting to delete description of invoice %"PRIu64,
 				   inv_dbid);
@@ -1380,7 +1406,10 @@ static struct command_result *json_delinvoice(struct command *cmd,
 		}
 		details->description = tal_free(details->description);
 	} else {
-		if (!invoices_delete(wallet->invoices, inv_dbid)) {
+		if (!invoices_delete(wallet->invoices, inv_dbid,
+				     details->state,
+				     details->label,
+				     details->invstring)) {
 			log_broken(cmd->ld->log,
 				   "Error attempting to remove invoice %"PRIu64,
 				   inv_dbid);

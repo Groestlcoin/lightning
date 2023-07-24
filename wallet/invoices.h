@@ -3,6 +3,7 @@
 #include "config.h"
 #include <bitcoin/preimage.h>
 #include <ccan/tal/tal.h>
+#include <wallet/wallet.h>
 
 struct amount_msat;
 struct db;
@@ -105,7 +106,11 @@ bool invoices_find_unpaid(struct invoices *invoices,
  *
  * Return false on failure.
  */
-bool invoices_delete(struct invoices *invoices, u64 inv_dbid);
+bool invoices_delete(struct invoices *invoices,
+		     u64 inv_dbid,
+		     enum invoice_status status,
+		     const struct json_escape *label,
+		     const char *invstring);
 
 /**
  * invoices_delete_description - Remove description from an invoice
@@ -116,7 +121,9 @@ bool invoices_delete(struct invoices *invoices, u64 inv_dbid);
  * Return false on failure.
  */
 bool invoices_delete_description(struct invoices *invoices,
-				 u64 inv_dbid);
+				 u64 inv_dbid,
+				 const struct json_escape *label,
+				 const char *description);
 
 /**
  * invoices_delete_expired - Delete all expired invoices
@@ -131,12 +138,18 @@ void invoices_delete_expired(struct invoices *invoices,
 /**
  * Iterate through all the invoices.
  * @invoices: the invoices
+ * @listindex: what index order to use (if you care)
+ * @liststart: first index to return (0 == all).
+ * @listlimit: limit on number of entries to return (NULL == no limit).
  * @inv_dbid: the first invoice dbid (if returns non-NULL)
  *
  * Returns pointer to hand as @stmt to invoices_next(), or NULL.
  * If you choose not to call invoices_next() you must free it!
  */
 struct db_stmt *invoices_first(struct invoices *invoices,
+			       const enum wait_index *listindex,
+			       u64 liststart,
+			       const u32 *listlimit,
 			       u64 *inv_dbid);
 
 /**
@@ -158,12 +171,14 @@ struct db_stmt *invoices_next(struct invoices *invoices,
  * @invoices - the invoice handler.
  * @inv_dbid - the invoice to mark as paid.
  * @received - the actual amount received.
+ * @label    - the label of the invoice.
  *
  * If the invoice is not UNPAID, returns false.
  */
 bool invoices_resolve(struct invoices *invoices,
 		      u64 inv_dbid,
-		      struct amount_msat received);
+		      struct amount_msat received,
+		      const struct json_escape *label);
 
 /**
  * invoices_waitany - Wait for any invoice to be paid.
@@ -221,4 +236,24 @@ struct invoice_details *invoices_get_details(const tal_t *ctx,
 					     struct invoices *invoices,
 					     u64 inv_dbid);
 
+/* Returns the id to use for the new invoice, and increments it. */
+u64 invoice_index_created(struct lightningd *ld,
+			  enum invoice_status state,
+			  const struct json_escape *label,
+			  const char *invstring);
+
+/* Returns the current updated_index, and increments it. */
+u64 invoice_index_update_status(struct lightningd *ld,
+				const struct json_escape *label,
+				enum invoice_status state);
+
+/* Returns the current updated_index, and increments it. */
+u64 invoice_index_update_deldesc(struct lightningd *ld,
+				 const struct json_escape *label,
+				 const char *description);
+
+void invoice_index_deleted(struct lightningd *ld,
+			   enum invoice_status state,
+			   const struct json_escape *label,
+			   const char *invstring);
 #endif /* LIGHTNING_WALLET_INVOICES_H */

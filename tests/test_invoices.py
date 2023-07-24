@@ -1,7 +1,7 @@
 from fixtures import *  # noqa: F401,F403
 from fixtures import TEST_NETWORK
 from pyln.client import RpcError, Millisatoshi
-from utils import only_one, wait_for, wait_channel_quiescent, mine_funding_to_announce
+from utils import only_one, wait_for, wait_channel_quiescent, mine_funding_to_announce, TIMEOUT
 
 
 import os
@@ -707,6 +707,123 @@ def test_listinvoices_filter(node_factory):
         assert len(r['invoices']) == 0
 
 
+def test_wait_invoices(node_factory, executor):
+    # We use delexpiredinvoice
+    l1, l2 = node_factory.line_graph(2, opts={'allow-deprecated-apis': True})
+
+    # Asking for 0 gives us current index.
+    waitres = l2.rpc.call('wait', {'subsystem': 'invoices', 'indexname': 'created', 'nextvalue': 0})
+    assert waitres == {'subsystem': 'invoices',
+                       'created': 0}
+
+    # Now ask for 1.
+    waitfut = executor.submit(l2.rpc.call, 'wait', {'subsystem': 'invoices', 'indexname': 'created', 'nextvalue': 1})
+    time.sleep(1)
+
+    inv = l2.rpc.invoice(42, 'invlabel', 'invdesc')
+    waitres = waitfut.result(TIMEOUT)
+    assert waitres == {'subsystem': 'invoices',
+                       'created': 1,
+                       'details': {'label': 'invlabel',
+                                   'bolt11': inv['bolt11'],
+                                   'status': 'unpaid'}}
+    assert only_one(l2.rpc.listinvoices('invlabel')['invoices'])['created_index'] == 1
+    assert 'updated_index' not in only_one(l2.rpc.listinvoices('invlabel')['invoices'])
+
+    # Second returns instantly, without any details.
+    waitres = l2.rpc.call('wait', {'subsystem': 'invoices', 'indexname': 'created', 'nextvalue': 1})
+    assert waitres == {'subsystem': 'invoices',
+                       'created': 1}
+
+    # Now for updates
+    waitres = l2.rpc.call('wait', {'subsystem': 'invoices', 'indexname': 'updated', 'nextvalue': 0})
+    assert waitres == {'subsystem': 'invoices',
+                       'updated': 0}
+
+    waitfut = executor.submit(l2.rpc.call, 'wait', {'subsystem': 'invoices', 'indexname': 'updated', 'nextvalue': 1})
+    time.sleep(1)
+    l1.rpc.pay(inv['bolt11'])
+    waitres = waitfut.result(TIMEOUT)
+    assert waitres == {'subsystem': 'invoices',
+                       'updated': 1,
+                       'details': {'label': 'invlabel', 'status': 'paid'}}
+    assert only_one(l2.rpc.listinvoices('invlabel')['invoices'])['created_index'] == 1
+    assert only_one(l2.rpc.listinvoices('invlabel')['invoices'])['updated_index'] == 1
+
+    # Second returns instantly, without any details.
+    waitres = l2.rpc.call('wait', {'subsystem': 'invoices', 'indexname': 'updated', 'nextvalue': 1})
+    assert waitres == {'subsystem': 'invoices',
+                       'updated': 1}
+
+    # Now check expiry works.
+    inv2 = l2.rpc.invoice(42, 'invlabel2', 'invdesc2', expiry=2)
+    waitres = l2.rpc.call('wait', {'subsystem': 'invoices', 'indexname': 'updated', 'nextvalue': 2})
+
+    assert waitres == {'subsystem': 'invoices',
+                       'updated': 2,
+                       # FIXME: fill in details!
+                       #  {'label': 'invlabel2', 'bolt11': inv2['bolt11'], 'status': 'expired'}
+                       'details': {'status': 'expired'}}
+
+    assert only_one(l2.rpc.listinvoices('invlabel2')['invoices'])['created_index'] == 2
+    assert only_one(l2.rpc.listinvoices('invlabel2')['invoices'])['updated_index'] == 2
+
+    # Now for deletions
+    waitres = l2.rpc.call('wait', {'subsystem': 'invoices', 'indexname': 'deleted', 'nextvalue': 0})
+    assert waitres == {'subsystem': 'invoices',
+                       'deleted': 0}
+
+    waitfut = executor.submit(l2.rpc.call, 'wait', {'subsystem': 'invoices', 'indexname': 'deleted', 'nextvalue': 1})
+    time.sleep(1)
+    l2.rpc.delinvoice('invlabel', 'paid')
+    waitres = waitfut.result(TIMEOUT)
+
+    assert waitres == {'subsystem': 'invoices',
+                       'deleted': 1,
+                       'details': {'label': 'invlabel',
+                                   'bolt11': inv['bolt11'],
+                                   'status': 'paid'}}
+
+    # Second returns instantly, without any details.
+    waitres = l2.rpc.call('wait', {'subsystem': 'invoices', 'indexname': 'deleted', 'nextvalue': 1})
+    assert waitres == {'subsystem': 'invoices',
+                       'deleted': 1}
+
+    # Now check delexpiredinvoice works.
+    waitfut = executor.submit(l2.rpc.call, 'wait', {'subsystem': 'invoices', 'indexname': 'deleted', 'nextvalue': 2})
+    time.sleep(1)
+    l2.rpc.delexpiredinvoice()
+    waitres = waitfut.result(TIMEOUT)
+
+    assert waitres == {'subsystem': 'invoices',
+                       'deleted': 2,
+                       'details': {'label': 'invlabel2',
+                                   'bolt11': inv2['bolt11'],
+                                   'status': 'expired'}}
+
+    # Creating a new on gives us 3, not another 2!
+    waitfut = executor.submit(l2.rpc.call, 'wait', {'subsystem': 'invoices', 'indexname': 'created', 'nextvalue': 3})
+    time.sleep(1)
+    inv = l2.rpc.invoice(42, 'invlabel2', 'invdesc2', deschashonly=True)
+    waitres = waitfut.result(TIMEOUT)
+    assert waitres == {'subsystem': 'invoices',
+                       'created': 3,
+                       'details': {'label': 'invlabel2',
+                                   'bolt11': inv['bolt11'],
+                                   'status': 'unpaid'}}
+    assert only_one(l2.rpc.listinvoices('invlabel2')['invoices'])['created_index'] == 3
+    assert 'updated_index' not in only_one(l2.rpc.listinvoices('invlabel2')['invoices'])
+
+    # Deleting a description causes updated to fire!
+    waitfut = executor.submit(l2.rpc.call, 'wait', {'subsystem': 'invoices', 'indexname': 'updated', 'nextvalue': 3})
+    time.sleep(1)
+    l2.rpc.delinvoice('invlabel2', status='unpaid', desconly=True)
+    waitres = waitfut.result(TIMEOUT)
+    assert waitres == {'subsystem': 'invoices',
+                       'updated': 3,
+                       'details': {'label': 'invlabel2', 'description': 'invdesc2'}}
+
+
 def test_invoice_deschash(node_factory, chainparams):
     l1, l2 = node_factory.line_graph(2)
 
@@ -750,3 +867,47 @@ def test_invoice_deschash(node_factory, chainparams):
     wait_for(lambda: len([ev for ev in l1.rpc.bkpr_listincome()['income_events'] if ev['tag'] == 'invoice']) == 1)
     inv = only_one([ev for ev in l1.rpc.bkpr_listincome()['income_events'] if ev['tag'] == 'invoice'])
     assert inv['description'] == b11['description_hash']
+
+
+def test_listinvoices_index(node_factory, executor):
+    l1, l2 = node_factory.line_graph(2)
+
+    invs = {}
+    for i in range(1, 100):
+        invs[i] = l2.rpc.invoice(i, str(i), "test_listinvoices_index")
+
+    assert [inv['label'] for inv in l2.rpc.listinvoices(index='created')['invoices']] == [str(i) for i in range(1, 100)]
+    assert [inv['label'] for inv in l2.rpc.listinvoices(index='created', start=1)['invoices']] == [str(i) for i in range(1, 100)]
+    assert [inv['label'] for inv in l2.rpc.listinvoices(index='created', start=2)['invoices']] == [str(i) for i in range(2, 100)]
+    assert [inv['label'] for inv in l2.rpc.listinvoices(index='created', start=99)['invoices']] == [str(i) for i in range(99, 100)]
+    assert l2.rpc.listinvoices(index='created', start=100) == {'invoices': []}
+    assert l2.rpc.listinvoices(index='created', start=2100) == {'invoices': []}
+
+    # Pay 10 of them, in reverse order.  These will be the last ones in the 'updated' index.
+    for i in range(70, 60, -1):
+        l1.rpc.pay(invs[i]['bolt11'])
+
+    # Make sure it's fully resolved!
+    wait_for(lambda: only_one(l2.rpc.listpeerchannels()['channels'])['htlcs'] == [])
+
+    # They're all still there!
+    assert set([inv['label'] for inv in l2.rpc.listinvoices(index='updated')['invoices']]) == set([str(i) for i in range(1, 100)])
+
+    # index values are correct.
+    for inv in l2.rpc.listinvoices(index='updated')['invoices']:
+        assert inv['created_index'] == int(inv['label'])
+        if int(inv['label']) in range(70, 60, -1):
+            assert inv['updated_index'] == 70 - int(inv['label']) + 1
+        else:
+            assert 'updated_index' not in inv
+
+    # Last 10 are in a defined order:
+    assert [inv['label'] for inv in l2.rpc.listinvoices(index='updated', start=1)['invoices']] == [str(i) for i in range(70, 60, -1)]
+    assert [inv['label'] for inv in l2.rpc.listinvoices(index='updated', start=2)['invoices']] == [str(i) for i in range(69, 60, -1)]
+    assert [inv['label'] for inv in l2.rpc.listinvoices(index='updated', start=10)['invoices']] == [str(i) for i in range(61, 60, -1)]
+    assert l2.rpc.listinvoices(index='updated', start=11) == {'invoices': []}
+    assert l2.rpc.listinvoices(index='updated', start=2100) == {'invoices': []}
+
+    # limit should work!
+    for i in range(1, 10):
+        assert only_one(l2.rpc.listinvoices(index='updated', start=i, limit=1)['invoices'])['label'] == str(70 + 1 - i)

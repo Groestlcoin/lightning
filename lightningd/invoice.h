@@ -6,6 +6,7 @@
 
 struct amount_msat;
 struct htlc_set;
+struct json_escape;
 struct lightningd;
 struct sha256;
 
@@ -38,6 +39,8 @@ struct invoice_details {
 	u8 *features;
 	/* The offer this refers to, if any. */
 	struct sha256 *local_offer_id;
+	/* Index values */
+	u64 created_index, updated_index;
 };
 
 /**

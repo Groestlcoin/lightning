@@ -6,8 +6,8 @@
 #include <db/exec.h>
 #include <db/utils.h>
 #include <lightningd/invoice.h>
+#include <lightningd/wait.h>
 #include <wallet/invoices.h>
-#include <wallet/wallet.h>
 
 struct invoice_waiter {
 	/* Is this waiter already triggered? */
@@ -111,24 +111,12 @@ static struct invoice_details *wallet_stmt2invoice_details(const tal_t *ctx,
 
 	dtl->features = db_col_arr(dtl, stmt, "features", u8);
 	dtl->local_offer_id = db_col_optional(dtl, stmt, "local_offer_id", sha256);
-
+	dtl->created_index = db_col_u64(stmt, "id");
+	dtl->updated_index = db_col_u64(stmt, "updated_index");
 	return dtl;
 }
 
-/* Update expirations. */
-static void update_db_expirations(struct invoices *invoices, u64 now)
-{
-	struct db_stmt *stmt;
-	stmt = db_prepare_v2(invoices->wallet->db, SQL("UPDATE invoices"
-					       "   SET state = ?"
-					       " WHERE state = ?"
-					       "   AND expiry_time <= ?;"));
-	db_bind_int(stmt, EXPIRED);
-	db_bind_int(stmt, UNPAID);
-	db_bind_u64(stmt, now);
-	db_exec_prepared_v2(take(stmt));
-}
-
+static void trigger_expiration(struct invoices *invoices);
 static void install_expiration_timer(struct invoices *invoices);
 
 struct invoices *invoices_new(const tal_t *ctx,
@@ -144,8 +132,7 @@ struct invoices *invoices_new(const tal_t *ctx,
 
 	invs->expiration_timer = NULL;
 
-	update_db_expirations(invs, time_now().ts.tv_sec);
-	install_expiration_timer(invs);
+	trigger_expiration(invs);
 	return invs;
 }
 
@@ -154,40 +141,57 @@ struct invoice_id_node {
 	u64 inv_dbid;
 };
 
+/* Get any invoice ids where invoice is >= expiry time and status */
+static u64 *expired_ids(const tal_t *ctx,
+			struct db *db,
+			u64 expiry_time,
+			enum invoice_status status)
+{
+	struct db_stmt *stmt;
+	u64 *ids = tal_arr(ctx, u64, 0);
+
+	stmt = db_prepare_v2(db, SQL("SELECT id"
+				     "  FROM invoices"
+				     " WHERE state = ?"
+				     "   AND expiry_time <= ?"));
+	db_bind_int(stmt, status);
+	db_bind_u64(stmt, expiry_time);
+	db_query_prepared(stmt);
+
+	while (db_step(stmt)) {
+		tal_arr_expand(&ids, db_col_u64(stmt, "id"));
+	}
+	tal_free(stmt);
+	return ids;
+}
+
 static void trigger_expiration(struct invoices *invoices)
 {
-	struct list_head idlist;
-	struct invoice_id_node *idn;
+	u64 *inv_dbids;
 	u64 now = time_now().ts.tv_sec;
 	struct db_stmt *stmt;
 
 	/* Free current expiration timer */
 	invoices->expiration_timer = tal_free(invoices->expiration_timer);
 
-	/* Acquire all expired invoices and save them in a list */
-	list_head_init(&idlist);
-	stmt = db_prepare_v2(invoices->wallet->db, SQL("SELECT id"
-					       "  FROM invoices"
-					       " WHERE state = ?"
-					       "   AND expiry_time <= ?"));
-	db_bind_int(stmt, UNPAID);
-	db_bind_u64(stmt, now);
-	db_query_prepared(stmt);
-
-	while (db_step(stmt)) {
-		idn = tal(tmpctx, struct invoice_id_node);
-		list_add_tail(&idlist, &idn->list);
-		idn->inv_dbid = db_col_u64(stmt, "id");
-	}
-	tal_free(stmt);
-
-	/* Expire all those invoices */
-	update_db_expirations(invoices, now);
+	inv_dbids = expired_ids(tmpctx, invoices->wallet->db, now, UNPAID);
 
 	/* Trigger expirations */
-	list_for_each(&idlist, idn, list) {
+	for (size_t i = 0; i < tal_count(inv_dbids); i++) {
+		stmt = db_prepare_v2(invoices->wallet->db, SQL("UPDATE invoices"
+							       "   SET state = ?"
+							       "      , updated_index = ?"
+							       " WHERE id = ?"));
+		db_bind_int(stmt, EXPIRED);
+		db_bind_u64(stmt,
+			    /* FIXME: details! */
+			    invoice_index_update_status(invoices->wallet->ld,
+							NULL, EXPIRED));
+		db_bind_u64(stmt, inv_dbids[i]);
+		db_exec_prepared_v2(take(stmt));
+
 		/* Trigger expiration */
-		trigger_invoice_waiter_expire_or_delete(invoices, idn->inv_dbid, false);
+		trigger_invoice_waiter_expire_or_delete(invoices, inv_dbids[i], false);
 	}
 
 	install_expiration_timer(invoices);
@@ -273,19 +277,22 @@ bool invoices_create(struct invoices *invoices,
 	/* Compute expiration. */
 	expiry_time = now + expiry;
 
+	*inv_dbid = invoice_index_created(invoices->wallet->ld, UNPAID, label, b11enc);
+
 	/* Save to database. */
 	stmt = db_prepare_v2(
 	    invoices->wallet->db,
 	    SQL("INSERT INTO invoices"
-		"            ( payment_hash, payment_key, state"
+		"            ( id, payment_hash, payment_key, state"
 		"            , msatoshi, label, expiry_time"
 		"            , pay_index, msatoshi_received"
 		"            , paid_timestamp, bolt11, description, features, local_offer_id)"
-		"     VALUES ( ?, ?, ?"
+		"     VALUES ( ?, ?, ?, ?"
 		"            , ?, ?, ?"
 		"            , NULL, NULL"
 		"            , NULL, ?, ?, ?, ?);"));
 
+	db_bind_u64(stmt, *inv_dbid);
 	db_bind_sha256(stmt, rhash);
 	db_bind_preimage(stmt, r);
 	db_bind_int(stmt, UNPAID);
@@ -307,8 +314,7 @@ bool invoices_create(struct invoices *invoices,
 		db_bind_null(stmt);
 
 	db_exec_prepared_v2(stmt);
-
-	*inv_dbid = db_last_insert_id_v2(take(stmt));
+	tal_free(stmt);
 
 	/* Install expiration trigger. */
 	if (!invoices->expiration_timer ||
@@ -391,7 +397,10 @@ bool invoices_find_unpaid(struct invoices *invoices,
 	}
 }
 
-bool invoices_delete(struct invoices *invoices, u64 inv_dbid)
+bool invoices_delete(struct invoices *invoices, u64 inv_dbid,
+		     enum invoice_status status,
+		     const struct json_escape *label,
+		     const char *invstring)
 {
 	struct db_stmt *stmt;
 	int changes;
@@ -408,18 +417,26 @@ bool invoices_delete(struct invoices *invoices, u64 inv_dbid)
 		return false;
 	}
 	/* Tell all the waiters about the fact that it was deleted. */
+	invoice_index_deleted(invoices->wallet->ld, status, label, invstring);
 	trigger_invoice_waiter_expire_or_delete(invoices, inv_dbid, true);
 	return true;
 }
 
-bool invoices_delete_description(struct invoices *invoices, u64 inv_dbid)
+bool invoices_delete_description(struct invoices *invoices, u64 inv_dbid,
+				 const struct json_escape *label,
+				 const char *description)
 {
 	struct db_stmt *stmt;
 	int changes;
 
-	stmt = db_prepare_v2(invoices->wallet->db, SQL("UPDATE invoices"
-					       "   SET description = NULL"
-					       " WHERE ID = ?;"));
+	stmt = db_prepare_v2(invoices->wallet->db,
+			     SQL("UPDATE invoices"
+				 "   SET description = NULL,"
+				 "       updated_index = ?"
+				 " WHERE ID = ?;"));
+	db_bind_u64(stmt,
+		    invoice_index_update_deldesc(invoices->wallet->ld,
+						 label, description));
 	db_bind_u64(stmt, inv_dbid);
 	db_exec_prepared_v2(stmt);
 
@@ -432,22 +449,53 @@ bool invoices_delete_description(struct invoices *invoices, u64 inv_dbid)
 void invoices_delete_expired(struct invoices *invoices,
 			     u64 max_expiry_time)
 {
-	struct db_stmt *stmt;
-	stmt = db_prepare_v2(invoices->wallet->db, SQL(
-			  "DELETE FROM invoices"
-			  " WHERE state = ?"
-			  "   AND expiry_time <= ?;"));
-	db_bind_int(stmt, EXPIRED);
-	db_bind_u64(stmt, max_expiry_time);
-	db_exec_prepared_v2(take(stmt));
+	u64 *ids = expired_ids(tmpctx, invoices->wallet->db, max_expiry_time,
+			       EXPIRED);
+
+	for (size_t i = 0; i < tal_count(ids); i++) {
+		struct db_stmt *stmt;
+		const struct invoice_details *details;
+
+		details = invoices_get_details(tmpctx, invoices, ids[i]);
+		stmt = db_prepare_v2(invoices->wallet->db, SQL(
+					     "DELETE FROM invoices"
+					     " WHERE id = ?;"));
+		db_bind_u64(stmt, ids[i]);
+		db_exec_prepared_v2(take(stmt));
+
+		invoice_index_deleted(invoices->wallet->ld,
+				      details->state,
+				      details->label,
+				      details->invstring);
+	}
 }
 
 struct db_stmt *invoices_first(struct invoices *invoices,
+			       const enum wait_index *listindex,
+			       u64 liststart,
+			       const u32 *listlimit,
 			       u64 *inv_dbid)
 {
 	struct db_stmt *stmt;
 
-	stmt = db_prepare_v2(invoices->wallet->db, SQL("SELECT id FROM invoices ORDER by id;"));
+	if (listindex && *listindex == WAIT_INDEX_UPDATED) {
+		stmt = db_prepare_v2(invoices->wallet->db,
+				     SQL("SELECT id FROM invoices"
+					 " WHERE updated_index >= ?"
+					 " ORDER BY updated_index"
+					 " LIMIT ?;"));
+	} else {
+		stmt = db_prepare_v2(invoices->wallet->db,
+				     SQL("SELECT id FROM invoices"
+					 " WHERE id >= ?"
+					 " ORDER BY id"
+					 " LIMIT ?;"));
+	}
+	db_bind_u64(stmt, liststart);
+	if (listlimit)
+		db_bind_int(stmt, *listlimit);
+	else
+		db_bind_int(stmt, INT_MAX);
 	db_query_prepared(stmt);
 
 	return invoices_next(invoices, stmt, inv_dbid);
@@ -518,7 +566,8 @@ static void maybe_mark_offer_used(struct db *db, u64 inv_dbid)
 
 bool invoices_resolve(struct invoices *invoices,
 		      u64 inv_dbid,
-		      struct amount_msat received)
+		      struct amount_msat received,
+		      const struct json_escape *label)
 {
 	struct db_stmt *stmt;
 	s64 pay_index;
@@ -538,11 +587,15 @@ bool invoices_resolve(struct invoices *invoices,
 					       "     , pay_index=?"
 					       "     , msatoshi_received=?"
 					       "     , paid_timestamp=?"
+					       "     , updated_index=?"
 					       " WHERE id=?;"));
 	db_bind_int(stmt, PAID);
 	db_bind_u64(stmt, pay_index);
 	db_bind_amount_msat(stmt, &received);
 	db_bind_u64(stmt, paid_timestamp);
+	db_bind_u64(stmt,
+		    invoice_index_update_status(invoices->wallet->ld,
+						label, PAID));
 	db_bind_u64(stmt, inv_dbid);
 	db_exec_prepared_v2(take(stmt));
 
@@ -654,6 +707,8 @@ struct invoice_details *invoices_get_details(const tal_t *ctx,
 					       ", description"
 					       ", features"
 					       ", local_offer_id"
+					       ", id"
+					       ", updated_index"
 					       " FROM invoices"
 					       " WHERE id = ?;"));
 	db_bind_u64(stmt, inv_dbid);
@@ -664,4 +719,69 @@ struct invoice_details *invoices_get_details(const tal_t *ctx,
 	details = wallet_stmt2invoice_details(ctx, stmt);
 	tal_free(stmt);
 	return details;
+}
+
+static u64 invoice_index_inc(struct lightningd *ld,
+			     const enum invoice_status *state,
+			     const struct json_escape *label,
+			     const char *invstring,
+			     const char *description,
+			     enum wait_index idx)
+{
+	const char *invstrname;
+
+	if (invstring && strstarts(invstring, "lni"))
+		invstrname = "bolt12";
+	else
+		invstrname = "bolt11";
+
+
+	return wait_index_increment(ld, WAIT_SUBSYSTEM_INVOICE, idx,
+				 "status", state ? invoice_status_str(*state) : NULL,
+				 /* We don't want to add more JSON escapes here! */
+				 "=label", label ? tal_fmt(tmpctx, "\"%s\"", label->s) : NULL,
+				 invstrname, invstring,
+				 "description", description,
+				 NULL);
+}
+
+void invoice_index_deleted(struct lightningd *ld,
+			   enum invoice_status state,
+			   const struct json_escape *label,
+			   const char *invstring)
+{
+	assert(label);
+	assert(invstring);
+	invoice_index_inc(ld, &state, label, invstring, NULL, WAIT_INDEX_DELETED);
+}
+
+/* Fortuntely, dbids start at 1, not 0! */
+u64 invoice_index_created(struct lightningd *ld,
+			  enum invoice_status state,
+			  const struct json_escape *label,
+			  const char *invstring)
+{
+	assert(label);
+	assert(invstring);
+
+	return invoice_index_inc(ld, &state, label, invstring, NULL,
+				 WAIT_INDEX_CREATED);
+}
+
+/* FIXME: We allow missing label here! :( */
+u64 invoice_index_update_status(struct lightningd *ld,
+				const struct json_escape *label,
+				enum invoice_status state)
+{
+	return invoice_index_inc(ld, &state, label, NULL, NULL,
+				 WAIT_INDEX_UPDATED);
+}
+
+u64 invoice_index_update_deldesc(struct lightningd *ld,
+				 const struct json_escape *label,
+				 const char *description)
+{
+	assert(description);
+	return invoice_index_inc(ld, NULL, label, NULL, description,
+				 WAIT_INDEX_UPDATED);
 }

@@ -3679,6 +3679,10 @@ def test_sql(node_factory, bitcoind):
                          'type': 'hex'},
                         {'name': 'invreq_payer_note',
                          'type': 'string'},
+                        {'name': 'created_index',
+                         'type': 'u64'},
+                        {'name': 'updated_index',
+                         'type': 'u64'},
                         {'name': 'pay_index',
                          'type': 'u64'},
                         {'name': 'amount_received_msat',
@@ -3762,6 +3766,8 @@ def test_sql(node_factory, bitcoind):
                          'type': 'string'},
                         {'name': 'scratch_txid',
                          'type': 'txid'},
+                        {'name': 'ignore_fee_limits',
+                         'type': 'boolean'},
                         {'name': 'feerate_perkw',
                          'type': 'u32'},
                         {'name': 'feerate_perkb',
@@ -4138,8 +4144,8 @@ def test_sql(node_factory, bitcoind):
     l3.daemon.wait_for_log("Refreshing channel: {}".format(scid))
 
     # This has to wait for the hold_invoice plugin to let go!
-    l1.rpc.close(l2.info['id'])
-    bitcoind.generate_block(13, wait_for_mempool=1)
+    txid = l1.rpc.close(l2.info['id'])['txid']
+    bitcoind.generate_block(13, wait_for_mempool=txid)
     wait_for(lambda: len(l3.rpc.listchannels()['channels']) == 2)
     assert len(l3.rpc.sql("SELECT * FROM channels;")['rows']) == 2
     l3.daemon.wait_for_log("Deleting channel: {}".format(scid))

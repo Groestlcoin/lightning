@@ -124,6 +124,9 @@ const char **channel_type_name(const tal_t *ctx UNNEEDED, const struct channel_t
 /* Generated stub for channel_unsaved_close_conn */
 void channel_unsaved_close_conn(struct channel *channel UNNEEDED, const char *why UNNEEDED)
 { fprintf(stderr, "channel_unsaved_close_conn called!\n"); abort(); }
+/* Generated stub for channel_update_feerates */
+void channel_update_feerates(struct lightningd *ld UNNEEDED, const struct channel *channel UNNEEDED)
+{ fprintf(stderr, "channel_update_feerates called!\n"); abort(); }
 /* Generated stub for channel_update_reserve */
 void channel_update_reserve(struct channel *channel UNNEEDED,
 			    struct channel_config *their_config UNNEEDED,
@@ -363,11 +366,17 @@ bool invoices_create(struct invoices *invoices UNNEEDED,
 		     const struct sha256 *local_offer_id UNNEEDED)
 { fprintf(stderr, "invoices_create called!\n"); abort(); }
 /* Generated stub for invoices_delete */
-bool invoices_delete(struct invoices *invoices UNNEEDED, u64 inv_dbid UNNEEDED)
+bool invoices_delete(struct invoices *invoices UNNEEDED,
+		     u64 inv_dbid UNNEEDED,
+		     enum invoice_status status UNNEEDED,
+		     const struct json_escape *label UNNEEDED,
+		     const char *invstring UNNEEDED)
 { fprintf(stderr, "invoices_delete called!\n"); abort(); }
 /* Generated stub for invoices_delete_description */
 bool invoices_delete_description(struct invoices *invoices UNNEEDED,
-				 u64 inv_dbid UNNEEDED)
+				 u64 inv_dbid UNNEEDED,
+				 const struct json_escape *label UNNEEDED,
+				 const char *description UNNEEDED)
 { fprintf(stderr, "invoices_delete_description called!\n"); abort(); }
 /* Generated stub for invoices_delete_expired */
 void invoices_delete_expired(struct invoices *invoices UNNEEDED,
@@ -390,6 +399,9 @@ bool invoices_find_unpaid(struct invoices *invoices UNNEEDED,
 { fprintf(stderr, "invoices_find_unpaid called!\n"); abort(); }
 /* Generated stub for invoices_first */
 struct db_stmt *invoices_first(struct invoices *invoices UNNEEDED,
+			       const enum wait_index *listindex UNNEEDED,
+			       u64 liststart UNNEEDED,
+			       const u32 *listlimit UNNEEDED,
 			       u64 *inv_dbid UNNEEDED)
 { fprintf(stderr, "invoices_first called!\n"); abort(); }
 /* Generated stub for invoices_get_details */
@@ -405,7 +417,8 @@ struct db_stmt *invoices_next(struct invoices *invoices UNNEEDED,
 /* Generated stub for invoices_resolve */
 bool invoices_resolve(struct invoices *invoices UNNEEDED,
 		      u64 inv_dbid UNNEEDED,
-		      struct amount_msat received UNNEEDED)
+		      struct amount_msat received UNNEEDED,
+		      const struct json_escape *label UNNEEDED)
 { fprintf(stderr, "invoices_resolve called!\n"); abort(); }
 /* Generated stub for invoices_waitany */
 void invoices_waitany(const tal_t *ctx UNNEEDED,
@@ -710,6 +723,12 @@ struct command_result *param_escaped_string(struct command *cmd UNNEEDED,
 					    const jsmntok_t *tok UNNEEDED,
 					    const char **str UNNEEDED)
 { fprintf(stderr, "param_escaped_string called!\n"); abort(); }
+/* Generated stub for param_index */
+struct command_result *param_index(struct command *cmd UNNEEDED, const char *name UNNEEDED,
+				   const char *buffer UNNEEDED,
+				   const jsmntok_t *tok UNNEEDED,
+				   enum wait_index **index UNNEEDED)
+{ fprintf(stderr, "param_index called!\n"); abort(); }
 /* Generated stub for param_invstring */
 struct command_result *param_invstring(struct command *cmd UNNEEDED, const char *name UNNEEDED,
 				    const char * buffer UNNEEDED, const jsmntok_t *tok UNNEEDED,
@@ -761,6 +780,11 @@ struct command_result *param_string(struct command *cmd UNNEEDED, const char *na
 				    const char * buffer UNNEEDED, const jsmntok_t *tok UNNEEDED,
 				    const char **str UNNEEDED)
 { fprintf(stderr, "param_string called!\n"); abort(); }
+/* Generated stub for param_u32 */
+struct command_result *param_u32(struct command *cmd UNNEEDED, const char *name UNNEEDED,
+				 const char *buffer UNNEEDED, const jsmntok_t *tok UNNEEDED,
+				 uint32_t **num UNNEEDED)
+{ fprintf(stderr, "param_u32 called!\n"); abort(); }
 /* Generated stub for param_u64 */
 struct command_result *param_u64(struct command *cmd UNNEEDED, const char *name UNNEEDED,
 				 const char *buffer UNNEEDED, const jsmntok_t *tok UNNEEDED,

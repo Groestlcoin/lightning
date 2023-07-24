@@ -205,6 +205,8 @@ The following tables are currently supported:
   - `bolt12` (type `string`, sqltype `TEXT`)
   - `local_offer_id` (type `hash`, sqltype `BLOB`)
   - `invreq_payer_note` (type `string`, sqltype `TEXT`)
+  - `created_index` (type `u64`, sqltype `INTEGER`)
+  - `updated_index` (type `u64`, sqltype `INTEGER`)
   - `pay_index` (type `u64`, sqltype `INTEGER`)
   - `amount_received_msat` (type `msat`, sqltype `INTEGER`)
   - `paid_at` (type `u64`, sqltype `INTEGER`)
@@ -250,6 +252,7 @@ The following tables are currently supported:
     - `row` (reference to `peerchannels_channel_type.rowid`, sqltype `INTEGER`)
     - `arrindex` (index within array, sqltype `INTEGER`)
     - `names` (type `string`, sqltype `TEXT`)
+  - `ignore_fee_limits` (type `boolean`, sqltype `INTEGER`)
   - `feerate_perkw` (type `u32`, sqltype `INTEGER`, from JSON object `feerate`)
   - `feerate_perkb` (type `u32`, sqltype `INTEGER`, from JSON object `feerate`)
   - `owner` (type `string`, sqltype `TEXT`)
@@ -510,4 +513,4 @@ RESOURCES
 ---------
 
 Main web site: <https://github.com/ElementsProject/lightning>
-[comment]: # ( SHA256STAMP:68c72c66bdc8b0515c6d5dddd5ffd14aa0342bd00f17a44929177c48c36a213f)
+[comment]: # ( SHA256STAMP:094d94f4d2cfd8e8bdc99be8b692100d3cbd70ab3c297ed8e191c8d4a0f9b6a7)

@@ -1999,7 +1999,7 @@ def check_socket(ip_addr, port):
 
 
 @pytest.mark.developer("needs a running Tor service instance at port 9151 or 9051")
-def test_statictor_onions(node_factory):
+def test_static_tor_onions(node_factory):
     """First basic tests ;-)
 
     Assume that tor is configured and just test
@@ -2034,7 +2034,7 @@ def test_statictor_onions(node_factory):
 
 
 @pytest.mark.developer("needs a running Tor service instance at port 9151 or 9051")
-def test_torport_onions(node_factory):
+def test_tor_port_onions(node_factory):
     """First basic tests for torport ;-)
 
     Assume that tor is configured and just test
@@ -2268,7 +2268,8 @@ def test_gossip_not_dying(node_factory, bitcoind):
 
     l1.daemon.wait_for_log("closing soon due to the funding outpoint being spent")
 
-    # We won't gossip the dead channel any more (but we still propagate node_announcement)
+    # We won't gossip the dead channel any more (but we still propagate node_announcement).  But connectd is not explicitly synced, so wait for "a bit".
+    time.sleep(1)
     assert len(get_gossip(l1)) == 2
 
 

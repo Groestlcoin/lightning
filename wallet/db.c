@@ -67,6 +67,9 @@ static void migrate_fill_in_channel_type(struct lightningd *ld,
 static void migrate_normalize_invstr(struct lightningd *ld,
 				     struct db *db);
 
+static void migrate_initialize_wait_indexes(struct lightningd *ld,
+					    struct db *db);
+
 /* Do not reorder or remove elements from this array, it is used to
  * migrate existing databases from a previous state, based on the
  * string indices */
@@ -958,6 +961,10 @@ static struct migration dbmigrations[] = {
     {NULL, migrate_normalize_invstr},
     {SQL("CREATE TABLE runes (id BIGSERIAL, rune TEXT, PRIMARY KEY (id));"), NULL},
     {SQL("CREATE TABLE runes_blacklist (start_index BIGINT, end_index BIGINT);"), NULL},
+    {SQL("ALTER TABLE channels ADD ignore_fee_limits INTEGER DEFAULT 0;"), NULL},
+    {NULL, migrate_initialize_wait_indexes},
+    {SQL("ALTER TABLE invoices ADD updated_index BIGINT DEFAULT 0"), NULL},
+    {SQL("CREATE INDEX invoice_update_idx ON invoices (updated_index)"), NULL},
 };
 
 /**
@@ -1392,6 +1399,18 @@ migrate_inflight_last_tx_to_psbt(struct lightningd *ld, struct db *db)
 	tal_free(stmt);
 }
 
+void load_indexes(struct db *db, struct indexes *indexes)
+{
+	for (size_t s = 0; s < NUM_WAIT_SUBSYSTEM; s++) {
+		for (size_t i = 0; i < NUM_WAIT_INDEX; i++) {
+			const char *fname = tal_fmt(tmpctx, "last_%s_%s_index",
+						    wait_subsystem_name(s),
+						    wait_index_name(i));
+			indexes[s].i[i] = db_get_intvar(db, fname, 0);
+		}
+	}
+}
+
 /* We're moving everything over to PSBTs from tx's, particularly our last_tx's
  * which are commitment transactions for channels.
  * This migration loads all of the last_tx's and 're-formats' them into psbts,
@@ -1631,6 +1650,24 @@ static void migrate_fill_in_channel_type(struct lightningd *ld,
 		db_exec_prepared_v2(update_stmt);
 		tal_free(update_stmt);
 	}
+	tal_free(stmt);
+}
+
+static void migrate_initialize_wait_indexes(struct lightningd *ld,
+					    struct db *db)
+{
+	struct db_stmt *stmt;
+	bool res;
+
+	/* "invoices.id" serves as the created_index.  It's never 0. */
+	stmt = db_prepare_v2(db, SQL("SELECT MAX(id) FROM invoices;"));
+	db_query_prepared(stmt);
+	res = db_step(stmt);
+	assert(res);
+
+	if (!db_col_is_null(stmt, "MAX(id)"))
+		db_set_intvar(db, "last_invoice_created_index",
+			      db_col_u64(stmt, "MAX(id)"));
 	tal_free(stmt);
 }
 
