@@ -59,6 +59,11 @@ struct runes {
 	struct usage_table *usage_table;
 };
 
+const char *rune_is_ours(struct lightningd *ld, const struct rune *rune)
+{
+	return rune_is_derived(ld->runes->master, rune);
+}
+
 #if DEVELOPER
 static void memleak_help_usage_table(struct htable *memtable,
 				     struct usage_table *usage_table)
@@ -111,16 +116,13 @@ static const char *rate_limit_check(const tal_t *ctx,
 	return NULL;
 }
 
-struct runes *runes_init(struct lightningd *ld)
+/* We need to initialize master runes secret early, so db can use rune_is_ours */
+struct runes *runes_early_init(struct lightningd *ld)
 {
 	const u8 *msg;
 	struct runes *runes = tal(ld, struct runes);
 	const u8 *data;
 	struct secret secret;
-
-	runes->ld = ld;
-	runes->next_unique_id = db_get_intvar(ld->wallet->db, "runes_uniqueid", 0);
-	runes->blacklist = wallet_get_runes_blacklist(runes, ld->wallet);
 
 	/* Runes came out of commando, hence the derivation key is 'commando' */
 	data = tal_dup_arr(tmpctx, u8, (u8 *)"commando", strlen("commando"), 0);
@@ -128,13 +130,22 @@ struct runes *runes_init(struct lightningd *ld)
 	if (!fromwire_hsmd_derive_secret_reply(msg, &secret))
 		fatal("Bad reply from HSM: %s", tal_hex(tmpctx, msg));
 
+	runes->ld = ld;
 	runes->master = rune_new(runes, secret.data, ARRAY_SIZE(secret.data), NULL);
+
+	return runes;
+}
+
+void runes_finish_init(struct runes *runes)
+{
+	struct lightningd *ld = runes->ld;
+
+	runes->next_unique_id = db_get_intvar(ld->wallet->db, "runes_uniqueid", 0);
+	runes->blacklist = wallet_get_runes_blacklist(runes, ld->wallet);
 
 	/* Initialize usage table and start flush timer. */
 	runes->usage_table = NULL;
 	flush_usage_table(runes);
-
-	return runes;
 }
 
 struct rune_and_string {
@@ -281,7 +292,7 @@ static struct command_result *json_add_rune(struct lightningd *ld,
 	if (is_rune_blacklisted(ld->runes, rune)) {
 		json_add_bool(js, "blacklisted", true);
 	}
-	if (rune_is_derived(ld->runes->master, rune)) {
+	if (rune_is_ours(ld, rune) != NULL) {
 		json_add_bool(js, "our_rune", false);
 	}
 	json_add_string(js, "unique_id", rune->unique_id);
@@ -310,7 +321,7 @@ static struct command_result *json_add_rune(struct lightningd *ld,
 	return NULL;
 }
 
-static struct command_result *json_listrunes(struct command *cmd,
+static struct command_result *json_showrunes(struct command *cmd,
 					     const char *buffer,
 					     const jsmntok_t *obj UNNEEDED,
 					     const jsmntok_t *params)
@@ -326,8 +337,11 @@ static struct command_result *json_listrunes(struct command *cmd,
 	json_array_start(response, "runes");
 	if (ras) {
 		long uid = atol(ras->rune->unique_id);
-		bool in_db = (wallet_get_rune(tmpctx, cmd->ld->wallet, uid) != NULL);
-		json_add_rune(cmd->ld, response, NULL, ras->runestr, ras->rune, in_db);
+		const char *from_db = wallet_get_rune(tmpctx, cmd->ld->wallet, uid);
+
+		/* We consider it stored iff this is exactly stored */
+		json_add_rune(cmd->ld, response, NULL, ras->runestr, ras->rune,
+			      from_db && streq(from_db, ras->runestr));
 	} else {
 		const char **strs = wallet_get_runes(cmd, cmd->ld->wallet);
 		for (size_t i = 0; i < tal_count(strs); i++) {
@@ -339,13 +353,13 @@ static struct command_result *json_listrunes(struct command *cmd,
 	return command_success(cmd, response);
 }
 
-static const struct json_command listrunes_command = {
-	"listrunes",
+static const struct json_command showrunes_command = {
+	"showrunes",
 	"utility",
-	json_listrunes,
-	"List a rune or list/decode an optional {rune}."
+	json_showrunes,
+	"Show the list of runes or decode an optional {rune}."
 };
-AUTODATA(json_command, &listrunes_command);
+AUTODATA(json_command, &showrunes_command);
 
 static struct rune_restr **readonly_restrictions(const tal_t *ctx)
 {
@@ -535,6 +549,14 @@ static const struct json_command creatrune_command = {
 };
 AUTODATA(json_command, &creatrune_command);
 
+static const struct json_command invokerune_command = {
+	"invokerune",
+	"utility",
+	json_createrune,
+	"Invoke or restrict an optional {rune} with optional {restrictions} and returns {rune}"
+};
+AUTODATA(json_command, &invokerune_command);
+
 static void blacklist_merge(struct rune_blacklist *blacklist,
 			    const struct rune_blacklist *entry)
 {
@@ -635,6 +657,14 @@ static const struct json_command blacklistrune_command = {
 	"Blacklist a rune or range of runes by taking an optional {start} and an optional {end} and returns {blacklist} array containing {start}, {end}"
 };
 AUTODATA(json_command, &blacklistrune_command);
+
+static const struct json_command destroyrune_command = {
+	"destroyrune",
+	"utility",
+	json_blacklistrune,
+	"Destroy a rune or range of runes by taking an optional {start} and an optional {end} and returns {blacklist} array containing {start}, {end}"
+};
+AUTODATA(json_command, &destroyrune_command);
 
 static const char *check_condition(const tal_t *ctx,
 				   const struct rune *rune,
@@ -738,7 +768,7 @@ static struct command_result *json_checkrune(struct command *cmd,
 	cinfo.usage = NULL;
 	strmap_init(&cinfo.cached_params);
 
-	err = rune_is_derived(cmd->ld->runes->master, ras->rune);
+	err = rune_is_ours(cmd->ld, ras->rune);
 	if (err) {
 		return command_fail(cmd, RUNE_NOT_AUTHORIZED, "Not authorized: %s", err);
 	}

@@ -1,8 +1,11 @@
 from fixtures import *  # noqa: F401,F403
+from fixtures import TEST_NETWORK
 from pyln.client import RpcError
 import base64
+import os
 import pytest
 import time
+import unittest
 
 
 def test_createrune(node_factory):
@@ -208,7 +211,7 @@ def test_createrune(node_factory):
                                 params=params)['valid'] is True
 
 
-def test_listrunes(node_factory):
+def test_showrunes(node_factory):
     l1 = node_factory.get_node()
     rune1 = l1.rpc.createrune()
     assert rune1 == {
@@ -216,12 +219,12 @@ def test_listrunes(node_factory):
         'unique_id': '0',
         'warning_unrestricted_rune': 'WARNING: This rune has no restrictions! Anyone who has access to this rune could drain funds from your node. Be careful when giving this to apps that you don\'t trust. Consider using the restrictions parameter to only allow access to specific rpc methods.'
     }
-    listrunes = l1.rpc.listrunes()
-    assert len(l1.rpc.listrunes()) == 1
+    showrunes = l1.rpc.showrunes()
+    assert len(l1.rpc.showrunes()) == 1
     l1.rpc.createrune()
-    listrunes = l1.rpc.listrunes()
-    assert len(listrunes['runes']) == 2
-    assert listrunes == {
+    showrunes = l1.rpc.showrunes()
+    assert len(showrunes['runes']) == 2
+    assert showrunes == {
         'runes': [
             {
                 'rune': 'OSqc7ixY6F-gjcigBfxtzKUI54uzgFSA6YfBQoWGDV89MA==',
@@ -238,11 +241,11 @@ def test_listrunes(node_factory):
         ]
     }
 
-    our_unstored_rune = l1.rpc.listrunes(rune='lI6iPwM1R9OkcRW25SH0a06PscPDinTfLFAjzSGFGE09OQ==')['runes'][0]
+    our_unstored_rune = l1.rpc.showrunes(rune='lI6iPwM1R9OkcRW25SH0a06PscPDinTfLFAjzSGFGE09OQ==')['runes'][0]
     assert our_unstored_rune['unique_id'] == '9'
     assert our_unstored_rune['stored'] is False
 
-    not_our_rune = l1.rpc.listrunes(rune='oNJAqigqDrHBGzsm7gV3z87oGpzq-KqFlOxx2O9iEQk9MA==')['runes'][0]
+    not_our_rune = l1.rpc.showrunes(rune='oNJAqigqDrHBGzsm7gV3z87oGpzq-KqFlOxx2O9iEQk9MA==')['runes'][0]
     assert not_our_rune['stored'] is False
     assert not_our_rune['our_rune'] is False
 
@@ -320,7 +323,7 @@ def test_blacklistrune(node_factory):
     assert blacklist == {'blacklist': [{'start': 0, 'end': 6},
                                        {'start': 9, 'end': 9}]}
 
-    blacklisted_rune = l1.rpc.listrunes(rune='geZmO6U7yqpHn-moaX93FVMVWrDRfSNY4AXx9ypLcqg9MQ==')['runes'][0]['blacklisted']
+    blacklisted_rune = l1.rpc.showrunes(rune='geZmO6U7yqpHn-moaX93FVMVWrDRfSNY4AXx9ypLcqg9MQ==')['runes'][0]['blacklisted']
     assert blacklisted_rune is True
 
 
@@ -421,3 +424,47 @@ def test_rune_pay_amount(node_factory):
                            method='pay',
                            params={'bolt11': inv2, 'amount_msat': 9999})
     assert res['valid'] is True
+
+
+@unittest.skipIf(os.getenv('TEST_DB_PROVIDER', 'sqlite3') != 'sqlite3', "Depends on canned sqlite3 db")
+@unittest.skipIf(TEST_NETWORK != 'regtest', 'canned sqlite3 db is regtest')
+def test_commando_rune_migration(node_factory):
+    """Test migration from commando's datastore using db from test_commando_listrunes"""
+    l1 = node_factory.get_node(dbfile='commando_listrunes.sqlite3.xz',
+                               options={'database-upgrade': True})
+
+    # This happens really early in logs!
+    l1.daemon.logsearch_start = 0
+    l1.daemon.wait_for_logs(['Transferring commando rune to db: '] * 2)
+
+    # datastore should be empty:
+    assert l1.rpc.listdatastore(['commando']) == {'datastore': []}
+
+    # Should match commando results!
+    assert l1.rpc.showrunes() == {'runes': [{'rune':
+                                             'OSqc7ixY6F-gjcigBfxtzKUI54uzgFSA6YfBQoWGDV89MA==',
+                                             'unique_id': '0', 'restrictions':
+                                             [], 'restrictions_as_english': ''},
+                                            {'rune':
+                                             'geZmO6U7yqpHn-moaX93FVMVWrDRfSNY4AXx9ypLcqg9MQ==',
+                                             'unique_id': '1', 'restrictions':
+                                             [], 'restrictions_as_english': ''}]}
+
+
+@unittest.skipIf(os.getenv('TEST_DB_PROVIDER', 'sqlite3') != 'sqlite3', "Depends on canned sqlite3 db")
+@unittest.skipIf(TEST_NETWORK != 'regtest', 'canned sqlite3 db is regtest')
+def test_commando_blacklist_migration(node_factory):
+    """Test migration from commando's datastore using db from test_commando_blacklist"""
+    l1 = node_factory.get_node(dbfile='commando_blacklist.sqlite3.xz',
+                               options={'database-upgrade': True})
+
+    # This happens really early in logs!
+    l1.daemon.logsearch_start = 0
+    l1.daemon.wait_for_logs(['Transferring commando blacklist to db: '] * 2)
+
+    # datastore should be empty:
+    assert l1.rpc.listdatastore(['commando']) == {'datastore': []}
+
+    # Should match commando results!
+    assert l1.rpc.blacklistrune() == {'blacklist': [{'start': 0, 'end': 6},
+                                                    {'start': 9, 'end': 9}]}

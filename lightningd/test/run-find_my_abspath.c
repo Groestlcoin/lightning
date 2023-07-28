@@ -187,9 +187,12 @@ void plugins_set_builtin_plugins_dir(struct plugins *plugins UNNEEDED,
 /* Generated stub for resend_closing_transactions */
 void resend_closing_transactions(struct lightningd *ld UNNEEDED)
 { fprintf(stderr, "resend_closing_transactions called!\n"); abort(); }
-/* Generated stub for runes_init */
-struct runes *runes_init(struct lightningd *ld UNNEEDED)
-{ fprintf(stderr, "runes_init called!\n"); abort(); }
+/* Generated stub for runes_early_init */
+struct runes *runes_early_init(struct lightningd *ld UNNEEDED)
+{ fprintf(stderr, "runes_early_init called!\n"); abort(); }
+/* Generated stub for runes_finish_init */
+void runes_finish_init(struct runes *runes UNNEEDED)
+{ fprintf(stderr, "runes_finish_init called!\n"); abort(); }
 /* Generated stub for setup_color_and_alias */
 void setup_color_and_alias(struct lightningd *ld UNNEEDED)
 { fprintf(stderr, "setup_color_and_alias called!\n"); abort(); }
@@ -218,6 +221,12 @@ void towire_channel_id(u8 **pptr UNNEEDED, const struct channel_id *channel_id U
 /* Generated stub for towire_node_id */
 void towire_node_id(u8 **pptr UNNEEDED, const struct node_id *id UNNEEDED)
 { fprintf(stderr, "towire_node_id called!\n"); abort(); }
+/* Generated stub for trace_span_end */
+void trace_span_end(const void *key UNNEEDED)
+{ fprintf(stderr, "trace_span_end called!\n"); abort(); }
+/* Generated stub for trace_span_start */
+void trace_span_start(const char *name UNNEEDED, const void *key UNNEEDED)
+{ fprintf(stderr, "trace_span_start called!\n"); abort(); }
 /* Generated stub for txfilter_add_derkey */
 void txfilter_add_derkey(struct txfilter *filter UNNEEDED,
 			 const u8 derkey[PUBKEY_CMPR_LEN])

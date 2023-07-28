@@ -8,17 +8,23 @@ updatedAt: "2023-07-13T05:08:44.966Z"
 ---
 # Binaries
 
-If you're on Ubuntu:
+If you're on Ubuntu, you need to install groestlcoind:
+
 
 ```shell
 sudo apt-get install -y software-properties-common
-sudo add-apt-repository -u ppa:lightningnetwork/ppa
-sudo apt-get install lightningd snapd
 sudo snap install groestlcoin-core
 sudo ln -s /snap/groestlcoin-core/current/bin/groestlcoin{d,-cli} /usr/local/bin/
 ```
 
-Alternatively, you can install a pre-compiled binary from the [releases](https://github.com/Groestlcoin/lightning/releases) page on GitHub. Core Lightning provides binaries for both Ubuntu and Fedora distributions.
+Then you can fetch a pre-compiled binary from the [releases](https://github.com/Groestlcoin/lightning/releases) page on GitHub. Core Lightning provides binaries for both Ubuntu and Fedora distributions.
+
+You will need some Python packages if you want to use clnrest.  Unfortunately there are some Python packages which are not packaged in Ubuntu, and so you will need to force installation of these (I recommend --user which will install them in your own .local directory, so at least you won't run the risk of breaking Python globally!).
+
+```
+sudo apt-get install python3-json5 python3-flask python3-gunicorn
+pip3 install --user flask_restx pyln-client
+```
 
 If you're on a different distribution or OS, you can compile the source by following the instructions from [Installing from Source](<>).
 
@@ -27,28 +33,20 @@ If you're on a different distribution or OS, you can compile the source by follo
 To install the Docker image for the latest stable release:
 
 ```shell
-docker pull elementsproject/lightningd:latest
+docker pull Groestlcoin/lightningd:latest
 ```
 
 To install for a specific version, for example, 22.11.1:
 
 ```shell
-docker pull elementsproject/lightningd:v22.11.1
+docker pull Groestlcoin/lightningd:v22.11.1
 ```
 
-See all of the docker images for Core Lightning on [Docker Hub](https://hub.docker.com/r/elementsproject/lightningd/tags).
-
-# Third-party apps
-
-For a GUI experience, you can install and use Core Lightning via a variety of third-party applications such as [Ride the Lightning](https://www.ridethelightning.info/), [Umbrel](https://getumbrel.com/), [BTCPayServer](https://btcpayserver.org/), [Raspiblitz](https://raspiblitz.org/), [Embassy](https://start9.com/).
-
-Core Lightning is also available on nixOS via the [nix-Groestlcoin](https://github.com/fort-nix/nix-bitcoin/) project.
+See all of the docker images for Core Lightning on [Docker Hub](https://hub.docker.com/r/groestlcoin/lightningd/tags).
 
 # Installing from source
 
-> 📘
->
-> To build Core Lightning in a reproducible way, follow the steps at [Reproducible builds for Core Lightning](doc:repro).
+To build Core Lightning in a reproducible way, follow the steps at [Reproducible builds for Core Lightning](doc:repro).
 
 ## Library Requirements
 
@@ -92,7 +90,7 @@ sudo ln -s /snap/groestlcoin-core/current/bin/groestlcoin{d,-cli} /usr/local/bin
 Clone lightning:
 
 ```shell
-git clone https://github.com/ElementsProject/lightning.git
+git clone https://github.com/Groestlcoin/lightning.git
 cd lightning
 ```
 
@@ -124,6 +122,7 @@ To build cln to just install a tagged or master version you can use the followin
 ```shell
 pip3 install --upgrade pip
 pip3 install mako
+pip3 install -r plugins/clnrest/requirements.txt
 ./configure
 make
 sudo make install
@@ -193,7 +192,7 @@ Make sure you have [groestlcoind](https://github.com/groestlcoin/groestlcoin) av
 Clone lightning:
 
 ```shell
-$ git clone https://github.com/ElementsProject/lightning.git
+$ git clone https://github.com/Groestlcoin/lightning.git
 $ cd lightning
 ```
 
@@ -231,7 +230,7 @@ OS version: FreeBSD 11.1-RELEASE or above
 
 ```shell
 pkg install git python py39-pip gmake libtool gmp sqlite3 postgresql13-client gettext autotools
-https://github.com/ElementsProject/lightning.git
+https://github.com/Groestlcoin/lightning.git
 pip install --upgrade pip
 pip3 install mako
 ./configure
@@ -366,7 +365,7 @@ $ make src/groestlcoind src/groestlcoin-cli && make install
 Clone lightning:
 
 ```shell
-$ git clone https://github.com/ElementsProject/lightning.git
+$ git clone https://github.com/Groestlcoin/lightning.git
 $ cd lightning
 ```
 
@@ -420,7 +419,7 @@ pip install --user poetry
 Clone Core Lightning:
 
 ```shell
-$ git clone https://github.com/ElementsProject/lightning.git
+$ git clone https://github.com/Groestlcoin/lightning.git
 $ cd lightning
 ```
 
@@ -539,7 +538,7 @@ For all the other Pi devices out there, consider using [Armbian](https://www.arm
 You can compile in `customize-image.sh` using the instructions for Ubuntu.
 
 A working example that compiles both groestlcoind and Core Lightning for Armbian can  
-be found [here](https://github.com/Sjors/armbian-bitcoin-core).
+be found [here](https://github.com/Groestlcoin/armbian-groestlcoin-core).
 
 ## To compile for Alpine
 
@@ -554,7 +553,7 @@ sqlite-dev python3 py3-mako net-tools zlib-dev libsodium gettext
 Clone lightning:
 
 ```shell
-git clone https://github.com/ElementsProject/lightning.git
+git clone https://github.com/Groestlcoin/lightning.git
 cd lightning
 git submodule update --init --recursive
 ```

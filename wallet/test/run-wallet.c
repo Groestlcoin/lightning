@@ -621,7 +621,9 @@ void payment_failed(struct lightningd *ld UNNEEDED, const struct htlc_out *hout 
 void payment_store(struct lightningd *ld UNNEEDED, struct wallet_payment *payment UNNEEDED)
 { fprintf(stderr, "payment_store called!\n"); abort(); }
 /* Generated stub for payment_succeeded */
-void payment_succeeded(struct lightningd *ld UNNEEDED, struct htlc_out *hout UNNEEDED,
+void payment_succeeded(struct lightningd *ld UNNEEDED,
+		       const struct sha256 *payment_hash UNNEEDED,
+		       u64 partid UNNEEDED, u64 groupid UNNEEDED,
 		       const struct preimage *rval UNNEEDED)
 { fprintf(stderr, "payment_succeeded called!\n"); abort(); }
 /* Generated stub for peer_restart_dualopend */
@@ -674,6 +676,9 @@ const char *resolve_close_command(const tal_t *ctx UNNEEDED,
 				  struct lightningd *ld UNNEEDED, struct channel *channel UNNEEDED,
 				  bool cooperative UNNEEDED)
 { fprintf(stderr, "resolve_close_command called!\n"); abort(); }
+/* Generated stub for rune_is_ours */
+const char *rune_is_ours(struct lightningd *ld UNNEEDED, const struct rune *rune UNNEEDED)
+{ fprintf(stderr, "rune_is_ours called!\n"); abort(); }
 /* Generated stub for serialize_onionpacket */
 u8 *serialize_onionpacket(
 	const tal_t *ctx UNNEEDED,
@@ -851,6 +856,12 @@ u8 *towire_warningfmt(const tal_t *ctx UNNEEDED,
 		      const struct channel_id *channel UNNEEDED,
 		      const char *fmt UNNEEDED, ...)
 { fprintf(stderr, "towire_warningfmt called!\n"); abort(); }
+/* Generated stub for trace_span_end */
+void trace_span_end(const void *key UNNEEDED)
+{ fprintf(stderr, "trace_span_end called!\n"); abort(); }
+/* Generated stub for trace_span_start */
+void trace_span_start(const char *name UNNEEDED, const void *key UNNEEDED)
+{ fprintf(stderr, "trace_span_start called!\n"); abort(); }
 /* Generated stub for try_reconnect */
 void try_reconnect(const tal_t *ctx UNNEEDED,
 		   struct peer *peer UNNEEDED,
