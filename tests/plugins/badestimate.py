@@ -9,11 +9,11 @@ plugin = Plugin()
 
 
 def bcli(plugin, cmd):
-    ret = subprocess.run(['bitcoin-cli',
-                          '-datadir={}'.format(plugin.get_option("bitcoin-datadir")),
-                          '-rpcuser={}'.format(plugin.get_option("bitcoin-rpcuser")),
-                          '-rpcpassword={}'.format(plugin.get_option("bitcoin-rpcpassword")),
-                          '-rpcport={}'.format(plugin.get_option("bitcoin-rpcport"))]
+    ret = subprocess.run(['groestlcoin-cli',
+                          '-datadir={}'.format(plugin.get_option("groestlcoin-datadir")),
+                          '-rpcuser={}'.format(plugin.get_option("groestlcoin-rpcuser")),
+                          '-rpcpassword={}'.format(plugin.get_option("groestlcoin-rpcpassword")),
+                          '-rpcport={}'.format(plugin.get_option("groestlcoin-rpcport"))]
                          + cmd, stdout=subprocess.PIPE)
     if ret.returncode != 0:
         return None
@@ -81,10 +81,10 @@ def getutxout(plugin, txid, vout, *kwargs):
             "script": txout['scriptPubKey']['hex']}
 
 
-plugin.add_option("bitcoin-rpcuser", '', '')
-plugin.add_option("bitcoin-rpcpassword", '', '')
-plugin.add_option("bitcoin-datadir", '', '')
-plugin.add_option("bitcoin-rpcport", '', '')
+plugin.add_option("groestlcoin-rpcuser", '', '')
+plugin.add_option("groestlcoin-rpcpassword", '', '')
+plugin.add_option("groestlcoin-datadir", '', '')
+plugin.add_option("groestlcoin-rpcport", '', '')
 plugin.add_option("badestimate-badorder", False, 'Send out-of-order estimates', opt_type='bool')
 
 plugin.run()

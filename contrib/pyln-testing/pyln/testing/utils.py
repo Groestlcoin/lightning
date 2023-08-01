@@ -661,7 +661,7 @@ class LightningD(TailableProc):
         return self.cmd_prefix + [self.executable] + self.early_opts + opts
 
     def start(self, stdin=None, wait_for_initialized=True, stderr_redir=False):
-        self.opts['bitcoin-rpcport'] = self.rpcproxy.rpcport
+        self.opts['groestlcoin-rpcport'] = self.rpcproxy.rpcport
         TailableProc.start(self, stdin, stdout_redir=False, stderr_redir=stderr_redir)
         if wait_for_initialized:
             self.wait_for_log("Server started with public key")
