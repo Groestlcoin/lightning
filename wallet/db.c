@@ -970,6 +970,11 @@ static struct migration dbmigrations[] = {
     {SQL("CREATE INDEX invoice_update_idx ON invoices (updated_index)"), NULL},
     {NULL, migrate_datastore_commando_runes},
     {NULL, migrate_invoice_created_index_var},
+    /* Splicing requires us to store HTLC sigs for inflight splices and allows us to discard old sigs after splice confirmation. */
+    {SQL("ALTER TABLE htlc_sigs ADD inflight_tx_id BLOB"), NULL},
+    {SQL("ALTER TABLE htlc_sigs ADD inflight_tx_outnum INTEGER"), NULL},
+    {SQL("ALTER TABLE channel_funding_inflights ADD splice_amnt BIGINT DEFAULT 0"), NULL},
+    {SQL("ALTER TABLE channel_funding_inflights ADD i_am_initiator INTEGER DEFAULT 0"), NULL},
 };
 
 /**
@@ -1679,10 +1684,35 @@ static void migrate_initialize_wait_indexes(struct lightningd *ld,
 static void migrate_invoice_created_index_var(struct lightningd *ld, struct db *db)
 {
 	struct db_stmt *stmt;
+	s64 badindex, realindex;
 
-	/* Prior migration had a typo! */
-	stmt = db_prepare_v2(db, SQL("UPDATE vars"
-				     " SET name = 'last_invoices_created_index'"
+	/* Prior migration had a typo!  But we might have run since
+	 * then and created an invoice, so we have to set the real one
+	 * to the max of the two... */
+	badindex = db_get_intvar(db, "last_invoice_created_index", -1);
+	realindex = db_get_intvar(db, "last_invoices_created_index", -1);
+
+	/* Bad index does not exist?  Fine */
+	if (badindex < 0)
+		return;
+
+	/* Bad index exists, real index doesn't?  Rename */
+	if (badindex >= 0 && realindex < 0) {
+		stmt = db_prepare_v2(db, SQL("UPDATE vars"
+					     " SET name = 'last_invoices_created_index'"
+					     " WHERE name = 'last_invoice_created_index'"));
+		db_exec_prepared_v2(stmt);
+		tal_free(stmt);
+		return;
+	}
+
+	/* Both exist.  Correct value is the higher one. */
+	if (badindex > realindex)
+		realindex = badindex;
+
+	/* Update correct one, remove bad one. */
+	db_set_intvar(db, "last_invoices_created_index", realindex);
+	stmt = db_prepare_v2(db, SQL("DELETE FROM vars"
 				     " WHERE name = 'last_invoice_created_index'"));
 	db_exec_prepared_v2(stmt);
 	tal_free(stmt);

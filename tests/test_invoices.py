@@ -913,7 +913,34 @@ def test_listinvoices_index(node_factory, executor):
         assert only_one(l2.rpc.listinvoices(index='updated', start=i, limit=1)['invoices'])['label'] == str(70 + 1 - i)
 
 
+def test_expiry_startup_crash(node_factory, bitcoind):
+    """We crash trying to expire invoice on startup"""
+    l1 = node_factory.get_node()
+
+    l1.rpc.invoice(42, 'invlabel', 'invdesc', expiry=10)
+    l1.stop()
+
+    time.sleep(12)
+    # Boom!:
+    # 0x55eddb820d30 wait_index_increment
+    # 	lightningd/wait.c:112
+    # 0x55eddb82ca9e invoice_index_inc
+    # 	wallet/invoices.c:738
+    # 0x55eddb82cc23 invoice_index_update_status
+    # 	wallet/invoices.c:775
+    # 0x55eddb82b769 trigger_expiration
+    # 	wallet/invoices.c:185
+    # 0x55eddb82b570 invoices_new
+    # 	wallet/invoices.c:134
+    # 0x55eddb82eeac wallet_new
+    # 	wallet/wallet.c:121
+    # 0x55eddb7dca6f main
+    # 	lightningd/lightningd.c:1082
+    l1.start()
+
+
 @unittest.skipIf(TEST_NETWORK != 'regtest', "The DB migration is network specific due to the chain var.")
+@unittest.skipIf(os.getenv('TEST_DB_PROVIDER', 'sqlite3') != 'sqlite3', "This test is based on a sqlite3 snapshot")
 def test_invoices_wait_db_migration(node_factory, bitcoind):
     """Canned db is from v23.02.2's test_invoice_routeboost_private l2"""
     bitcoind.generate_block(28)
@@ -924,3 +951,17 @@ def test_invoices_wait_db_migration(node_factory, bitcoind):
     # And now we crash:
     # Error executing statement: wallet/invoices.c:282: INSERT INTO invoices            ( id, payment_hash, payment_key, state            , msatoshi, label, expiry_time            , pay_index, msatoshi_received            , paid_timestamp, bolt11, description, features, local_offer_id)     VALUES ( ?, ?, ?, ?            , ?, ?, ?            , NULL, NULL            , NULL, ?, ?, ?, ?);: UNIQUE constraint failed: invoices.id
     l2.rpc.invoice(1000, "test", "test")
+
+
+@unittest.skipIf(os.getenv('TEST_DB_PROVIDER', 'sqlite3') != 'sqlite3', "This test is based on a sqlite3 snapshot")
+@unittest.skipIf(TEST_NETWORK != 'regtest', "The DB migration is network specific due to the chain var.")
+def test_invoice_botched_migration(node_factory, chainparams):
+    """Test for grubles' case, where they ran successfully with the wrong var: they have *both* last_invoice_created_index *and *last_invoices_created_index* (this can happen if invoice id 1 was deleted, so they didn't die on invoice creation):
+    Error executing statement: wallet/db.c:1684: UPDATE vars SET name = 'last_invoices_created_index' WHERE name = 'last_invoice_created_index': UNIQUE constraint failed: vars.name
+    """
+    l1 = node_factory.get_node(dbfile='invoices_botched_waitindex_migrate.sqlite3.xz',
+                               options={'database-upgrade': True})
+
+    assert ([(i['created_index'], i['label']) for i in l1.rpc.listinvoices()["invoices"]]
+            == [(1, "made_after_bad_migration"), (2, "label1")])
+    assert l1.rpc.invoice(100, "test", "test")["created_index"] == 3

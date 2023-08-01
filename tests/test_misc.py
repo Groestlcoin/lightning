@@ -1344,6 +1344,51 @@ def test_funding_reorg_remote_lags(node_factory, bitcoind):
     l2.daemon.wait_for_log(r'Deleting channel')
 
 
+@unittest.skipIf(os.getenv('TEST_DB_PROVIDER', 'sqlite3') != 'sqlite3', "deletes database, which is assumed sqlite3")
+def test_recover(node_factory, bitcoind):
+    """Test the recover option
+    """
+    # Start the node with --recovery with valid codex32 secret
+    l1 = node_factory.get_node(start=False,
+                               options={"recover": "ms10leetsllhdmn9m42vcsamx24zrxgs3qrl7ahwvhw4fnzrhve25gvezzyqqtum9pgv99ycma"})
+
+    os.unlink(os.path.join(l1.daemon.lightning_dir, TEST_NETWORK, "hsm_secret"))
+    l1.daemon.start()
+
+    basedir = l1.daemon.opts.get("lightning-dir")
+    with open(os.path.join(basedir, TEST_NETWORK, 'hsm_secret'), 'rb') as f:
+        buff = f.read()
+
+    # Check the node secret
+    assert buff.hex() == "ffeeddccbbaa99887766554433221100ffeeddccbbaa99887766554433221100"
+    l1.stop()
+
+    os.unlink(os.path.join(l1.daemon.lightning_dir, TEST_NETWORK, "lightningd.sqlite3"))
+
+    # Node should throw error to recover flag if HSM already exists.
+    l1.daemon.opts['recover'] = "ms10leetsllhdmn9m42vcsamx24zrxgs3qrl7ahwvhw4fnzrhve25gvezzyqqtum9pgv99ycma"
+    l1.daemon.start(wait_for_initialized=False, stderr_redir=True)
+
+    cmd_line = ["tools/hsmtool", "getcodexsecret", os.path.join(l1.daemon.lightning_dir, TEST_NETWORK, "hsm_secret"), "leet", "0"]
+    lines = subprocess.check_output(cmd_line).decode('utf-8').splitlines()
+    expected_output = "Codex32 Secret of your hsm_secret is: ms10leetsllhdmn9m42vcsamx24zrxgs3qrl7ahwvhw4fnzrhve25gvezzyqqtum9pgv99ycma"
+    assert [expected_output] == lines
+
+    # Will exit with failure code.
+    assert l1.daemon.wait() == 1
+    assert l1.daemon.is_in_stderr(r"hsm_secret already exists!")
+
+    os.unlink(os.path.join(l1.daemon.lightning_dir, TEST_NETWORK, "hsm_secret"))
+
+    l1.daemon.opts.update({"recover": "MS12NAMES6XQGUZTTXKEQNJSJZV4JV3NZ5K3KWGSPHUH6EVW"})
+    l1.daemon.start(wait_for_initialized=False, stderr_redir=True)
+    assert l1.daemon.wait() == 1
+    assert l1.daemon.is_in_stderr(r"Expected 32 Byte secret: d1808e096b35b209ca12132b264662a5")
+
+    l1.daemon.opts.pop("recover")
+    l1.start()
+
+
 def test_rescan(node_factory, bitcoind):
     """Test the rescan option
     """
@@ -2180,8 +2225,9 @@ def test_list_features_only(node_factory):
                 'option_shutdown_anysegwit/odd',
                 'option_channel_type/odd',
                 'option_scid_alias/odd',
-                'option_zeroconf/odd',
-                'supports_open_accept_channel_type']
+                'option_zeroconf/odd']
+    expected += ['supports_open_accept_channel_type']
+
     assert features == expected
 
 

@@ -1,7 +1,7 @@
 #!/bin/sh
 
 ## Short script to startup some local nodes with
-## bitcoind, all running on regtest
+## groestlcoind, all running on regtest
 ## Makes it easier to test things out, by hand.
 
 ## Should be called by source since it sets aliases
@@ -48,13 +48,13 @@ else
 	echo lightningd is "$LIGHTNINGD"
 fi
 
-if [ -z "$PATH_TO_BITCOIN" ]; then
+if [ -z "$PATH_TO_GROESTLCOIN" ]; then
 	if [ -d "$HOME/.groestlcoin" ]; then
-		PATH_TO_BITCOIN="$HOME/.groestlcoin"
+		PATH_TO_GROESTLCOIN="$HOME/.groestlcoin"
 	elif [ -d "$HOME/Library/Application Support/Groestlcoin/" ]; then
-		PATH_TO_BITCOIN="$HOME/Library/Application Support/Groestlcoin/"
+		PATH_TO_GROESTLCOIN="$HOME/Library/Application Support/Groestlcoin/"
 	else
-		echo "\$PATH_TO_BITCOIN not set to a .groestlcoin dir?" >&2
+		echo "\$PATH_TO_GROESTLCOIN not set to a .groestlcoin dir?" >&2
 		return
 	fi
 fi
@@ -82,7 +82,7 @@ start_nodes() {
 
 	LN_NODES=$node_count
 
-	for i in $(seq $node_count); do
+	for i in $(seq "$node_count"); do
 		socket=$(( 7070 + i * 101))
 		mkdir -p "/tmp/l$i-$network"
 		# Node config
@@ -100,6 +100,7 @@ start_nodes() {
 			dev-fast-gossip
 			dev-bitcoind-poll=5
 			experimental-dual-fund
+			experimental-splicing
 			experimental-offers
 			funder-policy=match
 			funder-policy-mod=100
@@ -114,7 +115,7 @@ start_nodes() {
 
 		# Start the lightning nodes
 		test -f "/tmp/l$i-$network/lightningd-$network.pid" || \
-			$EATMYDATA "$LIGHTNINGD" "--lightning-dir=/tmp/l$i-$network" &
+			$EATMYDATA "$LIGHTNINGD" "--network=$network" "--lightning-dir=/tmp/l$i-$network" "--groestlcoin-datadir=$PATH_TO_GROESTLCOIN" "--database-upgrade=true" &
 		# shellcheck disable=SC2139 disable=SC2086
 		alias l$i-cli="$LCLI --lightning-dir=/tmp/l$i-$network"
 		# shellcheck disable=SC2139 disable=SC2086
@@ -126,31 +127,31 @@ start_nodes() {
 	fi
 	# Give a hint.
 	echo "Commands: "
-	for i in $(seq $node_count); do
+	for i in $(seq "$node_count"); do
 		echo "	l$i-cli, l$i-log,"
 	done
 }
 
 start_ln() {
-	# Start bitcoind in the background
-	test -f "$PATH_TO_BITCOIN/regtest/groestlcoind.pid" || \
-		bitcoind -regtest -txindex -fallbackfee=0.00000253 -daemon
+	# Start groestlcoind in the background
+	test -f "$PATH_TO_GROESTLCOIN/regtest/groestlcoind.pid" || \
+		groestlcoind -datadir="$PATH_TO_GROESTLCOIN" -regtest -txindex -fallbackfee=0.00000253 -daemon
 
 	# Wait for it to start.
-	while ! bitcoin-cli -regtest ping 2> /tmp/null; do echo "awaiting bitcoind..." && sleep 1; done
+	while ! groestlcoin-cli -datadir="$PATH_TO_GROESTLCOIN" -regtest ping 2> /tmp/null; do echo "awaiting groestlcoind..." && sleep 1; done
 
 	# Kick it out of initialblockdownload if necessary
-	if bitcoin-cli -regtest getblockchaininfo | grep -q 'initialblockdownload.*true'; then
-		# Modern bitcoind needs createwallet
-		echo "Making \"default\" bitcoind wallet."
-		bitcoin-cli -regtest createwallet default >/dev/null 2>&1
-        # But it might already exist, load it
-        bitcoin-cli -regtest loadwallet default
-		bitcoin-cli -regtest generatetoaddress 1 "$(bitcoin-cli -regtest getnewaddress)" > /dev/null
+	if groestlcoin-cli -datadir="$PATH_TO_GROESTLCOIN" -regtest getblockchaininfo | grep -q 'initialblockdownload.*true'; then
+		# Modern groestlcoind needs createwallet
+		echo "Making \"default\" groestlcoind wallet."
+		groestlcoin-cli -datadir="$PATH_TO_GROESTLCOIN" -regtest createwallet default >/dev/null 2>&1
+		# But it might already exist, load it
+	        groestlcoin-cli -datadir="$PATH_TO_GROESTLCOIN" -regtest loadwallet default
+		groestlcoin-cli -datadir="$PATH_TO_GROESTLCOIN" -regtest generatetoaddress 1 "$(groestlcoin-cli -datadir="$PATH_TO_GROESTLCOIN" -regtest getnewaddress)" > /dev/null
 	else
-		bitcoin-cli -regtest loadwallet default
+		groestlcoin-cli -datadir="$PATH_TO_GROESTLCOIN" -regtest loadwallet default
 	fi
-	alias bt-cli='bitcoin-cli -regtest'
+	alias bt-cli='groestlcoin-cli -datadir=$PATH_TO_GROESTLCOIN -regtest'
 
 	if [ -z "$1" ]; then
 		nodes=2
@@ -161,19 +162,19 @@ start_ln() {
 	echo "	bt-cli, stop_ln, fund_nodes"
 }
 
-ensure_bitcoind_funds() {
+ensure_groestlcoind_funds() {
 
 	if [ -z "$ADDRESS" ]; then
-		ADDRESS=$(bitcoin-cli "$WALLET" -regtest getnewaddress)
+		ADDRESS=$(groestlcoin-cli -datadir="$PATH_TO_GROESTLCOIN" -regtest "$WALLET" getnewaddress)
 	fi
 
-	balance=$(bitcoin-cli -regtest "$WALLET" getbalance)
+	balance=$(groestlcoin-cli -datadir="$PATH_TO_GROESTLCOIN" -regtest "$WALLET" getbalance)
 
 	if [ 1 -eq "$(echo "$balance"'<1' | bc -l)" ]; then
 
 		printf "%s" "Mining into address " "$ADDRESS""... "
 
-		bitcoin-cli -regtest generatetoaddress 100 "$ADDRESS" > /dev/null
+		groestlcoin-cli -datadir="$PATH_TO_GROESTLCOIN" -regtest generatetoaddress 100 "$ADDRESS" > /dev/null
 
 		echo "done."
 	fi
@@ -195,16 +196,16 @@ fund_nodes() {
 	done
 
 	if [ -z "$NODES" ]; then
-		NODES=$(seq $node_count)
+		NODES=$(seq "$node_count")
 	fi
 
 	WALLET="-rpcwallet=$WALLET"
 
-	ADDRESS=$(bitcoin-cli "$WALLET" -regtest getnewaddress)
+	ADDRESS=$(groestlcoin-cli -datadir="$PATH_TO_GROESTLCOIN" -regtest "$WALLET" getnewaddress)
 
-	ensure_bitcoind_funds
+	ensure_groestlcoind_funds
 
-	echo "bitcoind balance:" "$(bitcoin-cli -regtest "$WALLET" getbalance)"
+	echo "groestlcoind balance:" "$(groestlcoin-cli -datadir="$PATH_TO_GROESTLCOIN" -regtest "$WALLET" getbalance)"
 
 	last_node=""
 
@@ -226,11 +227,11 @@ fund_nodes() {
 
 		L1_WALLET_ADDR=$($LCLI -F --lightning-dir=/tmp/l"$node1"-regtest newaddr | sed -n 's/^bech32=\(.*\)/\1/p')
 
-		ensure_bitcoind_funds
+		ensure_groestlcoind_funds
 
-		bitcoin-cli -regtest "$WALLET" sendtoaddress "$L1_WALLET_ADDR" 1 > /dev/null
+		groestlcoin-cli -datadir="$PATH_TO_GROESTLCOIN" -regtest "$WALLET" sendtoaddress "$L1_WALLET_ADDR" 1 > /dev/null
 
-		bitcoin-cli -regtest generatetoaddress 1 "$ADDRESS" > /dev/null
+		groestlcoin-cli -datadir="$PATH_TO_GROESTLCOIN" -regtest generatetoaddress 1 "$ADDRESS" > /dev/null
 
 		printf "%s" "Waiting for lightning node funds... "
 
@@ -245,7 +246,7 @@ fund_nodes() {
 
 		$LCLI --lightning-dir=/tmp/l"$node1"-regtest fundchannel "$L2_NODE_ID" 1000000 > /dev/null
 
-		bitcoin-cli -regtest generatetoaddress 6 "$ADDRESS" > /dev/null
+		groestlcoin-cli -datadir="$PATH_TO_GROESTLCOIN" -regtest generatetoaddress 6 "$ADDRESS" > /dev/null
 
 		printf "%s" "Waiting for confirmation... "
 
@@ -262,7 +263,7 @@ fund_nodes() {
 stop_nodes() {
 	network=${1:-regtest}
 	if [ -n "$LN_NODES" ]; then
-		for i in $(seq $LN_NODES); do
+		for i in $(seq "$LN_NODES"); do
 			test ! -f "/tmp/l$i-$network/lightningd-$network.pid" || \
 				(kill "$(cat "/tmp/l$i-$network/lightningd-$network.pid")"; \
 				rm "/tmp/l$i-$network/lightningd-$network.pid")
@@ -274,9 +275,9 @@ stop_nodes() {
 
 stop_ln() {
 	stop_nodes "$@"
-	test ! -f "$PATH_TO_BITCOIN/regtest/groestlcoind.pid" || \
-		(kill "$(cat "$PATH_TO_BITCOIN/regtest/groestlcoind.pid")"; \
-		rm "$PATH_TO_BITCOIN/regtest/groestlcoind.pid")
+	test ! -f "$PATH_TO_GROESTLCOIN/regtest/groestlcoind.pid" || \
+		(kill "$(cat "$PATH_TO_GROESTLCOIN/regtest/groestlcoind.pid")"; \
+		rm "$PATH_TO_GROESTLCOIN/regtest/groestlcoind.pid")
 
 	unset LN_NODES
 	unalias bt-cli
@@ -297,7 +298,7 @@ start_elem() {
 		fi
 	fi
 
-	test -f "$PATH_TO_ELEMENTS/liquid-regtest/bitcoin.pid" || \
+	test -f "$PATH_TO_ELEMENTS/liquid-regtest/groestlcoin.pid" || \
 		elementsd -chain=liquid-regtest -printtoconsole -logtimestamps -nolisten -validatepegin=0 -con_blocksubsidy=5000000000 -daemon
 
 	# Wait for it to start.
@@ -321,9 +322,9 @@ start_elem() {
 
 stop_elem() {
 	stop_nodes "$1" liquid-regtest
-	test ! -f "$PATH_TO_ELEMENTS/liquid-regtest/bitcoind.pid" || \
-		(kill "$(cat "$PATH_TO_ELEMENTS/liquid-regtest/bitcoind.pid")"; \
-		rm "$PATH_TO_ELEMENTS/liquid-regtest/bitcoind.pid")
+	test ! -f "$PATH_TO_ELEMENTS/liquid-regtest/groestlcoind.pid" || \
+		(kill "$(cat "$PATH_TO_ELEMENTS/liquid-regtest/groestlcoind.pid")"; \
+		rm "$PATH_TO_ELEMENTS/liquid-regtest/groestlcoind.pid")
 
 	unset LN_NODES
 	unalias et-cli

@@ -4,11 +4,15 @@
 #include <ccan/err/err.h>
 #include <ccan/json_escape/json_escape.h>
 #include <ccan/mem/mem.h>
+#include <ccan/noerr/noerr.h>
 #include <ccan/opt/opt.h>
 #include <ccan/opt/private.h>
+#include <ccan/read_write_all/read_write_all.h>
 #include <ccan/str/hex/hex.h>
+#include <ccan/tal/grab_file/grab_file.h>
 #include <ccan/tal/path/path.h>
 #include <ccan/tal/str/str.h>
+#include <common/codex32.h>
 #include <common/configdir.h>
 #include <common/configvar.h>
 #include <common/features.h>
@@ -20,6 +24,7 @@
 #include <common/wireaddr.h>
 #include <dirent.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <hsmd/hsmd_wiregen.h>
 #include <lightningd/chaintopology.h>
 #include <lightningd/hsm_control.h>
@@ -515,7 +520,7 @@ static char *opt_set_offline(struct lightningd *ld)
 {
 	ld->reconnect = false;
 	ld->listen = false;
-
+	log_info(ld->log, "Started in offline mode!");
 	return NULL;
 }
 
@@ -1187,6 +1192,20 @@ static char *opt_set_dual_fund(struct lightningd *ld)
 	return NULL;
 }
 
+static char *opt_set_splicing(struct lightningd *ld)
+{
+	/* Splicing requires STFU to be enabled */
+	feature_set_or(ld->our_features,
+		       take(feature_set_for_feature(NULL,
+						    OPTIONAL_FEATURE(OPT_QUIESCE))));
+	feature_set_or(ld->our_features,
+		       take(feature_set_for_feature(NULL,
+						    OPTIONAL_FEATURE(OPT_SPLICE))));
+	/* Splicing requires dual-fund to be enabled */
+	opt_set_dual_fund(ld);
+	return NULL;
+}
+
 static char *opt_set_onion_messages(struct lightningd *ld)
 {
 	feature_set_or(ld->our_features,
@@ -1257,6 +1276,75 @@ static char *opt_set_announce_dns(const char *optarg, struct lightningd *ld)
 	return opt_set_bool_arg(optarg, &ld->announce_dns);
 }
 
+static char *opt_set_codex32(const char *arg, struct lightningd *ld)
+{
+	char *err;
+	struct codex32 *parts = codex32_decode(tmpctx, arg, &err);
+
+	if (!parts) {
+		return err;
+	}
+
+	if (parts->type != CODEX32_ENCODING_SECRET) {
+		return tal_fmt(tmpctx, "Not a valid codex32 secret!");
+	}
+
+	if (tal_bytelen(parts->payload) != 32) {
+		return tal_fmt(tmpctx, "Expected 32 Byte secret: %s",
+					tal_hexstr(tmpctx,
+						   parts->payload,
+						   tal_bytelen(parts->payload)));
+	}
+
+	/* Checks if hsm_secret exists */
+	int fd = open("hsm_secret", O_CREAT|O_EXCL|O_WRONLY, 0400);
+	if (fd < 0) {
+		/* Don't do anything if the file already exists. */
+		if (errno == EEXIST)
+			return tal_fmt(tmpctx, "hsm_secret already exists!");
+
+		return tal_fmt(tmpctx, "Creating hsm_secret: %s",
+			       strerror(errno));
+	}
+
+	if (!write_all(fd, parts->payload, tal_count(parts->payload))) {
+		unlink_noerr("hsm_secret");
+		return tal_fmt(tmpctx, "Writing HSM: %s",
+			   strerror(errno));
+	}
+
+	/*~ fsync (mostly!) ensures that the file has reached the disk. */
+	if (fsync(fd) != 0) {
+		unlink_noerr("hsm_secret");
+		return tal_fmt(tmpctx, "fsync: %s", strerror(errno));
+	}
+	/*~ This should never fail if fsync succeeded.  But paranoia good, and
+	 * bugs exist. */
+	if (close(fd) != 0) {
+		unlink_noerr("hsm_secret");
+		return tal_fmt(tmpctx, "closing: %s", strerror(errno));
+	}
+
+	/*~ We actually need to sync the *directory itself* to make sure the
+	 * file exists!  You're only allowed to open directories read-only in
+	 * modern Unix though. */
+	fd = open(".", O_RDONLY);
+	if (fd < 0) {
+		unlink_noerr("hsm_secret");
+		return tal_fmt(tmpctx, "opening: %s", strerror(errno));
+	}
+	if (fsync(fd) != 0) {
+		unlink_noerr("hsm_secret");
+		return tal_fmt(tmpctx, "fsyncdir: %s", strerror(errno));
+	}
+	close(fd);
+
+	ld->recover = tal_strdup(ld, arg);
+	opt_set_offline(ld);
+
+	return NULL;
+}
+
 static void register_opts(struct lightningd *ld)
 {
 	/* This happens before plugins started */
@@ -1304,6 +1392,11 @@ static void register_opts(struct lightningd *ld)
 			       &ld->wallet_dsn,
 			       "Location of the wallet database.");
 
+	opt_register_early_arg("--recover", opt_set_codex32, NULL,
+				ld,
+				"Populate hsm_secret with the given codex32 secret"
+				" and starts the node in `offline` mode.");
+
 	/* This affects our features, so set early. */
 	opt_register_early_noarg("--large-channels|--wumbo",
 				 opt_set_wumbo, ld,
@@ -1314,6 +1407,11 @@ static void register_opts(struct lightningd *ld)
 				 "experimental: Advertise dual-funding"
 				 " and allow peers to establish channels"
 				 " via v2 channel open protocol.");
+
+	opt_register_early_noarg("--experimental-splicing",
+				 opt_set_splicing, ld,
+				 "experimental: Enables the ability to resize"
+				 " channels using splicing");
 
 	/* This affects our features, so set early. */
 	opt_register_early_noarg("--experimental-onion-messages",
@@ -1815,6 +1913,11 @@ void add_config_deprecated(struct lightningd *ld,
 				      feature_offered(ld->our_features
 						      ->bits[INIT_FEATURE],
 						      OPT_DUAL_FUND));
+		} else if (opt->cb == (void *)opt_set_splicing) {
+			json_add_bool(response, name0,
+				      feature_offered(ld->our_features
+						      ->bits[INIT_FEATURE],
+						      OPT_SPLICE));
 		} else if (opt->cb == (void *)opt_set_onion_messages) {
 			json_add_bool(response, name0,
 				      feature_offered(ld->our_features
@@ -1968,6 +2071,7 @@ bool is_known_opt_cb_arg(char *(*cb_arg)(const char *, void *))
 		|| cb_arg == (void *)opt_set_db_upgrade
 		|| cb_arg == (void *)arg_log_to_file
 		|| cb_arg == (void *)opt_add_accept_htlc_tlv
+		|| cb_arg == (void *)opt_set_codex32
 #if DEVELOPER
 		|| cb_arg == (void *)opt_subd_dev_disconnect
 		|| cb_arg == (void *)opt_force_featureset

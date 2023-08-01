@@ -16,15 +16,11 @@ If you want to experiment with `lightningd`, there's a script to set up a `groes
 . contrib/startup_regtest.sh
 ```
 
-
-
 Note that your local nodeset will be much faster/more responsive if you've configured your node to expose the developer options, e.g.
 
 ```bash
 ./configure --enable-developer
 ```
-
-
 
 #### Mainnet Option
 
@@ -33,8 +29,6 @@ To test with real groestlcoin,  you will need to have a local `groestlcoind` nod
 ```bash
 groestlcoind -daemon
 ```
-
-
 
 Wait until `groestlcoind` has synchronized with the network.
 
@@ -46,8 +40,6 @@ You can start `lightningd` with the following command:
 ```bash
 lightningd --network=groestlcoin --log-level=debug
 ```
-
-
 
 This creates a `.lightning/` subdirectory in your home directory: see `man -l doc/lightningd.8` (or [???](???)) for more runtime options.
 

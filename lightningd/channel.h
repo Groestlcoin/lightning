@@ -25,6 +25,9 @@ struct funding_info {
 
 	/* Our original funds, in funding amount */
 	struct amount_sat our_funds;
+
+	/* Relative splicing balance change */
+	s64 splice_amnt;
 };
 
 struct channel_inflight {
@@ -57,6 +60,9 @@ struct channel_inflight {
 
 	/* Amount requested to lease for this open */
 	struct amount_sat lease_amt;
+
+	/* Did I initate this splice attempt? */
+	bool i_am_initiator;
 };
 
 struct open_attempt {
@@ -366,7 +372,9 @@ struct channel_inflight *new_inflight(struct channel *channel,
 	     const u16 lease_chan_max_ppt,
 	     const u32 lease_blockheight_start,
 	     const struct amount_msat lease_fee,
-	     const struct amount_sat lease_amt);
+	     const struct amount_sat lease_amt,
+	     s64 splice_amnt,
+	     bool i_am_initiator);
 
 /* Given a txid, find an inflight channel stub. Returns NULL if none found */
 struct channel_inflight *channel_inflight_find(struct channel *channel,
@@ -383,6 +391,15 @@ void delete_channel(struct channel *channel STEALS);
 
 const char *channel_state_name(const struct channel *channel);
 const char *channel_state_str(enum channel_state state);
+
+/* Is the channel in NORMAL or AWAITING_SPLICE state? */
+bool channel_state_normalish(const struct channel *channel);
+
+/* Is the channel in AWAITING_*? */
+bool channel_state_awaitish(const struct channel *channel);
+
+/* Is the channel in one of the CLOSING or CLOSED like states? */
+bool channel_state_closish(enum channel_state channel_state);
 
 void channel_set_owner(struct channel *channel, struct subd *owner);
 
@@ -454,12 +471,12 @@ void channel_set_last_tx(struct channel *channel,
 
 static inline bool channel_can_add_htlc(const struct channel *channel)
 {
-	return channel->state == CHANNELD_NORMAL;
+	return channel_state_normalish(channel);
 }
 
 static inline bool channel_fees_can_change(const struct channel *channel)
 {
-	return channel->state == CHANNELD_NORMAL
+	return channel_state_normalish(channel)
 		|| channel->state == CHANNELD_SHUTTING_DOWN;
 }
 

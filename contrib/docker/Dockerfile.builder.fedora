@@ -1,6 +1,6 @@
 FROM fedora:35
 
-ENV GROESTLCOIN_VERSION 2.18.2
+ENV GROESTLCOIN_VERSION 22.0
 WORKDIR /tmp
 
 RUN dnf update -y && \
@@ -33,5 +33,4 @@ RUN wget https://github.com/Groestlcoin/groestlcoin/releases/download/v$GROESTLC
 RUN python3 -m pip install --upgrade pip && \
     python3 -m pip install python-bitcoinlib pytest setuptools pytest-test-groups flake8 pytest-rerunfailures ephemeral-port-reserve
 
-RUN python3 -m pip install flask gunicorn json5
-RUN python3 -m pip install --user flask_restx pyln-client
+RUN python3 -m pip install flask gunicorn json5 flask_restx flask-socketio gevent gevent-websocket

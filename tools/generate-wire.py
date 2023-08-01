@@ -231,6 +231,7 @@ class Type(FieldSet):
         'failed_htlc',
         'existing_htlc',
         'simple_htlc',
+        'inflight',
         'utxo',
         'bitcoin_tx',
         'wirestring',
@@ -248,6 +249,7 @@ class Type(FieldSet):
         'wally_psbt',
         'wally_tx',
         'scb_chan',
+        'inflight',
     ]
 
     # Some BOLT types are re-typed based on their field name

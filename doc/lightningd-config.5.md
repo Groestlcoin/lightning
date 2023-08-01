@@ -290,6 +290,11 @@ connections; default is not to activate the plugin at all.
 
 ### Lightning node customization options
 
+* **recover**=*codex32secret*
+
+  A 32-byte secret encoded as a codex32 secret string. This would be used to construct
+`hsm_secret`` in case it doesn't exist.
+
 * **alias**=*NAME*
 
   Up to 32 bytes of UTF-8 characters to tag your node. Completely silly, since
@@ -706,6 +711,16 @@ allowing both parties to contribute funds to a channel. The decision
 about whether to add funds or not to a proposed channel is handled
 automatically by a plugin that implements the appropriate logic for
 your needs. The default behavior is to not contribute funds.
+
+* **experimental-splicing**
+
+  Specifying this enables support for the splicing protocol ([bolt][bolt] #863),
+allowing both parties to dynamically adjust the size a channel. These changes
+can be built interactively using PSBT and combined with other channel actions
+including dual fund, additional channel splices, or generic transaction activity.
+The operations will be bundled into a single transaction. The channel will remain
+active while awaiting splice confirmation, however you can only spend the smaller
+of the prior channel balance and the new one.
 
 * **experimental-websocket-port**=*PORT*
 
