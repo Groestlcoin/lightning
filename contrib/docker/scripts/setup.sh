@@ -49,11 +49,10 @@ sudo apt-get -qq install --no-install-recommends --allow-unauthenticated -yy \
      xsltproc \
      zlib1g-dev
 
-
 (
     cd /tmp/ || exit 1
     wget https://github.com/Groestlcoin/groestlcoin/releases/download/v$GROESTLCOIN_VERSION/groestlcoin-$GROESTLCOIN_VERSION-x86_64-linux-gnu.tar.gz
-    tar -xjf groestlcoin-$GROESTLCOIN_VERSION-x86_64-linux-gnu.tar.gz
+    tar -xzf groestlcoin-$GROESTLCOIN_VERSION-x86_64-linux-gnu.tar.gz
     sudo mv groestlcoin-$GROESTLCOIN_VERSION/bin/* /usr/local/bin
     rm -rf \
        groestlcoin-$GROESTLCOIN_VERSION-x86_64-linux-gnu.tar.gz \

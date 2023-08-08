@@ -3,27 +3,9 @@ Core Lightning Documentation
 
 .. toctree::
    :maxdepth: 1
-   :caption: User Documentation
+   :caption: Main Documentation
 
-   INSTALL.md
-   TOR.md
-   FAQ <FAQ.md>
-   Backups <BACKUP.md>
-
-.. toctree::
-   :maxdepth: 2
-   :caption: Integrator Documentation
-
-   Writing plugins <PLUGINS.md>
-
-.. toctree::
-   :maxdepth: 1
-   :caption: Developer Documentation
-
-   HACKING.md
-   Coding Style Guideline <STYLE.md>
-   MAKING-RELEASES.md
-   CHANGELOG.md
+   https://docs.corelightning.org/docs
 
 .. toctree::
    :maxdepth: 1
@@ -132,6 +114,8 @@ Core Lightning Documentation
    lightning-signmessage <lightning-signmessage.7.md>
    lightning-signpsbt <lightning-signpsbt.7.md>
    lightning-splice_init <lightning-splice_init.7.md>
+   lightning-splice_signed <lightning-splice_signed.7.md>
+   lightning-splice_update <lightning-splice_update.7.md>
    lightning-sql <lightning-sql.7.md>
    lightning-staticbackup <lightning-staticbackup.7.md>
    lightning-stop <lightning-stop.7.md>

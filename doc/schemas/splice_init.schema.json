@@ -3,15 +3,13 @@
   "type": "object",
   "additionalProperties": false,
   "required": [
-    "scb"
+    "psbt"
   ],
+  "added": "v23.08",
   "properties": {
-    "scb": {
-      "type": "array",
-      "items": {
-        "type": "hex",
-        "description": "SCB of a channel in TLV format"
-      }
+    "psbt": {
+      "type": "string",
+      "description": "the (incomplete) PSBT of the splice transaction"
     }
   }
 }

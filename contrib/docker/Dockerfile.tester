@@ -1,5 +1,5 @@
-FROM ubuntu:18.04
-MAINTAINER Christian Decker <decker.christian@gmail.com>
+FROM ubuntu:22.04
+LABEL mantainer="Christian Decker <decker.christian@gmail.com>"
 
 ENV DEBIAN_FRONTEND noninteractive
 ENV GROESTLCOIN_VERSION 24.0.1
@@ -61,11 +61,11 @@ RUN echo "tester ALL=(root) NOPASSWD:ALL" > /etc/sudoers.d/tester && \
     chmod 0440 /etc/sudoers.d/tester
 
 RUN cd /tmp/ && \
-  wget https://github.com/Groestlcoin/groestlcoin/releases/download/v$GROESTLCOIN_VERSION/groestlcoin-$GROESTLCOIN_VERSION-x86_64-linux-gnu.tar.gz && \
-	tar -xjf groestlcoin-$GROESTLCOIN_VERSION-x86_64-linux-gnu.tar.gz && \
-	mv groestlcoin-$GROESTLCOIN_VERSION/bin/* /usr/local/bin && \
-	rm -rf \
-	  groestlcoin-$GROESTLCOIN_VERSION-x86_64-linux-gnu.tar.gz \
-          groestlcoin-$GROESTLCOIN_VERSION
+    wget https://github.com/Groestlcoin/groestlcoin/releases/download/v$GROESTLCOIN_VERSION/groestlcoin-$GROESTLCOIN_VERSION-x86_64-linux-gnu.tar.gz && \
+	  tar -xzf groestlcoin-$GROESTLCOIN_VERSION-x86_64-linux-gnu.tar.gz && \
+	  mv groestlcoin-$GROESTLCOIN_VERSION/bin/* /usr/local/bin && \
+	  rm -rf \
+	     groestlcoin-$GROESTLCOIN_VERSION-x86_64-linux-gnu.tar.gz \
+       groestlcoin-$GROESTLCOIN_VERSION
 
 USER tester
