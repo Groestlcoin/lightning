@@ -146,6 +146,10 @@ static const struct feature_style feature_styles[] = {
 	  .copy_style = { [INIT_FEATURE] = FEATURE_REPRESENT,
 			  [NODE_ANNOUNCE_FEATURE] = FEATURE_REPRESENT,
 			  [CHANNEL_FEATURE] = FEATURE_DONT_REPRESENT} },
+	{ OPT_EXPERIMENTAL_SPLICE,
+	  .copy_style = { [INIT_FEATURE] = FEATURE_REPRESENT,
+			  [NODE_ANNOUNCE_FEATURE] = FEATURE_REPRESENT,
+			  [CHANNEL_FEATURE] = FEATURE_DONT_REPRESENT} },
 };
 
 struct dependency {
@@ -491,6 +495,41 @@ const char *feature_name(const tal_t *ctx, size_t f)
 		NULL,
 		NULL,
 		NULL, /* 100/101 */
+		NULL,
+		NULL,
+		NULL,
+		NULL,
+		NULL, /* 110/111 */
+		NULL,
+		NULL,
+		NULL,
+		NULL,
+		NULL, /* 120/121 */
+		NULL,
+		NULL,
+		NULL,
+		NULL,
+		NULL, /* 130/131 */
+		NULL,
+		NULL,
+		NULL,
+		NULL,
+		NULL, /* 140/141 */
+		NULL,
+		NULL,
+		NULL,
+		NULL,
+		NULL, /* 150/151 */
+		NULL,
+		NULL,
+		NULL,
+		NULL,
+		NULL, /* 160/161 */
+		"option_experimental_splice", /* https://github.com/lightning/bolts/pull/863 */
+		NULL,
+		NULL,
+		NULL,
+		NULL, /* 170/171 */
 	};
 
 	if (f / 2 >= ARRAY_SIZE(fnames) || !fnames[f / 2])
