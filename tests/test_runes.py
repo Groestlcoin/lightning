@@ -471,6 +471,78 @@ def test_commando_blacklist_migration(node_factory):
                                                     {'start': 9, 'end': 9}]}
 
 
+def test_missing_method_or_nodeid(node_factory):
+    """For v23.11 we realized that nodeid should not be required for checkrune, which means method (which followed it) could not be require either"""
+    l1 = node_factory.get_node()
+    rune1 = l1.rpc.createrune(restrictions=[["method=getinfo"]])['rune']
+    rune2 = l1.rpc.createrune(restrictions=[["id={}".format(l1.info['id'])]])['rune']
+    rune3 = l1.rpc.createrune(restrictions=[["method!"]])['rune']
+    rune4 = l1.rpc.createrune(restrictions=[["id!"]])['rune']
+
+    # Simple cases with nodeid and method
+    assert l1.rpc.checkrune(rune=rune1,
+                            nodeid=l1.info['id'],
+                            method='getinfo')['valid'] is True
+    assert l1.rpc.checkrune(rune=rune2,
+                            nodeid=l1.info['id'],
+                            method='getinfo')['valid'] is True
+    # No nodeid works for rune1
+    assert l1.rpc.checkrune(rune=rune1,
+                            method='getinfo')['valid'] is True
+    # No method works for rune2
+    assert l1.rpc.checkrune(rune=rune2,
+                            nodeid=l1.info['id'])['valid'] is True
+
+    # No method works for rune3
+    assert l1.rpc.checkrune(rune=rune3,
+                            nodeid=l1.info['id'])['valid'] is True
+    # No id works for rune4
+    assert l1.rpc.checkrune(rune=rune4,
+                            method='getinfo')['valid'] is True
+
+    # This fails, as method is missing
+    with pytest.raises(RpcError, match='Not permitted: method not present'):
+        l1.rpc.checkrune(rune=rune1)
+    # This fails, as id is missing
+    with pytest.raises(RpcError, match='Not permitted: id not present'):
+        l1.rpc.checkrune(rune=rune2)
+    # This fails, as method is present
+    with pytest.raises(RpcError, match='Not permitted: method is present'):
+        l1.rpc.checkrune(rune=rune3, method='getinfo')
+    # This fails, as id is present
+    with pytest.raises(RpcError, match='Not permitted: id is present'):
+        l1.rpc.checkrune(rune=rune4, nodeid=l1.info['id'])
+
+
+def test_invalid_restrictions(node_factory):
+    # I meant "method!" not "!method"!
+    l1 = node_factory.get_node()
+    for cond in "!=/^$~<>{}#,":
+        with pytest.raises(RpcError, match='not a valid restriction'):
+            print(l1.rpc.createrune(restrictions=[[f"{cond}method"]]))
+
+
+def test_nonnumeric_uniqueid(node_factory):
+    """We always use numeric uniqueids, don't allow other forms"""
+    l1 = node_factory.get_node()
+
+    # "zero"
+    with pytest.raises(RpcError, match='should have valid numeric unique_id'):
+        l1.rpc.showrunes('pX1h8z05kg0WZqe0ogo_8MHOa7-8gVZNXTckyyLKuLk9emVybw==')
+
+    # "0andstr"
+    with pytest.raises(RpcError, match='should have valid numeric unique_id'):
+        l1.rpc.showrunes('1dYYAIxmjRDHbXUIpztpwDA0q7RrHKbXJd9Yhj50Dfc9MGFuZHN0cmluZw==')
+
+    # "9223372036854775809"
+    with pytest.raises(RpcError, match='should have valid numeric unique_id'):
+        l1.rpc.showrunes('cr7eQmdhPVqH3-M2g67JymP2zVKyZ_n5hhFk3IMSg5o9OTIyMzM3MjAzNjg1NDc3NTgwOQ==')
+
+    # No unique id!
+    with pytest.raises(RpcError, match='should have valid numeric unique_id'):
+        l1.rpc.showrunes('SaQlgbzu6SGAhANReucs7P8GLuVbSlPg30QG78UzNcY=')
+
+
 def test_showrune_id(node_factory):
     l1 = node_factory.get_node()
 

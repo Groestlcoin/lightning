@@ -83,6 +83,37 @@ static void flush_usage_table(struct runes *runes)
 	notleak(new_reltimer(runes->ld->timers, runes, time_from_sec(60), flush_usage_table, runes));
 }
 
+/* Convert unique_id string to u64.  We only expect this to fail when we're
+ * dealing with runes from elsewhere (i.e. param_rune) */
+static bool unique_id_num(const struct rune *rune, u64 *num)
+{
+	unsigned long long l;
+	char *end;
+
+	if (!rune->unique_id)
+		return false;
+	l = strtoull(rune->unique_id, &end, 0);
+	if (*end)
+		return false;
+
+	/* sqlite3 only does signed 64 bits, so don't exceed 63 bits. */
+	if (l > INT64_MAX)
+		return false;
+
+	*num = l;
+	return true;
+}
+
+u64 rune_unique_id(const struct rune *rune)
+{
+	u64 num;
+
+	/* Any of our runes must have valid unique ids! */
+	if (!unique_id_num(rune, &num))
+		abort();
+	return num;
+}
+
 static const char *rate_limit_check(const tal_t *ctx,
 				    const struct runes *runes,
 				    const struct rune *rune,
@@ -91,6 +122,8 @@ static const char *rate_limit_check(const tal_t *ctx,
 {
 	unsigned long r;
 	char *endp;
+	u64 unique_id = rune_unique_id(rune);
+
 	if (alt->condition != '=')
 		return "rate operator must be =";
 
@@ -100,10 +133,10 @@ static const char *rate_limit_check(const tal_t *ctx,
 
 	/* We cache this: we only add usage counter if whole rune succeeds! */
 	if (!cinfo->usage) {
-		cinfo->usage = usage_table_get(runes->usage_table, atol(rune->unique_id));
+		cinfo->usage = usage_table_get(runes->usage_table, unique_id);
 		if (!cinfo->usage) {
 			cinfo->usage = tal(runes->usage_table, struct usage);
-			cinfo->usage->id = atol(rune->unique_id);
+			cinfo->usage->id = unique_id;
 			cinfo->usage->counter = 0;
 			usage_table_add(runes->usage_table, cinfo->usage);
 		}
@@ -157,12 +190,18 @@ static struct command_result *param_rune(struct command *cmd, const char *name,
 					 const char * buffer, const jsmntok_t *tok,
 					 struct rune_and_string **rune_and_string)
 {
+	u64 uid;
+
 	*rune_and_string = tal(cmd, struct rune_and_string);
 	(*rune_and_string)->runestr = json_strdup(*rune_and_string, buffer, tok);
 	(*rune_and_string)->rune = rune_from_base64(cmd, (*rune_and_string)->runestr);
 	if (!(*rune_and_string)->rune)
 		return command_fail_badparam(cmd, name, buffer, tok,
 					     "should be base64 string");
+	/* We always create runes with integer unique ids: accept no less! */
+	if (!unique_id_num((*rune_and_string)->rune, &uid))
+		return command_fail_badparam(cmd, name, buffer, tok,
+					     "should have valid numeric unique_id");
 
 	return NULL;
 }
@@ -255,7 +294,7 @@ static bool is_rune_blacklisted(const struct runes *runes, const struct rune *ru
 	if (rune->unique_id == NULL) {
 		return false;
 	}
-	uid = atol(rune->unique_id);
+	uid = rune_unique_id(rune);
 	for (size_t i = 0; i < tal_count(runes->blacklist); i++) {
 		if (runes->blacklist[i].start <= uid && runes->blacklist[i].end >= uid) {
 			return true;
@@ -334,7 +373,7 @@ static struct command_result *json_showrunes(struct command *cmd,
 	response = json_stream_success(cmd);
 	json_array_start(response, "runes");
 	if (ras) {
-		long uid = atol(ras->rune->unique_id);
+		u64 uid = rune_unique_id(ras->rune);
 		const char *from_db = wallet_get_rune(tmpctx, cmd->ld->wallet, uid);
 
 		/* We consider it stored iff this is exactly stored */
@@ -419,6 +458,10 @@ static struct rune_altern *rune_altern_from_json(const tal_t *ctx,
 	alt->fieldname = tal_strndup(alt, unescape, condoff);
 	alt->condition = unescape[condoff];
 	alt->value = tal_strdup(alt, unescape + condoff + 1);
+
+	/* don't let them add empty fieldnames */
+	if (streq(alt->fieldname, ""))
+		return tal_free(alt);
 	return alt;
 }
 
@@ -526,7 +569,8 @@ static struct command_result *json_createrune(struct command *cmd,
 
 	ras = tal(cmd, struct rune_and_string);
 	ras->rune = rune_derive_start(cmd, cmd->ld->runes->master,
-		tal_fmt(tmpctx, "%"PRIu64, cmd->ld->runes->next_unique_id ? cmd->ld->runes->next_unique_id : 0));
+				      tal_fmt(tmpctx, "%"PRIu64,
+					      cmd->ld->runes->next_unique_id));
 	ras->runestr = rune_to_base64(tmpctx, ras->rune);
 
 	for (size_t i = 0; i < tal_count(restrs); i++)
@@ -674,11 +718,17 @@ static const char *check_condition(const tal_t *ctx,
 	if (streq(alt->fieldname, "time")) {
 		return rune_alt_single_int(ctx, alt, time_now().ts.tv_sec);
 	} else if (streq(alt->fieldname, "id")) {
-		const char *id = node_id_to_hexstr(tmpctx, cinfo->peer);
-		return rune_alt_single_str(ctx, alt, id, strlen(id));
+		if (cinfo->peer) {
+			const char *id = node_id_to_hexstr(tmpctx, cinfo->peer);
+			return rune_alt_single_str(ctx, alt, id, strlen(id));
+		}
+		return rune_alt_single_missing(ctx, alt);
 	} else if (streq(alt->fieldname, "method")) {
-		return rune_alt_single_str(ctx, alt,
-					   cinfo->method, strlen(cinfo->method));
+		if (cinfo->method) {
+			return rune_alt_single_str(ctx, alt,
+						   cinfo->method, strlen(cinfo->method));
+		}
+		return rune_alt_single_missing(ctx, alt);
 	} else if (streq(alt->fieldname, "pnum")) {
 		return rune_alt_single_int(ctx, alt, (cinfo && cinfo->params) ? cinfo->params->size : 0);
 	} else if (streq(alt->fieldname, "rate")) {
@@ -748,8 +798,8 @@ static struct command_result *json_checkrune(struct command *cmd,
 
 	if (!param(cmd, buffer, params,
 		   p_req("rune", param_rune, &ras),
-		   p_req("nodeid", param_node_id, &nodeid),
-		   p_req("method", param_string, &method),
+		   p_opt("nodeid", param_node_id, &nodeid),
+		   p_opt("method", param_string, &method),
 		   p_opt("params", param_params, &methodparams),
 		   NULL))
 		return command_param_failed();
@@ -793,6 +843,6 @@ static const struct json_command checkrune_command = {
 	"checkrune",
 	"utility",
 	json_checkrune,
-	"Checks rune for validity with required {nodeid}, {rune}, {method} and optional {params} and returns {valid: true} or error message"
+	"Checks rune for validity with required {rune} and optional {nodeid}, {method}, {params} and returns {valid: true} or error message"
 };
 AUTODATA(json_command, &checkrune_command);

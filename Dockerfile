@@ -13,9 +13,6 @@ RUN set -ex \
 
 WORKDIR /opt
 
-RUN wget -qO /tini "https://github.com/krallin/tini/releases/download/v0.18.0/tini" \
-    && echo "12d20136605531b09a2c2dac02ccee85e1b874eb322ef6baf7561cd93f93c855 /tini" | sha256sum -c - \
-    && chmod +x /tini
 
 ENV GROESTLCOIN_VERSION 22.0
 ENV GROESTLCOIN_TARBALL groestlcoin-${GROESTLCOIN_VERSION}-x86_64-linux-gnu.tar.gz
@@ -120,12 +117,14 @@ FROM debian:bullseye-slim as final
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
+      tini \
       socat \
       inotify-tools \
       python3.9 \
       python3-pip \
       qemu-user-static \
       libpq5 && \
+    apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
 ENV LIGHTNINGD_DATA=/root/.lightning
@@ -141,7 +140,6 @@ VOLUME [ "/root/.lightning" ]
 COPY --from=builder /tmp/lightning_install/ /usr/local/
 COPY --from=builder /usr/local/lib/python3.9/dist-packages/ /usr/local/lib/python3.9/dist-packages/
 COPY --from=downloader /opt/groestlcoin/bin /usr/bin
-COPY --from=downloader "/tini" /usr/bin/tini
 COPY tools/docker-entrypoint.sh entrypoint.sh
 
 EXPOSE 9735 9835

@@ -32,7 +32,7 @@ Don't hesitate to reach out to us on IRC at [#lightning-dev @ libera.chat][irc1]
 
 ## Getting Started
 
-Core Lightning only works on Linux and macOS, and requires a locally (or remotely) running `groestlcoind` (version 2.16.0 or above) that is fully caught up with the network you're running on, and relays transactions (ie with `blocksonly=0`).
+Core Lightning only works on Linux and macOS, and requires a locally (or remotely) running `groestlcoind` (version 22.0 or above) that is fully caught up with the network you're running on, and relays transactions (ie with `blocksonly=0`).
 Pruning (`prune=n` option in `groestlcoin.conf`) is partially supported, see [here](#pruning) for more details.
 
 ### Installation
