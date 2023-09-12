@@ -248,7 +248,7 @@ fi
 
 if [ -z "${TARGETS##* docker *}" ]; then
     echo "Building Docker Images"
-    DOCKER_USER="elementsproject"
+    DOCKER_USER="groestlcoin"
     PLATFORMS="amd64 arm64v8"
     for d in $PLATFORMS; do
         TMPDIR="$(mktemp -d /tmp/lightningd-docker-"$d".XXXXXX)"
