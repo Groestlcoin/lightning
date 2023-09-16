@@ -76,6 +76,7 @@ RUN apt-get install -y --no-install-recommends unzip tclsh \
     && make \
     && make install && cd .. && rm sqlite-src-3290000.zip && rm -rf sqlite-src-3290000
 
+USER root
 RUN wget -q https://gmplib.org/download/gmp/gmp-6.1.2.tar.xz \
     && tar xvf gmp-6.1.2.tar.xz \
     && cd gmp-6.1.2 \
