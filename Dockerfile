@@ -25,7 +25,7 @@ RUN mkdir /opt/groestlcoin && cd /opt/groestlcoin \
     && grep $GROESTLCOIN_TARBALL groestlcoin | tee SHA256SUMS \
     && sha256sum -c SHA256SUMS \
     && BD=groestlcoin-$GROESTLCOIN_VERSION/bin \
-    && tar -xzvf $GROESTLCOIN_TARBALL $BD/groestlcoin-cli --strip-components=1 \
+    && tar -xzvf $GROESTLCOIN_TARBALL $BD/ --strip-components=1 \
     && rm $GROESTLCOIN_TARBALL
 
 FROM debian:bullseye-slim as builder
@@ -76,6 +76,7 @@ RUN apt-get install -y --no-install-recommends unzip tclsh \
     && make \
     && make install && cd .. && rm sqlite-src-3290000.zip && rm -rf sqlite-src-3290000
 
+USER root
 ENV RUST_PROFILE=release
 ENV PATH=$PATH:/root/.cargo/bin/
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
