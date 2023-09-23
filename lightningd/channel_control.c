@@ -192,24 +192,20 @@ static void handle_splice_funding_error(struct lightningd *ld,
 
 	cc = splice_command_for_chan(ld, channel);
 	if (cc) {
-		struct json_stream *response = json_stream_success(cc->cmd);
-		json_add_string(response, "message", "Splice funding too low");
-		json_add_string(response, "error",
-				tal_fmt(tmpctx,
-					"%s provided %s but committed to %s.",
-					opener_error ? "You" : "Peer",
-					fmt_amount_msat(tmpctx, funding),
-					fmt_amount_msat(tmpctx, req_funding)));
-
-		was_pending(command_success(cc->cmd, response));
+		was_pending(command_fail(cc->cmd, SPLICE_FUNDING_LOW,
+					 "%s provided %s but committed to %s.",
+					 opener_error ? "You" : "Peer",
+					 fmt_amount_msat(tmpctx, funding),
+					 fmt_amount_msat(tmpctx, req_funding)));
 	}
-	else
+	else {
 		log_peer_unusual(ld->log, &channel->peer->id,
 				 "Splice funding too low. %s provided but %s"
 				 " commited to %s",
 				 opener_error ? "peer" : "you",
 				 fmt_amount_msat(tmpctx, funding),
 				 fmt_amount_msat(tmpctx, req_funding));
+	}
 }
 
 static void handle_splice_state_error(struct lightningd *ld,
@@ -227,13 +223,9 @@ static void handle_splice_state_error(struct lightningd *ld,
 	}
 
 	cc = splice_command_for_chan(ld, channel);
-	if (cc) {
-		struct json_stream *response = json_stream_success(cc->cmd);
-		json_add_string(response, "message", "Splice state error");
-		json_add_string(response, "error", error_msg);
-
-		was_pending(command_success(cc->cmd, response));
-	}
+	if (cc)
+		was_pending(command_fail(cc->cmd, SPLICE_STATE_ERROR,
+					 "%s", error_msg));
 	else
 		log_peer_unusual(ld->log, &channel->peer->id,
 				 "Splice state error: %s", error_msg);
@@ -246,6 +238,7 @@ static void handle_splice_feerate_error(struct lightningd *ld,
 	struct splice_command *cc;
 	struct amount_msat fee;
 	bool too_high;
+	char *error_msg;
 
 	if (!fromwire_channeld_splice_feerate_error(msg, &fee, &too_high)) {
 		channel_internal_error(channel,
@@ -256,27 +249,25 @@ static void handle_splice_feerate_error(struct lightningd *ld,
 
 	cc = splice_command_for_chan(ld, channel);
 	if (cc) {
-		struct json_stream *response = json_stream_success(cc->cmd);
-		json_add_string(response, "message", "Splice feerate failed");
-
 		if (too_high)
-			json_add_string(response, "error",
-					tal_fmt(tmpctx, "Feerate too high. Do you "
-						"really want to spend %s on fees?",
-						fmt_amount_msat(tmpctx, fee)));
+			error_msg = tal_fmt(tmpctx, "Feerate too high. Do you "
+				      "really want to spend %s on fees?",
+				      fmt_amount_msat(tmpctx, fee));
 		else
-			json_add_string(response, "error",
-					tal_fmt(tmpctx, "Feerate too low. Your "
-						"funding only provided %s in fees",
-						fmt_amount_msat(tmpctx, fee)));
+			error_msg = tal_fmt(tmpctx, "Feerate too low. Your "
+				      "funding only provided %s in fees",
+				      fmt_amount_msat(tmpctx, fee));
 
-		was_pending(command_success(cc->cmd, response));
+		was_pending(command_fail(cc->cmd,
+					 too_high ? SPLICE_HIGH_FEE : SPLICE_LOW_FEE,
+					 "%s", error_msg));
 	}
-	else
+	else {
 		log_peer_unusual(ld->log, &channel->peer->id, "Peer gave us a"
 				 " splice pkg with too low of feerate (fee was"
 				 " %s), we rejected it.",
 				 fmt_amount_msat(tmpctx, fee));
+	}
 }
 
 /* When channeld finishes processing the `splice_init` command, this is called */
@@ -1417,7 +1408,10 @@ bool peer_start_channeld(struct channel *channel,
 		infcopy->outpoint = inflight->funding->outpoint;
 		infcopy->amnt = inflight->funding->total_funds;
 		infcopy->splice_amnt = inflight->funding->splice_amnt;
-		infcopy->last_tx = tal_dup(infcopy, struct bitcoin_tx, inflight->last_tx);
+		if (inflight->last_tx)
+			infcopy->last_tx = tal_dup(infcopy, struct bitcoin_tx, inflight->last_tx);
+		else
+			infcopy->last_tx = NULL;
 		infcopy->last_sig = inflight->last_sig;
 		infcopy->i_am_initiator = inflight->i_am_initiator;
 		tal_wally_start();
@@ -1488,11 +1482,10 @@ bool peer_start_channeld(struct channel *channel,
 				       remote_ann_node_sig,
 				       remote_ann_bitcoin_sig,
 				       channel->type,
-				       IFDEV(ld->dev_fast_gossip, false),
-				       IFDEV(ld->dev_disable_commit == -1
+				       ld->dev_fast_gossip,
+				       ld->dev_disable_commit == -1
 					     ? NULL
 					     : (u32 *)&ld->dev_disable_commit,
-					     NULL),
 				       pbases,
 				       reestablish_only,
 				       channel->channel_update,
@@ -1646,7 +1639,12 @@ is_fundee_should_forget(struct lightningd *ld,
 	 *   - SHOULD forget the channel if it does not see the
 	 * correct funding transaction after a timeout of 2016 blocks.
 	 */
-	u32 max_funding_unconfirmed = IFDEV(ld->dev_max_funding_unconfirmed, 2016);
+	u32 max_funding_unconfirmed;
+
+	if (ld->developer)
+		max_funding_unconfirmed = ld->dev_max_funding_unconfirmed;
+	else
+		max_funding_unconfirmed = 2016;
 
 	/* Only applies if we are fundee. */
 	if (channel->opener == LOCAL)
@@ -2090,7 +2088,6 @@ static const struct json_command splice_signed_command = {
 };
 AUTODATA(json_command, &splice_signed_command);
 
-#if DEVELOPER
 static struct command_result *json_dev_feerate(struct command *cmd,
 					       const char *buffer,
 					       const jsmntok_t *obj UNNEEDED,
@@ -2138,7 +2135,8 @@ static const struct json_command dev_feerate_command = {
 	"dev-feerate",
 	"developer",
 	json_dev_feerate,
-	"Set feerate for {id} to {feerate}"
+	"Set feerate for {id} to {feerate}",
+	.dev_only = true,
 };
 AUTODATA(json_command, &dev_feerate_command);
 
@@ -2191,7 +2189,7 @@ static const struct json_command dev_quiesce_command = {
 	"dev-quiesce",
 	"developer",
 	json_dev_quiesce,
-	"Initiate quiscence protocol with peer"
+	"Initiate quiscence protocol with peer",
+	.dev_only = true,
 };
 AUTODATA(json_command, &dev_quiesce_command);
-#endif /* DEVELOPER */

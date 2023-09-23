@@ -3207,24 +3207,25 @@ void wallet_payment_store(struct wallet *wallet,
 	struct db_stmt *stmt;
 	if (!find_unstored_payment(wallet, &payment->payment_hash, payment->partid)) {
 		/* Already stored on-disk */
-#if DEVELOPER
-		/* Double-check that it is indeed stored to disk
-		 * (catch bug, where we call this on a payment_hash
-		 * we never paid to) */
-		bool res;
-		stmt =
-		    db_prepare_v2(wallet->db, SQL("SELECT status FROM payments"
-						  " WHERE payment_hash=?"
-						  " AND partid = ? AND groupid = ?;"));
-		db_bind_sha256(stmt, &payment->payment_hash);
-		db_bind_u64(stmt, payment->partid);
-		db_bind_u64(stmt, payment->groupid);
-		db_query_prepared(stmt);
-		res = db_step(stmt);
-		assert(res);
-		db_col_ignore(stmt, "status");
-		tal_free(stmt);
-#endif
+		if (wallet->ld->developer) {
+			/* Double-check that it is indeed stored to disk
+			 * (catch bug, where we call this on a payment_hash
+			 * we never paid to) */
+			bool res;
+			stmt =
+				db_prepare_v2(wallet->db, SQL("SELECT status FROM payments"
+							      " WHERE payment_hash=?"
+							      " AND partid = ? AND groupid = ?;"));
+			db_bind_sha256(stmt, &payment->payment_hash);
+			db_bind_u64(stmt, payment->partid);
+			db_bind_u64(stmt, payment->groupid);
+			db_query_prepared(stmt);
+			res = db_step(stmt);
+			assert(res);
+			db_col_ignore(stmt, "status");
+			tal_free(stmt);
+		}
+
 		return;
 	}
 
@@ -5679,44 +5680,60 @@ struct rune_blacklist *wallet_get_runes_blacklist(const tal_t *ctx, struct walle
 	return blist;
 }
 
-const char *wallet_get_rune(const tal_t *ctx, struct wallet *wallet, u64 unique_id)
+static struct timeabs db_col_time_from_nsec(struct db_stmt *stmt, const char *colname)
+{
+	struct timerel t;
+	struct timeabs tabs;
+
+	if (db_col_is_null(stmt, colname))
+		t = time_from_nsec(0);
+	else
+		t = time_from_nsec(db_col_u64(stmt, colname));
+	tabs.ts = t.ts;
+	return tabs;
+}
+
+const char *wallet_get_rune(const tal_t *ctx, struct wallet *wallet, u64 unique_id, struct timeabs *last_used)
 {
 	struct db_stmt *stmt;
 	const char *runestr;
 
-	stmt = db_prepare_v2(wallet->db, SQL("SELECT rune FROM runes WHERE id = ?"));
+	stmt = db_prepare_v2(wallet->db, SQL("SELECT rune, last_used_nsec FROM runes WHERE id = ?"));
 	db_bind_u64(stmt, unique_id);
 	db_query_prepared(stmt);
 
-	if (db_step(stmt))
+	if (db_step(stmt)) {
 		runestr = db_col_strdup(ctx, stmt, "rune");
-	else
+		*last_used = db_col_time_from_nsec(stmt, "last_used_nsec");
+	} else {
 		runestr = NULL;
+	}
 	tal_free(stmt);
 	return runestr;
 }
 
 /* Migration code needs db, not wallet access */
-static const char **db_get_runes(const tal_t *ctx, struct db *db)
+static const char **db_get_runes(const tal_t *ctx, struct db *db, struct timeabs **last_used)
 {
 	struct db_stmt *stmt;
 	const char **strs = tal_arr(ctx, const char *, 0);
 
-	stmt = db_prepare_v2(db, SQL("SELECT rune FROM runes"));
+	*last_used = tal_arr(ctx, struct timeabs, 0);
+	stmt = db_prepare_v2(db, SQL("SELECT rune, last_used_nsec FROM runes"));
 	db_query_prepared(stmt);
 
 	while (db_step(stmt)) {
 		const char *str = db_col_strdup(strs, stmt, "rune");
 		tal_arr_expand(&strs, str);
+		tal_arr_expand(last_used, db_col_time_from_nsec(stmt, "last_used_nsec"));
 	}
 	tal_free(stmt);
 	return strs;
 }
 
-const char **wallet_get_runes(const tal_t *ctx, struct wallet *wallet)
+const char **wallet_get_runes(const tal_t *ctx, struct wallet *wallet, struct timeabs **last_used)
 {
-	return db_get_runes(ctx, wallet->db);
-
+	return db_get_runes(ctx, wallet->db, last_used);
 }
 
 static void db_rune_insert(struct db *db,
@@ -5735,6 +5752,20 @@ static void db_rune_insert(struct db *db,
 void wallet_rune_insert(struct wallet *wallet, const struct rune *rune)
 {
 	db_rune_insert(wallet->db, rune);
+}
+
+void wallet_rune_update_last_used(struct wallet *wallet, const struct rune *rune, struct timeabs last_used)
+{
+	struct db_stmt *stmt;
+	struct timerel t;
+
+	t.ts = last_used.ts;
+	stmt = db_prepare_v2(wallet->db,
+			     SQL("UPDATE runes SET last_used_nsec = ? WHERE id = ?;"));
+	db_bind_u64(stmt, time_to_nsec(t));
+	db_bind_u64(stmt, rune_unique_id(rune));
+	db_exec_prepared_v2(stmt);
+	tal_free(stmt);
 }
 
 static void db_insert_blacklist(struct db *db,
@@ -5836,7 +5867,8 @@ void migrate_datastore_commando_runes(struct lightningd *ld, struct db *db)
 void migrate_runes_idfix(struct lightningd *ld, struct db *db)
 {
 	/* ID fields were wrong.  Pull them all out and put them back */
-	const char **runes = db_get_runes(tmpctx, db);
+	struct timeabs *last_used;
+	const char **runes = db_get_runes(tmpctx, db, &last_used);
 	struct db_stmt *stmt;
 
 	stmt = db_prepare_v2(db, SQL("DELETE FROM runes;"));

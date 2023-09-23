@@ -1585,17 +1585,19 @@ struct wally_psbt *psbt_using_utxos(const tal_t *ctx,
  * @ctx: tal ctx for return to be tallocated from
  * @wallet: the wallet
  * @unique_id: the id of the rune.
+ * @last_used: absolute time rune was last used
  *
  * Returns NULL if it's not found.
  */
-const char *wallet_get_rune(const tal_t *ctx, struct wallet *wallet, u64 unique_id);
+const char *wallet_get_rune(const tal_t *ctx, struct wallet *wallet, u64 unique_id, struct timeabs *last_used);
 
 /**
  * Get every runestring from the db
  * @ctx: tal ctx for return to be tallocated from
  * @wallet: the wallet
+ * @last_used: absolute time rune was last used
  */
-const char **wallet_get_runes(const tal_t *ctx, struct wallet *wallet);
+const char **wallet_get_runes(const tal_t *ctx, struct wallet *wallet, struct timeabs **last_used);
 
 /**
  * wallet_rune_insert -- Insert the newly created rune into the database
@@ -1604,6 +1606,15 @@ const char **wallet_get_runes(const tal_t *ctx, struct wallet *wallet);
  * @rune: the instance to store
  */
 void wallet_rune_insert(struct wallet *wallet, const struct rune *rune);
+
+/**
+ * wallet_rune_update_last_used -- Update the timestamp on an existing rune
+ *
+ * @wallet: the wallet to save into
+ * @rune: the instance to store
+ * @last_used: now
+ */
+void wallet_rune_update_last_used(struct wallet *wallet, const struct rune *rune, struct timeabs last_used);
 
 /* Load the runes blacklist */
 struct rune_blacklist {

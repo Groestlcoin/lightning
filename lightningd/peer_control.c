@@ -111,9 +111,7 @@ struct peer *new_peer(struct lightningd *ld, u64 dbid,
 	else
 		peer->their_features = NULL;
 
-#if DEVELOPER
-	peer->ignore_htlcs = false;
-#endif
+	peer->dev_ignore_htlcs = false;
 
 	peer_node_id_map_add(ld->peers, peer);
 	if (dbid)
@@ -338,7 +336,7 @@ void drop_to_chain(struct lightningd *ld, struct channel *channel,
 			   "Cannot broadcast our commitment tx:"
 			   " it's invalid! (ancient channel?)");
 	} else {
-		struct bitcoin_tx *tx;
+		struct bitcoin_tx *tx COMPILER_WANTS_INIT("gcc 12.3.0");
 
 		/* We need to drop *every* commitment transaction to chain */
 		if (!cooperative && !list_empty(&channel->inflights)) {
@@ -375,7 +373,6 @@ void resend_closing_transactions(struct lightningd *ld)
 
 void channel_errmsg(struct channel *channel,
 		    struct peer_fd *peer_fd,
-		    const struct channel_id *channel_id UNUSED,
 		    const char *desc,
 		    bool warning,
 		    bool aborted UNUSED,
@@ -403,14 +400,22 @@ void channel_errmsg(struct channel *channel,
 	if (err_for_them && !channel->error && !warning)
 		channel->error = tal_dup_talarr(channel, u8, err_for_them);
 
-	/* Other implementations chose to ignore errors early on.  Not
-	 * surprisingly, they now spew out spurious errors frequently,
-	 * and we would close the channel on them.  We now support warnings
-	 * for this case. */
-	if (warning) {
-		channel_fail_transient(channel, "%s%s: %s",
+	/* LND sends "internal error" and we close the channel.  But
+	 * prior to 0.11 we would turn this into a warning, and they
+	 * would recover after a reconnect.  So we downgrade, but snark
+	 * about it in the logs. */
+	if (!err_for_them && strends(desc, "internal error")) {
+		channel_fail_transient(channel, "%s: %s",
 				       channel->owner->name,
-				       warning ? " WARNING" : " (aborted)",
+				       "lnd sent 'internal error':"
+				       " let's give it some space");
+		return;
+	}
+
+	/* This is us, sending a warning.  */
+	if (warning) {
+		channel_fail_transient(channel, "%s sent %s",
+				       channel->owner->name,
 				       desc);
 		return;
 	}
@@ -447,13 +452,13 @@ void channel_errmsg(struct channel *channel,
 	 * CHANNELD_AWAITING_LOCKIN if we are fundee. */
 	if (!err_for_them && channel->opener == REMOTE
 	    && channel->state == CHANNELD_AWAITING_LOCKIN)
-		channel_fail_forget(channel, "%s: %s ERROR %s",
+		channel_fail_forget(channel, "%s: %s %s",
 				    channel->owner->name,
 				    err_for_them ? "sent" : "received", desc);
 	else
 		channel_fail_permanent(channel,
 				       err_for_them ? REASON_LOCAL : REASON_PROTOCOL,
-				       "%s: %s ERROR %s",
+				       "%s: %s %s",
 				       channel->owner->name,
 				       err_for_them ? "sent" : "received", desc);
 }
@@ -1259,7 +1264,6 @@ static void peer_connected_hook_final(struct peer_connected_hook_payload *payloa
 	/* Notify anyone who cares */
 	notify_connect(ld, &peer->id, payload->incoming, &addr);
 
-#if DEVELOPER
 	/* Developer hack to fail all channels on permfail line. */
 	if (dev_disconnect_permanent(ld)) {
 		list_for_each(&peer->channels, channel, list) {
@@ -1272,7 +1276,6 @@ static void peer_connected_hook_final(struct peer_connected_hook_payload *payloa
 		}
 		return;
 	}
-#endif
 
 	/* connect appropriate subds for all (active) channels! */
 	list_for_each(&peer->channels, channel, list) {
@@ -2911,7 +2914,6 @@ static const struct json_command setchannel_command = {
 };
 AUTODATA(json_command, &setchannel_command);
 
-#if DEVELOPER
 static struct command_result *json_sign_last_tx(struct command *cmd,
 						const char *buffer,
 						const jsmntok_t *obj UNNEEDED,
@@ -2971,7 +2973,8 @@ static const struct json_command dev_sign_last_tx = {
 	"dev-sign-last-tx",
 	"developer",
 	json_sign_last_tx,
-	"Sign and show the last commitment transaction with peer {id}"
+	"Sign and show the last commitment transaction with peer {id}",
+	.dev_only = true,
 };
 AUTODATA(json_command, &dev_sign_last_tx);
 
@@ -3012,7 +3015,8 @@ static const struct json_command dev_fail_command = {
 	"dev-fail",
 	"developer",
 	json_dev_fail,
-	"Fail with peer {id}"
+	"Fail with peer {id}",
+	.dev_only = true,
 };
 AUTODATA(json_command, &dev_fail_command);
 
@@ -3071,7 +3075,8 @@ static const struct json_command dev_reenable_commit = {
 	"dev-reenable-commit",
 	"developer",
 	json_dev_reenable_commit,
-	"Re-enable the commit timer on peer {id}"
+	"Re-enable the commit timer on peer {id}",
+	.dev_only = true,
 };
 AUTODATA(json_command, &dev_reenable_commit);
 
@@ -3187,8 +3192,9 @@ static const struct json_command dev_forget_channel_command = {
 	"dev-forget-channel",
 	"developer",
 	json_dev_forget_channel,
-	"Forget the channel with peer {id}, ignore UTXO check with {force}='true'.", false,
-	"Forget the channel with peer {id}. Checks if the channel is still active by checking its funding transaction. Check can be ignored by setting {force} to 'true'"
+	"Forget the channel with peer {id}, ignore UTXO check with {force}='true'.",
+	.verbose = "Forget the channel with peer {id}. Checks if the channel is still active by checking its funding transaction. Check can be ignored by setting {force} to 'true'",
+	.dev_only = true,
 };
 AUTODATA(json_command, &dev_forget_channel_command);
 
@@ -3283,4 +3289,3 @@ void peer_dev_memleak(struct lightningd *ld, struct leak_detect *leaks)
 		}
 	}
 }
-#endif /* DEVELOPER */

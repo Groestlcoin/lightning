@@ -975,6 +975,7 @@ static struct migration dbmigrations[] = {
     {SQL("ALTER TABLE htlc_sigs ADD inflight_tx_outnum INTEGER"), NULL},
     {SQL("ALTER TABLE channel_funding_inflights ADD splice_amnt BIGINT DEFAULT 0"), NULL},
     {SQL("ALTER TABLE channel_funding_inflights ADD i_am_initiator INTEGER DEFAULT 0"), NULL},
+    {SQL("ALTER TABLE runes ADD last_used_nsec BIGINT DEFAULT NULL"), NULL},
     {NULL, migrate_runes_idfix},
 };
 
@@ -1056,7 +1057,8 @@ static void db_error(struct lightningd *ld, bool fatal, const char *fmt, va_list
 struct db *db_setup(const tal_t *ctx, struct lightningd *ld,
 		    const struct ext_key *bip32_base)
 {
-	struct db *db = db_open(ctx, ld->wallet_dsn, db_error, ld);
+	struct db *db = db_open(ctx, ld->wallet_dsn, ld->developer,
+				db_error, ld);
 	bool migrated;
 
 	db->report_changes_fn = plugin_hook_db_sync;

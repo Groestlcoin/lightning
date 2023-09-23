@@ -38,7 +38,7 @@ jobs:
           export CFLAGS="-Wno-error -Wno-nullability-completeness -Wno-expansion-to-defined -Wno-builtin-requires-header"
           export CXXFLAGS="-Wno-error -Wno-nullability-completeness -Wno-expansion-to-defined -Wno-builtin-requires-header"
 
-          python3.10 -m poetry run ./configure --enable-developer --disable-valgrind --disable-compat
+          python3.10 -m poetry run ./configure --disable-valgrind --disable-compat
           python3.10 -m poetry run make
           sudo python3.10 -m poetry run make install
 

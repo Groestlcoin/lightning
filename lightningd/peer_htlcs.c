@@ -1,5 +1,6 @@
 #include "config.h"
 #include <ccan/cast/cast.h>
+#include <ccan/mem/mem.h>
 #include <ccan/tal/str/str.h>
 #include <channeld/channeld_wiregen.h>
 #include <common/blinding.h>
@@ -402,7 +403,7 @@ static void handle_localpay(struct htlc_in *hin,
 		 * 2. data:
 		 *    * [`u64`:`incoming_htlc_amt`]
 		 *
-		 * The amount in the HTLC doesn't match the value in the onion.
+		 * The amount in the HTLC is less than the value in the onion.
 		 */
 		failmsg = towire_final_incorrect_htlc_amount(NULL, hin->msat);
 		goto fail;
@@ -423,7 +424,7 @@ static void handle_localpay(struct htlc_in *hin,
 		 * 2. data:
 		 *    * [`u32`:`cltv_expiry`]
 		 *
-		 * The CLTV expiry in the HTLC doesn't match the value in the onion.
+		 * The CLTV expiry in the HTLC is less than the value in the onion.
 		 */
 		failmsg = towire_final_incorrect_cltv_expiry(NULL,
 							     hin->cltv_expiry);
@@ -647,7 +648,7 @@ const u8 *send_htlc_out(const tal_t *ctx,
 	tal_add_destructor(*houtp, destroy_hout_subd_died);
 
 	/* Give channel 30 seconds to commit this htlc. */
-	if (!IFDEV(out->peer->ld->dev_no_htlc_timeout, 0)) {
+	if (!out->peer->ld->dev_no_htlc_timeout) {
 		(*houtp)->timeout = new_reltimer(out->peer->ld->timers,
 						 *houtp, time_from_sec(30),
 						 htlc_offer_timeout,
@@ -1337,13 +1338,12 @@ static bool peer_accepted_htlc(const tal_t *ctx,
 
 	htlc_in_check(hin, __func__);
 
-#if DEVELOPER
-	if (channel->peer->ignore_htlcs) {
+	if (channel->peer->dev_ignore_htlcs) {
 		log_debug(channel->log, "their htlc %"PRIu64" dev_ignore_htlcs",
 			  id);
 		return true;
 	}
-#endif
+
 	/* BOLT #2:
 	 *
 	 *   - SHOULD fail to route any HTLC added after it has sent `shutdown`.
@@ -1571,16 +1571,19 @@ static bool peer_failed_our_htlc(struct channel *channel,
 		/* BOLT #2:
 		 *
 		 *   - if the `sha256_of_onion` in `update_fail_malformed_htlc`
-		 *     doesn't match the onion it sent:
+		 *     doesn't match the onion it sent and is not all zero:
 		 *    - MAY retry or choose an alternate error response.
 		 */
 		sha256(&our_sha256_of_onion, hout->onion_routing_packet,
 		       sizeof(hout->onion_routing_packet));
-		if (!sha256_eq(failed->sha256_of_onion, &our_sha256_of_onion))
+		if (!sha256_eq(failed->sha256_of_onion, &our_sha256_of_onion)
+		    && !memeqzero(failed->sha256_of_onion,
+				  sizeof(failed->sha256_of_onion))) {
 			log_unusual(channel->log,
 				    "update_fail_malformed_htlc for bad onion"
 				       " for htlc with id %"PRIu64".",
 				    hout->key.id);
+		}
 
 		/* BOLT #2:
 		 *
@@ -2952,7 +2955,6 @@ void htlcs_resubmit(struct lightningd *ld,
 	tal_free(unconnected_htlcs_in);
 }
 
-#if DEVELOPER
 static struct command_result *json_dev_ignore_htlcs(struct command *cmd,
 						    const char *buffer,
 						    const jsmntok_t *obj UNNEEDED,
@@ -2973,7 +2975,7 @@ static struct command_result *json_dev_ignore_htlcs(struct command *cmd,
 		return command_fail(cmd, LIGHTNINGD,
 				    "Could not find channel with that peer");
 	}
-	peer->ignore_htlcs = *ignore;
+	peer->dev_ignore_htlcs = *ignore;
 
 	return command_success(cmd, json_stream_success(cmd));
 }
@@ -2982,12 +2984,11 @@ static const struct json_command dev_ignore_htlcs = {
 	"dev-ignore-htlcs",
 	"developer",
 	json_dev_ignore_htlcs,
-	"Set ignoring incoming HTLCs for peer {id} to {ignore}", false,
-	"Set/unset ignoring of all incoming HTLCs.  For testing only."
+	"Set ignoring incoming HTLCs for peer {id} to {ignore}",
+	.dev_only = true,
 };
 
 AUTODATA(json_command, &dev_ignore_htlcs);
-#endif /* DEVELOPER */
 
 /* Warp this process to ensure the consistent json object structure
  * between 'listforwards' API and 'forward_event' notification. */

@@ -152,6 +152,9 @@ static struct tx_state *new_tx_state(const tal_t *ctx)
 struct state {
 	struct per_peer_state *pps;
 
+	/* --developer? */
+	bool developer;
+
 	/* Features they offered */
 	u8 *their_features;
 
@@ -331,8 +334,7 @@ static void negotiation_aborted(struct state *state, const char *why, bool abort
 	status_debug("aborted opening negotiation: %s", why);
 
 	/* Tell master that funding failed. */
-	peer_failed_received_errmsg(state->pps, why,
-				    &state->channel_id, true, aborted);
+	peer_failed_received_errmsg(state->pps, why, aborted);
 }
 
 /* Softer version of 'warning' (we don't disconnect)
@@ -958,15 +960,8 @@ static void set_remote_upfront_shutdown(struct state *state,
 		peer_failed_err(state->pps, &state->channel_id, "%s", err);
 }
 
-/* Memory leak detection is DEVELOPER-only because we go to great lengths to
- * record the backtrace when allocations occur: without that, the leak
- * detection tends to be useless for diagnosing where the leak came from, but
- * it has significant overhead.
- *
- * FIXME: dualopend doesn't always listen to lightningd, so we call this
- * at closing time, rather than when it askes.
- */
-#if DEVELOPER
+/* FIXME: dualopend doesn't always listen to lightningd, so we call this
+ * at closing time, rather than when it asks. */
 static void handle_dev_memleak(struct state *state, const u8 *msg)
 {
 	struct htable *memtable;
@@ -986,7 +981,6 @@ static void handle_dev_memleak(struct state *state, const u8 *msg)
 			take(towire_dualopend_dev_memleak_reply(NULL,
 							        found_leak)));
 }
-#endif /* DEVELOPER */
 
 static u8 *psbt_to_tx_sigs_msg(const tal_t *ctx,
 			       struct state *state,
@@ -1147,12 +1141,10 @@ fetch_psbt_changes(struct state *state,
 	wire_sync_write(REQ_FD, take(msg));
 
 	msg = wire_sync_read(tmpctx, REQ_FD);
-#if DEVELOPER
-	while (fromwire_dualopend_dev_memleak(msg)) {
+	while (state->developer && fromwire_dualopend_dev_memleak(msg)) {
 		handle_dev_memleak(state, msg);
 		msg = wire_sync_read(tmpctx, REQ_FD);
 	}
-#endif
 
 	if (fromwire_dualopend_fail(msg, msg, &err)) {
 		open_abort(state, "%s", err);
@@ -1289,9 +1281,7 @@ static u8 *opening_negotiate_msg(const tal_t *ctx, struct state *state)
 	 * form, but we use it in a very limited way. */
 	for (;;) {
 		u8 *msg;
-		char *err;
-		bool warning;
-		struct channel_id actual;
+		const char *err;
 		enum peer_wire t;
 
 		/* The event loop is responsible for freeing tmpctx, so our
@@ -1311,41 +1301,18 @@ static u8 *opening_negotiate_msg(const tal_t *ctx, struct state *state)
 			continue;
 
 		/* A helper which decodes an error. */
-		if (is_peer_error(tmpctx, msg, &state->channel_id,
-				  &err, &warning)) {
-			/* BOLT #1:
-			 *
-			 *  - if no existing channel is referred to by `channel_id`:
-			 *    - MUST ignore the message.
-			 */
-			/* In this case, is_peer_error returns true, but sets
-			 * err to NULL */
-			if (!err) {
-				tal_free(msg);
-				continue;
-			}
+		err = is_peer_error(tmpctx, msg);
+		if (err) {
 			negotiation_aborted(state,
 					    tal_fmt(tmpctx, "They sent %s",
 						    err), false);
 			/* Return NULL so caller knows to stop negotiating. */
-			return NULL;
+			return tal_free(msg);
 		}
 
-		/*~ We do not support multiple "live" channels, though the
-		 * protocol has a "channel_id" field in all non-gossip messages
-		 * so it's possible.  Our one-process-one-channel mechanism
-		 * keeps things simple: if we wanted to change this, we would
-		 * probably be best with another daemon to de-multiplex them;
-		 * this could be connectd itself, in fact. */
-		if (is_wrong_channel(msg, &state->channel_id, &actual)) {
-			status_debug("Rejecting %s for unknown channel_id %s",
-				     peer_wire_name(fromwire_peektype(msg)),
-				     type_to_string(tmpctx, struct channel_id,
-						    &actual));
-			peer_write(state->pps,
-				   take(towire_errorfmt(NULL, &actual,
-							"Multiple channels"
-							" unsupported")));
+		err = is_peer_warning(tmpctx, msg);
+		if (err) {
+			status_info("They sent %s", err);
 			tal_free(msg);
 			continue;
 		}
@@ -2492,7 +2459,7 @@ static void accepter_start(struct state *state, const u8 *oc2_msg)
 	struct tlv_accept_tlvs *a_tlv = tlv_accept_tlvs_new(tmpctx);
 	if (!state->upfront_shutdown_script[LOCAL])
 		state->upfront_shutdown_script[LOCAL]
-			= no_upfront_shutdown_script(state,
+			= no_upfront_shutdown_script(state, state->developer,
 						     state->our_features,
 						     state->their_features);
 
@@ -2968,7 +2935,7 @@ static void opener_start(struct state *state, u8 *msg)
 
 	if (!state->upfront_shutdown_script[LOCAL])
 		state->upfront_shutdown_script[LOCAL]
-			= no_upfront_shutdown_script(state,
+			= no_upfront_shutdown_script(state, state->developer,
 						     state->our_features,
 						     state->their_features);
 
@@ -3110,7 +3077,7 @@ static void opener_start(struct state *state, u8 *msg)
 	/* BOLT #2:
 	 * - if `channel_type` is set, and `channel_type` was set in
 	 *   `open_channel`, and they are not equal types:
-	 *    - MUST reject the channel.
+	 *    - MUST fail the channel.
 	 */
 	if (a_tlv->channel_type
 	    && !featurebits_eq(a_tlv->channel_type,
@@ -3415,12 +3382,10 @@ static void rbf_wrap_up(struct state *state,
 	wire_sync_write(REQ_FD, take(msg));
 	msg = wire_sync_read(tmpctx, REQ_FD);
 
-#if DEVELOPER
-	while (fromwire_dualopend_dev_memleak(msg)) {
+	while (state->developer && fromwire_dualopend_dev_memleak(msg)) {
 		handle_dev_memleak(state, msg);
 		msg = wire_sync_read(tmpctx, REQ_FD);
 	}
-#endif
 
 	if ((msg_type = fromwire_peektype(msg)) == WIRE_DUALOPEND_FAIL) {
 		if (!fromwire_dualopend_fail(msg, msg, &err_reason))
@@ -3993,9 +3958,7 @@ static void do_reconnect_dance(struct state *state)
 	do {
 		clean_tmpctx();
 		msg = peer_read(tmpctx, state->pps);
-	} while (handle_peer_error(state->pps,
-				   &state->channel_id,
-				   msg));
+	} while (handle_peer_error_or_warning(state->pps, msg));
 
 	if (!fromwire_channel_reestablish(tmpctx, msg, &cid,
 					  &next_commitment_number,
@@ -4062,10 +4025,11 @@ static u8 *handle_master_in(struct state *state)
 
 	switch (t) {
 	case WIRE_DUALOPEND_DEV_MEMLEAK:
-#if DEVELOPER
-		handle_dev_memleak(state, msg);
-#endif
-		return NULL;
+		if (state->developer) {
+			handle_dev_memleak(state, msg);
+			return NULL;
+		}
+		break;
 	case WIRE_DUALOPEND_OPENER_INIT:
 		opener_start(state, msg);
 		return NULL;
@@ -4205,7 +4169,7 @@ static u8 *handle_peer_in(struct state *state)
 	}
 
 	/* Handles errors. */
-	if (handle_peer_error(state->pps, &state->channel_id, msg))
+	if (handle_peer_error_or_warning(state->pps, msg))
 		return NULL;
 
 	peer_write(state->pps,
@@ -4258,7 +4222,7 @@ int main(int argc, char *argv[])
 	struct amount_msat our_msat;
 	bool from_abort;
 
-	subdaemon_setup(argc, argv);
+	state->developer = subdaemon_setup(argc, argv);
 
 	/* Init the holder for the funding transaction attempt */
 	state->tx_state = new_tx_state(state);

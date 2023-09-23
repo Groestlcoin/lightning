@@ -3397,7 +3397,6 @@ static unsigned int dual_opend_msg(struct subd *dualopend,
 	return 0;
 }
 
-#if DEVELOPER
 static struct command_result *json_queryrates(struct command *cmd,
 					      const char *buffer,
 					      const jsmntok_t *obj UNNEEDED,
@@ -3538,11 +3537,11 @@ static const struct json_command queryrates_command = {
 	"channels",
 	json_queryrates,
 	"Ask a peer what their contribution and liquidity rates are"
-	" for the given {amount} and {requested_amt}"
+	" for the given {amount} and {requested_amt}",
+	.dev_only = true,
 };
 
 AUTODATA(json_command, &queryrates_command);
-#endif /* DEVELOPER */
 
 static const struct json_command openchannel_init_command = {
 	"openchannel_init",
@@ -3588,9 +3587,8 @@ AUTODATA(json_command, &openchannel_signed_command);
 AUTODATA(json_command, &openchannel_bump_command);
 AUTODATA(json_command, &openchannel_abort_command);
 
-void static dualopen_errmsg(struct channel *channel,
+static void dualopen_errmsg(struct channel *channel,
 			    struct peer_fd *peer_fd,
-			    const struct channel_id *channel_id UNUSED,
 			    const char *desc,
 			    bool warning,
 			    bool aborted,

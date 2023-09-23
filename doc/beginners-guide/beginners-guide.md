@@ -16,12 +16,6 @@ If you want to experiment with `lightningd`, there's a script to set up a `groes
 . contrib/startup_regtest.sh
 ```
 
-Note that your local nodeset will be much faster/more responsive if you've configured your node to expose the developer options, e.g.
-
-```bash
-./configure --enable-developer
-```
-
 #### Mainnet Option
 
 To test with real groestlcoin,  you will need to have a local `groestlcoind` node running:

@@ -15,7 +15,9 @@ WORKDIR /opt
 
 
 ENV GROESTLCOIN_VERSION 22.0
-ENV GROESTLCOIN_TARBALL groestlcoin-${GROESTLCOIN_VERSION}-x86_64-linux-gnu.tar.gz
+ARG TARBALL_ARCH=x86_64-linux-gnu
+ENV TARBALL_ARCH_FINAL=$TARBALL_ARCH
+ENV GROESTLCOIN_TARBALL groestlcoin-${GROESTLCOIN_VERSION}-${TARBALL_ARCH_FINAL}.tar.gz
 ENV GROESTLCOIN_URL https://github.com/Groestlcoin/groestlcoin/releases/download/v$GROESTLCOIN_VERSION/$GROESTLCOIN_TARBALL
 ENV GROESTLCOIN_ASC_URL https://github.com/Groestlcoin/groestlcoin/releases/download/v$GROESTLCOIN_VERSION/SHA256SUMS
 
@@ -88,7 +90,6 @@ COPY . /tmp/lightning
 RUN git clone --recursive /tmp/lightning . && \
     git checkout $(git --work-tree=/tmp/lightning --git-dir=/tmp/lightning/.git rev-parse HEAD)
 
-ARG DEVELOPER=1
 ENV PYTHON_VERSION=3
 RUN curl -sSL https://install.python-poetry.org | python3 -
 
@@ -98,14 +99,12 @@ RUN pip3 install --upgrade pip setuptools wheel
 RUN pip3 wheel cryptography
 RUN pip3 install grpcio-tools
 
-RUN /root/.local/bin/poetry install
+RUN /root/.local/bin/poetry export -o requirements.txt --without-hashes --with dev
+RUN pip3 install -r requirements.txt
 
 RUN ./configure --prefix=/tmp/lightning_install --enable-static && \
-    make DEVELOPER=${DEVELOPER} && \
+    make && \
     /root/.local/bin/poetry run make install
-
-RUN pip3 install -r plugins/clnrest/requirements.txt
-RUN pip3 install ./contrib/pyln-client
 
 FROM debian:bullseye-slim as final
 

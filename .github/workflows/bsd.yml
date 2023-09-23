@@ -40,8 +40,7 @@ jobs:
           # fatal: unsafe repository ('/Users/runner/work/lightning/lightning' is owned by someone else)
           git config --global --add safe.directory $GITHUB_WORKSPACE
 
-          # Configure and build
-          ./configure CC="$CC" --enable-developer --disable-valgrind
+          ./configure CC="$CC" --disable-valgrind
           gmake
           gmake install
     - name: Upload artifacts

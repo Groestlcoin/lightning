@@ -8,6 +8,7 @@
 #include <common/json_param.h>
 #include <common/json_stream.h>
 #include <common/memleak.h>
+#include <common/overflows.h>
 #include <common/timeout.h>
 #include <common/type_to_string.h>
 #include <db/exec.h>
@@ -45,6 +46,7 @@ struct cond_info {
 	const struct node_id *peer;
 	const char *buf;
 	const char *method;
+	struct timeabs now;
 	const jsmntok_t *params;
 	STRMAP(const jsmntok_t *) cached_params;
 	struct usage *usage;
@@ -64,13 +66,11 @@ const char *rune_is_ours(struct lightningd *ld, const struct rune *rune)
 	return rune_is_derived(ld->runes->master, rune);
 }
 
-#if DEVELOPER
 static void memleak_help_usage_table(struct htable *memtable,
 				     struct usage_table *usage_table)
 {
 	memleak_scan_htable(memtable, &usage_table->raw);
 }
-#endif /* DEVELOPER */
 
 /* Every minute we forget entries. */
 static void flush_usage_table(struct runes *runes)
@@ -112,6 +112,58 @@ u64 rune_unique_id(const struct rune *rune)
 	if (!unique_id_num(rune, &num))
 		abort();
 	return num;
+}
+
+static const char *last_time_check(const tal_t *ctx,
+				    const struct runes *runes,
+				    const struct rune *rune,
+				    const struct rune_altern *alt,
+				    struct cond_info *cinfo)
+{
+	u64 r, multiplier, diff;
+	struct timeabs last_used;
+	char *endp;
+	const u64 sec_per_nsec = 1000000000;
+
+	if (alt->condition != '=')
+		return "per operator must be =";
+
+	r = strtoul(alt->value, &endp, 10);
+	if (endp == alt->value || r == 0 || r >= UINT32_MAX)
+		return "malformed per";
+	if (streq(endp, "") || streq(endp, "sec")) {
+		multiplier = sec_per_nsec;
+	} else if (streq(endp, "nsec")) {
+		multiplier = 1;
+	} else if (streq(endp, "usec")) {
+		multiplier = 1000;
+	} else if (streq(endp, "msec")) {
+		multiplier = 1000000;
+	} else if (streq(endp, "min")) {
+		multiplier = 60 * sec_per_nsec;
+	} else if (streq(endp, "hour")) {
+		multiplier = 60 * 60 * sec_per_nsec;
+	} else if (streq(endp, "day")) {
+		multiplier = 24 * 60 * 60 * sec_per_nsec;
+	} else {
+		return "malformed suffix";
+	}
+	if (mul_overflows_u64(r, multiplier)) {
+		return "per overflow";
+	}
+	if (!wallet_get_rune(tmpctx, cinfo->runes->ld->wallet, atol(rune->unique_id), &last_used)) {
+		/* FIXME: If we do not know the rune, per does not work */
+		return NULL;
+	}
+	if (time_before(cinfo->now, last_used)) {
+		last_used = cinfo->now;
+	}
+	diff = time_to_nsec(time_between(cinfo->now, last_used));
+
+	if (diff < (r * multiplier)) {
+		return "too soon";
+	}
+	return NULL;
 }
 
 static const char *rate_limit_check(const tal_t *ctx,
@@ -317,7 +369,8 @@ static struct command_result *json_add_rune(struct lightningd *ld,
 					    const char *fieldname,
 					    const char *runestr,
 					    const struct rune *rune,
-					    bool stored)
+					    bool stored,
+					    struct timeabs last_used)
 {
 	char *rune_english;
 	rune_english = "";
@@ -331,6 +384,9 @@ static struct command_result *json_add_rune(struct lightningd *ld,
 	}
 	if (rune_is_ours(ld, rune) != NULL) {
 		json_add_bool(js, "our_rune", false);
+	}
+	if (last_used.ts.tv_sec != 0) {
+		json_add_timeabs(js, "last_used", last_used);
 	}
 	json_add_string(js, "unique_id", rune->unique_id);
 	json_array_start(js, "restrictions");
@@ -374,16 +430,21 @@ static struct command_result *json_showrunes(struct command *cmd,
 	json_array_start(response, "runes");
 	if (ras) {
 		u64 uid = rune_unique_id(ras->rune);
-		const char *from_db = wallet_get_rune(tmpctx, cmd->ld->wallet, uid);
+		struct timeabs last_used;
+		const char *from_db = wallet_get_rune(tmpctx, cmd->ld->wallet, uid, &last_used);
 
+		/* This is how we indicate no timestamp: */
+		if (!from_db)
+			last_used.ts.tv_sec = 0;
 		/* We consider it stored iff this is exactly stored */
 		json_add_rune(cmd->ld, response, NULL, ras->runestr, ras->rune,
-			      from_db && streq(from_db, ras->runestr));
+			      from_db && streq(from_db, ras->runestr), last_used);
 	} else {
-		const char **strs = wallet_get_runes(cmd, cmd->ld->wallet);
+		struct timeabs *last_used;
+		const char **strs = wallet_get_runes(cmd, cmd->ld->wallet, &last_used);
 		for (size_t i = 0; i < tal_count(strs); i++) {
 			const struct rune *r = rune_from_base64(cmd, strs[i]);
-			json_add_rune(cmd->ld, response, NULL, strs[i], r, true);
+			json_add_rune(cmd->ld, response, NULL, strs[i], r, true, last_used[i]);
 		}
 	}
 	json_array_end(response);
@@ -716,7 +777,7 @@ static const char *check_condition(const tal_t *ctx,
 	const jsmntok_t *ptok;
 
 	if (streq(alt->fieldname, "time")) {
-		return rune_alt_single_int(ctx, alt, time_now().ts.tv_sec);
+		return rune_alt_single_int(ctx, alt, cinfo->now.ts.tv_sec);
 	} else if (streq(alt->fieldname, "id")) {
 		if (cinfo->peer) {
 			const char *id = node_id_to_hexstr(tmpctx, cinfo->peer);
@@ -733,6 +794,8 @@ static const char *check_condition(const tal_t *ctx,
 		return rune_alt_single_int(ctx, alt, (cinfo && cinfo->params) ? cinfo->params->size : 0);
 	} else if (streq(alt->fieldname, "rate")) {
 		return rate_limit_check(ctx, cinfo->runes, rune, alt, cinfo);
+	} else if (streq(alt->fieldname, "per")) {
+		return last_time_check(ctx, cinfo->runes, rune, alt, cinfo);
 	}
 
 	/* Rest are params looksup: generate this once! */
@@ -784,6 +847,12 @@ static const char *check_condition(const tal_t *ctx,
 				   ptok->end - ptok->start);
 }
 
+static void update_rune_usage_time(struct runes *runes,
+						 struct rune *rune, struct timeabs now)
+{
+	wallet_rune_update_last_used(runes->ld->wallet, rune, now);
+}
+
 static struct command_result *json_checkrune(struct command *cmd,
 						 const char *buffer,
 						 const jsmntok_t *obj UNNEEDED,
@@ -812,6 +881,7 @@ static struct command_result *json_checkrune(struct command *cmd,
 	cinfo.buf = buffer;
 	cinfo.method = method;
 	cinfo.params = methodparams;
+	cinfo.now = time_now();
 	/* We will populate it in rate_limit_check if required. */
 	cinfo.usage = NULL;
 	strmap_init(&cinfo.cached_params);
@@ -833,6 +903,7 @@ static struct command_result *json_checkrune(struct command *cmd,
 	/* If it succeeded, *now* we increment any associated usage counter. */
 	if (cinfo.usage)
 		cinfo.usage->counter++;
+	update_rune_usage_time(cmd->ld->runes, ras->rune, cinfo.now);
 
 	js = json_stream_success(cmd);
 	json_add_bool(js, "valid", true);
