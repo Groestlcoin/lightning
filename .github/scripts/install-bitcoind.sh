@@ -9,6 +9,4 @@ cd /tmp/
 wget "https://github.com/Groestlcoin/groestlcoin/releases/download/v${GROESTLCOIN_VERSION}/${FILENAME}"
 tar -xf "${FILENAME}"
 sudo mv "${DIRNAME}"/bin/* "/usr/local/bin"
-
-
 rm -rf "${FILENAME}" "${DIRNAME}"
