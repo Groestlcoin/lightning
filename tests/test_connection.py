@@ -682,7 +682,7 @@ def test_reconnect_signed(node_factory):
     # Technically, this is async to fundchannel (and could reconnect first)
     if EXPERIMENTAL_DUAL_FUND:
         l1.daemon.wait_for_logs(['sendrawtx exit 0',
-                                 'Peer has reconnected, state DUALOPEND_OPEN_INIT'])
+                                 'Peer has reconnected, state DUALOPEND_OPEN_COMMITTED'])
     else:
         l1.daemon.wait_for_logs(['sendrawtx exit 0',
                                  'Peer has reconnected, state CHANNELD_AWAITING_LOCKIN'])
@@ -2428,11 +2428,6 @@ def test_update_fee(node_factory, bitcoind):
 
     # Make l1 send out feechange.
     l1.set_feerates((14000, 11000, 7500, 3750))
-
-    # Now make sure an HTLC works.
-    # (First wait for route propagation.)
-    l1.wait_channel_active(chanid)
-    sync_blockheight(bitcoind, [l1, l2])
 
     # Make payments.
     l1.pay(l2, 200000000)

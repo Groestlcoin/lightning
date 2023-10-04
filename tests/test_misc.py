@@ -320,9 +320,6 @@ def test_htlc_out_timeout(node_factory, bitcoind, executor):
     l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
     chanid, _ = l1.fundchannel(l2, 10**6)
 
-    # Wait for route propagation.
-    l1.wait_channel_active(chanid)
-
     amt = 200000000
     inv = l2.rpc.invoice(amt, 'test_htlc_out_timeout', 'desc')['bolt11']
     assert only_one(l2.rpc.listinvoices('test_htlc_out_timeout')['invoices'])['status'] == 'unpaid'
@@ -392,7 +389,6 @@ def test_htlc_in_timeout(node_factory, bitcoind, executor):
     l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
     chanid, _ = l1.fundchannel(l2, 10**6)
 
-    l1.wait_channel_active(chanid)
     sync_blockheight(bitcoind, [l1, l2])
 
     amt = 200000000
@@ -1235,13 +1231,6 @@ def test_blockchaintrack(node_factory, bitcoind):
     assert [o for o in l1.rpc.listfunds()['outputs'] if o['status'] != "unconfirmed"] == []
 
 
-def chan_active(node, scid, is_active):
-    chans = node.rpc.listchannels(scid)['channels']
-    print(chans)
-    return [c['active'] for c in chans] == [is_active, is_active]
-
-
-@pytest.mark.openchannel('v2')
 @pytest.mark.openchannel('v1')
 def test_funding_reorg_private(node_factory, bitcoind):
     """Change funding tx height after lockin, between node restart.
@@ -1253,7 +1242,10 @@ def test_funding_reorg_private(node_factory, bitcoind):
             # gossipd send lightning update for original channel.
             'allow_broken_log': True,
             'allow_warning': True,
-            'dev-fast-reconnect': None}
+            'dev-fast-reconnect': None,
+            # if it's not zeroconf, we'll terminate on reorg.
+            'plugin': os.path.join(os.getcwd(), 'tests/plugins/zeroconf-selective.py'),
+            'zeroconf-allow': 'any'}
     l1, l2 = node_factory.line_graph(2, fundchannel=False, opts=opts)
     l1.fundwallet(10000000)
     sync_blockheight(bitcoind, [l1])                # height 102
@@ -1264,10 +1256,10 @@ def test_funding_reorg_private(node_factory, bitcoind):
 
     daemon = 'DUALOPEND' if l1.config('experimental-dual-fund') else 'CHANNELD'
     wait_for(lambda: only_one(l1.rpc.listpeerchannels()['channels'])['status']
-             == ['{}_AWAITING_LOCKIN:Funding needs 1 more confirmations to be ready.'.format(daemon)])
+             == ["{}_AWAITING_LOCKIN:They've confirmed channel ready, we haven't yet.".format(daemon)])
     bitcoind.generate_block(1)                      # height 107
-    l1.wait_channel_active('106x1x0')
-    l2.wait_channel_active('106x1x0')
+    l1.wait_local_channel_active('106x1x0')
+    l2.wait_local_channel_active('106x1x0')
     l1.stop()
 
     # Create a fork that changes short_channel_id from 106x1x0 to 108x1x0
@@ -1280,31 +1272,31 @@ def test_funding_reorg_private(node_factory, bitcoind):
                              r'Got depth change .->{} for .* REORG'.format(0)])
 
     # New one should replace old.
-    wait_for(lambda: chan_active(l2, '108x1x0', True))
-    assert l2.rpc.listchannels('106x1x0')['channels'] == []
+    wait_for(lambda: l2.is_local_channel_active('108x1x0'))
+    assert [c for c in l2.rpc.listpeerchannels()['channels'] if c['short_channel_id'] == '106x1x0'] == []
 
     l1.rpc.close(l2.info['id'])
     bitcoind.generate_block(1, True)
-    l1.daemon.wait_for_log(r'Deleting channel')
-    l2.daemon.wait_for_log(r'Deleting channel')
 
 
 @pytest.mark.openchannel('v1')
-@pytest.mark.openchannel('v2')
 def test_funding_reorg_remote_lags(node_factory, bitcoind):
     """Nodes may disagree about short_channel_id before channel announcement
     """
     # may_reconnect so channeld will restart; bad gossip can happen due to reorg
     opts = {'funding-confirms': 1, 'may_reconnect': True, 'allow_bad_gossip': True,
-            'allow_warning': True, 'dev-fast-reconnect': None}
+            'allow_warning': True, 'dev-fast-reconnect': None,
+            # if it's not zeroconf, l2 will terminate on reorg.
+            'plugin': os.path.join(os.getcwd(), 'tests/plugins/zeroconf-selective.py'),
+            'zeroconf-allow': 'any'}
     l1, l2 = node_factory.line_graph(2, fundchannel=False, opts=opts)
     l1.fundwallet(10000000)
     sync_blockheight(bitcoind, [l1])                # height 102
 
     l1.rpc.fundchannel(l2.info['id'], "all")
     bitcoind.generate_block(5)                      # heights 103 - 107
-    l1.wait_channel_active('103x1x0')
-    l2.wait_channel_active('103x1x0')
+    l1.wait_local_channel_active('103x1x0')
+    l2.wait_local_channel_active('103x1x0')
 
     # Make l2 temporary blind for blocks > 107
     def no_more_blocks(req):
@@ -1317,15 +1309,15 @@ def test_funding_reorg_remote_lags(node_factory, bitcoind):
     bitcoind.simple_reorg(103, 1)                   # heights 103 - 108
     # But now it's height 104, we need another block to make it announceable.
     bitcoind.generate_block(1)
-    l1.daemon.wait_for_log(r'Peer transient failure .* short_channel_id changed to 104x1x0 \(was 103x1x0\)')
+    l1.daemon.wait_for_log(r'Short channel id changed from 103x1x0->104x1x0')
 
     l2.daemon.wait_for_logs([r'Peer transient failure in CHANNELD_NORMAL: channeld sent Bad node_signature*'])
 
     # Unblinding l2 brings it back in sync, restarts channeld and sends its announce sig
     l2.daemon.rpcproxy.mock_rpc('getblockhash', None)
 
-    wait_for(lambda: chan_active(l2, '104x1x0', True))
-    assert l2.rpc.listchannels('103x1x0')['channels'] == []
+    wait_for(lambda: l2.is_local_channel_active('104x1x0'))
+    assert [c for c in l2.rpc.listpeerchannels()['channels'] if c['short_channel_id'] == '103x1x0'] == []
 
     wait_for(lambda: only_one(l2.rpc.listpeerchannels()['channels'])['status'] == [
         'CHANNELD_NORMAL:Reconnected, and reestablished.',
@@ -1335,6 +1327,20 @@ def test_funding_reorg_remote_lags(node_factory, bitcoind):
     bitcoind.generate_block(1, True)
     l1.daemon.wait_for_log(r'Deleting channel')
     l2.daemon.wait_for_log(r'Deleting channel')
+
+
+@pytest.mark.openchannel('v1')
+@pytest.mark.openchannel('v2')
+def test_funding_reorg_get_upset(node_factory, bitcoind):
+    l1, l2 = node_factory.line_graph(2, opts=[{}, {'allow_broken_log': True}])
+    bitcoind.simple_reorg(103, 1)
+
+    # l1 is ok, as funder.
+    l1.daemon.wait_for_log('Funding tx .* reorganized out, but we opened it...')
+    assert only_one(l1.rpc.listpeerchannels()['channels'])['state'] == 'CHANNELD_NORMAL'
+    # l2 is upset!
+    l2.daemon.wait_for_log('Funding transaction has been reorged out in state CHANNELD_NORMAL')
+    assert only_one(l2.rpc.listpeerchannels()['channels'])['state'] == 'AWAITING_UNILATERAL'
 
 
 @unittest.skipIf(os.getenv('TEST_DB_PROVIDER', 'sqlite3') != 'sqlite3', "deletes database, which is assumed sqlite3")
