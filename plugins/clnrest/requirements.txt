@@ -482,6 +482,9 @@ rpds-py==0.10.2 ; python_version >= "3.8" and python_version < "4.0" \
     --hash=sha256:edd74b760a6bb950397e7a7bd2f38e6700f6525062650b1d77c6d851b82f02c2 \
     --hash=sha256:f40abbcc0a7d9a8a80870af839d317e6932533f98682aabd977add6c53beeb23 \
     --hash=sha256:fce7a8ee8d0f682c953c0188735d823f0fcb62779bf92cd6ba473a8e730e26ad
+setuptools==68.2.0 ; python_version >= "3.8" and python_version < "4.0" \
+    --hash=sha256:00478ca80aeebeecb2f288d3206b0de568df5cd2b8fada1209843cc9a8d88a48 \
+    --hash=sha256:af3d5949030c3f493f550876b2fd1dd5ec66689c4ee5d5344f009746f71fd5a8
 werkzeug==2.3.7 ; python_version >= "3.8" and python_version < "4.0" \
     --hash=sha256:2b8c0e447b4b9dbcc85dd97b6eeb4dcbaf6c8b6c3be0bd654e25553e0a2157d8 \
     --hash=sha256:effc12dba7f3bd72e605ce49807bbe692bd729c3bb122a3b91747a6ae77df528
