@@ -30,4 +30,4 @@ RUN wget https://github.com/Groestlcoin/groestlcoin/releases/download/v$GROESTLC
     rm -rf groestlcoin.tar.gz groestlcoin-$GROESTLCOIN_VERSION
 
 RUN python3 -m pip install --upgrade pip && \
-    python3 -m pip install python-bitcoinlib pytest setuptools pytest-test-groups flake8 pytest-rerunfailures ephemeral-port-reserve
+    python3 -m pip install python-bitcoinlib pytest pytest-test-groups flake8 pytest-rerunfailures ephemeral-port-reserve
