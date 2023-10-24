@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 export DEBIAN_FRONTEND=noninteractive
-export GROESTLCOIN_VERSION=24.0.1
+export GROESTLCOIN_VERSION=25.0
 export RUST_VERSION=stable
 sudo useradd -ms /bin/bash tester
 sudo apt-get update -qq
@@ -53,7 +53,7 @@ sudo chmod 0440 /etc/sudoers.d/tester
 
 (
     cd /tmp/ || exit 1
-    wget https://github.com/Groestlcoin/groestlcoin/releases/download/v$GROESTLCOIN_VERSION/groestlcoin-24.0.1-x86_64-linux-gnu.tar.gz
+    wget https://github.com/Groestlcoin/groestlcoin/releases/download/v$GROESTLCOIN_VERSION/groestlcoin-${GROESTLCOIN_VERSION}-x86_64-linux-gnu.tar.gz
     tar -xvzf groestlcoin-${GROESTLCOIN_VERSION}-x86_64-linux-gnu.tar.gz
     sudo mv groestlcoin-${GROESTLCOIN_VERSION}/bin/* /usr/local/bin
     rm -rf \

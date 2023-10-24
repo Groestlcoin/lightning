@@ -1812,8 +1812,10 @@ static void peer_discard(struct daemon *daemon, const u8 *msg)
 	/* If it's reconnected already, it will learn soon. */
 	if (peer->counter != counter)
 		return;
+
+	/* We make sure any final messages from the subds are sent! */
 	status_peer_debug(&id, "discard_peer");
-	tal_free(peer);
+	drain_peer(peer);
 }
 
 static void start_shutdown(struct daemon *daemon, const u8 *msg)
@@ -2098,6 +2100,10 @@ static struct io_plan *recv_req(struct io_conn *conn,
 		start_shutdown(daemon, msg);
 		goto out;
 
+	case WIRE_CONNECTD_SET_CUSTOMMSGS:
+		set_custommsgs(daemon, msg);
+		goto out;
+
 	case WIRE_CONNECTD_DEV_MEMLEAK:
 		if (daemon->developer) {
 			dev_connect_memleak(daemon, msg);
@@ -2207,6 +2213,7 @@ int main(int argc, char *argv[])
 	daemon->gossip_store_fd = -1;
 	daemon->shutting_down = false;
 	daemon->dev_suppress_gossip = false;
+	daemon->custom_msgs = NULL;
 
 	/* stdin == control */
 	daemon->master = daemon_conn_new(daemon, STDIN_FILENO, recv_req, NULL,

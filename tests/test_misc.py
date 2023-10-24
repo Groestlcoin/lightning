@@ -2619,12 +2619,6 @@ def test_sendcustommsg(node_factory):
     with pytest.raises(RpcError, match=r'Cannot send messages of type 18 .WIRE_PING.'):
         l2.rpc.sendcustommsg(l2.info['id'], r'0012')
 
-    # The sendcustommsg RPC call is currently limited to odd-typed messages,
-    # since they will not result in disconnections or even worse channel
-    # failures.
-    with pytest.raises(RpcError, match=r'Cannot send even-typed [0-9]+ custom message'):
-        l2.rpc.sendcustommsg(l2.info['id'], r'00FE')
-
     # This should work since the peer is currently owned by `channeld`
     l2.rpc.sendcustommsg(l1.info['id'], msg)
     l2.daemon.wait_for_log(
@@ -3604,3 +3598,36 @@ def test_setconfig(node_factory, bitcoind):
         assert lines[1].startswith('# Inserted by setconfig ')
         assert lines[2] == 'min-capacity-sat=400000'
         assert len(lines) == 3
+
+
+def test_even_sendcustommsg(node_factory):
+    l1, l2 = node_factory.get_nodes(2, opts={'log-level': 'io',
+                                             'allow_warning': True})
+    l1.connect(l2)
+
+    # Even-numbered message
+    msg = hex(43690)[2:] + ('ff' * 30) + 'bb'
+
+    # l2 will hang up when it gets this.
+    l1.rpc.sendcustommsg(l2.info['id'], msg)
+    l2.daemon.wait_for_log(r'\[IN\] {}'.format(msg))
+    l1.daemon.wait_for_log('Invalid unknown even msg')
+    wait_for(lambda: l1.rpc.listpeers(l2.info['id'])['peers'] == [])
+
+    # Now with a plugin which allows it
+    l1.connect(l2)
+    l2.rpc.plugin_start(os.path.join(os.getcwd(), "tests/plugins/allow_even_msgs.py"))
+
+    l1.rpc.sendcustommsg(l2.info['id'], msg)
+    l2.daemon.wait_for_log(r'\[IN\] {}'.format(msg))
+    l2.daemon.wait_for_log(r'allow_even_msgs.*Got message 43690')
+
+    # And nobody gets upset
+    assert only_one(l1.rpc.listpeers(l2.info['id'])['peers'])['connected']
+
+    # It does if we remove the plugin though!
+    l2.rpc.plugin_stop("allow_even_msgs.py")
+    l1.rpc.sendcustommsg(l2.info['id'], msg)
+    l2.daemon.wait_for_log(r'\[IN\] {}'.format(msg))
+    l1.daemon.wait_for_log('Invalid unknown even msg')
+    wait_for(lambda: l1.rpc.listpeers(l2.info['id'])['peers'] == [])

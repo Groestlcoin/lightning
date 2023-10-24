@@ -579,6 +579,7 @@ static unsigned connectd_msg(struct subd *connectd, const u8 *msg, const int *fd
 	case WIRE_CONNECTD_SEND_ONIONMSG:
 	case WIRE_CONNECTD_CUSTOMMSG_OUT:
 	case WIRE_CONNECTD_START_SHUTDOWN:
+	case WIRE_CONNECTD_SET_CUSTOMMSGS:
 	/* This is a reply, so never gets through to here. */
 	case WIRE_CONNECTD_INIT_REPLY:
 	case WIRE_CONNECTD_ACTIVATE_REPLY:
@@ -612,6 +613,37 @@ static unsigned connectd_msg(struct subd *connectd, const u8 *msg, const int *fd
 		break;
 	}
 	return 0;
+}
+
+void force_peer_disconnect(struct lightningd *ld,
+			   const struct peer *peer,
+			   const char *why)
+{
+	struct channel *c, *next;
+
+	/* Don't bother on shutting down */
+	if (!ld->connectd)
+		return;
+
+	/* Disconnect subds */
+	if (peer->uncommitted_channel)
+		kill_uncommitted_channel(peer->uncommitted_channel, why);
+
+	list_for_each_safe(&peer->channels, c, next, list) {
+		if (!c->owner)
+			continue;
+
+		log_debug(c->log, "Forcing disconnect due to %s", why);
+		/* This frees c! */
+		if (channel_state_uncommitted(c->state))
+			channel_unsaved_close_conn(c, why);
+		else
+			channel_set_owner(c, NULL);
+	}
+
+	subd_send_msg(peer->ld->connectd,
+		      take(towire_connectd_discard_peer(NULL, &peer->id,
+							peer->connectd_counter)));
 }
 
 static void connect_init_done(struct subd *connectd,
@@ -779,13 +811,12 @@ static struct command_result *json_sendcustommsg(struct command *cmd,
 	}
 
 	if (type % 2 == 0) {
-		return command_fail(
-		    cmd, JSONRPC2_INVALID_REQUEST,
-		    "Cannot send even-typed %d custom message. Currently "
-		    "custom messages are limited to odd-numbered message "
-		    "types, as even-numbered types might result in "
-		    "disconnections.",
-		    type);
+		/* INFO the first time, then DEBUG */
+		static enum log_level level = LOG_INFORM;
+		log_(cmd->ld->log, level, dest, false,
+		     "sendcustommsg id=%s sending a custom even message (%u)",
+		     cmd->id, type);
+		level = LOG_DBG;
 	}
 
 	peer = peer_by_id(cmd->ld, dest);
