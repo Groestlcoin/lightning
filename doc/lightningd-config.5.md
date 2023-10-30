@@ -294,9 +294,9 @@ connections; default is not to activate the plugin at all.
 
 ### Lightning node customization options
 
-* **recover**=*codex32secret*
+* **recover**=*hsmsecret*
 
-  Restore the node from a 32-byte secret encoded as a codex32 secret string: this will fail if the `hsm_secret` file exists.  Your node will start the node in offline mode, for manual recovery.  The secret can be extracted from the `hsm_secret` using hsmtool(8).
+  Restore the node from a 32-byte secret encoded as either a codex32 secret string or a 64-character hex string: this will fail if the `hsm_secret` file exists.  Your node will start the node in offline mode, for manual recovery.  The secret can be extracted from the `hsm_secret` using hsmtool(8).
 
 * **alias**=*NAME*
 
@@ -489,7 +489,7 @@ not easily distinguishable.  As a result, autoclean may delete more
 than one of these at once, and then suffer failures when it fails to
 delete the others.
 
-### Payment control options:
+### Payment and invoice control options:
 
 * **disable-mpp** [plugin `pay`]
 
@@ -497,6 +497,11 @@ delete the others.
 the MPP support is enabled, but it can be desirable to disable in situations
 in which each payment should result in a single HTLC being forwarded in the
 network.
+
+* **invoices-onchain-fallback**
+
+  Add a (taproot) fallback address to invoices produced by the `invoice`
+command, so they invoices can also be paid onchain.
 
 ### Networking options
 

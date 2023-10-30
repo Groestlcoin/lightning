@@ -41,7 +41,8 @@ void notify_disconnect(struct lightningd *ld, struct node_id *nodeid);
 void notify_warning(struct lightningd *ld, struct log_entry *l);
 
 void notify_invoice_payment(struct lightningd *ld, struct amount_msat amount,
-			    struct preimage preimage, const struct json_escape *label);
+			    struct preimage preimage, const struct json_escape *label,
+			    const struct bitcoin_outpoint *outpoint);
 
 void notify_invoice_creation(struct lightningd *ld, struct amount_msat *amount,
 			    struct preimage preimage, const struct json_escape *label);
@@ -69,7 +70,9 @@ void notify_forward_event(struct lightningd *ld,
 			  enum forward_status state,
 			  enum onion_wire failcode,
 			  struct timeabs *resolved_time,
-			  enum forward_style forward_style);
+			  enum forward_style forward_style,
+			  u64 created_index,
+			  u64 updated_index);
 
 void notify_sendpay_success(struct lightningd *ld,
 			    const struct wallet_payment *payment);

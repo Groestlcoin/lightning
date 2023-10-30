@@ -30,6 +30,8 @@ struct invoice_details {
 	struct amount_msat received;
 	/* Set if state == PAID; time paid */
 	u64 paid_timestamp;
+	/* Set if state == PAID and invoice paid on chain; outpoint containing the payment */
+	const struct bitcoin_outpoint *paid_outpoint;
 	/* BOLT11 or BOLT12 encoding for this invoice */
 	const char *invstring;
 
@@ -54,25 +56,40 @@ struct invoice_details {
  *
  * Returns NULL if there's a problem, otherwise returns the invoice details.
  */
-const struct invoice_details *
-invoice_check_payment(const tal_t *ctx,
-		      struct lightningd *ld,
-		      const struct sha256 *payment_hash,
-		      const struct amount_msat msat,
-		      const struct secret *payment_secret,
-		      const char **err);
+const struct invoice_details *invoice_check_payment(const tal_t *ctx,
+						    struct lightningd *ld,
+						    const struct sha256 *payment_hash,
+						    const struct amount_msat msat,
+						    const struct secret *payment_secret,
+						    const char **err);
+
+/**
+ * invoice_check_onchain_payment - check if this on-chain payment would be valid
+ * @ld: the lightning context
+ * @scriptPubKey: fallback script with which to search for invoices
+ * @sat: output amount
+ * @outpoint: the outpoint which paid it.
+ */
+void invoice_check_onchain_payment(struct lightningd *ld,
+				   const u8 *scriptPubKey,
+				   struct amount_sat sat,
+				   const struct bitcoin_outpoint *outpoint);
 
 /**
  * invoice_try_pay - process payment for these incoming payments.
  * @ld: lightningd
- * @set: the htlc_set used to pay this.
+ * @set: the htlc_set used to pay this (NULL if onchain)
  * @details: returned from successful invoice_check_payment.
+ * @msat: the amount of the output or htlc_set
+ * @outpoint: the onchain outpoint (iff onchain).
  *
- * Either calls fulfill_htlc_set() or fail_htlc_set().
+ * If @set is not NULL, either calls fulfill_htlc_set() or fail_htlc_set().
  */
 void invoice_try_pay(struct lightningd *ld,
 		     struct htlc_set *set,
-		     const struct invoice_details *details);
+		     const struct invoice_details *details,
+		     struct amount_msat msat,
+		     const struct bitcoin_outpoint *outpoint);
 
 /* Simple enum -> string converter for JSON fields */
 const char *invoice_status_str(enum invoice_status state);

@@ -19,6 +19,7 @@
 #include <lightningd/channel.h>
 #include <lightningd/coin_mvts.h>
 #include <lightningd/gossip_control.h>
+#include <lightningd/invoice.h>
 #include <lightningd/io_loop_with_timers.h>
 #include <lightningd/jsonrpc.h>
 #include <lightningd/lightningd.h>
@@ -92,6 +93,19 @@ static void filter_block_txs(struct chain_topology *topo, struct block *b)
 						     tx->wtx, is_coinbase, &b->height, &owned);
 			wallet_transaction_add(topo->ld->wallet, tx->wtx,
 					       b->height, i);
+			// invoice_check_onchain_payment(tx);
+			for (size_t k = 0; k < tx->wtx->num_outputs; k++) {
+				const u8 *oscript = bitcoin_tx_output_get_script(tmpctx, tx, k);
+				if (txfilter_scriptpubkey_matches(topo->bitcoind->ld->owned_txfilter, oscript)) {
+					struct amount_sat amount;
+					struct bitcoin_outpoint outpoint;
+					outpoint.txid = txid;
+					outpoint.n = k;
+					bitcoin_tx_output_get_amount_sat(tx, k, &amount);
+					invoice_check_onchain_payment(topo->ld, oscript, amount, &outpoint);
+				}
+			}
+
 		}
 
 		/* We did spends first, in case that tells us to watch tx. */
@@ -201,7 +215,7 @@ static void rebroadcast_txs(struct chain_topology *topo)
 	tal_free(cleanup_ctx);
 
 	/* Free explicitly in case we were called because a block came in. */
-	tal_free(topo->rebroadcast_timer);
+	topo->rebroadcast_timer = tal_free(topo->rebroadcast_timer);
 
 	/* Nothing to broadcast?  Reset timer immediately */
 	if (*num_rebroadcast_remaining == 0)
@@ -286,7 +300,7 @@ void broadcast_tx_(const tal_t *ctx,
 		  cmd_id ? " for " : "", cmd_id ? cmd_id : "");
 
 	wallet_transaction_add(topo->ld->wallet, tx->wtx, 0, 0);
-	bitcoind_sendrawtx(ctx, topo->bitcoind, otx->cmd_id,
+	bitcoind_sendrawtx(otx, topo->bitcoind, otx->cmd_id,
 			   fmt_bitcoin_tx(tmpctx, otx->tx),
 			   allowhighfees,
 			   broadcast_done, otx);

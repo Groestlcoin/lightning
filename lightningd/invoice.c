@@ -1,4 +1,5 @@
 #include "config.h"
+#include <bitcoin/script.h>
 #include <ccan/array_size/array_size.h>
 #include <ccan/asort/asort.h>
 #include <ccan/cast/cast.h>
@@ -23,10 +24,13 @@
 #include <lightningd/hsm_control.h>
 #include <lightningd/invoice.h>
 #include <lightningd/notification.h>
+#include <lightningd/peer_htlcs.h>
 #include <lightningd/plugin_hook.h>
 #include <lightningd/routehint.h>
 #include <sodium/randombytes.h>
+#include <stdio.h>
 #include <wallet/invoices.h>
+#include <wallet/walletrpc.h>
 #include <wire/wire_sync.h>
 
 const char *invoice_status_str(enum invoice_status state)
@@ -57,6 +61,12 @@ static void json_add_invoice_fields(struct json_stream *response,
 		json_add_amount_msat(response,
 				     "amount_received_msat", inv->received);
 		json_add_u64(response, "paid_at", inv->paid_timestamp);
+		if (inv->paid_outpoint) {
+			json_object_start(response, "paid_outpoint");
+			json_add_txid(response, "txid", &inv->paid_outpoint->txid);
+			json_add_num(response, "outnum", inv->paid_outpoint->n);
+			json_object_end(response);
+		}
 		json_add_preimage(response, "payment_preimage", &inv->r);
 	}
 	if (inv->description)
@@ -168,6 +178,8 @@ struct invoice_payment_hook_payload {
 	struct htlc_set *set;
 	/* What invoice it's trying to pay. */
 	const struct json_escape *label;
+	/* Outpoint that pays the invoice, if paid on chain. */
+	struct bitcoin_outpoint *outpoint;
 	/* Amount it's offering. */
 	struct amount_msat msat;
 	/* Preimage we'll give it if succeeds. */
@@ -215,7 +227,7 @@ invoice_payment_serialize(struct invoice_payment_hook_payload *payload,
 			type_to_string(tmpctx, struct amount_msat,
 				       &payload->msat));
 
-	if (payload->ld->developer)
+	if (payload->ld->developer && payload->set)
 		invoice_payment_add_tlvs(stream, payload->set);
 	json_object_end(stream); /* .payment */
 }
@@ -317,20 +329,22 @@ invoice_payment_hooks_done(struct invoice_payment_hook_payload *payload STEALS)
 
 	/* Paid or expired in the meantime. */
 	if (!invoices_resolve(ld->wallet->invoices, inv_dbid, payload->msat,
-			      payload->label)) {
-		htlc_set_fail(payload->set, take(failmsg_incorrect_or_unknown(
-							 NULL, ld, payload->set->htlcs[0])));
+			      payload->label, payload->outpoint)) {
+		if (payload->set)
+			htlc_set_fail(payload->set, take(failmsg_incorrect_or_unknown(
+								NULL, ld, payload->set->htlcs[0])));
 		return;
 	}
 
 	log_info(ld->log, "Resolved invoice '%s' with amount %s in %zu htlcs",
 		 payload->label->s,
 		 type_to_string(tmpctx, struct amount_msat, &payload->msat),
-		 tal_count(payload->set->htlcs));
-	htlc_set_fulfill(payload->set, &payload->preimage);
+		 payload->set ? tal_count(payload->set->htlcs) : 0);
+	if (payload->set)
+		htlc_set_fulfill(payload->set, &payload->preimage);
 
 	notify_invoice_payment(ld, payload->msat, payload->preimage,
-			       payload->label);
+			       payload->label, payload->outpoint);
 }
 
 static bool
@@ -342,18 +356,20 @@ invoice_payment_deserialize(struct invoice_payment_hook_payload *payload,
 	const u8 *failmsg;
 
 	/* If peer dies or something, this can happen. */
-	if (!payload->set) {
+	if (!payload->set && !payload->outpoint) {
 		log_debug(ld->log, "invoice '%s' paying htlc_in has gone!",
 			  payload->label->s);
 		return false;
 	}
 
-	/* Did we have a hook result? */
-	failmsg = hook_gives_failmsg(NULL, ld,
-				     payload->set->htlcs[0], buffer, toks);
-	if (failmsg) {
-		htlc_set_fail(payload->set, take(failmsg));
-		return false;
+	if (payload->set) {
+		/* Did we have a hook result? */
+		failmsg = hook_gives_failmsg(NULL, ld,
+						payload->set->htlcs[0], buffer, toks);
+		if (failmsg) {
+			htlc_set_fail(payload->set, take(failmsg));
+			return false;
+		}
 	}
 	return true;
 }
@@ -465,18 +481,23 @@ invoice_check_payment(const tal_t *ctx,
 
 void invoice_try_pay(struct lightningd *ld,
 		     struct htlc_set *set,
-		     const struct invoice_details *details)
+		     const struct invoice_details *details,
+		     struct amount_msat msat,
+		     const struct bitcoin_outpoint *outpoint)
 {
 	struct invoice_payment_hook_payload *payload;
 
 	payload = tal(NULL, struct invoice_payment_hook_payload);
 	payload->ld = ld;
 	payload->label = tal_steal(payload, details->label);
-	payload->msat = set->so_far;
 	payload->preimage = details->r;
+	payload->msat = msat;
 	payload->set = set;
-	tal_add_destructor2(set, invoice_payload_remove_set, payload);
+	payload->outpoint = tal_dup_or_null(payload, struct bitcoin_outpoint, outpoint);
 
+	// set is NULL if invoice is being paid on-chain
+	if (payload->set)
+		tal_add_destructor2(set, invoice_payload_remove_set, payload);
 	plugin_hook_call_invoice_payment(ld, NULL, payload);
 }
 
@@ -692,6 +713,7 @@ struct invoice_info {
 	struct bolt11 *b11;
 	struct json_escape *label;
 	struct chanhints *chanhints;
+	bool custom_fallbacks;
 };
 
 /* Add routehints based on listincoming results: NULL means success. */
@@ -876,6 +898,13 @@ invoice_complete(struct invoice_info *info,
 				    info->label->s);
 	}
 
+	if (info->cmd->ld->unified_invoices && info->b11->fallbacks && !info->custom_fallbacks) {
+		for (size_t i = 0; i < tal_count(info->b11->fallbacks); i++) {
+			const u8 *fallback_script = info->b11->fallbacks[i];
+			invoices_create_fallback(wallet->invoices, inv_dbid, fallback_script);
+		}
+	}
+
 	/* Get details */
 	details = invoices_get_details(info, wallet->invoices, inv_dbid);
 
@@ -912,6 +941,10 @@ invoice_complete(struct invoice_info *info,
 		json_add_string(response, "warning_private_unused",
 				"Insufficient incoming capacity, once private channels were excluded (try exposeprivatechannels=true?)");
 
+	if (info->cmd->ld->unified_invoices && info->custom_fallbacks)
+		json_add_string(response, "warning_custom_fallbacks",
+				"WARNING: Not tracking on-chain payments for custom fallback addresses");
+
 	return command_success(info->cmd, response);
 }
 
@@ -940,6 +973,31 @@ static void listincoming_done(const char *buffer,
 			 warning_deadends,
 			 warning_offline,
 			 warning_private_unused);
+}
+
+void invoice_check_onchain_payment(struct lightningd *ld,
+				   const u8 *scriptPubKey,
+				   struct amount_sat sat,
+				   const struct bitcoin_outpoint *outpoint)
+{
+	u64 inv_dbid;
+	const struct invoice_details *details;
+	struct amount_msat msat;
+	if (!amount_sat_to_msat(&msat, sat))
+		abort();
+	/* Does this onchain payment fulfill an invoice? */
+	if(!invoices_find_by_fallback_script(ld->wallet->invoices, &inv_dbid, scriptPubKey)) {
+		return;
+	}
+
+	details = invoices_get_details(tmpctx, ld->wallet->invoices, inv_dbid);
+
+	if (amount_msat_less(msat, *details->msat)) {
+		// notify_underpaid_onchain_invoice();
+		return;
+	}
+
+	invoice_try_pay(ld, NULL, details, msat, outpoint);
 }
 
 /* Since this is a dev-only option, we will crash if dev-routes is not
@@ -1095,20 +1153,20 @@ static struct command_result *json_invoice(struct command *cmd,
 	info = tal(cmd, struct invoice_info);
 	info->cmd = cmd;
 
-	if (!param(cmd, buffer, params,
-		   p_req("amount_msat|msatoshi", param_positive_msat_or_any, &msatoshi_val),
-		   p_req("label", param_label, &info->label),
-		   p_req("description", param_escaped_string, &desc_val),
-		   p_opt_def("expiry", param_u64, &expiry, 3600*24*7),
-		   p_opt("fallbacks", param_array, &fallbacks),
-		   p_opt("preimage", param_preimage, &preimage),
-		   p_opt("exposeprivatechannels", param_chanhints,
-			 &info->chanhints),
-		   p_opt_def("cltv", param_number, &cltv,
-			     cmd->ld->config.cltv_final),
-		   p_opt_def("deschashonly", param_bool, &hashonly, false),
-		   p_opt("dev-routes", param_array, &dev_routes),
-		   NULL))
+	if (!param_check(cmd, buffer, params,
+			 p_req("amount_msat|msatoshi", param_positive_msat_or_any, &msatoshi_val),
+			 p_req("label", param_label, &info->label),
+			 p_req("description", param_escaped_string, &desc_val),
+			 p_opt_def("expiry", param_u64, &expiry, 3600*24*7),
+			 p_opt("fallbacks", param_array, &fallbacks),
+			 p_opt("preimage", param_preimage, &preimage),
+			 p_opt("exposeprivatechannels", param_chanhints,
+			       &info->chanhints),
+			 p_opt_def("cltv", param_number, &cltv,
+				   cmd->ld->config.cltv_final),
+			 p_opt_def("deschashonly", param_bool, &hashonly, false),
+			 p_opt("dev-routes", param_array, &dev_routes),
+			 NULL))
 		return command_param_failed();
 
 	if (dev_routes && !cmd->ld->developer)
@@ -1129,7 +1187,17 @@ static struct command_result *json_invoice(struct command *cmd,
 				    strlen(desc_val));
 	}
 
+	if (command_check_only(cmd))
+		return command_check_done(cmd);
+
+	info->custom_fallbacks = false;
 	if (fallbacks) {
+		info->custom_fallbacks = true;
+		if (cmd->ld->unified_invoices) {
+			log_info(cmd->ld->log,
+				 "WARNING: Not tracking on-chain payments "
+				 "for custom fallback addresses");
+		}
 		size_t i;
 		const jsmntok_t *t;
 
@@ -1141,6 +1209,17 @@ static struct command_result *json_invoice(struct command *cmd,
 			if (r)
 				return r;
 		}
+	} else if (cmd->ld->unified_invoices) {
+		struct pubkey pubkey;
+		const u8 *p2tr;
+
+		fallback_scripts = tal_arr(cmd, const u8 *, 1);
+
+		if (!newaddr_inner(cmd, &pubkey, ADDR_P2TR))
+			return command_fail(cmd, LIGHTNINGD, "Keys exhausted ");
+
+		p2tr = scriptpubkey_p2tr(fallback_scripts, &pubkey);
+		fallback_scripts[0] = p2tr;
 	}
 
 	if (preimage)
@@ -1276,15 +1355,15 @@ static struct command_result *json_listinvoices(struct command *cmd,
 	u32 *listlimit;
 	char *fail;
 
-	if (!param(cmd, buffer, params,
-		   p_opt("label", param_label, &label),
-		   p_opt("invstring", param_invstring, &invstring),
-		   p_opt("payment_hash", param_sha256, &payment_hash),
-		   p_opt("offer_id", param_sha256, &offer_id),
-		   p_opt("index", param_index, &listindex),
-		   p_opt_def("start", param_u64, &liststart, 0),
-		   p_opt("limit", param_u32, &listlimit),
-		   NULL))
+	if (!param_check(cmd, buffer, params,
+			 p_opt("label", param_label, &label),
+			 p_opt("invstring", param_invstring, &invstring),
+			 p_opt("payment_hash", param_sha256, &payment_hash),
+			 p_opt("offer_id", param_sha256, &offer_id),
+			 p_opt("index", param_index, &listindex),
+			 p_opt_def("start", param_u64, &liststart, 0),
+			 p_opt("limit", param_u32, &listlimit),
+			 NULL))
 		return command_param_failed();
 
 	/* Yeah, I wasn't sure about this style either.  It's curt though! */
@@ -1324,6 +1403,9 @@ static struct command_result *json_listinvoices(struct command *cmd,
 		}
 	}
 
+	if (command_check_only(cmd))
+		return command_check_done(cmd);
+
 	response = json_stream_success(cmd);
 	json_array_start(response, "invoices");
 	json_add_invoices(response, wallet, label, payment_hash, offer_id,
@@ -1354,11 +1436,11 @@ static struct command_result *json_delinvoice(struct command *cmd,
 	struct wallet *wallet = cmd->ld->wallet;
 	bool *deldesc;
 
-	if (!param(cmd, buffer, params,
-		   p_req("label", param_label, &label),
-		   p_req("status", param_string, &status),
-		   p_opt_def("desconly", param_bool, &deldesc, false),
-		   NULL))
+	if (!param_check(cmd, buffer, params,
+			 p_req("label", param_label, &label),
+			 p_req("status", param_string, &status),
+			 p_opt_def("desconly", param_bool, &deldesc, false),
+			 NULL))
 		return command_param_failed();
 
 	if (!invoices_find_by_label(wallet->invoices, &inv_dbid, label)) {
@@ -1387,6 +1469,9 @@ static struct command_result *json_delinvoice(struct command *cmd,
 			return command_fail(cmd, INVOICE_NO_DESCRIPTION,
 					    "Invoice description already removed");
 
+		if (command_check_only(cmd))
+			return command_check_done(cmd);
+
 		if (!invoices_delete_description(wallet->invoices, inv_dbid,
 						 details->label, details->description)) {
 			log_broken(cmd->ld->log,
@@ -1397,6 +1482,9 @@ static struct command_result *json_delinvoice(struct command *cmd,
 		}
 		details->description = tal_free(details->description);
 	} else {
+		if (command_check_only(cmd))
+			return command_check_done(cmd);
+
 		if (!invoices_delete(wallet->invoices, inv_dbid,
 				     details->state,
 				     details->label,
@@ -1513,14 +1601,17 @@ static struct command_result *json_waitinvoice(struct command *cmd,
 	struct wallet *wallet = cmd->ld->wallet;
 	struct json_escape *label;
 
-	if (!param(cmd, buffer, params,
-		   p_req("label", param_label, &label),
-		   NULL))
+	if (!param_check(cmd, buffer, params,
+			 p_req("label", param_label, &label),
+			 NULL))
 		return command_param_failed();
 
 	if (!invoices_find_by_label(wallet->invoices, &inv_dbid, label)) {
 		return command_fail(cmd, LIGHTNINGD, "Label not found");
 	}
+	if (command_check_only(cmd))
+		return command_check_done(cmd);
+
 	details = invoices_get_details(cmd, cmd->ld->wallet->invoices, inv_dbid);
 
 	/* If paid or expired return immediately */
@@ -1554,10 +1645,10 @@ static struct command_result *json_decodepay(struct command *cmd,
 	const char *str, *desc;
 	char *fail;
 
-	if (!param(cmd, buffer, params,
-		   p_req("bolt11", param_invstring, &str),
-		   p_opt("description", param_escaped_string, &desc),
-		   NULL))
+	if (!param_check(cmd, buffer, params,
+			 p_req("bolt11", param_invstring, &str),
+			 p_opt("description", param_escaped_string, &desc),
+			 NULL))
 		return command_param_failed();
 
 	b11 = bolt11_decode(cmd, str, cmd->ld->our_features, desc, NULL,
@@ -1566,6 +1657,9 @@ static struct command_result *json_decodepay(struct command *cmd,
 	if (!b11) {
 		return command_fail(cmd, LIGHTNINGD, "Invalid bolt11: %s", fail);
 	}
+
+	if (command_check_only(cmd))
+		return command_check_done(cmd);
 
 	response = json_stream_success(cmd);
 	json_add_bolt11(response, b11);
@@ -1675,11 +1769,11 @@ static struct command_result *json_createinvoice(struct command *cmd,
 	bool have_n;
 	char *fail;
 
-	if (!param(cmd, buffer, params,
-		   p_req("invstring", param_invstring, &invstring),
-		   p_req("label", param_label, &label),
-		   p_req("preimage", param_preimage, &preimage),
-		   NULL))
+	if (!param_check(cmd, buffer, params,
+			 p_req("invstring", param_invstring, &invstring),
+			 p_req("label", param_label, &label),
+			 p_req("preimage", param_preimage, &preimage),
+			 NULL))
 		return command_param_failed();
 
 	sha256(&payment_hash, preimage, sizeof(*preimage));
@@ -1702,6 +1796,9 @@ static struct command_result *json_createinvoice(struct command *cmd,
 		if (!sha256_eq(&payment_hash, &b11->payment_hash))
 			return command_fail(cmd, JSONRPC2_INVALID_PARAMS,
 					    "Incorrect preimage");
+
+		if (command_check_only(cmd))
+			return command_check_done(cmd);
 
 		if (!invoices_create(cmd->ld->wallet->invoices,
 				     &inv_dbid,
@@ -1793,6 +1890,10 @@ static struct command_result *json_createinvoice(struct command *cmd,
 		if (!inv->offer_description)
 			return command_fail(cmd, JSONRPC2_INVALID_PARAMS,
 					    "Missing description in invoice");
+
+		if (command_check_only(cmd))
+			return command_check_done(cmd);
+
 		desc = tal_strndup(cmd,
 				   inv->offer_description,
 				   tal_bytelen(inv->offer_description));
@@ -1844,11 +1945,6 @@ static struct command_result *json_preapproveinvoice(struct command *cmd,
 		   p_req("bolt11", param_invstring, &invstring),
 		   NULL))
 		return command_param_failed();
-
-	/* Strip optional URI preamble. */
-	if (strncmp(invstring, "lightning:", 10) == 0 ||
-	    strncmp(invstring, "LIGHTNING:", 10) == 0)
-		invstring += 10;
 
 	msg = hsm_sync_req(tmpctx, cmd->ld,
 			   take(towire_hsmd_preapprove_invoice(NULL, invstring)));
@@ -1925,9 +2021,9 @@ static struct command_result *json_signinvoice(struct command *cmd,
 	bool have_n;
 	char *fail;
 
-	if (!param(cmd, buffer, params,
-		   p_req("invstring", param_invstring, &invstring),
-		   NULL))
+	if (!param_check(cmd, buffer, params,
+			 p_req("invstring", param_invstring, &invstring),
+			 NULL))
 		return command_param_failed();
 
 	b11 = bolt11_decode_nosig(cmd, invstring, cmd->ld->our_features,
@@ -1951,6 +2047,9 @@ static struct command_result *json_signinvoice(struct command *cmd,
 	if (!b11->description && !b11->description_hash)
 		return command_fail(cmd, JSONRPC2_INVALID_PARAMS,
 				    "Missing description in invoice");
+
+	if (command_check_only(cmd))
+		return command_check_done(cmd);
 
 	response = json_stream_success(cmd);
 	json_add_invstring(response, b11enc);

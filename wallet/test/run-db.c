@@ -52,6 +52,30 @@ void  fatal_vfmt(const char *fmt UNNEEDED, va_list ap UNNEEDED)
 /* Generated stub for find_peer_by_dbid */
 struct peer *find_peer_by_dbid(struct lightningd *ld UNNEEDED, u64 dbid UNNEEDED)
 { fprintf(stderr, "find_peer_by_dbid called!\n"); abort(); }
+/* Generated stub for forward_index_created */
+u64 forward_index_created(struct lightningd *ld UNNEEDED,
+			  enum forward_status status UNNEEDED,
+			  struct short_channel_id in_channel UNNEEDED,
+			  u64 in_htlc_id UNNEEDED,
+			  struct amount_msat in_amount UNNEEDED,
+			  const struct short_channel_id *out_channel UNNEEDED)
+{ fprintf(stderr, "forward_index_created called!\n"); abort(); }
+/* Generated stub for forward_index_deleted */
+void forward_index_deleted(struct lightningd *ld UNNEEDED,
+			   enum forward_status status UNNEEDED,
+			   struct short_channel_id in_channel UNNEEDED,
+			   u64 in_htlc_id UNNEEDED,
+			   const struct amount_msat *in_amount UNNEEDED,
+			   const struct short_channel_id *out_channel UNNEEDED)
+{ fprintf(stderr, "forward_index_deleted called!\n"); abort(); }
+/* Generated stub for forward_index_update_status */
+u64 forward_index_update_status(struct lightningd *ld UNNEEDED,
+				enum forward_status status UNNEEDED,
+				struct short_channel_id in_channel UNNEEDED,
+				u64 in_htlc_id UNNEEDED,
+				struct amount_msat in_amount UNNEEDED,
+				const struct short_channel_id *out_channel UNNEEDED)
+{ fprintf(stderr, "forward_index_update_status called!\n"); abort(); }
 /* Generated stub for fromwire_hsmd_get_channel_basepoints_reply */
 bool fromwire_hsmd_get_channel_basepoints_reply(const void *p UNNEEDED, struct basepoints *basepoints UNNEEDED, struct pubkey *funding_pubkey UNNEEDED)
 { fprintf(stderr, "fromwire_hsmd_get_channel_basepoints_reply called!\n"); abort(); }
@@ -201,7 +225,9 @@ void notify_forward_event(struct lightningd *ld UNNEEDED,
 			  enum forward_status state UNNEEDED,
 			  enum onion_wire failcode UNNEEDED,
 			  struct timeabs *resolved_time UNNEEDED,
-			  enum forward_style forward_style UNNEEDED)
+			  enum forward_style forward_style UNNEEDED,
+			  u64 created_index UNNEEDED,
+			  u64 updated_index UNNEEDED)
 { fprintf(stderr, "notify_forward_event called!\n"); abort(); }
 /* Generated stub for onion_wire_name */
 const char *onion_wire_name(int e UNNEEDED)
@@ -237,6 +263,27 @@ const char *rune_is_ours(struct lightningd *ld UNNEEDED, const struct rune *rune
 /* Generated stub for rune_unique_id */
 u64 rune_unique_id(const struct rune *rune UNNEEDED)
 { fprintf(stderr, "rune_unique_id called!\n"); abort(); }
+/* Generated stub for sendpay_index_created */
+u64 sendpay_index_created(struct lightningd *ld UNNEEDED,
+			  const struct sha256 *payment_hash UNNEEDED,
+			  u64 partid UNNEEDED,
+			  u64 groupid UNNEEDED,
+			  enum payment_status status UNNEEDED)
+{ fprintf(stderr, "sendpay_index_created called!\n"); abort(); }
+/* Generated stub for sendpay_index_deleted */
+void sendpay_index_deleted(struct lightningd *ld UNNEEDED,
+			   const struct sha256 *payment_hash UNNEEDED,
+			   u64 partid UNNEEDED,
+			   u64 groupid UNNEEDED,
+			   enum payment_status status UNNEEDED)
+{ fprintf(stderr, "sendpay_index_deleted called!\n"); abort(); }
+/* Generated stub for sendpay_index_update_status */
+u64 sendpay_index_update_status(struct lightningd *ld UNNEEDED,
+				const struct sha256 *payment_hash UNNEEDED,
+				u64 partid UNNEEDED,
+				u64 groupid UNNEEDED,
+				enum payment_status status UNNEEDED)
+{ fprintf(stderr, "sendpay_index_update_status called!\n"); abort(); }
 /* Generated stub for to_canonical_invstr */
 const char *to_canonical_invstr(const tal_t *ctx UNNEEDED, const char *invstring UNNEEDED)
 { fprintf(stderr, "to_canonical_invstr called!\n"); abort(); }

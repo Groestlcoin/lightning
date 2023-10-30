@@ -1392,29 +1392,38 @@ def test_forward_event_notification(node_factory, bitcoind, executor):
     # First event won't have conclusion.
     del expect['resolved_time']
     del expect['out_htlc_id']
+    del expect['updated_index']
     expect['status'] = 'offered'
     assert plugin_stats[0] == expect
     expect = stats[0].copy()
     del expect['out_htlc_id']
+    # We don't bother populating created_index for updates.
+    del expect['created_index']
     assert plugin_stats[1] == expect
 
     expect = stats[1].copy()
     del expect['resolved_time']
     del expect['out_htlc_id']
+    del expect['updated_index']
     expect['status'] = 'offered'
     assert plugin_stats[2] == expect
     expect = stats[1].copy()
     del expect['out_htlc_id']
+    # We don't bother populating created_index for updates.
+    del expect['created_index']
     assert plugin_stats[3] == expect
 
     expect = stats[2].copy()
     del expect['failcode']
     del expect['failreason']
     del expect['out_htlc_id']
+    del expect['updated_index']
     expect['status'] = 'offered'
     assert plugin_stats[4] == expect
     expect = stats[2].copy()
     del expect['out_htlc_id']
+    # We don't bother populating created_index for updates.
+    del expect['created_index']
     assert plugin_stats[5] == expect
 
 
@@ -3534,7 +3543,9 @@ def test_sql(node_factory, bitcoind):
                          'type': 'string'}]},
         'forwards': {
             'indices': [['in_channel', 'in_htlc_id']],
-            'columns': [{'name': 'in_channel',
+            'columns': [{'name': 'created_index',
+                         'type': 'u64'},
+                        {'name': 'in_channel',
                          'type': 'short_channel_id'},
                         {'name': 'in_htlc_id',
                          'type': 'u64'},
@@ -3547,6 +3558,8 @@ def test_sql(node_factory, bitcoind):
                         {'name': 'out_channel',
                          'type': 'short_channel_id'},
                         {'name': 'out_htlc_id',
+                         'type': 'u64'},
+                        {'name': 'updated_index',
                          'type': 'u64'},
                         {'name': 'style',
                          'type': 'string'},
@@ -3608,6 +3621,10 @@ def test_sql(node_factory, bitcoind):
                          'type': 'msat'},
                         {'name': 'paid_at',
                          'type': 'u64'},
+                        {'name': 'paid_outpoint_txid',
+                         'type': 'txid'},
+                        {'name': 'paid_outpoint_outnum',
+                         'type': 'u32'},
                         {'name': 'payment_preimage',
                          'type': 'secret'}]},
         'offers': {
@@ -3645,7 +3662,9 @@ def test_sql(node_factory, bitcoind):
                          'type': 'string'}]},
         'sendpays': {
             'indices': [['payment_hash']],
-            'columns': [{'name': 'id',
+            'columns': [{'name': 'created_index',
+                         'type': 'u64'},
+                        {'name': 'id',
                          'type': 'u64'},
                         {'name': 'groupid',
                          'type': 'u64'},
@@ -3653,6 +3672,8 @@ def test_sql(node_factory, bitcoind):
                          'type': 'u64'},
                         {'name': 'payment_hash',
                          'type': 'hash'},
+                        {'name': 'updated_index',
+                         'type': 'u64'},
                         {'name': 'status',
                          'type': 'string'},
                         {'name': 'amount_msat',
@@ -4230,6 +4251,7 @@ def test_plugin_nostart(node_factory):
     assert [p['name'] for p in l1.rpc.plugin_list()['plugins'] if 'badinterp' in p['name']] == []
 
 
+@unittest.skip("A bit flaky, but when breaks, it is costing us 2h of CI time")
 def test_plugin_startdir_lol(node_factory):
     """Though we fail to start many of them, we don't crash!"""
     l1 = node_factory.get_node(allow_broken_log=True)

@@ -632,6 +632,18 @@ class LightningRpc(UnixDomainSocketRpc):
         }
         return self.call("datastore", payload)
 
+    def datastoreusage(self, key=None):
+        """
+        Returns the total bytes that are stored for under the given key or the
+        root of the datastore. All descendants of the given key (or root) are
+        taken into account.
+        {key} can be a single string or a sequence of strings.
+        """
+        payload = {
+            "key": key,
+        }
+        return self.call("datastoreusage", payload)
+
     def decodepay(self, bolt11, description=None):
         """
         Decode {bolt11}, using {description} if necessary.
@@ -994,7 +1006,7 @@ class LightningRpc(UnixDomainSocketRpc):
         }
         return self.call("listdatastore", payload)
 
-    def listforwards(self, status=None, in_channel=None, out_channel=None):
+    def listforwards(self, status=None, in_channel=None, out_channel=None, index=None, start=None, limit=None):
         """List all forwarded payments and their information matching
         forward {status}, {in_channel} and {out_channel}.
         """
@@ -1002,6 +1014,9 @@ class LightningRpc(UnixDomainSocketRpc):
             "status": status,
             "in_channel": in_channel,
             "out_channel": out_channel,
+            "index": index,
+            "start": start,
+            "limit": limit,
         }
         return self.call("listforwards", payload)
 
@@ -1084,12 +1099,15 @@ class LightningRpc(UnixDomainSocketRpc):
         }
         return self.call("listpeerchannels", payload)
 
-    def listsendpays(self, bolt11=None, payment_hash=None, status=None):
+    def listsendpays(self, bolt11=None, payment_hash=None, status=None, index=None, start=None, limit=None):
         """Show all sendpays results, or only for `bolt11` or `payment_hash`."""
         payload = {
             "bolt11": bolt11,
             "payment_hash": payment_hash,
-            "status": status
+            "status": status,
+            "index": index,
+            "start": start,
+            "limit": limit,
         }
         return self.call("listsendpays", payload)
 

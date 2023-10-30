@@ -89,6 +89,31 @@ bool invoices_find_by_label(struct invoices *invoices,
 bool invoices_find_by_rhash(struct invoices *invoices,
 			    u64 *inv_dbid,
 			    const struct sha256 *rhash);
+/**
+ * invoices_create_fallback - Add scriptpubkey into invoice_fallbacks for this inv
+ *
+ * @param invoices - the invoice handler.
+ * @param inv_dbid - invoice id
+ * @param scriptPubKey - the fallback scriptpubkey associated with
+ * the above invoice id
+ */
+void invoices_create_fallback(struct invoices *invoices,
+			      u64 inv_dbid,
+			      const u8 *scriptPubkey);
+/**
+ * invoices_find_by_fallback_script - Search for an invoice by
+ * scriptpubkey in invoice_fallbacks child table
+ *
+ * @invoices - the invoice handler.
+ * @inv_dbid - pointer to location to put the found dbid in
+ * @scriptPubKey - the scriptpubkey to search for.
+ *
+ * Returns false if no invoice with that scriptpubkey exists.
+ * Returns true if found.
+ */
+bool invoices_find_by_fallback_script(struct invoices *invoices,
+			    u64 *inv_dbid,
+			    const u8 *scriptPubkey);
 
 /**
  * invoices_find_unpaid - Search for an unpaid, unexpired invoice by
@@ -179,13 +204,15 @@ struct db_stmt *invoices_next(struct invoices *invoices,
  * @inv_dbid - the invoice to mark as paid.
  * @received - the actual amount received.
  * @label    - the label of the invoice.
+ * @outpoint - the outpoint (if onchain).
  *
  * If the invoice is not UNPAID, returns false.
  */
 bool invoices_resolve(struct invoices *invoices,
 		      u64 inv_dbid,
 		      struct amount_msat received,
-		      const struct json_escape *label);
+		      const struct json_escape *label,
+		      const struct bitcoin_outpoint *outpoint);
 
 /**
  * invoices_waitany - Wait for any invoice to be paid.

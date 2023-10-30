@@ -67,11 +67,20 @@ static void migrate_fill_in_channel_type(struct lightningd *ld,
 static void migrate_normalize_invstr(struct lightningd *ld,
 				     struct db *db);
 
-static void migrate_initialize_wait_indexes(struct lightningd *ld,
-					    struct db *db);
+static void migrate_initialize_invoice_wait_indexes(struct lightningd *ld,
+						    struct db *db);
 
 static void migrate_invoice_created_index_var(struct lightningd *ld,
 					      struct db *db);
+
+static void migrate_initialize_payment_wait_indexes(struct lightningd *ld,
+						    struct db *db);
+
+static void migrate_forwards_add_rowid(struct lightningd *ld,
+				       struct db *db);
+
+static void migrate_initialize_forwards_wait_indexes(struct lightningd *ld,
+						     struct db *db);
 
 /* Do not reorder or remove elements from this array, it is used to
  * migrate existing databases from a previous state, based on the
@@ -965,7 +974,7 @@ static struct migration dbmigrations[] = {
     {SQL("CREATE TABLE runes (id BIGSERIAL, rune TEXT, PRIMARY KEY (id));"), NULL},
     {SQL("CREATE TABLE runes_blacklist (start_index BIGINT, end_index BIGINT);"), NULL},
     {SQL("ALTER TABLE channels ADD ignore_fee_limits INTEGER DEFAULT 0;"), NULL},
-    {NULL, migrate_initialize_wait_indexes},
+    {NULL, migrate_initialize_invoice_wait_indexes},
     {SQL("ALTER TABLE invoices ADD updated_index BIGINT DEFAULT 0"), NULL},
     {SQL("CREATE INDEX invoice_update_idx ON invoices (updated_index)"), NULL},
     {NULL, migrate_datastore_commando_runes},
@@ -978,6 +987,29 @@ static struct migration dbmigrations[] = {
     {NULL, migrate_runes_idfix},
     {SQL("ALTER TABLE runes ADD last_used_nsec BIGINT DEFAULT NULL"), NULL},
     {SQL("DELETE FROM vars WHERE name = 'runes_uniqueid'"), NULL},
+    {SQL("CREATE TABLE invoice_fallbacks ("
+     "  scriptpubkey BLOB,"
+     "  invoice_id BIGINT REFERENCES invoices(id) ON DELETE CASCADE,"
+     "  PRIMARY KEY (scriptpubkey)"
+     ");"),
+     NULL},
+    {SQL("ALTER TABLE invoices ADD paid_txid BLOB DEFAULT NULL"), NULL},
+    {SQL("ALTER TABLE invoices ADD paid_outnum INTEGER DEFAULT NULL"), NULL},
+    {SQL("CREATE TABLE local_anchors ("
+	 "  channel_id BIGSERIAL REFERENCES channels(id),"
+	 "  commitment_index BIGINT,"
+	 "  commitment_txid BLOB,"
+	 "  commitment_anchor_outnum INTEGER,"
+	 "  commitment_fee BIGINT,"
+	 "  commitment_weight INTEGER)"), NULL},
+    {SQL("CREATE INDEX local_anchors_idx ON local_anchors (channel_id)"), NULL},
+    {SQL("ALTER TABLE payments ADD updated_index BIGINT DEFAULT 0"), NULL},
+    {SQL("CREATE INDEX payments_update_idx ON payments (updated_index)"), NULL},
+    {NULL, migrate_initialize_payment_wait_indexes},
+    {NULL, migrate_forwards_add_rowid},
+    {SQL("ALTER TABLE forwards ADD updated_index BIGINT DEFAULT 0"), NULL},
+    {SQL("CREATE INDEX forwards_updated_idx ON forwards (updated_index)"), NULL},
+    {NULL, migrate_initialize_forwards_wait_indexes},
 };
 
 /**
@@ -1667,8 +1699,8 @@ static void migrate_fill_in_channel_type(struct lightningd *ld,
 	tal_free(stmt);
 }
 
-static void migrate_initialize_wait_indexes(struct lightningd *ld,
-					    struct db *db)
+static void migrate_initialize_invoice_wait_indexes(struct lightningd *ld,
+						    struct db *db)
 {
 	struct db_stmt *stmt;
 	bool res;
@@ -1720,6 +1752,77 @@ static void migrate_invoice_created_index_var(struct lightningd *ld, struct db *
 				     " WHERE name = 'last_invoice_created_index'"));
 	db_exec_prepared_v2(stmt);
 	tal_free(stmt);
+}
+
+/* We expect to have a few of these... */
+static void migrate_initialize_wait_indexes(struct db *db,
+					    enum wait_subsystem subsystem,
+					    enum wait_index index,
+					    const char *query,
+					    const char *colname)
+{
+	struct db_stmt *stmt;
+	bool res;
+
+	stmt = db_prepare_v2(db, query);
+	db_query_prepared(stmt);
+	res = db_step(stmt);
+	assert(res);
+
+	if (!db_col_is_null(stmt, colname))
+		db_set_intvar(db,
+			      tal_fmt(tmpctx, "last_%s_%s_index",
+				      wait_subsystem_name(subsystem),
+				      wait_index_name(index)),
+			      db_col_u64(stmt, colname));
+	tal_free(stmt);
+}
+
+static void migrate_initialize_payment_wait_indexes(struct lightningd *ld,
+						    struct db *db)
+{
+	migrate_initialize_wait_indexes(db,
+					WAIT_SUBSYSTEM_SENDPAY,
+					WAIT_INDEX_CREATED,
+					SQL("SELECT MAX(id) FROM payments;"),
+					"MAX(id)");
+}
+
+static void migrate_forwards_add_rowid(struct lightningd *ld,
+				       struct db *db)
+{
+	struct db_stmt *stmt;
+
+	/* sqlite3 has implicit "rowid" column already */
+	if (streq(db->config->name, "sqlite3"))
+		return;
+
+	stmt = db_prepare_v2(db, SQL("ALTER TABLE forwards ADD rowid BIGINT"));
+	db_exec_prepared_v2(take(stmt));
+
+	/* Yes, I got ChatGPT to write this for me! */
+	stmt = db_prepare_v2(db, SQL("WITH numbered_rows AS ("
+				     " SELECT in_channel_scid, in_htlc_id, row_number() OVER () AS rn"
+				     " FROM forwards)"
+				     " UPDATE forwards"
+				     " SET rowid = numbered_rows.rn"
+				     " FROM numbered_rows"
+				     " WHERE forwards.in_channel_scid = numbered_rows.in_channel_scid"
+				     " AND forwards.in_htlc_id = numbered_rows.in_htlc_id;"));
+	db_exec_prepared_v2(take(stmt));
+
+	stmt = db_prepare_v2(db, SQL("CREATE INDEX forwards_created_idx ON forwards (rowid)"));
+	db_exec_prepared_v2(take(stmt));
+}
+
+static void migrate_initialize_forwards_wait_indexes(struct lightningd *ld,
+						     struct db *db)
+{
+	migrate_initialize_wait_indexes(db,
+					WAIT_SUBSYSTEM_FORWARD,
+					WAIT_INDEX_CREATED,
+					SQL("SELECT MAX(rowid) FROM forwards;"),
+					"MAX(rowid)");
 }
 
 static void complain_unfixed(struct lightningd *ld,

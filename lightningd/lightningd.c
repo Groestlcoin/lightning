@@ -72,6 +72,7 @@
 #include <lightningd/io_loop_with_timers.h>
 #include <lightningd/lightningd.h>
 #include <lightningd/onchain_control.h>
+#include <lightningd/peer_htlcs.h>
 #include <lightningd/plugin.h>
 #include <lightningd/plugin_hook.h>
 #include <lightningd/runes.h>
@@ -212,7 +213,6 @@ static struct lightningd *new_lightningd(const tal_t *ctx)
 	ld->recover = NULL;
 	list_head_init(&ld->connects);
 	list_head_init(&ld->waitsendpay_commands);
-	list_head_init(&ld->sendpay_commands);
 	list_head_init(&ld->close_commands);
 	list_head_init(&ld->ping_commands);
 	list_head_init(&ld->disconnect_commands);
@@ -240,10 +240,14 @@ static struct lightningd *new_lightningd(const tal_t *ctx)
 	ld->autolisten = true;
 	ld->reconnect = true;
 	ld->try_reexec = false;
+	ld->recover_secret = NULL;
 	ld->db_upgrade_ok = NULL;
 
 	/* --experimental-upgrade-protocol */
 	ld->experimental_upgrade_protocol = false;
+
+	/* --invoices-onchain-fallback */
+	ld->unified_invoices = false;
 
 	/*~ This is from ccan/timer: it is efficient for the case where timers
 	 * are deleted before expiry (as is common with timeouts) using an
@@ -1390,8 +1394,15 @@ stop:
 
 	/* Gather these before we free ld! */
 	try_reexec = ld->try_reexec;
-	if (try_reexec)
+	if (try_reexec) {
+		/* Maybe we reexec with --recover, due to recover command */
+		if (ld->recover_secret) {
+			tal_arr_insert(&orig_argv, argc,
+				       tal_fmt(orig_argv, "--recover=%s",
+					       ld->recover_secret));
+		}
 		tal_steal(NULL, orig_argv);
+	}
 
 	/* Free this last: other things may clean up timers. */
 	timers = tal_steal(NULL, ld->timers);
@@ -1418,7 +1429,7 @@ stop:
 		/* Close all filedescriptors except stdin/stdout/stderr */
 		closefrom(STDERR_FILENO + 1);
 		execv(orig_argv[0], orig_argv);
-		err(1, "Failed to re-exec ourselves after version change");
+		err(1, "Failed to re-exec ourselves after version change/recover");
 	}
 
 	/*~ Farewell.  Next stop: hsmd/hsmd.c. */

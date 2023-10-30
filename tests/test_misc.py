@@ -9,7 +9,7 @@ from pyln.testing.utils import (
     wait_for, TailableProc, env, mine_funding_to_announce
 )
 from utils import (
-    account_balance, scriptpubkey_addr, check_coin_moves
+    account_balance, scriptpubkey_addr, check_coin_moves, first_scid
 )
 from ephemeral_port_reserve import reserve
 
@@ -1343,6 +1343,22 @@ def test_funding_reorg_get_upset(node_factory, bitcoind):
     assert only_one(l2.rpc.listpeerchannels()['channels'])['state'] == 'AWAITING_UNILATERAL'
 
 
+def test_decode(node_factory, bitcoind):
+    """Test the decode option to decode the contents of emergency recovery.
+    """
+    l1 = node_factory.get_node(allow_broken_log=True)
+    cmd_line = ["tools/hsmtool", "getemergencyrecover", os.path.join(l1.daemon.lightning_dir, TEST_NETWORK, "emergency.recover")]
+    out = subprocess.check_output(cmd_line).decode('utf-8')
+    bech32_out = out.strip('\n')
+    assert bech32_out.startswith('clnemerg1')
+
+    x = l1.rpc.decode(bech32_out)
+
+    assert x["valid"]
+    assert x["type"] == "emergency recover"
+    assert x["decrypted"].startswith('17')
+
+
 @unittest.skipIf(os.getenv('TEST_DB_PROVIDER', 'sqlite3') != 'sqlite3', "deletes database, which is assumed sqlite3")
 def test_recover(node_factory, bitcoind):
     """Test the recover option
@@ -1399,8 +1415,14 @@ def test_recover(node_factory, bitcoind):
     l1.daemon.opts.update({"recover": "CL10LEETSLLHDMN9M42VCSAMX24ZRXGS3QQAT3LTDVAKMT73"})
     l1.daemon.start(wait_for_initialized=False, stderr_redir=True)
     assert l1.daemon.wait() == 1
-    assert l1.daemon.is_in_stderr(r"Expected 32 Byte secret: ffeeddccbbaa99887766554433221100")
+    assert l1.daemon.is_in_stderr(r"Invalid length: must be 32 bytes")
 
+    # Can do HSM secret in hex, too!
+    l1.daemon.opts["recover"] = "6c696768746e696e672d31000000000000000000000000000000000000000000"
+    l1.daemon.start()
+    l1.stop()
+
+    # And can start without recovery, of course!
     l1.daemon.opts.pop("recover")
     l1.start()
 
@@ -1835,8 +1857,9 @@ def test_check_command(node_factory):
 
     l1.rpc.check(command_to_check='help')
     l1.rpc.check(command_to_check='help', command='check')
-    # Note: this just checks form, not whether it's valid!
-    l1.rpc.check(command_to_check='help', command='badcommand')
+    # Actually checks that command is there!
+    with pytest.raises(RpcError, match=r'Unknown command'):
+        l1.rpc.check(command_to_check='help', command='badcommand')
     with pytest.raises(RpcError, match=r'Unknown command'):
         l1.rpc.check(command_to_check='badcommand')
     with pytest.raises(RpcError, match=r'unknown parameter'):
@@ -2856,6 +2879,7 @@ def test_listforwards_and_listhtlcs(node_factory, bitcoind):
     # Wait until channels are active
     mine_funding_to_announce(bitcoind, [l1, l2, l3, l4])
     l1.wait_channel_active(c23)
+    l1.wait_channel_active(c24)
 
     # successful payments
     i31 = l3.rpc.invoice(1000, 'i31', 'desc')
@@ -2965,6 +2989,94 @@ def test_listforwards_and_listhtlcs(node_factory, bitcoind):
     l2.rpc.delforward(in_channel=c12, in_htlc_id=1, status='settled')
     l2.rpc.delforward(in_channel=c12, in_htlc_id=2, status='local_failed')
     assert l2.rpc.listforwards() == {'forwards': []}
+
+
+def test_listforwards_wait(node_factory, executor):
+    l1, l2, l3 = node_factory.line_graph(3, wait_for_announce=True)
+
+    scid12 = first_scid(l1, l2)
+    scid23 = first_scid(l2, l3)
+    waitres = l1.rpc.wait(subsystem='forwards', indexname='created', nextvalue=0)
+    assert waitres == {'subsystem': 'forwards',
+                       'created': 0}
+
+    # Now ask for 1.
+    waitcreate = executor.submit(l2.rpc.wait, subsystem='forwards', indexname='created', nextvalue=1)
+    waitupdate = executor.submit(l2.rpc.wait, subsystem='forwards', indexname='updated', nextvalue=1)
+    time.sleep(1)
+
+    amt1 = 1000
+    inv1 = l3.rpc.invoice(amt1, 'inv1', 'desc')
+    l1.rpc.pay(inv1['bolt11'])
+
+    waitres = waitcreate.result(TIMEOUT)
+    assert waitres == {'subsystem': 'forwards',
+                       'created': 1,
+                       'details': {'in_channel': scid12,
+                                   'in_htlc_id': 0,
+                                   'in_msat': Millisatoshi(amt1 + 1),
+                                   'out_channel': scid23,
+                                   'status': 'offered'}}
+    waitres = waitupdate.result(TIMEOUT)
+    assert waitres == {'subsystem': 'forwards',
+                       'updated': 1,
+                       'details': {'in_channel': scid12,
+                                   'in_htlc_id': 0,
+                                   'in_msat': Millisatoshi(amt1 + 1),
+                                   'out_channel': scid23,
+                                   'status': 'settled'}}
+
+    # Now check failure.
+    amt2 = 42
+    inv2 = l3.rpc.invoice(amt2, 'inv2', 'invdesc2')
+    l3.rpc.delinvoice('inv2', 'unpaid')
+
+    waitcreate = executor.submit(l2.rpc.wait, subsystem='forwards', indexname='created', nextvalue=2)
+    waitupdate = executor.submit(l2.rpc.wait, subsystem='forwards', indexname='updated', nextvalue=2)
+    time.sleep(1)
+
+    with pytest.raises(RpcError, match="WIRE_INCORRECT_OR_UNKNOWN_PAYMENT_DETAILS"):
+        l1.rpc.pay(inv2['bolt11'])
+
+    waitres = waitcreate.result(TIMEOUT)
+    assert waitres == {'subsystem': 'forwards',
+                       'created': 2,
+                       'details': {'in_channel': scid12,
+                                   'in_htlc_id': 1,
+                                   'in_msat': Millisatoshi(amt2 + 1),
+                                   'out_channel': scid23,
+                                   'status': 'offered'}}
+    waitres = waitupdate.result(TIMEOUT)
+    assert waitres == {'subsystem': 'forwards',
+                       'updated': 2,
+                       'details': {'in_channel': scid12,
+                                   'in_htlc_id': 1,
+                                   'in_msat': Millisatoshi(amt2 + 1),
+                                   'out_channel': scid23,
+                                   'status': 'failed'}}
+
+    # Order and pagination.
+    assert [(p['created_index'], p['in_msat'], p['status']) for p in l2.rpc.listforwards(index='created')['forwards']] == [(1, Millisatoshi(amt1 + 1), 'settled'), (2, Millisatoshi(amt2 + 1), 'failed')]
+    assert [(p['created_index'], p['in_msat'], p['status']) for p in l2.rpc.listforwards(index='created', start=2)['forwards']] == [(2, Millisatoshi(amt2 + 1), 'failed')]
+    assert [(p['created_index'], p['in_msat'], p['status']) for p in l2.rpc.listforwards(index='created', limit=1)['forwards']] == [(1, Millisatoshi(amt1 + 1), 'settled')]
+
+    # We can also filter by status.
+    assert [(p['created_index'], p['in_msat'], p['status']) for p in l2.rpc.listforwards(status='failed', index='created', limit=2)['forwards']] == [(2, Millisatoshi(amt2 + 1), 'failed')]
+
+    assert [(p['created_index'], p['in_msat'], p['status']) for p in l2.rpc.listforwards(status='failed', index='updated', limit=2)['forwards']] == [(2, Millisatoshi(amt2 + 1), 'failed')]
+
+    # Finally, check deletion.
+    waitfut = executor.submit(l2.rpc.wait, subsystem='forwards', indexname='deleted', nextvalue=1)
+    time.sleep(1)
+
+    l2.rpc.delforward(scid12, 1, 'failed')
+
+    waitres = waitfut.result(TIMEOUT)
+    assert waitres == {'subsystem': 'forwards',
+                       'deleted': 1,
+                       'details': {'in_channel': scid12,
+                                   'in_htlc_id': 1,
+                                   'status': 'failed'}}
 
 
 @pytest.mark.openchannel('v1')
@@ -3315,6 +3427,37 @@ def test_datastore_keylist(node_factory):
                                                                          'hex': b'ab2val2'.hex()}]}
 
 
+def test_datastoreusage(node_factory):
+    l1: LightningNode = node_factory.get_node()
+    assert l1.rpc.datastoreusage() == {'datastoreusage': {'key': '[]', 'total_bytes': 0}}
+
+    data = 'somedatatostoreinthedatastore'  # len 29
+    l1.rpc.datastore(key=["a", "b"], string=data)
+    assert l1.rpc.datastoreusage() == {'datastoreusage': {'key': '[]', 'total_bytes': (29 + 1 + 1 + 1)}}
+    assert l1.rpc.datastoreusage(key="a") == {'datastoreusage': {'key': '[a]', 'total_bytes': (29 + 1 + 1 + 1)}}
+    assert l1.rpc.datastoreusage(key=["a", "b"]) == {'datastoreusage': {'key': '[a,b]', 'total_bytes': (29 + 1 + 1 + 1)}}
+
+    # add second leaf
+    l1.rpc.datastore(key=["a", "c"], string=data)
+    assert l1.rpc.datastoreusage() == {'datastoreusage': {'key': '[]', 'total_bytes': (29 + 1 + 1 + 1 + 29 + 1 + 1 + 1)}}
+    assert l1.rpc.datastoreusage(key=["a", "b"]) == {'datastoreusage': {'key': '[a,b]', 'total_bytes': (29 + 1 + 1 + 1)}}
+    assert l1.rpc.datastoreusage(key=["a", "c"]) == {'datastoreusage': {'key': '[a,c]', 'total_bytes': (29 + 1 + 1 + 1)}}
+
+    # check that the key is also counted as stored data
+    l1.rpc.datastore(key=["a", "thisissomelongkeythattriestostore46bytesofdata"], string=data)
+    assert l1.rpc.datastoreusage() == {'datastoreusage': {'key': '[]', 'total_bytes': (29 + 1 + 1 + 46 + 64)}}
+    assert l1.rpc.datastoreusage(key=["a", "thisissomelongkeythattriestostore46bytesofdata"]) == {'datastoreusage': {'key': '[a,thisissomelongkeythattriestostore46bytesofdata]', 'total_bytes': (29 + 1 + 1 + 46)}}
+
+    # check that the root is also counted
+    l1.rpc.datastore(key=["thisissomelongkeythattriestostore46bytesofdata", "a"], string=data)
+    assert l1.rpc.datastoreusage(key=["thisissomelongkeythattriestostore46bytesofdata", "a"]) == {'datastoreusage': {'key': '[thisissomelongkeythattriestostore46bytesofdata,a]', 'total_bytes': (29 + 1 + 1 + 46)}}
+
+    # check really deep data
+    l1.rpc.datastore(key=["a", "d", "e", "f", "g"], string=data)
+    assert l1.rpc.datastoreusage(key=["a", "d", "e", "f", "g"]) == {'datastoreusage': {'key': '[a,d,e,f,g]', 'total_bytes': (29 + 1 + 1 + 1 + 1 + 1 + 4)}}
+    assert l1.rpc.datastoreusage() == {'datastoreusage': {'key': '[]', 'total_bytes': (29 + 1 + 1 + 1 + 1 + 1 + 4 + 218)}}
+
+
 @unittest.skipIf(os.getenv('TEST_DB_PROVIDER', 'sqlite3') != 'sqlite3',
                  "This test requires sqlite3")
 def test_torv2_in_db(node_factory):
@@ -3600,6 +3743,62 @@ def test_setconfig(node_factory, bitcoind):
         assert len(lines) == 3
 
 
+@unittest.skipIf(os.getenv('TEST_DB_PROVIDER', 'sqlite3') != 'sqlite3', "deletes database, which is assumed sqlite3")
+def test_recover_command(node_factory, bitcoind):
+    l1, l2 = node_factory.get_nodes(2)
+
+    l1oldid = l1.info['id']
+
+    def get_hsm_secret(n):
+        """Returns codex32 and hex"""
+        hsmfile = os.path.join(n.daemon.lightning_dir, TEST_NETWORK, "hsm_secret")
+        codex32 = subprocess.check_output(["tools/hsmtool", "getcodexsecret", hsmfile, "leet"]).decode('utf-8').strip()
+        with open(hsmfile, "rb") as f:
+            hexhsm = f.read().hex()
+        return codex32, hexhsm
+
+    l1codex32, l1hex = get_hsm_secret(l1)
+    l2codex32, l2hex = get_hsm_secret(l2)
+
+    # Get the PID for later
+    with open(os.path.join(l1.daemon.lightning_dir,
+                           f"lightningd-{TEST_NETWORK}.pid"), "r") as f:
+        pid = f.read().strip()
+
+    assert l1.rpc.check('recover', hsmsecret=l2codex32) == {'command_to_check': 'recover'}
+    l1.rpc.recover(hsmsecret=l2codex32)
+    l1.daemon.wait_for_log("Server started with public key")
+    # l1.info is cached on start, so won't reflect current reality!
+    assert l1.rpc.getinfo()['id'] == l2.info['id']
+
+    # Won't work if we issue an address...
+    l2.rpc.newaddr()
+
+    with pytest.raises(RpcError, match='Node has already issued bitcoin addresses'):
+        l2.rpc.recover(hsmsecret=l1codex32)
+
+    with pytest.raises(RpcError, match='Node has already issued bitcoin addresses'):
+        l2.rpc.check('recover', hsmsecret=l1codex32)
+
+    # Now try recovering using hex secret (remove old prerecover!)
+    shutil.rmtree(os.path.join(l1.daemon.lightning_dir, TEST_NETWORK,
+                               f"lightning.pre-recover.{pid}"))
+
+    # l1 already has --recover in cmdline: recovering again would add it
+    # twice!
+    with pytest.raises(RpcError, match='Already doing recover'):
+        l1.rpc.check('recover', hsmsecret=l1hex)
+
+    with pytest.raises(RpcError, match='Already doing recover'):
+        l1.rpc.recover(hsmsecret=l1hex)
+
+    l1.restart()
+    assert l1.rpc.check('recover', hsmsecret=l1hex) == {'command_to_check': 'recover'}
+    l1.rpc.recover(hsmsecret=l1hex)
+    l1.daemon.wait_for_log("Server started with public key")
+    assert l1.rpc.getinfo()['id'] == l1oldid
+
+
 def test_even_sendcustommsg(node_factory):
     l1, l2 = node_factory.get_nodes(2, opts={'log-level': 'io',
                                              'allow_warning': True})
@@ -3617,6 +3816,7 @@ def test_even_sendcustommsg(node_factory):
     # Now with a plugin which allows it
     l1.connect(l2)
     l2.rpc.plugin_start(os.path.join(os.getcwd(), "tests/plugins/allow_even_msgs.py"))
+    l2.daemon.wait_for_log("connectd.*Now allowing 1 custom message types")
 
     l1.rpc.sendcustommsg(l2.info['id'], msg)
     l2.daemon.wait_for_log(r'\[IN\] {}'.format(msg))

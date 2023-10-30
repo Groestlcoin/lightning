@@ -88,7 +88,6 @@ a foreign key.
 
 [comment]: # (GENERATE-DOC-START)
 The following tables are currently supported:
-
 - `bkpr_accountevents` (see lightning-bkpr-listaccountevents(7))
   - `account` (type `string`, sqltype `TEXT`)
   - `type` (type `string`, sqltype `TEXT`)
@@ -172,6 +171,7 @@ The following tables are currently supported:
   - `close_cause` (type `string`, sqltype `TEXT`)
 
 - `forwards` indexed by `in_channel and in_htlc_id` (see lightning-listforwards(7))
+  - `created_index` (type `u64`, sqltype `INTEGER`)
   - `in_channel` (type `short_channel_id`, sqltype `TEXT`)
   - `in_htlc_id` (type `u64`, sqltype `INTEGER`)
   - `in_msat` (type `msat`, sqltype `INTEGER`)
@@ -179,6 +179,7 @@ The following tables are currently supported:
   - `received_time` (type `number`, sqltype `REAL`)
   - `out_channel` (type `short_channel_id`, sqltype `TEXT`)
   - `out_htlc_id` (type `u64`, sqltype `INTEGER`)
+  - `updated_index` (type `u64`, sqltype `INTEGER`)
   - `style` (type `string`, sqltype `TEXT`)
   - `fee_msat` (type `msat`, sqltype `INTEGER`)
   - `out_msat` (type `msat`, sqltype `INTEGER`)
@@ -211,6 +212,8 @@ The following tables are currently supported:
   - `pay_index` (type `u64`, sqltype `INTEGER`)
   - `amount_received_msat` (type `msat`, sqltype `INTEGER`)
   - `paid_at` (type `u64`, sqltype `INTEGER`)
+  - `paid_outpoint_txid` (type `txid`, sqltype `BLOB`, from JSON object `paid_outpoint`)
+  - `paid_outpoint_outnum` (type `u32`, sqltype `INTEGER`, from JSON object `paid_outpoint`)
   - `payment_preimage` (type `secret`, sqltype `BLOB`)
 
 - `nodes` indexed by `nodeid` (see lightning-listnodes(7))
@@ -355,10 +358,12 @@ The following tables are currently supported:
   - `features` (type `hex`, sqltype `BLOB`)
 
 - `sendpays` indexed by `payment_hash` (see lightning-listsendpays(7))
+  - `created_index` (type `u64`, sqltype `INTEGER`)
   - `id` (type `u64`, sqltype `INTEGER`)
   - `groupid` (type `u64`, sqltype `INTEGER`)
   - `partid` (type `u64`, sqltype `INTEGER`)
   - `payment_hash` (type `hash`, sqltype `BLOB`)
+  - `updated_index` (type `u64`, sqltype `INTEGER`)
   - `status` (type `string`, sqltype `TEXT`)
   - `amount_msat` (type `msat`, sqltype `INTEGER`)
   - `destination` (type `pubkey`, sqltype `BLOB`)
@@ -515,4 +520,4 @@ RESOURCES
 ---------
 
 Main web site: <https://github.com/ElementsProject/lightning>
-[comment]: # ( SHA256STAMP:2f77078555f16a9dbee5f068d4d0ba18727aeb378be674cd96bf7c1554a74ce5)
+[comment]: # ( SHA256STAMP:f1434805992a6d428e96c93e2acde932d99da9cfbc91c9b543b3553b1af39c9b)

@@ -33,11 +33,13 @@
             "bolt12 invoice": 1,
             "bolt12 invoice_request": 2,
             "bolt12 offer": 0,
+            "emergency recover": 5,
             "rune": 4
         },
         "DecodepayFallbacksType": {
             "P2PKH": 0,
             "P2SH": 1,
+            "P2TR": 4,
             "P2WPKH": 2,
             "P2WSH": 3
         },
@@ -89,6 +91,10 @@
         "ListforwardsForwardsStyle": {
             "legacy": 0,
             "tlv": 1
+        },
+        "ListforwardsIndex": {
+            "created": 0,
+            "updated": 1
         },
         "ListforwardsStatus": {
             "failed": 3,
@@ -267,6 +273,10 @@
             "SKIPPED": 0,
             "UNUSUAL": 2
         },
+        "ListsendpaysIndex": {
+            "created": 0,
+            "updated": 1
+        },
         "ListsendpaysPaymentsStatus": {
             "complete": 2,
             "failed": 1,
@@ -387,6 +397,10 @@
             "Connect.features": 2,
             "Connect.id": 1
         },
+        "CreateinvoicePaid_outpoint": {
+            "CreateInvoice.paid_outpoint.outnum": 2,
+            "CreateInvoice.paid_outpoint.txid": 1
+        },
         "CreateinvoiceRequest": {
             "CreateInvoice.invstring": 1,
             "CreateInvoice.label": 2,
@@ -404,6 +418,7 @@
             "CreateInvoice.label": 1,
             "CreateInvoice.local_offer_id": 13,
             "CreateInvoice.paid_at": 11,
+            "CreateInvoice.paid_outpoint": 17,
             "CreateInvoice.pay_index": 9,
             "CreateInvoice.payer_note": 14,
             "CreateInvoice.payment_hash": 4,
@@ -439,6 +454,13 @@
             "Datastore.key[]": 1,
             "Datastore.string": 4
         },
+        "DatastoreusageDatastoreusage": {
+            "DatastoreUsage.datastoreusage.key": 1,
+            "DatastoreUsage.datastoreusage.total_bytes": 2
+        },
+        "DatastoreusageResponse": {
+            "DatastoreUsage.datastoreusage": 1
+        },
         "DecodeExtra": {
             "Decode.extra[].data": 2,
             "Decode.extra[].tag": 1
@@ -471,6 +493,7 @@
         "DecodeResponse": {
             "Decode.created_at": 60,
             "Decode.currency_minor_unit": 8,
+            "Decode.decrypted": 76,
             "Decode.description_hash": 64,
             "Decode.expiry": 61,
             "Decode.extra[]": 69,
@@ -905,6 +928,7 @@
             "ListDatastore.datastore[]": 1
         },
         "ListforwardsForwards": {
+            "ListForwards.forwards[].created_index": 12,
             "ListForwards.forwards[].fee_msat": 7,
             "ListForwards.forwards[].in_channel": 1,
             "ListForwards.forwards[].in_htlc_id": 10,
@@ -915,11 +939,15 @@
             "ListForwards.forwards[].payment_hash": 6,
             "ListForwards.forwards[].received_time": 4,
             "ListForwards.forwards[].status": 3,
-            "ListForwards.forwards[].style": 9
+            "ListForwards.forwards[].style": 9,
+            "ListForwards.forwards[].updated_index": 13
         },
         "ListforwardsRequest": {
             "ListForwards.in_channel": 2,
+            "ListForwards.index": 4,
+            "ListForwards.limit": 6,
             "ListForwards.out_channel": 3,
+            "ListForwards.start": 5,
             "ListForwards.status": 1
         },
         "ListforwardsResponse": {
@@ -981,12 +1009,17 @@
             "ListInvoices.invoices[].label": 1,
             "ListInvoices.invoices[].local_offer_id": 9,
             "ListInvoices.invoices[].paid_at": 13,
+            "ListInvoices.invoices[].paid_outpoint": 18,
             "ListInvoices.invoices[].pay_index": 11,
             "ListInvoices.invoices[].payer_note": 10,
             "ListInvoices.invoices[].payment_hash": 3,
             "ListInvoices.invoices[].payment_preimage": 14,
             "ListInvoices.invoices[].status": 4,
             "ListInvoices.invoices[].updated_index": 17
+        },
+        "ListinvoicesInvoicesPaid_outpoint": {
+            "ListInvoices.invoices[].paid_outpoint.outnum": 2,
+            "ListInvoices.invoices[].paid_outpoint.txid": 1
         },
         "ListinvoicesRequest": {
             "ListInvoices.index": 5,
@@ -1270,6 +1303,7 @@
             "ListSendPays.payments[].bolt11": 10,
             "ListSendPays.payments[].bolt12": 11,
             "ListSendPays.payments[].created_at": 7,
+            "ListSendPays.payments[].created_index": 16,
             "ListSendPays.payments[].description": 14,
             "ListSendPays.payments[].destination": 6,
             "ListSendPays.payments[].erroronion": 13,
@@ -1279,11 +1313,15 @@
             "ListSendPays.payments[].partid": 15,
             "ListSendPays.payments[].payment_hash": 3,
             "ListSendPays.payments[].payment_preimage": 12,
-            "ListSendPays.payments[].status": 4
+            "ListSendPays.payments[].status": 4,
+            "ListSendPays.payments[].updated_index": 17
         },
         "ListsendpaysRequest": {
             "ListSendPays.bolt11": 1,
+            "ListSendPays.index": 4,
+            "ListSendPays.limit": 6,
             "ListSendPays.payment_hash": 2,
+            "ListSendPays.start": 5,
             "ListSendPays.status": 3
         },
         "ListsendpaysResponse": {
@@ -1403,6 +1441,7 @@
             "SendOnion.bolt11": 9,
             "SendOnion.bolt12": 10,
             "SendOnion.created_at": 6,
+            "SendOnion.created_index": 14,
             "SendOnion.destination": 5,
             "SendOnion.id": 1,
             "SendOnion.label": 8,
@@ -1410,7 +1449,8 @@
             "SendOnion.partid": 13,
             "SendOnion.payment_hash": 2,
             "SendOnion.payment_preimage": 11,
-            "SendOnion.status": 3
+            "SendOnion.status": 3,
+            "SendOnion.updated_index": 15
         },
         "SendpayRequest": {
             "SendPay.amount_msat": 10,
@@ -1432,6 +1472,7 @@
             "SendPay.bolt12": 12,
             "SendPay.completed_at": 15,
             "SendPay.created_at": 7,
+            "SendPay.created_index": 16,
             "SendPay.destination": 6,
             "SendPay.groupid": 2,
             "SendPay.id": 1,
@@ -1440,7 +1481,8 @@
             "SendPay.partid": 10,
             "SendPay.payment_hash": 3,
             "SendPay.payment_preimage": 13,
-            "SendPay.status": 4
+            "SendPay.status": 4,
+            "SendPay.updated_index": 17
         },
         "SendpayRoute": {
             "SendPay.route[].amount_msat": 5,
@@ -1559,6 +1601,10 @@
             "UtxoPsbt.psbt": 1,
             "UtxoPsbt.reservations[]": 6
         },
+        "WaitanyinvoicePaid_outpoint": {
+            "WaitAnyInvoice.paid_outpoint.outnum": 2,
+            "WaitAnyInvoice.paid_outpoint.txid": 1
+        },
         "WaitanyinvoiceRequest": {
             "WaitAnyInvoice.lastpay_index": 1,
             "WaitAnyInvoice.timeout": 2
@@ -1573,6 +1619,7 @@
             "WaitAnyInvoice.expires_at": 5,
             "WaitAnyInvoice.label": 1,
             "WaitAnyInvoice.paid_at": 11,
+            "WaitAnyInvoice.paid_outpoint": 15,
             "WaitAnyInvoice.pay_index": 9,
             "WaitAnyInvoice.payment_hash": 3,
             "WaitAnyInvoice.payment_preimage": 12,
@@ -1585,6 +1632,10 @@
         },
         "WaitblockheightResponse": {
             "WaitBlockHeight.blockheight": 1
+        },
+        "WaitinvoicePaid_outpoint": {
+            "WaitInvoice.paid_outpoint.outnum": 2,
+            "WaitInvoice.paid_outpoint.txid": 1
         },
         "WaitinvoiceRequest": {
             "WaitInvoice.label": 1
@@ -1599,6 +1650,7 @@
             "WaitInvoice.expires_at": 5,
             "WaitInvoice.label": 1,
             "WaitInvoice.paid_at": 11,
+            "WaitInvoice.paid_outpoint": 15,
             "WaitInvoice.pay_index": 9,
             "WaitInvoice.payment_hash": 3,
             "WaitInvoice.payment_preimage": 12,
@@ -1618,6 +1670,7 @@
             "WaitSendPay.bolt12": 12,
             "WaitSendPay.completed_at": 14,
             "WaitSendPay.created_at": 7,
+            "WaitSendPay.created_index": 15,
             "WaitSendPay.destination": 6,
             "WaitSendPay.groupid": 2,
             "WaitSendPay.id": 1,
@@ -1625,7 +1678,8 @@
             "WaitSendPay.partid": 10,
             "WaitSendPay.payment_hash": 3,
             "WaitSendPay.payment_preimage": 13,
-            "WaitSendPay.status": 4
+            "WaitSendPay.status": 4,
+            "WaitSendPay.updated_index": 16
         },
         "WithdrawRequest": {
             "Withdraw.destination": 1,
@@ -1825,6 +1879,18 @@
             "added": "pre-v0.10.1",
             "deprecated": false
         },
+        "CreateInvoice.paid_outpoint": {
+            "added": "v23.11",
+            "deprecated": false
+        },
+        "CreateInvoice.paid_outpoint.outnum": {
+            "added": "v23.11",
+            "deprecated": false
+        },
+        "CreateInvoice.paid_outpoint.txid": {
+            "added": "v23.11",
+            "deprecated": false
+        },
         "CreateInvoice.pay_index": {
             "added": "pre-v0.10.1",
             "deprecated": false
@@ -1905,6 +1971,22 @@
             "added": "pre-v0.10.1",
             "deprecated": false
         },
+        "DatastoreUsage": {
+            "added": "v23.11",
+            "deprecated": false
+        },
+        "DatastoreUsage.datastoreusage": {
+            "added": "v23.11",
+            "deprecated": false
+        },
+        "DatastoreUsage.datastoreusage.key": {
+            "added": "v23.11",
+            "deprecated": false
+        },
+        "DatastoreUsage.datastoreusage.total_bytes": {
+            "added": "v23.11",
+            "deprecated": false
+        },
         "Decode": {
             "added": "v23.05",
             "deprecated": null
@@ -1915,6 +1997,10 @@
         },
         "Decode.currency_minor_unit": {
             "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "Decode.decrypted": {
+            "added": "v23.11",
             "deprecated": false
         },
         "Decode.description_hash": {
@@ -3493,6 +3579,10 @@
             "added": "pre-v0.10.1",
             "deprecated": false
         },
+        "ListForwards.forwards[].created_index": {
+            "added": "v23.11",
+            "deprecated": false
+        },
         "ListForwards.forwards[].fee_msat": {
             "added": "pre-v0.10.1",
             "deprecated": false
@@ -3533,12 +3623,28 @@
             "added": "pre-v0.10.1",
             "deprecated": false
         },
+        "ListForwards.forwards[].updated_index": {
+            "added": "v23.11",
+            "deprecated": false
+        },
         "ListForwards.in_channel": {
             "added": "pre-v0.10.1",
             "deprecated": false
         },
+        "ListForwards.index": {
+            "added": "v23.11",
+            "deprecated": false
+        },
+        "ListForwards.limit": {
+            "added": "v23.11",
+            "deprecated": false
+        },
         "ListForwards.out_channel": {
             "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "ListForwards.start": {
+            "added": "v23.11",
             "deprecated": false
         },
         "ListForwards.status": {
@@ -3727,6 +3833,18 @@
         },
         "ListInvoices.invoices[].paid_at": {
             "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "ListInvoices.invoices[].paid_outpoint": {
+            "added": "v23.11",
+            "deprecated": false
+        },
+        "ListInvoices.invoices[].paid_outpoint.outnum": {
+            "added": "v23.11",
+            "deprecated": false
+        },
+        "ListInvoices.invoices[].paid_outpoint.txid": {
+            "added": "v23.11",
             "deprecated": false
         },
         "ListInvoices.invoices[].pay_index": {
@@ -4657,6 +4775,14 @@
             "added": "pre-v0.10.1",
             "deprecated": false
         },
+        "ListSendPays.index": {
+            "added": "v23.11",
+            "deprecated": false
+        },
+        "ListSendPays.limit": {
+            "added": "v23.11",
+            "deprecated": false
+        },
         "ListSendPays.payment_hash": {
             "added": "pre-v0.10.1",
             "deprecated": false
@@ -4683,6 +4809,10 @@
         },
         "ListSendPays.payments[].created_at": {
             "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "ListSendPays.payments[].created_index": {
+            "added": "v23.11",
             "deprecated": false
         },
         "ListSendPays.payments[].description": {
@@ -4723,6 +4853,14 @@
         },
         "ListSendPays.payments[].status": {
             "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "ListSendPays.payments[].updated_index": {
+            "added": "v23.11",
+            "deprecated": false
+        },
+        "ListSendPays.start": {
+            "added": "v23.11",
             "deprecated": false
         },
         "ListSendPays.status": {
@@ -4997,6 +5135,10 @@
             "added": "pre-v0.10.1",
             "deprecated": false
         },
+        "SendOnion.created_index": {
+            "added": "v23.11",
+            "deprecated": false
+        },
         "SendOnion.destination": {
             "added": "pre-v0.10.1",
             "deprecated": false
@@ -5061,6 +5203,10 @@
             "added": "pre-v0.10.1",
             "deprecated": false
         },
+        "SendOnion.updated_index": {
+            "added": "v23.11",
+            "deprecated": false
+        },
         "SendPay": {
             "added": "pre-v0.10.1",
             "deprecated": null
@@ -5087,6 +5233,10 @@
         },
         "SendPay.created_at": {
             "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "SendPay.created_index": {
+            "added": "v23.11",
             "deprecated": false
         },
         "SendPay.destination": {
@@ -5151,6 +5301,10 @@
         },
         "SendPay.status": {
             "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "SendPay.updated_index": {
+            "added": "v23.11",
             "deprecated": false
         },
         "SendPsbt": {
@@ -5501,6 +5655,18 @@
             "added": "pre-v0.10.1",
             "deprecated": false
         },
+        "WaitAnyInvoice.paid_outpoint": {
+            "added": "v23.11",
+            "deprecated": false
+        },
+        "WaitAnyInvoice.paid_outpoint.outnum": {
+            "added": "v23.11",
+            "deprecated": false
+        },
+        "WaitAnyInvoice.paid_outpoint.txid": {
+            "added": "v23.11",
+            "deprecated": false
+        },
         "WaitAnyInvoice.pay_index": {
             "added": "pre-v0.10.1",
             "deprecated": false
@@ -5577,6 +5743,18 @@
             "added": "pre-v0.10.1",
             "deprecated": false
         },
+        "WaitInvoice.paid_outpoint": {
+            "added": "v23.11",
+            "deprecated": false
+        },
+        "WaitInvoice.paid_outpoint.outnum": {
+            "added": "v23.11",
+            "deprecated": false
+        },
+        "WaitInvoice.paid_outpoint.txid": {
+            "added": "v23.11",
+            "deprecated": false
+        },
         "WaitInvoice.pay_index": {
             "added": "pre-v0.10.1",
             "deprecated": false
@@ -5625,6 +5803,10 @@
             "added": "pre-v0.10.1",
             "deprecated": false
         },
+        "WaitSendPay.created_index": {
+            "added": "v23.11",
+            "deprecated": false
+        },
         "WaitSendPay.destination": {
             "added": "pre-v0.10.1",
             "deprecated": false
@@ -5659,6 +5841,10 @@
         },
         "WaitSendPay.timeout": {
             "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "WaitSendPay.updated_index": {
+            "added": "v23.11",
             "deprecated": false
         },
         "Withdraw": {

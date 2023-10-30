@@ -233,8 +233,6 @@ struct lightningd {
 
 	/* Outstanding waitsendpay commands. */
 	struct list_head waitsendpay_commands;
-	/* Outstanding sendpay commands. */
-	struct list_head sendpay_commands;
 	/* Outstanding close commands. */
 	struct list_head close_commands;
 	/* Outstanding ping commands. */
@@ -371,6 +369,8 @@ struct lightningd {
 
 	/* Should we re-exec ourselves instead of just exiting? */
 	bool try_reexec;
+	/* If set, we are to restart with --recover=... */
+	const char *recover_secret;
 
 	/* Array of (even) TLV types that we should allow. This is required
 	 * since we otherwise would outright reject them. */
@@ -381,6 +381,9 @@ struct lightningd {
 
 	/* --experimental-upgrade-protocol */
 	bool experimental_upgrade_protocol;
+
+	/* --invoices-onchain-fallback */
+	bool unified_invoices;
 
 	/* For anchors: how much do we keep for spending close txs? */
 	struct amount_sat emergency_sat;

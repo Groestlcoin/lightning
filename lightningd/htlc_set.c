@@ -6,6 +6,7 @@
 #include <lightningd/htlc_set.h>
 #include <lightningd/invoice.h>
 #include <lightningd/lightningd.h>
+#include <lightningd/peer_htlcs.h>
 
 /* If an HTLC times out, we need to free entire set, since we could be processing
  * it in invoice.c right now. */
@@ -209,7 +210,7 @@ void htlc_set_add(struct lightningd *ld,
 	if (amount_msat_greater_eq(set->so_far, total_msat)) {
 		/* Disable timer now, in case invoice_hook is slow! */
 		tal_free(set->timeout);
-		invoice_try_pay(ld, set, details);
+		invoice_try_pay(ld, set, details, set->so_far, NULL);
 		return;
 	}
 
