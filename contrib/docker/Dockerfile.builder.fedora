@@ -30,5 +30,5 @@ RUN wget https://github.com/Groestlcoin/groestlcoin/releases/download/v$GROESTLC
 		mv groestlcoin-$GROESTLCOIN_VERSION/share/man/man1/* /usr/share/man/man1 && \
     rm -rf groestlcoin.tar.gz groestlcoin-$GROESTLCOIN_VERSION
 
-RUN python3 -m pip install --upgrade pip && \
+RUN python3 -m pip install --force-reinstall -U pip setuptools && \
     python3 -m pip install python-bitcoinlib pytest pytest-test-groups flake8 pytest-rerunfailures ephemeral-port-reserve

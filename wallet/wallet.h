@@ -255,6 +255,9 @@ static inline enum channel_state channel_state_in_db(enum channel_state s)
 	case DUALOPEND_OPEN_COMMITTED:
 		BUILD_ASSERT(DUALOPEND_OPEN_COMMITTED == 11);
 		return s;
+	case DUALOPEND_OPEN_COMMIT_READY:
+		BUILD_ASSERT(DUALOPEND_OPEN_COMMIT_READY == 14);
+		return s;
 	case DUALOPEND_AWAITING_LOCKIN:
 		BUILD_ASSERT(DUALOPEND_AWAITING_LOCKIN == 12);
 		return s;
@@ -422,13 +425,22 @@ bool wallet_update_output_status(struct wallet *w,
 				 enum output_status newstatus);
 
 /**
- * wallet_get_utxos - Retrieve all utxos matching a given state
+ * wallet_get_all_utxos - Return all utxos, including spent ones.
  *
  * Returns a `tal_arr` of `utxo` structs. Double indirection in order
  * to be able to steal individual elements onto something else.
  */
-struct utxo **wallet_get_utxos(const tal_t *ctx, struct wallet *w,
-			      const enum output_status state);
+struct utxo **wallet_get_all_utxos(const tal_t *ctx, struct wallet *w);
+
+/**
+ * wallet_get_unspent_utxos - Return reserved and unreserved UTXOs.
+ *
+ * Returns a `tal_arr` of `utxo` structs. Double indirection in order
+ * to be able to steal individual elements onto something else.
+ *
+ * Use utxo_is_reserved() to test if it's reserved.
+ */
+struct utxo **wallet_get_unspent_utxos(const tal_t *ctx, struct wallet *w);
 
 
 /**
@@ -529,6 +541,25 @@ struct utxo *wallet_utxo_get(const tal_t *ctx, struct wallet *w,
 			     const struct bitcoin_outpoint *outpoint);
 
 /**
+ * wallet_utxo_boost - get (unreserved) utxos to meet a given feerate.
+ * @ctx: context to tal return array from
+ * @w: the wallet
+ * @blockheight: current height (to determine reserved status)
+ * @fee_amount: amount already paying in fees
+ * @feerate_target: feerate we want, in perkw.
+ * @weight: (in)existing weight before any utxos added, (out)final weight with utxos added.
+ *
+ * May not meet the feerate, but will spend all available utxos to try.
+ * You may also need to create change, as it may exceed.
+ */
+struct utxo **wallet_utxo_boost(const tal_t *ctx,
+				struct wallet *w,
+				u32 blockheight,
+				struct amount_sat fee_amount,
+				u32 feerate_target,
+				size_t *weight);
+
+/**
  * wallet_can_spend - Do we have the private key matching this scriptpubkey?
  *
  * FIXME: This is very slow with lots of inputs!
@@ -594,6 +625,12 @@ void wallet_inflight_add(struct wallet *w, struct channel_inflight *inflight);
  */
 void wallet_inflight_save(struct wallet *w,
 			  struct channel_inflight *inflight);
+
+/**
+ * Remove any channel inflights that are incomplete.
+ */
+void wallet_channel_inflight_cleanup_incomplete(struct wallet *w,
+						u64 wallet_id);
 
 /**
  * Remove all the inflights from a channel. Also cleans up

@@ -99,7 +99,7 @@ start_nodes() {
 			cat <<- EOF >> "/tmp/l$i-$network/config"
 			developer
 			dev-fast-gossip
-			dev-bitcoind-poll=5
+			dev-groestlcoind-poll=5
 			experimental-dual-fund
 			experimental-splicing
 			experimental-offers
@@ -142,18 +142,25 @@ start_ln() {
 	# Wait for it to start.
 	while ! groestlcoin-cli -datadir="$PATH_TO_GROESTLCOIN" -regtest ping 2> /tmp/null; do echo "awaiting groestlcoind..." && sleep 1; done
 
-	# Kick it out of initialblockdownload if necessary
-	if groestlcoin-cli -datadir="$PATH_TO_GROESTLCOIN" -regtest getblockchaininfo | grep -q 'initialblockdownload.*true'; then
-		# Modern groestlcoind needs createwallet
+	# Check if default wallet exists
+	if ! groestlcoin-cli -datadir="$PATH_TO_GROESTLCOIN" -regtest listwalletdir | jq -r '.wallets[] | .name' | grep -wqe 'default' ; then
+		# wallet dir does not exist, create one
 		echo "Making \"default\" groestlcoind wallet."
 		groestlcoin-cli -datadir="$PATH_TO_GROESTLCOIN" -regtest createwallet default >/dev/null 2>&1
-		# But it might already exist, load it
-	        groestlcoin-cli -datadir="$PATH_TO_GROESTLCOIN" -regtest loadwallet default
-		groestlcoin-cli -datadir="$PATH_TO_GROESTLCOIN" -regtest generatetoaddress 1 "$(groestlcoin-cli -datadir="$PATH_TO_GROESTLCOIN" -regtest getnewaddress)" > /dev/null
-	else
-		groestlcoin-cli -datadir="$PATH_TO_GROESTLCOIN" -regtest loadwallet default
 	fi
-	alias bt-cli='groestlcoin-cli -datadir=$PATH_TO_GROESTLCOIN -regtest'
+
+	# Check if default wallet is loaded
+	if ! groestlcoin-cli -datadir="$PATH_TO_GROESTLCOIN" -regtest listwallets | jq -r '.[]' | grep -wqe 'default' ; then
+		echo "Loading \"default\" groestlcoind wallet."
+		groestlcoin-cli -datadir="$PATH_TO_GROESTLCOIN" -regtest loadwallet default >/dev/null 2>&1
+	fi
+
+	# Kick it out of initialblockdownload if necessary
+	if groestlcoin-cli -datadir="$PATH_TO_GROESTLCOIN" -regtest getblockchaininfo | grep -q 'initialblockdownload.*true'; then
+		groestlcoin-cli -datadir="$PATH_TO_GROESTLCOIN" -regtest generatetoaddress 1 "$(groestlcoin-cli -datadir="$PATH_TO_GROESTLCOIN" -regtest getnewaddress)" > /dev/null
+	fi
+
+	alias bt-cli='groestlcoin-cli -datadir="$PATH_TO_GROESTLCOIN" -regtest'
 
 	if [ -z "$1" ]; then
 		nodes=2
