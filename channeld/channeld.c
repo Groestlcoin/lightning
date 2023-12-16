@@ -3458,7 +3458,7 @@ static void resume_splice_negotiation(struct peer *peer,
 	u32 chan_output_index;
 	struct bitcoin_signature their_sig;
 	struct pubkey *their_pubkey;
-	struct bitcoin_tx *final_tx;
+	struct bitcoin_tx *final_tx COMPILER_WANTS_INIT("12.3.0 -O3");
 	struct bitcoin_txid final_txid;
 	u8 **wit_stack;
 	struct tlv_txsigs_tlvs *txsig_tlvs, *their_txsigs_tlvs;
@@ -5147,7 +5147,7 @@ static void peer_reconnect(struct peer *peer,
 	}
 
 	status_debug("Got reestablish commit=%"PRIu64" revoke=%"PRIu64
-		     " inflights: %lu, active splices: %"PRIu32,
+		     " inflights: %zu, active splices: %"PRIu32,
 		     next_commitment_number,
 		     next_revocation_number,
 		     tal_count(peer->splice_state->inflights),

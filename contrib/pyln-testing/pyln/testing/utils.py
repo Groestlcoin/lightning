@@ -1132,7 +1132,7 @@ class LightningNode(object):
     def is_local_channel_active(self, scid):
         """Is the local channel @scid usable?"""
         channels = self.rpc.listpeerchannels()['channels']
-        return [c['state'] in ('CHANNELD_NORMAL', 'CHANNELD_AWAITING_SPLICE') for c in channels if c.get('short_channel_id') == scid] == [True]
+        return [c['state'] in ('CHANNELD_NORMAL', 'CHANNELD_AWAITING_SPLICE') and 'remote' in c.get('updates', {}) for c in channels if c.get('short_channel_id') == scid] == [True]
 
     def wait_local_channel_active(self, scid):
         wait_for(lambda: self.is_local_channel_active(scid))
@@ -1662,7 +1662,8 @@ class NodeFactory(object):
         # Make sure we have all node announcements, too
         for n in nodes:
             for n2 in nodes:
-                wait_for(lambda: 'alias' in only_one(n.rpc.listnodes(n2.info['id'])['nodes']))
+                alias = n2.rpc.getinfo()['alias']
+                wait_for(lambda: [n.get('alias') for n in n.rpc.listnodes(n2.info['id'])['nodes']] == [alias])
 
     def line_graph(self, num_nodes, fundchannel=True, fundamount=FUNDAMOUNT, wait_for_announce=False, opts=None, announce_channels=True):
         """ Create nodes, connect them and optionally fund channels.

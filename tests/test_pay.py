@@ -259,8 +259,6 @@ def test_pay_disconnect(node_factory, bitcoind):
     inv = l2.rpc.invoice(123000, 'test_pay_disconnect', 'description')
     rhash = inv['payment_hash']
 
-    wait_for(lambda: [c['active'] for c in l1.rpc.listchannels()['channels']] == [True, True])
-
     # Can't use `pay` since that'd notice that we can't route, due to disabling channel_update
     route = l1.rpc.getroute(l2.info['id'], 123000, 1)["route"]
 
@@ -311,7 +309,7 @@ def test_pay_get_error_with_update(node_factory):
     l3.stop()
 
     # Make sure that l2 has seen disconnect, considers channel disabled.
-    wait_for(lambda: [c['active'] for c in l2.rpc.listchannels(chanid2)['channels']] == [False, False])
+    wait_for(lambda: only_one(l2.rpc.listpeerchannels(l3.info['id'])['channels'])['peer_connected'] is False)
 
     assert(l1.is_channel_active(chanid2))
     with pytest.raises(RpcError, match=r'WIRE_TEMPORARY_CHANNEL_FAILURE'):
@@ -2041,7 +2039,8 @@ def test_setchannel_usage(node_factory, bitcoind):
     assert channel['minimum_htlc_out_msat'] == 17
     assert channel['maximum_htlc_out_msat'] == 133337
 
-    # wait for gossip and check if l1 sees new fees in listchannels
+    # wait for gossip and check if l1 sees new fees in listchannels after mining
+    bitcoind.generate_block(5)
     wait_for(lambda: [c['base_fee_millisatoshi'] for c in l1.rpc.listchannels(scid)['channels']] == [DEF_BASE, 1337])
     wait_for(lambda: [c['fee_per_millionth'] for c in l1.rpc.listchannels(scid)['channels']] == [DEF_PPM, 137])
     wait_for(lambda: [c['htlc_minimum_msat'] for c in l1.rpc.listchannels(scid)['channels']] == [0, 17])
@@ -2444,10 +2443,19 @@ def test_setchannel_all(node_factory, bitcoind):
     # now try to set all (two) channels using wildcard syntax
     result = l1.rpc.setchannel("all", 0xDEAD, 0xBEEF, 0xBAD, 0xCAFE)
 
-    wait_for(lambda: [c['base_fee_millisatoshi'] for c in l1.rpc.listchannels(scid2)['channels']] == [DEF_BASE, 0xDEAD])
-    wait_for(lambda: [c['fee_per_millionth'] for c in l1.rpc.listchannels(scid2)['channels']] == [DEF_PPM, 0xBEEF])
-    wait_for(lambda: [c['base_fee_millisatoshi'] for c in l1.rpc.listchannels(scid3)['channels']] == [0xDEAD, DEF_BASE])
-    wait_for(lambda: [c['fee_per_millionth'] for c in l1.rpc.listchannels(scid3)['channels']] == [0xBEEF, DEF_PPM])
+    channel_after = {"htlc_minimum_msat": Millisatoshi(0xBAD),
+                     "htlc_maximum_msat": Millisatoshi(0xCAFE),
+                     "cltv_expiry_delta": 6,
+                     "fee_base_msat": Millisatoshi(0xDEAD),
+                     "fee_proportional_millionths": 0xBEEF}
+
+    # We should see these updates immediately.
+    assert only_one(l1.rpc.listpeerchannels(l2.info['id'])['channels'])['updates']['local'] == channel_after
+    assert only_one(l1.rpc.listpeerchannels(l3.info['id'])['channels'])['updates']['local'] == channel_after
+
+    # Peer should see them soon (once we sent)
+    wait_for(lambda: only_one(l2.rpc.listpeerchannels()['channels'])['updates']['remote'] == channel_after)
+    wait_for(lambda: only_one(l3.rpc.listpeerchannels()['channels'])['updates']['remote'] == channel_after)
 
     # Don't assume order!
     assert len(result['channels']) == 2
@@ -3465,7 +3473,6 @@ def test_excluded_adjacent_routehint(node_factory, bitcoind):
     l1, l2, l3 = node_factory.line_graph(3)
 
     # We'll be forced to use routehint, since we don't know about l3.
-    l3.wait_channel_active(l3.get_channel_scid(l2))
     inv = l3.rpc.invoice(10**3, "lbl", "desc", exposeprivatechannels=l2.get_channel_scid(l3))
 
     l1.wait_channel_active(l1.get_channel_scid(l2))
@@ -4033,9 +4040,6 @@ def test_mpp_waitblockheight_routehint_conflict(node_factory, bitcoind, executor
     # Increase blockheight by 2, like in test_blockheight_disagreement.
     bitcoind.generate_block(2)
     sync_blockheight(bitcoind, [l3])
-
-    # FIXME: routehint currently requires channels in gossip store
-    l3.wait_channel_active(l2l3)
 
     inv = l3.rpc.invoice(Millisatoshi(2 * 10000 * 1000), 'i', 'i', exposeprivatechannels=True)['bolt11']
     assert 'routes' in l3.rpc.decodepay(inv)
@@ -4890,8 +4894,6 @@ gives a routehint straight to us causes an issue
     # Make sure l3 sees l1->l2 channel.
     l3.wait_channel_active(scid12)
 
-    # FIXME: Routehint code currently relies on private gossip in store!
-    l3.wait_channel_active(scid23)
     inv = l3.rpc.invoice(10, "test", "test")['bolt11']
     decoded = l3.rpc.decodepay(inv)
     assert(only_one(only_one(decoded['routes']))['short_channel_id']
@@ -5476,8 +5478,6 @@ def test_pay_routehint_minhtlc(node_factory, bitcoind):
     # And make sure l1 knows that l2->l3 has htlcmin 1000
     wait_for(lambda: l1.rpc.listchannels(scid)['channels'][0]['htlc_minimum_msat'] == Millisatoshi(1000))
 
-    # FIXME: Routehint code currently relies on private gossip in store!
-    l4.wait_channel_active(scid34)
     inv = l4.rpc.invoice(100000, "inv", "inv")
     assert only_one(l1.rpc.decodepay(inv['bolt11'])['routes'])
 
