@@ -61,12 +61,13 @@ RUN git config --global --add safe.directory '*'
 RUN mkdir /build
 WORKDIR /build
 
-CMD poetry export -o requirements.txt --without-hashes \
-	&& pip install -r requirements.txt \
-	&& tools/build-release.sh zipfile \
-	&& mkdir -p /repro \
-	&& cd /repro \
-	&& unzip /build/release/*.zip \
-	&& cd clightning* \
-	&& tools/repro-build.sh \
-	&& cp *.xz /build/release/
+# We mount the repo into `/repo` and then we take a snapshot of it
+# first by cloning it. This ensures we're not including any
+# uncommitted changes in the working directory on the host. Notice
+# that we no longer take the zipfile.
+CMD git clone /repo . \
+    && poetry export -o requirements.txt --without-hashes \
+    && pip install -r requirements.txt \
+    && tools/build-release.sh zipfile \
+    && tools/repro-build.sh \
+    && cp *.xz /repo/release/
