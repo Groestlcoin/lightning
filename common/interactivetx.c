@@ -84,7 +84,7 @@ static bool is_segwit_output(const tal_t *ctx,
 	if (tal_bytelen(redeemscript) > 0)
 		maybe_witness = redeemscript;
 	else
-		maybe_witness = wally_tx_output_get_script(ctx, output);
+		maybe_witness = cln_wally_tx_output_get_script(ctx, output);
 
 	return is_known_segwit_scripttype(maybe_witness);
 }
@@ -459,7 +459,7 @@ char *process_interactivetx_updates(const tal_t *ctx,
 
 			/* Convert tx_bytes to a tx! */
 			len = tal_bytelen(tx_bytes);
-			tx = pull_bitcoin_tx(ctx, &tx_bytes, &len);
+			tx = pull_bitcoin_tx_only(ctx, &tx_bytes, &len);
 
 			if (!tx || len != 0)
 				return tal_fmt(ctx, "Invalid tx sent. len: %d",

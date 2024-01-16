@@ -302,8 +302,8 @@ void bitcoin_tx_output_set_amount(struct bitcoin_tx *tx, int outnum,
 	wally_psbt_output_set_amount(&tx->psbt->outputs[outnum], satoshis);
 }
 
-const u8 *wally_tx_output_get_script(const tal_t *ctx,
-				     const struct wally_tx_output *output)
+const u8 *cln_wally_tx_output_get_script(const tal_t *ctx,
+					 const struct wally_tx_output *output)
 {
 	if (output->script == NULL) {
 		/* This can happen for coinbase transactions and pegin
@@ -321,7 +321,7 @@ const u8 *bitcoin_tx_output_get_script(const tal_t *ctx,
 	assert(outnum < tx->wtx->num_outputs);
 	output = &tx->wtx->outputs[outnum];
 
-	return wally_tx_output_get_script(ctx, output);
+	return cln_wally_tx_output_get_script(ctx, output);
 }
 
 u8 *bitcoin_tx_output_get_witscript(const tal_t *ctx, const struct bitcoin_tx *tx,
@@ -652,8 +652,8 @@ static struct wally_tx *pull_wtx(const tal_t *ctx,
 	return wtx;
 }
 
-struct bitcoin_tx *pull_bitcoin_tx(const tal_t *ctx, const u8 **cursor,
-				   size_t *max)
+struct bitcoin_tx *pull_bitcoin_tx_only(const tal_t *ctx, const u8 **cursor,
+					size_t *max)
 {
 	struct bitcoin_tx *tx = tal(ctx, struct bitcoin_tx);
 	tx->wtx = pull_wtx(tx, cursor, max);
@@ -662,10 +662,20 @@ struct bitcoin_tx *pull_bitcoin_tx(const tal_t *ctx, const u8 **cursor,
 
 	tal_add_destructor(tx, bitcoin_tx_destroy);
 	tx->chainparams = chainparams;
-	tx->psbt = new_psbt(tx, tx->wtx);
-	if (!tx->psbt)
-		return tal_free(tx);
+	tx->psbt = NULL;
 
+	return tx;
+}
+
+struct bitcoin_tx *pull_bitcoin_tx(const tal_t *ctx, const u8 **cursor,
+				   size_t *max)
+{
+	struct bitcoin_tx *tx = pull_bitcoin_tx_only(ctx, cursor, max);
+	if (tx) {
+		tx->psbt = new_psbt(tx, tx->wtx);
+		if (!tx->psbt)
+			return tal_free(tx);
+        }
 	return tx;
 }
 
@@ -784,15 +794,13 @@ struct bitcoin_tx *fromwire_bitcoin_tx(const tal_t *ctx,
 
 	u32 len = fromwire_u32(cursor, max);
 	size_t start = *max;
-	tx = pull_bitcoin_tx(ctx, cursor, max);
+	tx = pull_bitcoin_tx_only(ctx, cursor, max);
 	if (!tx)
 		return fromwire_fail(cursor, max);
 	// Check that we consumed len bytes
 	if (start - *max != len)
 		return fromwire_fail(cursor, max);
 
-	/* pull_bitcoin_tx sets the psbt */
-	tal_free(tx->psbt);
 	tx->psbt = fromwire_wally_psbt(tx, cursor, max);
 	if (!tx->psbt)
 		return fromwire_fail(cursor, max);

@@ -65,7 +65,8 @@ static void filter_block_txs(struct chain_topology *topo, struct block *b)
 	struct amount_sat owned;
 
 	/* Now we see if any of those txs are interesting. */
-	for (i = 0; i < tal_count(b->full_txs); i++) {
+	const size_t num_txs = tal_count(b->full_txs);
+	for (i = 0; i < num_txs; i++) {
 		const struct bitcoin_tx *tx = b->full_txs[i];
 		struct bitcoin_txid txid;
 		size_t j;
@@ -354,7 +355,8 @@ static void watch_for_utxo_reconfirmation(struct chain_topology *topo,
 	struct utxo **unconfirmed;
 
 	unconfirmed = wallet_get_unconfirmed_closeinfo_utxos(tmpctx, wallet);
-	for (size_t i = 0; i < tal_count(unconfirmed); i++) {
+	const size_t num_unconfirmed = tal_count(unconfirmed);
+	for (size_t i = 0; i < num_unconfirmed; i++) {
 		assert(unconfirmed[i]->close_info != NULL);
 		assert(unconfirmed[i]->blockheight == NULL);
 
@@ -376,7 +378,8 @@ static u32 interp_feerate(const struct feerate_est *rates, u32 blockcount)
 	const struct feerate_est *before = NULL, *after = NULL;
 
 	/* Find before and after. */
-	for (size_t i = 0; i < tal_count(rates); i++) {
+	const size_t num_feerates = tal_count(rates);
+	for (size_t i = 0; i < num_feerates; i++) {
 		if (rates[i].blockcount <= blockcount) {
 			before = &rates[i];
 		} else if (rates[i].blockcount > blockcount && !after) {
@@ -483,9 +486,10 @@ static void smooth_one_feerate(const struct chain_topology *topo,
 static bool feerates_differ(const struct feerate_est *a,
 			    const struct feerate_est *b)
 {
-	if (tal_count(a) != tal_count(b))
+	const size_t num_feerates = tal_count(a);
+	if (num_feerates != tal_count(b))
 		return true;
-	for (size_t i = 0; i < tal_count(a); i++) {
+	for (size_t i = 0; i < num_feerates; i++) {
 		if (a[i].blockcount != b[i].blockcount)
 			return true;
 		if (a[i].rate != b[i].rate)
@@ -499,12 +503,13 @@ static bool different_blockcounts(struct chain_topology *topo,
 				  const struct feerate_est *old,
 				  const struct feerate_est *new)
 {
-	if (tal_count(old) != tal_count(new)) {
+	const size_t num_feerates = tal_count(old);
+	if (num_feerates != tal_count(new)) {
 		log_unusual(topo->log, "Presented with %zu feerates this time (was %zu!)",
-			    tal_count(new), tal_count(old));
+			    tal_count(new), num_feerates);
 		return true;
 	}
-	for (size_t i = 0; i < tal_count(old); i++) {
+	for (size_t i = 0; i < num_feerates; i++) {
 		if (old[i].blockcount != new[i].blockcount) {
 			log_unusual(topo->log, "Presented with feerates"
 				    " for blockcount %u, previously %u",
@@ -549,7 +554,8 @@ static void update_feerates(struct lightningd *ld,
 
 	/* If there were old smoothed feerates, incorporate those */
 	if (tal_count(topo->smoothed_feerates) != 0) {
-		for (size_t i = 0; i < tal_count(new_smoothed); i++)
+		const size_t num_new = tal_count(new_smoothed);
+		for (size_t i = 0; i < num_new; i++)
 			smooth_one_feerate(topo, &new_smoothed[i]);
 	}
 	changed |= feerates_differ(topo->smoothed_feerates, new_smoothed);
@@ -665,7 +671,6 @@ static struct command_result *json_feerates(struct command *cmd,
 {
 	struct chain_topology *topo = cmd->ld->topology;
 	struct json_stream *response;
-	bool missing;
 	enum feerate_style *style;
 	u32 rate;
 
@@ -674,10 +679,10 @@ static struct command_result *json_feerates(struct command *cmd,
 		   NULL))
 		return command_param_failed();
 
-	missing = (tal_count(topo->feerates[0]) == 0);
+	const size_t num_feerates = tal_count(topo->feerates[0]);
 
 	response = json_stream_success(cmd);
-	if (missing)
+	if (!num_feerates)
 		json_add_string(response, "warning_missing_feerates",
 				"Some fee estimates unavailable: groestlcoind startup?");
 
@@ -721,8 +726,8 @@ static struct command_result *json_feerates(struct command *cmd,
 				      *style));
 
 	json_array_start(response, "estimates");
-	assert(tal_count(topo->smoothed_feerates) == tal_count(topo->feerates[0]));
-	for (size_t i = 0; i < tal_count(topo->feerates[0]); i++) {
+	assert(tal_count(topo->smoothed_feerates) == num_feerates);
+	for (size_t i = 0; i < num_feerates; i++) {
 		json_object_start(response, NULL);
 		json_add_num(response, "blockcount",
 			     topo->feerates[0][i].blockcount);
@@ -736,7 +741,7 @@ static struct command_result *json_feerates(struct command *cmd,
 	json_array_end(response);
 	json_object_end(response);
 
-	if (!missing) {
+	if (num_feerates) {
 		/* It actually is negotiated per-channel... */
 		bool anchor_outputs
 			= feature_offered(cmd->ld->our_features->bits[INIT_FEATURE],
@@ -917,7 +922,8 @@ static void record_wallet_spend(struct lightningd *ld,
 static void topo_update_spends(struct chain_topology *topo, struct block *b)
 {
 	const struct short_channel_id *spent_scids;
-	for (size_t i = 0; i < tal_count(b->full_txs); i++) {
+	const size_t num_txs = tal_count(b->full_txs);
+	for (size_t i = 0; i < num_txs; i++) {
 		const struct bitcoin_tx *tx = b->full_txs[i];
 
 		for (size_t j = 0; j < tx->wtx->num_inputs; j++) {
@@ -942,26 +948,29 @@ static void topo_update_spends(struct chain_topology *topo, struct block *b)
 
 static void topo_add_utxos(struct chain_topology *topo, struct block *b)
 {
-	for (size_t i = 0; i < tal_count(b->full_txs); i++) {
+	/* Coinbase and pegin UTXOs can be ignored */
+	const uint32_t skip_features = WALLY_TX_IS_COINBASE | WALLY_TX_IS_PEGIN;
+	const size_t num_txs = tal_count(b->full_txs);
+	for (size_t i = 0; i < num_txs; i++) {
 		const struct bitcoin_tx *tx = b->full_txs[i];
-		struct bitcoin_outpoint outpoint;
-
-		bitcoin_txid(tx, &outpoint.txid);
-		for (outpoint.n = 0;
-		     outpoint.n < tx->wtx->num_outputs;
-		     outpoint.n++) {
-			if (tx->wtx->outputs[outpoint.n].features
-			    & WALLY_TX_IS_COINBASE)
+		for (size_t n = 0; n < tx->wtx->num_outputs; n++) {
+			if (tx->wtx->outputs[n].features & skip_features)
 				continue;
+			if (tx->wtx->outputs[n].script_len != BITCOIN_SCRIPTPUBKEY_P2WSH_LEN)
+				continue; /* Cannot possibly be a p2wsh utxo */
 
-			const u8 *script = bitcoin_tx_output_get_script(tmpctx, tx, outpoint.n);
-			struct amount_asset amt = bitcoin_tx_output_get_amount(tx, outpoint.n);
+			struct amount_asset amt = bitcoin_tx_output_get_amount(tx, n);
+			if (!amount_asset_is_main(&amt))
+				continue; /* Ignore non-policy asset outputs */
 
-			if (amount_asset_is_main(&amt) && is_p2wsh(script, NULL)) {
-				wallet_utxoset_add(topo->ld->wallet, &outpoint,
-						   b->height, i, script,
-						   amount_asset_to_sat(&amt));
-			}
+			const u8 *script = bitcoin_tx_output_get_script(tmpctx, tx, n);
+			if (!is_p2wsh(script, NULL))
+				continue; /* We only care about p2wsh utxos */
+
+			struct bitcoin_outpoint outpoint = { b->txids[i], n };
+			wallet_utxoset_add(topo->ld->wallet, &outpoint,
+					   b->height, i, script,
+					   amount_asset_to_sat(&amt));
 		}
 	}
 }
@@ -1159,7 +1168,8 @@ u32 feerate_min(struct lightningd *ld, bool *unknown)
 	 * */
 	min = 0xFFFFFFFF;
 	for (size_t i = 0; i < ARRAY_SIZE(topo->feerates); i++) {
-		for (size_t j = 0; j < tal_count(topo->feerates[i]); j++) {
+		const size_t num_feerates = tal_count(topo->feerates[i]);
+		for (size_t j = 0; j < num_feerates; j++) {
 			if (topo->feerates[i][j].rate < min)
 				min = topo->feerates[i][j].rate;
 		}
@@ -1188,7 +1198,8 @@ u32 feerate_max(struct lightningd *ld, bool *unknown)
 		*unknown = false;
 
 	for (size_t i = 0; i < ARRAY_SIZE(topo->feerates); i++) {
-		for (size_t j = 0; j < tal_count(topo->feerates[i]); j++) {
+		const size_t num_feerates = tal_count(topo->feerates[i]);
+		for (size_t j = 0; j < num_feerates; j++) {
 			if (topo->feerates[i][j].rate > max)
 				max = topo->feerates[i][j].rate;
 		}

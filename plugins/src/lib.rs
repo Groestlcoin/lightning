@@ -198,9 +198,16 @@ where
             RpcMethod {
                 name: name.to_string(),
                 description: description.to_string(),
+                usage: String::default(),
                 callback: Box::new(move |p, r| Box::pin(callback(p, r))),
             },
         );
+        self
+    }
+
+    pub fn rpcmethod_from_builder(mut self, rpc_method: RpcMethodBuilder<S>) -> Builder<S, I, O> {
+        self.rpcmethods
+            .insert(rpc_method.name.to_string(), rpc_method.build());
         self
     }
 
@@ -335,7 +342,7 @@ where
             .map(|v| messages::RpcMethod {
                 name: v.name.clone(),
                 description: v.description.clone(),
-                usage: String::new(),
+                usage: v.usage.clone(),
             })
             .collect();
 
@@ -383,6 +390,44 @@ where
     }
 }
 
+impl<S> RpcMethodBuilder<S>
+where
+    S: Send + Clone,
+{
+    pub fn new<C, F>(name: &str, callback: C) -> Self
+    where
+        C: Send + Sync + 'static,
+        C: Fn(Plugin<S>, Request) -> F + 'static,
+        F: Future<Output = Response> + Send + 'static,
+    {
+        Self {
+            name: name.to_string(),
+            callback: Box::new(move |p, r| Box::pin(callback(p, r))),
+            usage: None,
+            description: None,
+        }
+    }
+
+    pub fn description(mut self, description: &str) -> Self {
+        self.description = Some(description.to_string());
+        self
+    }
+
+    pub fn usage(mut self, usage: &str) -> Self {
+        self.usage = Some(usage.to_string());
+        self
+    }
+
+    fn build(self) -> RpcMethod<S> {
+        RpcMethod {
+            callback: self.callback,
+            name: self.name,
+            description: self.description.unwrap_or_default(),
+            usage: self.usage.unwrap_or_default(),
+        }
+    }
+}
+
 // Just some type aliases so we don't get confused in a lisp-like sea
 // of parentheses.
 type Request = serde_json::Value;
@@ -405,6 +450,17 @@ where
     callback: AsyncCallback<S>,
     description: String,
     name: String,
+    usage: String,
+}
+
+pub struct RpcMethodBuilder<S>
+where
+    S: Clone + Send,
+{
+    callback: AsyncCallback<S>,
+    name: String,
+    description: Option<String>,
+    usage: Option<String>,
 }
 
 struct Subscription<S>
@@ -717,5 +773,69 @@ mod test {
         let state = ();
         let builder = Builder::new(tokio::io::stdin(), tokio::io::stdout());
         let _ = builder.start(state);
+    }
+
+    #[tokio::test]
+    async fn logs_become_json_rpc_notifications() {
+        // The input and output for testing the plugin behavior
+        let (input, input_writer) = tokio::net::UnixStream::pair().unwrap();
+        let (output, output_reader) = tokio::net::UnixStream::pair().unwrap();
+
+        let mut framed_reader = FramedRead::new(output_reader, JsonCodec::default());
+        let mut input_writer = FramedWrite::new(input_writer, JsonCodec::default());
+
+        // Send the get_manifest method
+        let get_manifest = serde_json::json!({
+            "jsonrpc" : "2.0",
+            "method" : "getmanifest",
+            "id" : 1,
+            "params" : {}
+        });
+        let init = serde_json::json!({
+            "jsonrpc" : "2.0",
+            "method" : "init",
+            "id" : 2,
+            "params" : {
+                "options" : {},
+                "configuration" : {
+                    "lightning-dir" : "/tmp/lightning-dir",
+                    "rpc-file" : "rpc",
+                    "startup" : true,
+                    "network" : "testnet",
+                    "feature_set" : {},
+                }
+            }
+        });
+        input_writer.send(get_manifest).await.unwrap();
+        input_writer.send(init).await.unwrap();
+
+        // We create a scope here
+        // At the bottom of this scope the configured_plugin
+        // should be dropped and all logs should be flushed
+        {
+            // Configure the plugin and the logger
+            let builder: Builder<(), _, _> = Builder::new(input, output);
+            let _ = builder.configure().await.unwrap().unwrap();
+
+            // builder.configure() configures our logger
+            // Every LogEntry should now be written to `output`-stream
+            // as a json-rpc notification.
+            log::info!("I'm a log message");
+        }
+
+        // Check the output_reader the find the log message
+        let duration = std::time::Duration::from_millis(10);
+        let mut found_message = false;
+        while let Ok(Some(msg)) = tokio::time::timeout(duration, framed_reader.next()).await {
+            if msg.is_ok() {
+                let msg = msg.unwrap();
+                if msg.get("method") == Some(&json!("log")) {
+                    if msg["params"]["message"] == json!("I'm a log message") {
+                        found_message = true
+                    }
+                }
+            }
+        }
+        assert!(found_message)
     }
 }

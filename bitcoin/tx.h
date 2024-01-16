@@ -89,8 +89,13 @@ bool bitcoin_txid_to_hex(const struct bitcoin_txid *txid,
 struct bitcoin_tx *bitcoin_tx_with_psbt(const tal_t *ctx, struct wally_psbt *psbt);
 
 /* Internal de-linearization functions. */
+/* Pull a bitcoin tx, and create a PSBT wrapper for it */
 struct bitcoin_tx *pull_bitcoin_tx(const tal_t *ctx,
 				   const u8 **cursor, size_t *max);
+
+/* Pull a bitcoin tx without creating a PSBT wrapper for it */
+struct bitcoin_tx *pull_bitcoin_tx_only(const tal_t *ctx,
+					const u8 **cursor, size_t *max);
 
 /* Helper to create a wally_tx_output: make sure to wally_tx_output_free!
  * Returns NULL if amount is extreme (wally doesn't like).
@@ -156,8 +161,8 @@ const u8 *bitcoin_tx_output_get_script(const tal_t *ctx, const struct bitcoin_tx
  * comfort of being able to call `tal_bytelen` and similar on a script we just
  * return a `tal_arr` clone of the original script.
  */
-const u8 *wally_tx_output_get_script(const tal_t *ctx,
-				     const struct wally_tx_output *output);
+const u8 *cln_wally_tx_output_get_script(const tal_t *ctx,
+					 const struct wally_tx_output *output);
 /**
  * Helper to get a witness script for an output.
  */

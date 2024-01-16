@@ -41,10 +41,10 @@ To install the Docker image for the latest stable release:
 docker pull Groestlcoin/lightningd:latest
 ```
 
-To install for a specific version, for example, 22.11.1:
+To install for a specific version, for example, 23.11.2:
 
 ```shell
-docker pull Groestlcoin/lightningd:v22.11.1
+docker pull Groestlcoin/lightningd:v23.11
 ```
 
 See all of the docker images for Core Lightning on [Docker Hub](https://hub.docker.com/r/groestlcoin/lightningd/tags).
@@ -102,7 +102,7 @@ cd lightning
 Checkout a release tag:
 
 ```shell
-git checkout v22.11.1
+git checkout v23.11.2
 ```
 
 For development or running tests, get additional dependencies:
@@ -128,6 +128,7 @@ To build cln to just install a tagged or master version you can use the followin
 pip3 install --upgrade pip
 pip3 install mako
 pip3 install -r plugins/clnrest/requirements.txt
+pip3 install grpcio-tools
 ./configure
 make
 sudo make install
@@ -204,7 +205,7 @@ cd lightning
 Checkout a release tag:
 
 ```shell
-git checkout v22.11.1
+git checkout v23.11.2
 ```
 
 Build and install lightning:
@@ -379,7 +380,7 @@ cd lightning
 Checkout a release tag:
 
 ```shell
-git checkout v22.11.1
+git checkout v23.11.2
 ```
 
 Build lightning:

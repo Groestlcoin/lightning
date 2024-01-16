@@ -990,7 +990,7 @@ static char *check_balances(const tal_t *ctx,
 
 static bool is_segwit_output(struct wally_tx_output *output)
 {
-	const u8 *script = wally_tx_output_get_script(tmpctx, output);
+	const u8 *script = cln_wally_tx_output_get_script(tmpctx, output);
 	return is_known_segwit_scripttype(script);
 }
 
@@ -1784,7 +1784,7 @@ static bool run_tx_interactive(struct state *state,
 
 			/* Convert tx_bytes to a tx! */
 			len = tal_bytelen(tx_bytes);
-			tx = pull_bitcoin_tx(tmpctx, &tx_bytes, &len);
+			tx = pull_bitcoin_tx_only(tmpctx, &tx_bytes, &len);
 			if (!tx || len != 0) {
 				open_abort(state, "%s", "Invalid tx sent.");
 				return false;
