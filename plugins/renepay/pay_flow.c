@@ -340,9 +340,20 @@ static void convert_and_attach_flows(struct payment *payment,
 			     flow_path_annotated(tmpctx, pf));
 
 		/* Increase totals for payment */
-		amount_msat_accumulate(&payment->total_sent, pf->amounts[0]);
-		amount_msat_accumulate(&payment->total_delivering,
-				       payflow_delivered(pf));
+		if(!amount_msat_add(&payment->total_sent,
+				    payment->total_sent,
+				    pf->amounts[0]))
+		{
+			// TODO: fail this call and notifiy the plugin
+			assert(0);
+		}
+		if(!amount_msat_add(&payment->total_delivering,
+				    payment->total_delivering,
+				    payflow_delivered(pf)))
+		{
+			// TODO: fail this call and notifiy the plugin
+			assert(0);
+		}
 
 		/* We keep a global map to identify notifications
 		 * about this flow. */
@@ -443,6 +454,7 @@ const char *add_payflows(const tal_t *ctx,
 {
 	bitmap *disabled;
 	const struct gossmap_node *src, *dst;
+	char *errmsg;
 
 	disabled = make_disabled_bitmap(tmpctx, pay_plugin->gossmap, p->disabled_scids);
 	src = gossmap_find_node(pay_plugin->gossmap, &pay_plugin->my_id);
@@ -471,17 +483,30 @@ const char *add_payflows(const tal_t *ctx,
 				p->min_prob_success ,
 				p->delay_feefactor,
 				p->base_fee_penalty,
-				p->prob_cost_factor);
+				p->prob_cost_factor,
+				&errmsg);
 		if (!flows) {
 			*ecode = PAY_ROUTE_NOT_FOUND;
 			return tal_fmt(ctx,
-				       "minflow couldn't find a feasible flow for %s",
-				       type_to_string(tmpctx,struct amount_msat,&amount));
+				       "minflow couldn't find a feasible flow for %s, %s",
+				       type_to_string(tmpctx,struct amount_msat,&amount),
+				       errmsg);
 		}
 
 		/* Are we unhappy? */
-		prob = flow_set_probability(flows,pay_plugin->gossmap,pay_plugin->chan_extra_map);
-		fee = flow_set_fee(flows);
+		char *fail;
+		prob = flowset_probability(tmpctx, flows, pay_plugin->gossmap,
+					   pay_plugin->chan_extra_map, &fail);
+		if(prob<0)
+		{
+			plugin_err(pay_plugin->plugin,
+				   "flow_set_probability failed: %s", fail);
+		}
+		if(!flowset_fee(&fee,flows))
+		{
+			plugin_err(pay_plugin->plugin,
+				   "flowset_fee failed");
+		}
 		delay = flows_worst_delay(flows) + p->final_cltv;
 
 		payment_note(p, LOG_INFORM,
@@ -584,9 +609,20 @@ static struct pf_result *pf_resolve(struct pay_flow *pf,
 
 	/* If it didn't deliver, remove from totals */
 	if (pf->state != PAY_FLOW_SUCCESS) {
-		amount_msat_reduce(&pf->payment->total_delivering,
-				   payflow_delivered(pf));
-		amount_msat_reduce(&pf->payment->total_sent, pf->amounts[0]);
+		if(!amount_msat_sub(&pf->payment->total_delivering,
+				    pf->payment->total_delivering,
+				    payflow_delivered(pf)))
+		{
+			// TODO: fail this call and notifiy the plugin
+			assert(0);
+		}
+		if(!amount_msat_sub(&pf->payment->total_sent,
+				    pf->payment->total_sent,
+				    pf->amounts[0]))
+		{
+			// TODO: fail this call and notifiy the plugin
+			assert(0);
+		}
 	}
 
 	/* Subtract HTLC counters from the path */

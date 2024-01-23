@@ -324,6 +324,8 @@ int main(int argc, char *argv[])
 	struct short_channel_id scid12, scid23;
 	struct chan_extra_map *chan_extra_map;
 
+	char *errmsg;
+
 	common_setup(argv[0]);
 
 	fd = tmpdir_mkstemp(tmpctx, "run-not_mcf.XXXXXX", &gossfile);
@@ -344,6 +346,8 @@ int main(int argc, char *argv[])
 	chan_extra_map_init(chan_extra_map);
 	uncertainty_network_update(gossmap,chan_extra_map);
 
+	printf("All set, now let's call minflow ...\n");
+
 	flows = minflow(tmpctx, gossmap,
 			gossmap_find_node(gossmap, &l1),
 			gossmap_find_node(gossmap, &l3),
@@ -354,13 +358,23 @@ int main(int argc, char *argv[])
 			 /* min probability = */ 0.1,
 			 /* delay fee factor = */ 1,
 			 /* base fee penalty */ 1,
-			 /* prob cost factor = */ 10);
-	commit_flow_set(gossmap,chan_extra_map,flows);
+			 /* prob cost factor = */ 10,
+			 &errmsg);
+	printf("minflow completed.\n");
+
+	if (!flows) {
+		printf("Minflow has failed with: %s", errmsg);
+		assert(0 && "minflow failed");
+	}
+	if(commit_flowset(tmpctx, gossmap,chan_extra_map,flows,NULL)<tal_count(flows))
+	{
+		assert(0 && "commit_flowset failed");
+	}
 	printf("%s\n",
 	       print_flows(tmpctx,"Flow via single path l1->l2->l3", gossmap, flows));
 
 
-
+	printf("Checking results.\n");
 	/* Should go 1->2->3 */
 	assert(tal_count(flows) == 1);
 	assert(tal_count(flows[0]->path) == 2);
@@ -406,7 +420,10 @@ int main(int argc, char *argv[])
 	assert(amount_msat_eq(ce->half[1].known_max, AMOUNT_MSAT(1000000000)));
 
 	/* Clear that */
-	remove_completed_flow_set(gossmap, chan_extra_map, flows);
+	if(!remove_completed_flowset(tmpctx, gossmap, chan_extra_map, flows,NULL))
+	{
+		assert(0 && "remove_completed_flowset failed");
+	}
 
 	// /* Now try adding a local channel scid */
 
@@ -489,6 +506,8 @@ int main(int argc, char *argv[])
 	// remove_completed_flow(gossmap, chan_extra_map, flows[0]);
 	// remove_completed_flow(gossmap, chan_extra_map, flows[1]);
 
+	printf("All set, let's call minflow ... \n");
+
 	/* Higher mu values mean we pay more for certainty! */
 	struct flow **flows2 = minflow(tmpctx, gossmap,
 			 gossmap_find_node(gossmap, &l1),
@@ -500,9 +519,20 @@ int main(int argc, char *argv[])
 			 /* min probability = */ 0.1, // 10%
 			 /* delay fee factor = */ 1,
 			 /* base fee penalty */ 1,
-			 /* prob cost factor = */ 10);
+			 /* prob cost factor = */ 10,
+			 &errmsg);
+
+	printf("minflow completed execution.\n");
+
+	if (!flows) {
+		printf("Minflow has failed with: %s", errmsg);
+		assert(0 && "minflow failed");
+	}
 	printf("%s\n",
 		print_flows(tmpctx,"Flow via two paths, high mu", gossmap, flows2));
+
+	printf("Verifying results ... \n");
+
 	assert(tal_count(flows2) == 2);
 
 	/* The solution is composed by two paths, one with lenght 1 and the

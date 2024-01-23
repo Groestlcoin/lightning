@@ -6,6 +6,7 @@ tests/fuzz/fuzz-connectd-handshake-act*.o: tests/fuzz/connectd_handshake.h
 tests/fuzz/fuzz-ripemd160: LDLIBS += -lcrypto
 tests/fuzz/fuzz-sha256: LDLIBS += -lcrypto
 tests/fuzz/fuzz-wire-*.o: tests/fuzz/wire.h
+tests/fuzz/fuzz-bolt12-*.o: tests/fuzz/bolt12.h
 
 FUZZ_TARGETS_SRC := $(wildcard tests/fuzz/fuzz-*.c)
 FUZZ_TARGETS_OBJS := $(FUZZ_TARGETS_SRC:.c=.o)
@@ -23,6 +24,7 @@ FUZZ_COMMON_OBJS := \
 	common/bigsize.o				\
 	common/blockheight_states.o			\
 	common/bolt11.o					\
+	common/bolt12_merkle.o				\
 	common/channel_config.o				\
 	common/close_tx.o				\
 	common/configdir.o				\
@@ -56,6 +58,7 @@ FUZZ_COMMON_OBJS := \
 	common/type_to_string.o				\
 	common/utils.o					\
 	common/version.o				\
+	wire/bolt12_wiregen.o				\
 	wire/fromwire.o					\
 	wire/onion_wiregen.o				\
 	wire/peer_wire.o				\

@@ -39,7 +39,9 @@ static const char* print_flows(
 		struct flow **flows)
 {
 	tal_t *this_ctx = tal(ctx,tal_t);
-	double tot_prob = flow_set_probability(flows,gossmap,chan_extra_map);
+	double tot_prob =
+	    flowset_probability(tmpctx, flows, gossmap, chan_extra_map, NULL);
+	assert(tot_prob>=0);
 	char *buff = tal_fmt(ctx,"%s: %zu subflows, prob %2lf\n", desc, tal_count(flows),tot_prob);
 	for (size_t i = 0; i < tal_count(flows); i++) {
 		struct amount_msat fee, delivered;
@@ -75,6 +77,8 @@ int main(int argc, char *argv[])
 	struct short_channel_id scid12, scid13, scid24, scid34;
 	struct gossmap_localmods *mods;
 	struct chan_extra_map *chan_extra_map;
+
+	char *errmsg;
 
 	common_setup(argv[0]);
 
@@ -156,7 +160,12 @@ int main(int argc, char *argv[])
 			 /* min probability = */ 0.8, // 80%
 			 /* delay fee factor = */ 0,
 			 /* base fee penalty */ 0,
-			 /* prob cost factor = */ 1);
+			 /* prob cost factor = */ 1,
+			 &errmsg);
+	if (!flows) {
+		printf("Minflow has failed with: %s", errmsg);
+		assert(0 && "minflow failed");
+	}
 
 	printf("%s\n",
 		print_flows(tmpctx,"Simple minflow", gossmap,chan_extra_map, flows));
