@@ -755,7 +755,8 @@ class LightningRpc(UnixDomainSocketRpc):
                     minconf=None, utxos=None, push_msat=None, close_to=None,
                     request_amt=None, compact_lease=None,
                     mindepth: Optional[int] = None,
-                    reserve: Optional[str] = None):
+                    reserve: Optional[str] = None,
+                    channel_type=None):
         """
         Fund channel with {id} using {amount} satoshis with feerate
         of {feerate} (uses default feerate if unset).
@@ -782,11 +783,12 @@ class LightningRpc(UnixDomainSocketRpc):
             "compact_lease": compact_lease,
             "mindepth": mindepth,
             "reserve": reserve,
+            "channel_type": channel_type,
         }
         return self.call("fundchannel", payload)
 
     def fundchannel_start(self, node_id, amount, feerate=None, announce=True,
-                          close_to=None, mindepth: Optional[int] = None):
+                          close_to=None, mindepth: Optional[int] = None, channel_type=None):
         """
         Start channel funding with {id} for {amount} satoshis
         with feerate of {feerate} (uses default feerate if unset).
@@ -803,6 +805,7 @@ class LightningRpc(UnixDomainSocketRpc):
             "announce": announce,
             "close_to": close_to,
             "mindepth": mindepth,
+            "channel_type": channel_type,
         }
         return self.call("fundchannel_start", payload)
 
@@ -851,8 +854,8 @@ class LightningRpc(UnixDomainSocketRpc):
         res = self.call("listpeers", payload)
         return res.get("peers") and res["peers"][0] or None
 
-    def getroute(self, node_id, amount_msat=None, riskfactor=None, cltv=9, fromid=None,
-                 fuzzpercent=None, exclude=None, maxhops=None, msatoshi=None):
+    def getroute(self, node_id, amount_msat, riskfactor, cltv=9, fromid=None,
+                 fuzzpercent=None, exclude=None, maxhops=None):
         """
         Show route to {id} for {amount_msat}, using {riskfactor} and optional
         {cltv} (default 9). If specified search from {fromid} otherwise use
@@ -861,13 +864,6 @@ class LightningRpc(UnixDomainSocketRpc):
         scid/direction or node-id to exclude. Limit the number of hops in the
         route to {maxhops}.
         """
-        if msatoshi:
-            amount_msat = msatoshi
-        if riskfactor is None:
-            raise TypeError("getroute() missing 'riskfactor'")
-        if amount_msat is None:
-            raise TypeError("getroute() missing 'amount_msat'")
-
         payload = {
             "id": node_id,
             "amount_msat": amount_msat,
@@ -889,20 +885,12 @@ class LightningRpc(UnixDomainSocketRpc):
         }
         return self.call("help", payload)
 
-    def invoice(self, amount_msat=None, label=None, description=None, expiry=None, fallbacks=None,
-                preimage=None, exposeprivatechannels=None, cltv=None, deschashonly=None, msatoshi=None):
+    def invoice(self, amount_msat, label, description, expiry=None, fallbacks=None,
+                preimage=None, exposeprivatechannels=None, cltv=None, deschashonly=None):
         """
         Create an invoice for {amount_msat} with {label} and {description} with
         optional {expiry} seconds (default 1 week).
         """
-        if msatoshi:
-            amount_msat = msatoshi
-        if label is None:
-            raise TypeError("invoice() missing 'label'")
-        if description is None:
-            raise TypeError("invoice() missing 'description'")
-        if amount_msat is None:
-            raise TypeError("invoice() missing 'amount_msat'")
         payload = {
             "amount_msat": amount_msat,
             "label": label,
@@ -1096,15 +1084,12 @@ class LightningRpc(UnixDomainSocketRpc):
     def pay(self, bolt11, amount_msat=None, label=None, riskfactor=None,
             maxfeepercent=None, retry_for=None,
             maxdelay=None, exemptfee=None, localinvreqid=None, exclude=None,
-            maxfee=None, description=None, msatoshi=None):
+            maxfee=None, description=None):
         """
         Send payment specified by {bolt11} with {amount_msat}
         (ignored if {bolt11} has an amount), optional {label}
         and {riskfactor} (default 1.0).
         """
-        # Deprecated usage
-        if msatoshi:
-            amount_msat = msatoshi
         payload = {
             "bolt11": bolt11,
             "amount_msat": amount_msat,
@@ -1121,7 +1106,7 @@ class LightningRpc(UnixDomainSocketRpc):
         }
         return self.call("pay", payload)
 
-    def openchannel_init(self, node_id, channel_amount, psbt, feerate=None, funding_feerate=None, announce=True, close_to=None, request_amt=None, *args, **kwargs):
+    def openchannel_init(self, node_id, channel_amount, psbt, feerate=None, funding_feerate=None, announce=True, close_to=None, request_amt=None, channel_type=None):
         """Initiate an openchannel with a peer """
         payload = {
             "id": node_id,
@@ -1132,6 +1117,7 @@ class LightningRpc(UnixDomainSocketRpc):
             "announce": announce,
             "close_to": close_to,
             "request_amt": request_amt,
+            "channel_type": channel_type,
         }
         return self.call("openchannel_init", payload)
 
@@ -1259,13 +1245,10 @@ class LightningRpc(UnixDomainSocketRpc):
         }
         return self.call("plugin", payload)
 
-    def sendpay(self, route, payment_hash, label=None, amount_msat=None, bolt11=None, payment_secret=None, partid=None, groupid=None, payment_metadata=None, msatoshi=None):
+    def sendpay(self, route, payment_hash, label=None, amount_msat=None, bolt11=None, payment_secret=None, partid=None, groupid=None, payment_metadata=None):
         """
         Send along {route} in return for preimage of {payment_hash}.
         """
-        # Deprecated usage
-        if msatoshi:
-            amount_msat = msatoshi
         payload = {
             "route": route,
             "payment_hash": payment_hash,
@@ -1282,7 +1265,7 @@ class LightningRpc(UnixDomainSocketRpc):
     def sendonion(
             self, onion, first_hop, payment_hash, label=None,
             shared_secrets=None, partid=None, bolt11=None, amount_msat=None,
-            destination=None, msatoshi=None
+            destination=None
     ):
         """Send an outgoing payment using the specified onion.
 
@@ -1291,9 +1274,6 @@ class LightningRpc(UnixDomainSocketRpc):
         internal handling, but not required.
 
         """
-        # Deprecated usage
-        if msatoshi:
-            amount_msat = msatoshi
         payload = {
             "onion": onion,
             "first_hop": first_hop,
@@ -1550,17 +1530,11 @@ class LightningRpc(UnixDomainSocketRpc):
         }
         return self.call("checkmessage", payload)
 
-    def keysend(self, destination, amount_msat=None, label=None, maxfeepercent=None,
+    def keysend(self, destination, amount_msat, label=None, maxfeepercent=None,
                 retry_for=None, maxdelay=None, exemptfee=None,
-                extratlvs=None, msatoshi=None):
+                extratlvs=None):
         """
         """
-        # Deprecated usage
-        if msatoshi:
-            amount_msat = msatoshi
-        if amount_msat is None:
-            raise TypeError("keysend() missing 'amount_msat'")
-
         if extratlvs is not None and not isinstance(extratlvs, dict):
             raise ValueError(
                 "extratlvs is not a dictionary with integer keys and hexadecimal values"

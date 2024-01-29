@@ -801,7 +801,9 @@ static struct command_result *check_invoice_request_usage(struct command *cmd,
 }
 
 static struct channel *
-find_channel_for_htlc_add(struct lightningd *ld, const struct node_id *node,
+find_channel_for_htlc_add(struct lightningd *ld,
+			  struct command *cmd,
+			  const struct node_id *node,
 			  const struct short_channel_id *scid_or_alias,
 			  const struct amount_msat *amount)
 {
@@ -822,8 +824,11 @@ find_channel_for_htlc_add(struct lightningd *ld, const struct node_id *node,
 	}
 
 	/* We used to ignore scid: now all-zero means "any" */
-	if (!channel && (ld->deprecated_apis ||
-			 memeqzero(scid_or_alias, sizeof(*scid_or_alias)))) {
+	if (!channel
+	    && (memeqzero(scid_or_alias, sizeof(*scid_or_alias))
+		|| command_deprecated_in_ok(cmd,
+					    "channel.ignored",
+					    "v0.12", "v24.02"))) {
 		list_for_each(&peer->channels, channel, list) {
 			if (channel_state_can_add_htlc(channel->state) &&
 			    amount_msat_greater(channel->our_msat, *amount)) {
@@ -1073,7 +1078,7 @@ send_payment_core(struct lightningd *ld,
 	if (ret)
 		return ret;
 
-	channel = find_channel_for_htlc_add(ld, &first_hop->node_id,
+	channel = find_channel_for_htlc_add(ld, cmd, &first_hop->node_id,
 					    &first_hop->scid, &msat);
 	if (!channel) {
 		struct json_stream *data
@@ -1310,7 +1315,7 @@ static struct command_result *json_sendonion(struct command *cmd,
 			 p_opt_def("partid", param_u64, &partid, 0),
 			 /* FIXME: parameter should be invstring now */
 			 p_opt("bolt11", param_invstring, &invstring),
-			 p_opt_def("amount_msat|msatoshi", param_msat, &msat, AMOUNT_MSAT(0)),
+			 p_opt_def("amount_msat", param_msat, &msat, AMOUNT_MSAT(0)),
 			 p_opt("destination", param_node_id, &destination),
 			 p_opt("localinvreqid", param_sha256, &local_invreq_id),
 			 p_opt("groupid", param_u64, &group),
@@ -1393,8 +1398,7 @@ static struct command_result *param_route_hops(struct command *cmd,
 		int *ignored;
 
 		if (!param(cmd, buffer, t,
-			   /* deprecated: getroute gives both, so we allow both! */
-			   p_req_dup_ok("amount_msat|msatoshi", param_msat, &amount_msat),
+			   p_req("amount_msat", param_msat, &amount_msat),
 			   p_req("id", param_node_id, &id),
 			   p_req("delay", param_number, &delay),
 			   p_req("channel", param_short_channel_id, &channel),
@@ -1497,7 +1501,7 @@ static struct command_result *self_payment(struct lightningd *ld,
 	log_info(ld->log, "Self-resolved invoice '%s' with amount %s",
 		 inv->label->s,
 		 type_to_string(tmpctx, struct amount_msat, &msat));
-	notify_invoice_payment(ld, msat, inv->r, inv->label, NULL);
+	notify_invoice_payment(ld, msat, &inv->r, inv->label, NULL);
 
 	/* Now resolve the payment */
 	payment_succeeded(ld, rhash, partid, groupid,  &inv->r);
@@ -1526,7 +1530,7 @@ static struct command_result *json_sendpay(struct command *cmd,
 			 p_req("route", param_route_hops, &route),
 			 p_req("payment_hash", param_sha256, &rhash),
 			 p_opt("label", param_escaped_string, &label),
-			 p_opt("amount_msat|msatoshi", param_msat, &msat),
+			 p_opt("amount_msat", param_msat, &msat),
 			 /* FIXME: parameter should be invstring now */
 			 p_opt("bolt11", param_invstring, &invstring),
 			 p_opt("payment_secret", param_secret, &payment_secret),

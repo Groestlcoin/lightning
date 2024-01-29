@@ -24,6 +24,7 @@
 #include <ccan/tal/str/str.h>
 #include <common/codex32.h>
 #include <common/configdir.h>
+#include <common/deprecation.h>
 #include <common/json_command.h>
 #include <common/json_filter.h>
 #include <common/json_param.h>
@@ -92,6 +93,9 @@ struct json_connection {
 	/* JSON parsing state. */
 	jsmn_parser input_parser;
 	jsmntok_t *input_toks;
+
+	/* Local deprecated support? */
+	bool deprecated_ok;
 
 	/* Our commands */
 	struct list_head commands;
@@ -460,12 +464,15 @@ static void json_add_help_command(struct command *cmd,
 	char *usage;
 
 	/* If they disallow deprecated APIs, don't even list them */
-	if (!cmd->ld->deprecated_apis && json_command->deprecated)
+	if (!command_deprecated_out_ok(cmd, NULL,
+				       json_command->depr_start,
+				       json_command->depr_end)) {
 		return;
+	}
 
 	usage = tal_fmt(cmd, "%s%s %s",
 			json_command->name,
-			json_command->deprecated ? " (DEPRECATED!)" : "",
+			json_command->depr_start ? " (DEPRECATED!)" : "",
 			strmap_get(&cmd->ld->jsonrpc->usagemap,
 				   json_command->name));
 	json_object_start(response, NULL);
@@ -528,7 +535,9 @@ static struct command_result *json_help(struct command *cmd,
 			return command_fail(cmd, JSONRPC2_METHOD_NOT_FOUND,
 					    "Unknown command %s",
 					    cmdname);
-		if (!cmd->ld->deprecated_apis && one_cmd->deprecated)
+		if (!command_deprecated_in_ok(cmd, NULL,
+					      one_cmd->depr_start,
+					      one_cmd->depr_end))
 			return command_fail(cmd, JSONRPC2_METHOD_NOT_FOUND,
 					    "Deprecated command %s",
 					    cmdname);
@@ -650,6 +659,38 @@ struct command_result *command_fail(struct command *cmd, enum jsonrpc_errcode co
 struct json_filter **command_filter_ptr(struct command *cmd)
 {
 	return &cmd->filter;
+}
+
+bool command_deprecated_ok_flag(const struct command *cmd)
+{
+	if (cmd->jcon)
+		return cmd->jcon->deprecated_ok;
+	return cmd->ld->deprecated_ok;
+}
+
+bool command_deprecated_in_ok(struct command *cmd,
+				 const char *param,
+				 const char *depr_start,
+				 const char *depr_end)
+{
+	return lightningd_deprecated_in_ok(cmd->ld,
+					   command_log(cmd),
+					   command_deprecated_ok_flag(cmd),
+					   cmd->json_cmd->name, param,
+					   depr_start, depr_end,
+					   cmd->id);
+}
+
+bool command_deprecated_out_ok(struct command *cmd,
+			       const char *fieldname,
+			       const char *depr_start,
+			       const char *depr_end)
+{
+	return lightningd_deprecated_out_ok(cmd->ld,
+					    command_deprecated_ok_flag(cmd),
+					    cmd->json_cmd->name,
+					    fieldname,
+					    depr_start, depr_end);
 }
 
 struct command_result *command_still_pending(struct command *cmd)
@@ -881,7 +922,10 @@ static void replace_command(struct rpc_command_hook_payload *p,
 			      buffer + method->start);
 		goto fail;
 	}
-	if (p->cmd->json_cmd->deprecated && !p->cmd->ld->deprecated_apis) {
+	if (!command_deprecated_in_ok(p->cmd,
+				      json_strdup(tmpctx, buffer, method),
+				      p->cmd->json_cmd->depr_start,
+				      p->cmd->json_cmd->depr_end)) {
 		bad = tal_fmt(tmpctx, "redirected to deprecated command '%.*s'",
 			      method->end - method->start,
 			      buffer + method->start);
@@ -1112,7 +1156,10 @@ parse_request(struct json_connection *jcon, const jsmntok_t tok[])
 		    c, JSONRPC2_METHOD_NOT_FOUND, "Unknown command '%.*s'",
 		    method->end - method->start, jcon->buffer + method->start);
 	}
-	if (c->json_cmd->deprecated && !jcon->ld->deprecated_apis) {
+	if (!command_deprecated_in_ok(c,
+				      json_strdup(tmpctx, jcon->buffer, method),
+				      c->json_cmd->depr_start,
+				      c->json_cmd->depr_end)) {
 		return command_fail(c, JSONRPC2_METHOD_NOT_FOUND,
 				    "Command %.*s is deprecated",
 				    json_tok_full_len(method),
@@ -1302,6 +1349,7 @@ static struct io_plan *jcon_connected(struct io_conn *conn,
 	jcon->input_toks = toks_alloc(jcon);
 	jcon->notifications_enabled = false;
 	jcon->db_batching = false;
+	jcon->deprecated_ok = ld->deprecated_ok;
 	list_head_init(&jcon->commands);
 
 	/* We want to log on destruction, so we free this in destructor. */
@@ -1423,11 +1471,6 @@ void jsonrpc_setup(struct lightningd *ld)
 bool command_usage_only(const struct command *cmd)
 {
 	return cmd->mode == CMD_USAGE;
-}
-
-bool command_deprecated_apis(const struct command *cmd)
-{
-	return cmd->ld->deprecated_apis;
 }
 
 bool command_dev_apis(const struct command *cmd)
@@ -1725,3 +1768,29 @@ static const struct json_command batching_command = {
 	"Database transaction batching {enable}",
 };
 AUTODATA(json_command, &batching_command);
+
+static struct command_result *json_deprecations(struct command *cmd,
+						const char *buffer,
+						const jsmntok_t *obj UNNEEDED,
+						const jsmntok_t *params)
+{
+	bool *enable;
+
+	if (!param(cmd, buffer, params,
+		   p_req("enable", param_bool, &enable),
+		   NULL))
+		return command_param_failed();
+
+	/* Catch the case where they sent this command then hung up. */
+	if (cmd->jcon)
+		cmd->jcon->deprecated_ok = *enable;
+	return command_success(cmd, json_stream_success(cmd));
+}
+
+static const struct json_command deprecations_command = {
+	"deprecations",
+	"utility",
+	json_deprecations,
+	"Set/unset deprecated APIs on this JSON connection (for developer testing)",
+};
+AUTODATA(json_command, &deprecations_command);

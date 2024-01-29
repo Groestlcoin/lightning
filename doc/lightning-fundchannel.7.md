@@ -6,7 +6,7 @@ SYNOPSIS
 
 **fundchannel** *id* *amount* [*feerate*] [*announce*] [*minconf*]
 [*utxos*] [*push\_msat*] [*close\_to*] [*request\_amt*] [*compact\_lease*]
-[*reserve*]
+[*reserve*] [*channel\_type*]
 
 DESCRIPTION
 -----------
@@ -72,7 +72,25 @@ Default is 1% of the funding amount. It can be a whole number, a whole number
 ending in *sat*, a whole number ending in *000msat*, or a number with 1 to 8
 decimal places ending in *btc*.
 
+*channel\_type* *(added v24.02)* is an array of bit numbers, representing the explicit
+channel type to request.  There is currently no sanity checking on
+this value so if you use strange values and your channel breaks, you
+get to keep both pieces.  BOLT 2 defines the following value types:
 
+```
+The currently defined basic types are:
+  - no features (no bits set)
+  - `option_static_remotekey` (bit 12)
+  - `option_anchor_outputs` and `option_static_remotekey` (bits 20 and 12)
+  - `option_anchors_zero_fee_htlc_tx` and `option_static_remotekey` (bits 22 and 12)
+
+Each basic type has the following variations allowed:
+  - `option_scid_alias` (bit 46)
+  - `option_zeroconf` (bit 50)
+```
+
+EXAMPLE
+-------
 
 This example shows how to use lightning-cli to open new channel with peer 03f...fc1 from one whole utxo bcc1...39c:0
 (you can use **listfunds** command to get txid and vout):
@@ -89,6 +107,11 @@ On success, an object is returned, containing:
 - **txid** (txid): The txid of the transaction which funded the channel
 - **outnum** (u32): The 0-based output index showing which output funded the channel
 - **channel\_id** (hex): The channel\_id of the resulting channel (always 64 characters)
+- **channel\_type** (object): channel\_type as negotiated with peer *(added v24.02)*:
+  - **bits** (array of u32s): Each bit set in this channel\_type *(added v24.02)*:
+    - Bit number
+  - **names** (array of strings): Feature name for each bit set in this channel\_type *(added v24.02)*:
+    - Name of feature bit (one of "static\_remotekey/even", "anchor\_outputs/even", "anchors\_zero\_fee\_htlc\_tx/even", "scid\_alias/even", "zeroconf/even")
 - **close\_to** (hex, optional): The raw scriptPubkey which mutual close will go to; only present if *close\_to* parameter was specified and peer supports `option_upfront_shutdown_script`
 - **mindepth** (u32, optional): Number of confirmations before we consider the channel active.
 
@@ -117,4 +140,4 @@ RESOURCES
 
 Main web site: <https://github.com/ElementsProject/lightning>
 
-[comment]: # ( SHA256STAMP:a8329cdb3f13f5bd0047824bed82c2e10516af2735dc59aa2cd71e4cc4f0250a)
+[comment]: # ( SHA256STAMP:b890bd25970e8e1ef92812daa89a25ded100173f9ab411492a87d6cd268ee32d)

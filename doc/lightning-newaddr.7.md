@@ -32,7 +32,6 @@ On success, an object is returned, containing:
 
 - **p2tr** (string, optional): The taproot address *(added v23.08)*
 - **bech32** (string, optional): The bech32 (native segwit) address
-- **p2sh-segwit** (string, optional): The p2sh-wrapped address **deprecated, removal in v23.11**
 
 [comment]: # (GENERATE-FROM-SCHEMA-END)
 
@@ -57,4 +56,4 @@ RESOURCES
 
 Main web site: <https://github.com/ElementsProject/lightning>
 
-[comment]: # ( SHA256STAMP:f93771e450afe0fc20b2ff9763ba7654d4caf17c35cf45186f2cb9146a67503f)
+[comment]: # ( SHA256STAMP:443545e42992626b55c87dd694b272aba58a2fd80e776edad95428e161f229a3)

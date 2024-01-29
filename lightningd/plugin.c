@@ -11,6 +11,7 @@
 #include <ccan/utf8/utf8.h>
 #include <common/configdir.h>
 #include <common/configvar.h>
+#include <common/deprecation.h>
 #include <common/features.h>
 #include <common/json_command.h>
 #include <common/memleak.h>
@@ -902,10 +903,27 @@ struct io_plan *plugin_stdout_conn_init(struct io_conn *conn,
 
 static char *plugin_opt_check(struct plugin_opt *popt)
 {
-	/* Warn them that this is deprecated */
-	if (popt->deprecated && !popt->plugin->plugins->ld->deprecated_apis)
+	/* Fail if this is deprecated */
+	if (!lightningd_deprecated_in_ok(popt->plugin->plugins->ld,
+					 popt->plugin->plugins->log,
+					 popt->plugin->plugins->ld->deprecated_ok,
+					 popt->plugin->shortname,
+					 popt->name,
+					 popt->depr_start,
+					 popt->depr_end, NULL))
 		return tal_fmt(tmpctx, "deprecated option (will be removed!)");
 	return NULL;
+}
+
+static bool plugin_opt_deprecated_out_ok(struct plugin_opt *popt)
+{
+	return lightningd_deprecated_out_ok(popt->plugin->plugins->ld,
+					    popt->plugin->plugins->ld->deprecated_ok,
+					    popt->plugin->shortname,
+					    /* Skip --prefix  */
+					    popt->name + 2,
+					    popt->depr_start,
+					    popt->depr_end);
 }
 
 /* We merely check they're valid: the values stay in configvars */
@@ -927,8 +945,12 @@ static char *plugin_opt_bool_check(const char *arg, struct plugin_opt *popt)
 {
 	/* FIXME: For some reason, '1' and '0' were allowed here? */
 	if (streq(arg, "1") || streq(arg, "0")) {
-		if (!popt->plugin->plugins->ld->deprecated_apis)
+		struct lightningd *ld = popt->plugin->plugins->ld;
+		if (!lightningd_deprecated_in_ok(ld, ld->log, ld->deprecated_ok,
+						 popt->name + 2, "0-or-1",
+						 "v23.08", "v24.08", NULL)) {
 			return "boolean plugin arguments must be true or false";
+		}
 	} else {
 		bool v;
 		char *ret = opt_set_bool_arg(arg, &v);
@@ -995,21 +1017,67 @@ static char *bool_setting(tal_t *ctx,
 	return NULL;
 }
 
+/* Parse deprecated field, as either bool or an array of strings */
+static const char *json_parse_deprecated(const tal_t *ctx,
+					 const char *buffer,
+					 const jsmntok_t *deprtok,
+					 const char **depr_start,
+					 const char **depr_end)
+{
+	bool is_depr;
+
+	*depr_start = *depr_end = NULL;
+
+	if (!deprtok)
+		return NULL;
+
+	/* Not every plugin will track deprecation cycles (and that's OK!):
+	 * pretend it's just been deprecated. */
+	if (json_to_bool(buffer, deprtok, &is_depr)) {
+		if (is_depr)
+			*depr_start = CLN_NEXT_VERSION;
+		return NULL;
+	}
+
+	if (deprtok->type != JSMN_ARRAY || deprtok->size > 2) {
+		return tal_fmt(ctx, "\"deprecated\" must be an array of 1 or 2 elements, not %.*s",
+			       deprtok->end - deprtok->start,
+			       buffer + deprtok->start);
+	}
+
+	*depr_start = json_strdup(ctx, buffer, deprtok + 1);
+	if (version_to_number(*depr_start) == 0)
+		return tal_fmt(ctx,
+			       "invalid \"deprecated\" start version %s",
+			       *depr_start);
+
+	if (deprtok->size == 2) {
+		*depr_end = json_strdup(ctx, buffer, deprtok + 2);
+		if (version_to_number(*depr_end) == 0)
+			return tal_fmt(ctx,
+				       "invalid \"deprecated\" end version %s",
+				       *depr_end);
+	}
+	return NULL;
+}
+
 /* Add a single plugin option to the plugin as well as registering it with the
  * command line options. */
 static const char *plugin_opt_add(struct plugin *plugin, const char *buffer,
 				  const jsmntok_t *opt)
 {
-	const jsmntok_t *nametok, *typetok, *defaulttok, *desctok;
+	const jsmntok_t *nametok, *typetok, *defaulttok, *desctok, *deprtok;
 	struct plugin_opt *popt;
 	const char *name, *err;
 	enum opt_type optflags = 0;
 	bool set;
+	struct lightningd *ld = plugin->plugins->ld;
 
 	nametok = json_get_member(buffer, opt, "name");
 	typetok = json_get_member(buffer, opt, "type");
 	desctok = json_get_member(buffer, opt, "description");
 	defaulttok = json_get_member(buffer, opt, "default");
+	deprtok = json_get_member(buffer, opt, "deprecated");
 
 	if (!typetok || !nametok || !desctok) {
 		return tal_fmt(plugin,
@@ -1022,6 +1090,7 @@ static const char *plugin_opt_add(struct plugin *plugin, const char *buffer,
 			     json_strdup(tmpctx, buffer, nametok));
 	name = popt->name + 2;
 	popt->def = NULL;
+	popt->depr_start = popt->depr_end = NULL;
 
 	/* Only allow sane option names  */
 	if (strspn(name, "0123456789" "abcdefghijklmnopqrstuvwxyz" "_-")
@@ -1040,9 +1109,11 @@ static const char *plugin_opt_add(struct plugin *plugin, const char *buffer,
 	}
 
 	popt->description = json_strdup(popt, buffer, desctok);
-	err = bool_setting(plugin, popt->name, buffer, opt, "deprecated", &popt->deprecated);
+
+	err = json_parse_deprecated(popt, buffer, deprtok,
+				    &popt->depr_start, &popt->depr_end);
 	if (err)
-		return err;
+		return tal_steal(plugin, err);
 
 	err = bool_setting(plugin, popt->name, buffer, opt, "multi", &set);
 	if (err)
@@ -1062,17 +1133,14 @@ static const char *plugin_opt_add(struct plugin *plugin, const char *buffer,
 			/* We used to allow (ignore) anything, now make sure it's 'false' */
 			if (!json_to_bool(buffer, defaulttok, &val)
 			    || val != false) {
-				if (!plugin->plugins->ld->deprecated_apis)
+				if (!lightningd_deprecated_in_ok(ld, plugin->log,
+								 ld->deprecated_ok,
+								 "options.flag", "default-not-false",
+								 "v23.08", "v24.08", NULL)) {
 					return tal_fmt(plugin, "%s type flag default must be 'false' not %.*s",
 						       popt->name,
 						       json_tok_full_len(defaulttok),
 						       json_tok_full(buffer, defaulttok));
-				else {
-					/* At least warn that we're ignoring! */
-					log_broken(plugin->log, "Ignoring default %.*s for %s (if set, must be 'false'!)",
-						   json_tok_full_len(defaulttok),
-						   json_tok_full(buffer, defaulttok),
-						   popt->name);
 				}
 			}
 			defaulttok = NULL;
@@ -1082,7 +1150,8 @@ static const char *plugin_opt_add(struct plugin *plugin, const char *buffer,
 		clnopt_noarg(popt->name,
 			     optflags,
 			     plugin_opt_flag_check, popt,
-			     popt->deprecated ? opt_hidden : popt->description);
+			     /* Don't document if it's deprecated */
+			     popt->depr_start ? opt_hidden : popt->description);
 	} else {
 		/* These all take an arg. */
 		char *(*cb_arg)(const char *optarg, void *arg);
@@ -1116,7 +1185,8 @@ static const char *plugin_opt_add(struct plugin *plugin, const char *buffer,
 		 * configvar if it's set. */
 		clnopt_witharg(popt->name,
 			       optflags, cb_arg, popt_show_default, popt,
-			       popt->deprecated ? opt_hidden : popt->description);
+			       /* Don't document if it's deprecated */
+			       popt->depr_start ? opt_hidden : popt->description);
 	}
 
 	list_add_tail(&plugin->plugin_opts, &popt->list);
@@ -1237,6 +1307,7 @@ static struct command_result *plugin_rpcmethod_dispatch(struct command *cmd,
 	const jsmntok_t *idtok;
 	struct plugin *plugin;
 	struct jsonrpc_request *req;
+	bool cmd_ok;
 
 	if (cmd->mode == CMD_CHECK)
 		return command_param_failed();
@@ -1249,6 +1320,15 @@ static struct command_result *plugin_rpcmethod_dispatch(struct command *cmd,
 	idtok = json_get_member(buffer, toks, "id");
 	assert(idtok != NULL);
 
+	/* If they've changed deprecation status for this cmd, tell plugin */
+	cmd_ok = command_deprecated_ok_flag(cmd);
+	if (cmd_ok != cmd->ld->deprecated_ok) {
+		if (!notify_deprecated_oneshot(cmd->ld, plugin, cmd_ok)) {
+			log_debug(plugin->log,
+				  "Plugin does not support deprecation setting for cmd %s (id %s)",
+				  cmd->json_cmd->name, cmd->id);
+		}
+	}
 	req = jsonrpc_request_start_raw(plugin, cmd->json_cmd->name,
 					cmd->id, plugin->non_numeric_ids,
 					plugin->log,
@@ -1268,16 +1348,16 @@ static const char *plugin_rpcmethod_add(struct plugin *plugin,
 					const jsmntok_t *meth)
 {
 	const jsmntok_t *nametok, *categorytok, *desctok, *longdesctok,
-		*usagetok, *deptok;
+		*usagetok, *deprtok;
 	struct json_command *cmd;
-	const char *usage;
+	const char *usage, *err;
 
 	nametok = json_get_member(buffer, meth, "name");
 	categorytok = json_get_member(buffer, meth, "category");
 	desctok = json_get_member(buffer, meth, "description");
 	longdesctok = json_get_member(buffer, meth, "long_description");
 	usagetok = json_get_member(buffer, meth, "usage");
-	deptok = json_get_member(buffer, meth, "deprecated");
+	deprtok = json_get_member(buffer, meth, "deprecated");
 
 	if (!nametok || nametok->type != JSMN_STRING) {
 		return tal_fmt(plugin,
@@ -1321,15 +1401,9 @@ static const char *plugin_rpcmethod_add(struct plugin *plugin,
 		return tal_fmt(plugin,
 			    "\"usage\" not provided by plugin");
 
-	if (deptok) {
-		if (!json_to_bool(buffer, deptok, &cmd->deprecated))
-			return tal_fmt(plugin,
-				       "%s: invalid \"deprecated\" field %.*s",
-				       cmd->name,
-			               deptok->end - deptok->start,
-				       buffer + deptok->start);
-	} else
-		cmd->deprecated = false;
+	err = json_parse_deprecated(cmd, buffer, deprtok, &cmd->depr_start, &cmd->depr_end);
+	if (err)
+		return tal_steal(plugin, err);
 
 	cmd->dev_only = false;
 	cmd->dispatch = plugin_rpcmethod_dispatch;
@@ -1613,10 +1687,11 @@ static const char *plugin_parse_getmanifest_response(const char *buffer,
 						     const jsmntok_t *toks,
 						     const jsmntok_t *idtok,
 						     struct plugin *plugin,
-	const char **disabled)
+						     const char **disabled)
 {
-	const jsmntok_t *resulttok, *dynamictok, *featurestok, *custommsgtok, *tok;
+	const jsmntok_t *resulttok, *featurestok, *custommsgtok, *tok;
 	const char *err;
+	struct lightningd *ld = plugin->plugins->ld;
 
 	*disabled = NULL;
 
@@ -1635,12 +1710,10 @@ static const char *plugin_parse_getmanifest_response(const char *buffer,
 		return NULL;
 	}
 
-	dynamictok = json_get_member(buffer, resulttok, "dynamic");
-	if (dynamictok && !json_to_bool(buffer, dynamictok, &plugin->dynamic)) {
-		return tal_fmt(plugin, "Bad 'dynamic' field ('%.*s')",
-			    json_tok_full_len(dynamictok),
-			    json_tok_full(buffer, dynamictok));
-	}
+	err = bool_setting(plugin, "getmanifest", buffer, resulttok, "dynamic",
+			   &plugin->dynamic);
+	if (err)
+		return err;
 
 	featurestok = json_get_member(buffer, resulttok, "featurebits");
 
@@ -1683,7 +1756,7 @@ static const char *plugin_parse_getmanifest_response(const char *buffer,
 				    buffer + featurestok->start);
 		}
 
-		if (!feature_set_or(plugin->plugins->ld->our_features, fset)) {
+		if (!feature_set_or(ld->our_features, fset)) {
 			return tal_fmt(plugin,
 				    "Custom featurebits already present");
 		}
@@ -1715,13 +1788,19 @@ static const char *plugin_parse_getmanifest_response(const char *buffer,
 				       "Invalid nonnumericids: %.*s",
 				       json_tok_full_len(tok),
 				       json_tok_full(buffer, tok));
-		if (!plugin->plugins->ld->deprecated_apis
-		    && !plugin->non_numeric_ids)
+		if (!plugin->non_numeric_ids
+		    && !lightningd_deprecated_in_ok(ld, ld->log, ld->deprecated_ok,
+						    "plugin", "nonnumericids",
+						    "v23.08", "v24.08", NULL)) {
 			return tal_fmt(plugin,
 				       "Plugin does not allow nonnumericids");
-	} else
+		}
+	} else {
 		/* Default is false in deprecated mode */
-		plugin->non_numeric_ids = !plugin->plugins->ld->deprecated_apis;
+		plugin->non_numeric_ids = !lightningd_deprecated_out_ok(ld, ld->deprecated_ok,
+									"plugin", "nonnumericids",
+									"v23.08", "v24.08");
+	}
 
 	err = plugin_notifications_add(buffer, resulttok, plugin);
 	if (!err)
@@ -1926,7 +2005,7 @@ const char *plugin_send_getmanifest(struct plugin *p, const char *cmd_id)
 	req = jsonrpc_request_start(p, "getmanifest", cmd_id, p->non_numeric_ids,
 				    p->log, NULL, plugin_manifest_cb, p);
 	json_add_bool(req->stream, "allow-deprecated-apis",
-		      p->plugins->ld->deprecated_apis);
+		      p->plugins->ld->deprecated_ok);
 	jsonrpc_request_end(req);
 	plugin_request_send(p, req);
 	p->plugin_state = AWAITING_GETMANIFEST_RESPONSE;
@@ -2053,7 +2132,7 @@ static void json_add_plugin_options(struct json_stream *stream,
 		struct configvar *cv;
 		const struct opt_table *ot;
 
-		if (popt->deprecated && !include_deprecated)
+		if (!include_deprecated && !plugin_opt_deprecated_out_ok(popt))
 			continue;
 
 		namesarr[0] = popt->name + 2;
@@ -2292,8 +2371,7 @@ void json_add_opt_plugins_array(struct json_stream *response,
 		json_add_string(response, "name", p->shortname);
 
 		if (!list_empty(&p->plugin_opts)) {
-			json_add_plugin_options(response, "options", p,
-						!plugins->ld->deprecated_apis);
+			json_add_plugin_options(response, "options", p, false);
 		}
 		json_object_end(response);
 	}

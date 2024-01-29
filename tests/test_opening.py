@@ -4,6 +4,7 @@ from pyln.client import RpcError, Millisatoshi
 from utils import (
     only_one, wait_for, sync_blockheight, first_channel_id, calc_lease_fee, check_coin_moves
 )
+from pyln.testing.utils import FUNDAMOUNT
 
 from pathlib import Path
 from pprint import pprint
@@ -1655,7 +1656,9 @@ def test_zeroconf_open(bitcoind, node_factory):
     # Now start the negotiation, l1 should have negotiated zeroconf,
     # and use their own mindepth=6, while l2 uses mindepth=2 from the
     # plugin
-    l1.rpc.fundchannel(l2.info['id'], 'all', mindepth=0)
+    ret = l1.rpc.fundchannel(l2.info['id'], 'all', mindepth=0)
+    assert ret['channel_type'] == {'bits': [12, 50], 'names': ['static_remotekey/even', 'zeroconf/even']}
+    assert only_one(l1.rpc.listpeerchannels(l2.info['id'])['channels'])['channel_type'] == {'bits': [12, 50], 'names': ['static_remotekey/even', 'zeroconf/even']}
 
     assert l1.db.query('SELECT minimum_depth FROM channels WHERE minimum_depth != 1') == [{'minimum_depth': 0}]
     assert l2.db.query('SELECT minimum_depth FROM channels') == [{'minimum_depth': 0}]
@@ -2581,3 +2584,106 @@ def test_fundchannel_utxo_too_small(bitcoind, node_factory):
     l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
     with pytest.raises(RpcError, match=r'Could not afford 100000sat using all 0 available UTXOs'):
         l1.rpc.fundchannel(l2.info['id'], 100000, 10000)
+
+
+@unittest.skipIf(TEST_NETWORK != 'regtest', 'elementsd doesnt yet support PSBT features we need')
+def test_opening_explicit_channel_type(node_factory, bitcoind):
+    plugin_path = Path(__file__).parent / "plugins" / "zeroconf-selective.py"
+    l1, l2, l3, l4 = node_factory.get_nodes(4,
+                                            opts=[{'experimental-dual-fund': None,
+                                                   'experimental-anchors': None},
+                                                  {'experimental-anchors': None,
+                                                   'plugin': str(plugin_path),
+                                                   'zeroconf-allow': '0266e4598d1d3c415f572a8488830b60f7e744ed9235eb0b1ba93283b315c03518'},
+                                                  {'experimental-dual-fund': None,
+                                                   'experimental-anchors': None},
+                                                  {'experimental-anchors': None}])
+
+    l1.fundwallet(FUNDAMOUNT)
+    l1.connect(l2)
+    l1.connect(l3)
+    l1.connect(l4)
+
+    STATIC_REMOTEKEY = 12
+    ANCHORS_OLD = 20
+    ANCHORS_ZERO_FEE_HTLC_TX = 22
+    ZEROCONF = 50
+
+    for zeroconf in ([], [ZEROCONF]):
+        for ctype in ([STATIC_REMOTEKEY],
+                      [STATIC_REMOTEKEY, ANCHORS_ZERO_FEE_HTLC_TX]):
+            ret = l1.rpc.fundchannel_start(l2.info['id'], FUNDAMOUNT,
+                                           channel_type=ctype + zeroconf)
+            assert ret['channel_type']['bits'] == ctype + zeroconf
+            assert only_one(l1.rpc.listpeerchannels()['channels'])['channel_type']['bits'] == ctype + zeroconf
+            # Note: l2 doesn't show it in listpeerchannels yet...
+            l1.rpc.fundchannel_cancel(l2.info['id'])
+
+    # Zeroconf is refused to l4.
+    for ctype in ([STATIC_REMOTEKEY],
+                  [ANCHORS_ZERO_FEE_HTLC_TX, STATIC_REMOTEKEY]):
+        with pytest.raises(RpcError, match=r'not on our allowlist'):
+            l1.rpc.fundchannel_start(l4.info['id'], FUNDAMOUNT,
+                                     channel_type=ctype + [ZEROCONF])
+
+    psbt = l1.rpc.fundpsbt(FUNDAMOUNT - 1000, '253perkw', 250, reserve=0)['psbt']
+    for ctype in ([STATIC_REMOTEKEY], [STATIC_REMOTEKEY, ANCHORS_ZERO_FEE_HTLC_TX]):
+        ret = l1.rpc.openchannel_init(l3.info['id'], FUNDAMOUNT - 1000, psbt, channel_type=ctype)
+        assert ret['channel_type']['bits'] == ctype
+        assert only_one(l1.rpc.listpeerchannels()['channels'])['channel_type']['bits'] == ctype
+        assert only_one(l3.rpc.listpeerchannels()['channels'])['channel_type']['bits'] == ctype
+        l1.rpc.openchannel_abort(ret['channel_id'])
+
+    # Old anchors not supported for new channels
+    with pytest.raises(RpcError, match=r'channel_type not supported'):
+        l1.rpc.fundchannel_start(l2.info['id'], FUNDAMOUNT, channel_type=[STATIC_REMOTEKEY, ANCHORS_OLD])
+
+    with pytest.raises(RpcError, match=r'channel_type not supported'):
+        l1.rpc.openchannel_init(l3.info['id'], FUNDAMOUNT - 1000, psbt, channel_type=[STATIC_REMOTEKEY, ANCHORS_OLD])
+
+    # We need static_remotekey now, too
+    with pytest.raises(RpcError, match=r'channel_type not supported'):
+        l1.rpc.fundchannel_start(l2.info['id'], FUNDAMOUNT, channel_type=[])
+
+    with pytest.raises(RpcError, match=r'channel_type not supported'):
+        l1.rpc.openchannel_init(l3.info['id'], FUNDAMOUNT - 1000, psbt, channel_type=[])
+
+    # l1 will try, with dev-any-channel-type, l2 will reject.
+    l1.stop()
+    l1.daemon.opts['dev-any-channel-type'] = None
+    l1.start()
+    l1.connect(l2)
+
+    with pytest.raises(RpcError, match=r'They sent ERROR .*: You gave bad parameters: Did not support channel_type \[12,20\]'):
+        l1.rpc.fundchannel_start(l2.info['id'], FUNDAMOUNT, channel_type=[STATIC_REMOTEKEY, ANCHORS_OLD])
+
+    # Now make l2 accept it!
+    l2.stop()
+    l2.daemon.opts['dev-any-channel-type'] = None
+    l2.start()
+    l1.connect(l2)
+
+    ret = l1.rpc.fundchannel_start(l2.info['id'], FUNDAMOUNT, channel_type=[STATIC_REMOTEKEY, ANCHORS_OLD])
+    assert ret['channel_type']['bits'] == [STATIC_REMOTEKEY, ANCHORS_OLD]
+    assert only_one(l1.rpc.listpeerchannels()['channels'])['channel_type']['bits'] == [STATIC_REMOTEKEY, ANCHORS_OLD]
+    # Note: l3 doesn't show it in listpeerchannels yet...
+    l1.rpc.fundchannel_cancel(l2.info['id'])
+
+    l1.rpc.unreserveinputs(psbt)
+
+    # Works with fundchannel / multifundchannel
+    ret = l1.rpc.fundchannel(l2.info['id'], FUNDAMOUNT // 3, channel_type=[STATIC_REMOTEKEY])
+    assert ret['channel_type']['bits'] == [STATIC_REMOTEKEY]
+    assert only_one(l1.rpc.listpeerchannels()['channels'])['channel_type']['bits'] == [STATIC_REMOTEKEY]
+    assert only_one(l2.rpc.listpeerchannels()['channels'])['channel_type']['bits'] == [STATIC_REMOTEKEY]
+    # FIXME: Check type is actually correct!
+
+    # Mine that so we can spend change.
+    bitcoind.generate_block(1, wait_for_mempool=1)
+    wait_for(lambda: len(l1.rpc.listfunds()['outputs']) == 1)
+
+    l1.connect(l3)
+    ret = l1.rpc.fundchannel(l3.info['id'], FUNDAMOUNT // 3, channel_type=[STATIC_REMOTEKEY])
+    assert ret['channel_type']['bits'] == [STATIC_REMOTEKEY]
+    assert only_one(l1.rpc.listpeerchannels(l3.info['id'])['channels'])['channel_type']['bits'] == [STATIC_REMOTEKEY]
+    assert only_one(l3.rpc.listpeerchannels()['channels'])['channel_type']['bits'] == [STATIC_REMOTEKEY]

@@ -29,6 +29,7 @@ COMMON_SRC_NOGEN :=				\
 	common/daemon.c				\
 	common/daemon_conn.c			\
 	common/decode_array.c			\
+	common/deprecation.c			\
 	common/derive_basepoints.c		\
 	common/descriptor_checksum.c		\
 	common/dev_disconnect.c			\
@@ -42,6 +43,7 @@ COMMON_SRC_NOGEN :=				\
 	common/gossmods_listpeerchannels.c	\
 	common/hash_u5.c			\
 	common/hmac.c				\
+	common/hsm_capable.c			\
 	common/hsm_encryption.c			\
 	common/htlc_state.c			\
 	common/htlc_trim.c			\
@@ -52,6 +54,7 @@ COMMON_SRC_NOGEN :=				\
 	common/initial_commit_tx.c		\
 	common/invoice_path_id.c		\
 	common/iso4217.c			\
+	common/json_channel_type.c		\
 	common/json_filter.c			\
 	common/json_param.c			\
 	common/json_parse.c			\

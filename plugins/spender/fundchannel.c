@@ -55,6 +55,7 @@ json_fundchannel(struct command *cmd,
 	const jsmntok_t *compact_lease;
 	const jsmntok_t *mindepth;
 	const jsmntok_t *reserve;
+	const jsmntok_t *channel_type;
 
 	struct out_req *req;
 
@@ -71,6 +72,7 @@ json_fundchannel(struct command *cmd,
 		   p_opt("compact_lease", param_tok, &compact_lease),
 		   p_opt("mindepth", param_tok, &mindepth),
 		   p_opt("reserve", param_tok, &reserve),
+		   p_opt("channel_type", param_tok, &channel_type),
 		   NULL))
 		return command_param_failed();
 
@@ -103,6 +105,8 @@ json_fundchannel(struct command *cmd,
 
 	if (reserve)
 		json_add_tok(req->js, "reserve", reserve, buf);
+	if (channel_type)
+		json_add_tok(req->js, "channel_type", channel_type, buf);
 
 	json_object_end(req->js);
 	json_array_end(req->js);
@@ -116,51 +120,50 @@ json_fundchannel(struct command *cmd,
 	return send_outreq(cmd->plugin, req);
 }
 
+static bool json_to_tok(const char *buffer, const jsmntok_t *tok, const jsmntok_t **ret)
+{
+	*ret = tok;
+	return true;
+}
+
 static struct command_result *
 fundchannel_get_result(struct command *cmd,
 		       const char *buf,
 		       const jsmntok_t *result,
 		       void *nothing UNUSED)
 {
-	bool ok;
+	const char *err;
 	const jsmntok_t *tx;
 	const jsmntok_t *txid;
-	const jsmntok_t *channel_ids_array;
-	const jsmntok_t *channel_ids_obj;
 	const jsmntok_t *channel_id;
 	const jsmntok_t *outnum;
 	const jsmntok_t *close_to_script;
-
+	const jsmntok_t *channel_type;
 	struct json_stream *out;
 
-	ok = true;
-	tx = ok ? json_get_member(buf, result, "tx") : NULL;
-	ok = ok && tx;
-	txid = ok ? json_get_member(buf, result, "txid") : NULL;
-	ok = ok && txid;
-	channel_ids_array = ok ? json_get_member(buf, result, "channel_ids") : NULL;
-	ok = ok && channel_ids_array;
-	channel_ids_obj = ok ? json_get_arr(channel_ids_array, 0) : NULL;
-	ok = ok && channel_ids_obj;
-	channel_id = ok ? json_get_member(buf, channel_ids_obj, "channel_id") : NULL;
-	ok = ok && channel_id;
-	outnum = ok ? json_get_member(buf, channel_ids_obj, "outnum") : NULL;
-	ok = ok && outnum;
-	close_to_script = ok ? json_get_member(buf, channel_ids_obj,
-					       "close_to")
-			     : NULL;
-
-
-	if (!ok)
+	close_to_script = NULL;
+	err = json_scan(cmd, buf, result,
+			"{tx:%,"
+			"txid:%,"
+			"channel_ids:[0:{channel_id:%,outnum:%,channel_type:%,close_to?:%}]}",
+			JSON_SCAN(json_to_tok, &tx),
+			JSON_SCAN(json_to_tok, &txid),
+			JSON_SCAN(json_to_tok, &channel_id),
+			JSON_SCAN(json_to_tok, &outnum),
+			JSON_SCAN(json_to_tok, &channel_type),
+			JSON_SCAN(json_to_tok, &close_to_script));
+	if (err) {
 		plugin_err(cmd->plugin,
-			   "Unexpected result from multifundchannel: %.*s",
+			   "Unexpected result from multifundchannel: %.*s: %s",
 			   json_tok_full_len(result),
-			   json_tok_full(buf, result));
+			   json_tok_full(buf, result), err);
+	}
 
 	out = jsonrpc_stream_success(cmd);
 	json_add_tok(out, "tx", tx, buf);
 	json_add_tok(out, "txid", txid, buf);
 	json_add_tok(out, "channel_id", channel_id, buf);
+	json_add_tok(out, "channel_type", channel_type, buf);
 	json_add_tok(out, "outnum", outnum, buf);
 	if (close_to_script)
 		json_add_tok(out, "close_to", close_to_script, buf);

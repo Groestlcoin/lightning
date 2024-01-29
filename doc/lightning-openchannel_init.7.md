@@ -4,7 +4,7 @@ lightning-openchannel\_init -- Command to initiate a channel to a peer
 SYNOPSIS
 --------
 
-**openchannel\_init** *id* *amount* *initalpsbt* [*commitment\_feerate*] [*funding\_feerate*] [*announce*] [*close\_to*] [*request\_amt*] [*compact\_lease*]
+**openchannel\_init** *id* *amount* *initalpsbt* [*commitment\_feerate*] [*funding\_feerate*] [*announce*] [*close\_to*] [*request\_amt*] [*compact\_lease*] [*channel\_type*]
 
 DESCRIPTION
 -----------
@@ -47,6 +47,19 @@ much liquidity into the channel. Must also pass in *compact\_lease*.
 channel lease terms. If the peer's terms don't match this set, we will
 fail to open the channel.
 
+*channel\_type* *(added v24.02)* is an array of bit numbers, representing the explicit
+channel type to request.  BOLT 2 defines the following value types:
+
+The currently defined basic types are:
+  - no features (no bits set) `[]`
+  - `option_static_remotekey` (`[12]`)
+  - `option_anchor_outputs` and `option_static_remotekey` (`[20, 12]`)
+  - `option_anchors_zero_fee_htlc_tx` and `option_static_remotekey` ([22, 12])
+
+Each basic type has the following variations allowed:
+  - `option_scid_alias` ([46])
+  - `option_zeroconf` ([50])
+```
 
 RETURN VALUE
 ------------
@@ -56,6 +69,11 @@ On success, an object is returned, containing:
 
 - **channel\_id** (hex): the channel id of the channel (always 64 characters)
 - **psbt** (string): the (incomplete) PSBT of the funding transaction
+- **channel\_type** (object): channel\_type as negotiated with peer *(added v24.02)*:
+  - **bits** (array of u32s): Each bit set in this channel\_type *(added v24.02)*:
+    - Bit number
+  - **names** (array of strings): Feature name for each bit set in this channel\_type *(added v24.02)*:
+    - Name of feature bit (one of "static\_remotekey/even", "anchor\_outputs/even", "anchors\_zero\_fee\_htlc\_tx/even", "scid\_alias/even", "zeroconf/even")
 - **commitments\_secured** (boolean): whether the *psbt* is complete (always *false*)
 - **funding\_serial** (u64): the serial\_id of the funding output in the *psbt*
 - **requires\_confirmed\_inputs** (boolean, optional): Does peer require confirmed inputs in psbt?
@@ -106,4 +124,4 @@ RESOURCES
 
 Main web site: <https://github.com/ElementsProject/lightning>
 
-[comment]: # ( SHA256STAMP:40121e2e7b0db8c99de12b4fd086f58f63e0d6643b9da1c1697a34dd5057454e)
+[comment]: # ( SHA256STAMP:2815e0b486c5346d0d058a7670b7e34f55b7ce0f5d35861dd76316e42b7b589d)

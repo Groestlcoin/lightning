@@ -103,6 +103,8 @@ struct state {
 	struct amount_sat *reserve;
 
 	bool allowdustreserve;
+
+	bool dev_accept_any_channel_type;
 };
 
 /*~ If we can't agree on parameters, we fail to open the channel.
@@ -301,7 +303,8 @@ static bool intuit_scid_alias_type(struct state *state, u8 channel_flags,
 /* We start the 'open a channel' negotation with the supplied peer, but
  * stop when we get to the part where we need the funding txid */
 static u8 *funder_channel_start(struct state *state, u8 channel_flags,
-				u32 nonanchor_feerate, u32 anchor_feerate)
+				u32 nonanchor_feerate, u32 anchor_feerate,
+				const struct channel_type *ctype)
 {
 	u8 *msg;
 	u8 *funding_output_script;
@@ -330,23 +333,27 @@ static u8 *funder_channel_start(struct state *state, u8 channel_flags,
 						     state->our_features,
 						     state->their_features);
 
-	state->channel_type = default_channel_type(state,
-						   state->our_features,
-						   state->their_features);
+	if (ctype) {
+		state->channel_type = channel_type_dup(state, ctype);
+	} else {
+		state->channel_type = default_channel_type(state,
+							   state->our_features,
+							   state->their_features);
 
-	/* Spec says we should use the option_scid_alias variation if we
-	 * want them to *only* use the scid_alias (which we do for unannounced
-	 * channels!).
-	 *
-	 * But:
-	 * 1. We didn't accept this in CLN prior to v23.05.
-	 * 2. LND won't accept that without OPT_ANCHORS_ZERO_FEE_HTLC_TX.
-	 *
-	 * So we keep it off for now, until anchors merge.
-	 */
-	if (channel_type_has(state->channel_type, OPT_ANCHORS_ZERO_FEE_HTLC_TX)) {
-		if (!(channel_flags & CHANNEL_FLAGS_ANNOUNCE_CHANNEL))
-			channel_type_set_scid_alias(state->channel_type);
+		/* Spec says we should use the option_scid_alias variation if we
+		 * want them to *only* use the scid_alias (which we do for unannounced
+		 * channels!).
+		 *
+		 * But:
+		 * 1. We didn't accept this in CLN prior to v23.05.
+		 * 2. LND won't accept that without OPT_ANCHORS_ZERO_FEE_HTLC_TX.
+		 *
+		 * So we keep it off for now, until anchors merge.
+		 */
+		if (channel_type_has(state->channel_type, OPT_ANCHORS_ZERO_FEE_HTLC_TX)) {
+			if (!(channel_flags & CHANNEL_FLAGS_ANNOUNCE_CHANNEL))
+				channel_type_set_scid_alias(state->channel_type);
+		}
 	}
 
 	/* Which feerate do we use?  (We can lowball fees if using anchors!) */
@@ -447,7 +454,22 @@ static u8 *funder_channel_start(struct state *state, u8 channel_flags,
 	 *   `open_channel`, and they are not equal types:
 	 *    - MUST fail the channel.
 	 */
-	if (accept_tlvs->channel_type) {
+
+	/* Simple case: caller specified, don't allow any variants */
+	if (ctype) {
+		if (!accept_tlvs->channel_type) {
+			negotiation_failed(state,
+					   "They replied without a channel_type");
+			return NULL;
+		}
+		if (!featurebits_eq(accept_tlvs->channel_type, state->channel_type->features)) {
+			negotiation_failed(state,
+					   "Return unoffered channel_type: %s",
+					   fmt_featurebits(tmpctx,
+							   accept_tlvs->channel_type));
+			return NULL;
+		}
+	} else if (accept_tlvs->channel_type) {
 		/* Except that v23.05 could set OPT_SCID_ALIAS in reply! */
 		struct channel_type *atype;
 
@@ -568,6 +590,9 @@ static u8 *funder_channel_start(struct state *state, u8 channel_flags,
 		status_debug(
 		    "We negotiated option_zeroconf, using our minimum_depth=%d",
 		    state->minimum_depth);
+		/* We set this now to show we're zeroconf */
+		if (their_mindepth == 0 && !ctype)
+			channel_type_set_zeroconf(state->channel_type);
 	} else {
 		state->minimum_depth = their_mindepth;
 	}
@@ -578,8 +603,8 @@ static u8 *funder_channel_start(struct state *state, u8 channel_flags,
 		       tal_hex(tmpctx, funding_output_script));
 
 	/* Backwards/cross compat hack */
-	if (intuit_scid_alias_type(state, channel_flags,
-				   accept_tlvs->channel_type != NULL)) {
+	if (!ctype && intuit_scid_alias_type(state, channel_flags,
+					     accept_tlvs->channel_type != NULL)) {
 		channel_type_set_scid_alias(state->channel_type);
 	}
 
@@ -940,14 +965,20 @@ static u8 *fundee_channel(struct state *state, const u8 *open_channel_msg)
 	if (open_tlvs->channel_type) {
 		open_channel_had_channel_type = true;
 		state->channel_type = channel_type_accept(
-		    state, open_tlvs->channel_type, state->our_features,
-		    state->their_features);
+		    state, open_tlvs->channel_type, state->our_features);
 		if (!state->channel_type) {
-			negotiation_failed(state,
-					   "Did not support channel_type %s",
-					   fmt_featurebits(tmpctx,
-							   open_tlvs->channel_type));
-			return NULL;
+			if (state->dev_accept_any_channel_type) {
+				status_unusual("dev-any-channel-type: accepting %s",
+					       fmt_featurebits(tmpctx,
+							       open_tlvs->channel_type));
+				state->channel_type = channel_type_from(state, open_tlvs->channel_type);
+			} else {
+				negotiation_failed(state,
+						   "Did not support channel_type [%s]",
+						   fmt_featurebits(tmpctx,
+								   open_tlvs->channel_type));
+				return NULL;
+			}
 		}
 	} else {
 		open_channel_had_channel_type = false;
@@ -1435,6 +1466,7 @@ static u8 *handle_master_in(struct state *state)
 	struct bitcoin_txid funding_txid;
 	u16 funding_txout;
 	u32 nonanchor_feerate, anchor_feerate;
+	struct channel_type *ctype;
 
 	switch (t) {
 	case WIRE_OPENINGD_FUNDER_START:
@@ -1447,9 +1479,11 @@ static u8 *handle_master_in(struct state *state)
 						    &anchor_feerate,
 						    &state->channel_id,
 						    &channel_flags,
-						    &state->reserve))
+						    &state->reserve,
+						    &ctype))
 			master_badmsg(WIRE_OPENINGD_FUNDER_START, msg);
-		msg = funder_channel_start(state, channel_flags, nonanchor_feerate, anchor_feerate);
+		msg = funder_channel_start(state, channel_flags, nonanchor_feerate, anchor_feerate, ctype);
+		tal_free(ctype);
 
 		/* We want to keep openingd alive, since we're not done yet */
 		if (msg)
@@ -1523,7 +1557,8 @@ int main(int argc, char *argv[])
 				    &state->minimum_depth,
 				    &state->min_feerate, &state->max_feerate,
 				    &state->dev_force_tmp_channel_id,
-				    &state->allowdustreserve))
+				    &state->allowdustreserve,
+				    &state->dev_accept_any_channel_type))
 		master_badmsg(WIRE_OPENINGD_INIT, msg);
 
 	/* 3 == peer, 4 = hsmd */

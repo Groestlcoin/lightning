@@ -273,9 +273,6 @@ static const u8 *hook_gives_failmsg(const tal_t *ctx,
 		return failmsg;
 	}
 
-	if (!ld->deprecated_apis)
-		return NULL;
-
 	t = json_get_member(buffer, toks, "failure_code");
 	if (!t) {
 		static bool warned = false;
@@ -291,6 +288,12 @@ static const u8 *hook_gives_failmsg(const tal_t *ctx,
 		}
 		return failmsg_incorrect_or_unknown(ctx, ld, hin);
 	}
+
+	if (!lightningd_deprecated_in_ok(ld, ld->log,
+					 ld->deprecated_ok,
+					 "invoice_payment_hook", "failure_code",
+					 "v22.08", "V23.02", NULL))
+		return NULL;
 
 	if (!json_to_number(buffer, t, &val))
 		fatal("Invalid invoice_payment_hook failure_code: %.*s",
@@ -341,7 +344,7 @@ invoice_payment_hooks_done(struct invoice_payment_hook_payload *payload STEALS)
 	if (payload->set)
 		htlc_set_fulfill(payload->set, &payload->preimage);
 
-	notify_invoice_payment(ld, payload->msat, payload->preimage,
+	notify_invoice_payment(ld, payload->msat, &payload->preimage,
 			       payload->label, payload->outpoint);
 }
 
@@ -915,7 +918,7 @@ invoice_complete(struct invoice_info *info,
 	json_add_u64(response, "created_index", details->created_index);
 
 	notify_invoice_creation(info->cmd->ld, info->b11->msat,
-				info->payment_preimage, info->label);
+				&info->payment_preimage, info->label);
 
 	if (warning_no_listincoming)
 		json_add_string(response, "warning_listincoming",
@@ -1152,7 +1155,7 @@ static struct command_result *json_invoice(struct command *cmd,
 	info->cmd = cmd;
 
 	if (!param_check(cmd, buffer, params,
-			 p_req("amount_msat|msatoshi", param_positive_msat_or_any, &msatoshi_val),
+			 p_req("amount_msat", param_positive_msat_or_any, &msatoshi_val),
 			 p_req("label", param_label, &info->label),
 			 p_req("description", param_escaped_string, &desc_val),
 			 p_opt_def("expiry", param_u64, &expiry, 3600*24*7),
@@ -1530,7 +1533,8 @@ static const struct json_command delexpiredinvoice_command = {
 	"payment",
 	json_delexpiredinvoice,
 	"Delete all expired invoices that expired as of given {maxexpirytime} (a UNIX epoch time), or all expired invoices if not specified",
-	.deprecated = true,
+	.depr_start = "v22.11",
+	.depr_end = "v24.02",
 };
 AUTODATA(json_command, &delexpiredinvoice_command);
 
@@ -1811,7 +1815,7 @@ static struct command_result *json_createinvoice(struct command *cmd,
 				     NULL))
 			return fail_exists(cmd, label);
 
-		notify_invoice_creation(cmd->ld, b11->msat, *preimage, label);
+		notify_invoice_creation(cmd->ld, b11->msat, preimage, label);
 	} else {
 		struct tlv_invoice *inv;
 		struct sha256 offer_id, *local_offer_id;
@@ -1909,7 +1913,7 @@ static struct command_result *json_createinvoice(struct command *cmd,
 				     local_offer_id))
 			return fail_exists(cmd, label);
 
-		notify_invoice_creation(cmd->ld, &msat,	*preimage, label);
+		notify_invoice_creation(cmd->ld, &msat,	preimage, label);
 	}
 
 	response = json_stream_success(cmd);
@@ -1980,7 +1984,7 @@ static struct command_result *json_preapprovekeysend(struct command *cmd,
 	if (!param(cmd, buffer, params,
 		   p_req("destination", param_node_id, &destination),
 		   p_req("payment_hash", param_sha256, &payment_hash),
-		   p_req("amount_msat|msatoshi", param_msat, &amount),
+		   p_req("amount_msat", param_msat, &amount),
 		   NULL))
 		return command_param_failed();
 

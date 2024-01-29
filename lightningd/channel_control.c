@@ -1631,6 +1631,8 @@ bool peer_start_channeld(struct channel *channel,
 	initmsg = towire_channeld_init(tmpctx,
 				       chainparams,
 				       ld->our_features,
+				       /* Capabilities arg needs to be a tal array */
+				       ld->hsm_capabilities,
 				       &channel->cid,
 				       &channel->funding,
 				       channel->funding_sats,

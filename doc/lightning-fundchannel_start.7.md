@@ -4,7 +4,7 @@ lightning-fundchannel\_start -- Command for initiating channel establishment for
 SYNOPSIS
 --------
 
-**fundchannel\_start** *id* *amount* [*feerate* *announce* *close\_to* *push\_msat*]
+**fundchannel\_start** *id* *amount* [*feerate*] [*announce*] [*close\_to*] [*push\_msat*] [*channel\_type*]
 
 DESCRIPTION
 -----------
@@ -34,6 +34,21 @@ open. Note that this is a gift to the peer -- these satoshis are
 added to the initial balance of the peer at channel start and are largely
 unrecoverable once pushed.
 
+*channel\_type* *(added v24.02)* is an array of bit numbers, representing the explicit
+channel type to request.  BOLT 2 defines the following value types:
+
+```
+The currently defined basic types are:
+  - no features (no bits set) `[]`
+  - `option_static_remotekey` (`[12]`)
+  - `option_anchor_outputs` and `option_static_remotekey` (`[20, 12]`)
+  - `option_anchors_zero_fee_htlc_tx` and `option_static_remotekey` ([22, 12])
+
+Each basic type has the following variations allowed:
+  - `option_scid_alias` ([46])
+  - `option_zeroconf` ([50])
+```
+
 Note that the funding transaction MUST NOT be broadcast until after
 channel establishment has been successfully completed by running
 `fundchannel_complete`, as the commitment transactions for this channel
@@ -48,6 +63,11 @@ On success, an object is returned, containing:
 
 - **funding\_address** (string): The address to send funding to for the channel. DO NOT SEND COINS TO THIS ADDRESS YET.
 - **scriptpubkey** (hex): The raw scriptPubkey for the address
+- **channel\_type** (object): channel\_type as negotiated with peer *(added v24.02)*:
+  - **bits** (array of u32s): Each bit set in this channel\_type *(added v24.02)*:
+    - Bit number
+  - **names** (array of strings): Feature name for each bit set in this channel\_type *(added v24.02)*:
+    - Name of feature bit (one of "static\_remotekey/even", "anchor\_outputs/even", "anchors\_zero\_fee\_htlc\_tx/even", "scid\_alias/even", "zeroconf/even")
 - **close\_to** (hex, optional): The raw scriptPubkey which mutual close will go to; only present if *close\_to* parameter was specified and peer supports `option_upfront_shutdown_script`
 - **mindepth** (u32, optional): Number of confirmations before we consider the channel active.
 
@@ -87,4 +107,4 @@ RESOURCES
 
 Main web site: <https://github.com/ElementsProject/lightning>
 
-[comment]: # ( SHA256STAMP:ed685f91a9242a38a2d48b82ed7ba063a1a4d754d95283ad232cbe7d12471659)
+[comment]: # ( SHA256STAMP:55a714d25c1e01c90076462f022ad814aad42bbf824ba44060d406d53ebcad0c)

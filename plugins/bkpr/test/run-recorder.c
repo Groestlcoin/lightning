@@ -38,6 +38,15 @@ void daemon_setup(const char *argv0 UNNEEDED,
 		  void (*backtrace_print)(const char *fmt UNNEEDED, ...) UNNEEDED,
 		  void (*backtrace_exit)(void))
 { fprintf(stderr, "daemon_setup called!\n"); abort(); }
+/* Generated stub for deprecated_ok_ */
+bool  deprecated_ok_(bool deprecated_apis UNNEEDED,
+		    const char *feature UNNEEDED,
+		    const char *start UNNEEDED,
+		    const char *end UNNEEDED,
+		    const char **begs UNNEEDED,
+		    void (*complain)(const char *feat UNNEEDED, bool allowing UNNEEDED, void *) UNNEEDED,
+		    void *cbarg UNNEEDED)
+{ fprintf(stderr, "deprecated_ok_ called!\n"); abort(); }
 /* Generated stub for first_fee_state */
 enum htlc_state first_fee_state(enum side opener UNNEEDED)
 { fprintf(stderr, "first_fee_state called!\n"); abort(); }
@@ -389,8 +398,7 @@ static struct chain_event *make_chain_event(const tal_t *ctx,
 
 static bool test_onchain_fee_wallet_spend(const tal_t *ctx, struct plugin *p)
 {
-	bool created;
-	struct db *db = db_setup(ctx, p, tmp_dsn(ctx), &created);
+	struct db *db = db_setup(ctx, p, tmp_dsn(ctx));
 	struct node_id node_id, peer_id;
 	struct account *wal_acct, *ext_acct;
 	struct bitcoin_txid txid;
@@ -465,8 +473,7 @@ static bool test_onchain_fee_wallet_spend(const tal_t *ctx, struct plugin *p)
 
 static bool test_onchain_fee_chan_close(const tal_t *ctx, struct plugin *p)
 {
-	bool created;
-	struct db *db = db_setup(ctx, p, tmp_dsn(ctx), &created);
+	struct db *db = db_setup(ctx, p, tmp_dsn(ctx));
 	struct node_id node_id, peer_id;
 	struct account *acct, *wal_acct, *ext_acct;
 	struct onchain_fee **ofs, **ofs1;
@@ -733,8 +740,7 @@ static bool test_onchain_fee_chan_close(const tal_t *ctx, struct plugin *p)
 
 static bool test_onchain_fee_chan_open(const tal_t *ctx, struct plugin *p)
 {
-	bool created;
-	struct db *db = db_setup(ctx, p, tmp_dsn(ctx), &created);
+	struct db *db = db_setup(ctx, p, tmp_dsn(ctx));
 	struct node_id node_id, peer_id;
 	struct account *acct, *acct2, *wal_acct, *ext_acct;
 	struct bitcoin_txid txid;
@@ -855,8 +861,7 @@ static bool test_onchain_fee_chan_open(const tal_t *ctx, struct plugin *p)
 
 static bool test_channel_rebalances(const tal_t *ctx, struct plugin *p)
 {
-	bool created;
-	struct db *db = db_setup(ctx, p, tmp_dsn(ctx), &created);
+	struct db *db = db_setup(ctx, p, tmp_dsn(ctx));
 	struct channel_event *ev1, *ev2, *ev3, **chan_evs;
 	struct rebalance **rebals;
 	struct account *acct1, *acct2, *acct3;
@@ -939,8 +944,7 @@ static bool test_channel_rebalances(const tal_t *ctx, struct plugin *p)
 
 static bool test_channel_event_crud(const tal_t *ctx, struct plugin *p)
 {
-	bool created;
-	struct db *db = db_setup(ctx, p, tmp_dsn(ctx), &created);
+	struct db *db = db_setup(ctx, p, tmp_dsn(ctx));
 	struct node_id peer_id;
 	struct account *acct, *acct2;
 	struct channel_event *ev1, *ev2, *ev3, **chan_evs;
@@ -1026,8 +1030,7 @@ static bool test_channel_event_crud(const tal_t *ctx, struct plugin *p)
 
 static bool test_chain_event_crud(const tal_t *ctx, struct plugin *p)
 {
-	bool created;
-	struct db *db = db_setup(ctx, p, tmp_dsn(ctx), &created);
+	struct db *db = db_setup(ctx, p, tmp_dsn(ctx));
 	struct node_id peer_id;
 	struct account *acct, *acct2;
 	struct chain_event *ev1, *ev2, *ev3, **chain_evs;
@@ -1155,8 +1158,7 @@ static bool test_chain_event_crud(const tal_t *ctx, struct plugin *p)
 
 static bool test_account_balances(const tal_t *ctx, struct plugin *p)
 {
-	bool created;
-	struct db *db = db_setup(ctx, p, tmp_dsn(ctx), &created);
+	struct db *db = db_setup(ctx, p, tmp_dsn(ctx));
 	struct node_id peer_id;
 	struct account *acct, *acct2;
 	struct chain_event *ev1;
@@ -1269,8 +1271,7 @@ static bool test_account_balances(const tal_t *ctx, struct plugin *p)
 
 static bool test_account_crud(const tal_t *ctx, struct plugin *p)
 {
-	bool created;
-	struct db *db = db_setup(ctx, p, tmp_dsn(ctx), &created);
+	struct db *db = db_setup(ctx, p, tmp_dsn(ctx));
 	struct node_id *peer_id;
 	struct account *acct, *acct2, **acct_list;
 	struct chain_event *ev1;

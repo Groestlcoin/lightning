@@ -3,6 +3,10 @@
 #include "config.h"
 #include <common/gossmap.h>
 #include <plugins/libplugin.h>
+#include <plugins/renepay/pay_flow.h>
+
+/* FIXME: this shouldn't be here, the dependency tree is a little messed-up. */
+enum pay_flow_state;
 
 struct pay_flow;
 
@@ -173,9 +177,14 @@ void payment_disable_chan(struct payment *p,
 			  enum log_level lvl,
 			  const char *fmt, ...);
 
+/* Remove all flows with the given state. */
+void payment_remove_flows(struct payment *p, enum pay_flow_state state);
+
 struct command_result *payment_fail(
 	struct payment *payment,
 	enum jsonrpc_errcode code,
 	const char *fmt, ...);
+
+struct command_result *payment_success(struct payment *p);
 
 #endif /* LIGHTNING_PLUGINS_RENEPAY_PAYMENT_H */

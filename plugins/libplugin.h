@@ -24,8 +24,6 @@ struct htable;
 struct plugin;
 struct rpc_conn;
 
-extern bool deprecated_apis;
-
 enum plugin_restartability {
 	PLUGIN_STATIC,
 	PLUGIN_RESTARTABLE
@@ -69,8 +67,8 @@ struct plugin_command {
 	struct command_result *(*handle)(struct command *cmd,
 					 const char *buf,
 					 const jsmntok_t *params);
-	/* If true, this command *disabled* if allow-deprecated-apis = false */
-	bool deprecated;
+	/* If it's deprecated from a particular release (or NULL) */
+	const char *depr_start, *depr_end;
 	/* If true, this option requires --developer to be enabled */
 	bool dev_only;
 };
@@ -84,8 +82,8 @@ struct plugin_option {
 	void *arg;
 	/* If true, this option requires --developer to be enabled */
 	bool dev_only;
-	/* If true, this options *disabled* if allow-deprecated-apis = false */
-	bool deprecated;
+	/* If it's deprecated from a particular release (or NULL) */
+	const char *depr_start, *depr_end;
 	/* If true, allow setting after plugin has initialized */
 	bool dynamic;
 };
@@ -273,6 +271,19 @@ struct json_out *json_out_obj(const tal_t *ctx,
 /* Return this iff the param() call failed in your handler. */
 struct command_result *command_param_failed(void);
 
+/* Helper for sql command, which is a front-end to other commands. */
+bool command_deprecated_in_named_ok(struct command *cmd,
+				    const char *cmdname,
+				    const char *param,
+				    const char *depr_start,
+				    const char *depr_end);
+
+/* For commando, which doesn't have a "cmd" incoming */
+bool command_deprecated_in_nocmd_ok(struct plugin *plugin,
+				    const char *name,
+				    const char *depr_start,
+				    const char *depr_end);
+
 /* Call this on fatal error. */
 void NORETURN plugin_err(struct plugin *p, const char *fmt, ...);
 
@@ -306,6 +317,14 @@ command_hook_success(struct command *cmd);
 /* End a notification handler.  */
 struct command_result *WARN_UNUSED_RESULT
 notification_handled(struct command *cmd);
+
+/**
+ * What's the deprecation_ok state for this cmd?
+ * @cmd: the command.
+ *
+ * Either the default, or the explicit connection override.
+ */
+bool command_deprecated_ok_flag(const struct command *cmd);
 
 /* Helper for notification handler that will be finished in a callback.  */
 #define notification_handler_pending(cmd) command_still_pending(cmd)
@@ -413,7 +432,7 @@ static inline void *plugin_option_cb_check(char *(*set)(struct plugin *plugin,
 bool plugin_developer_mode(const struct plugin *plugin);
 
 /* Macro to define arguments */
-#define plugin_option_(name, type, description, set, arg, dev_only, deprecated, dynamic)	\
+#define plugin_option_(name, type, description, set, arg, dev_only, depr_start, depr_end, dynamic) \
 	(name),								\
 	(type),								\
 	(description),							\
@@ -423,20 +442,21 @@ bool plugin_developer_mode(const struct plugin *plugin);
 						   const char *)),	\
 	(arg),								\
 	(dev_only),							\
-	(deprecated),							\
+	(depr_start),							\
+	(depr_end),							\
 	(dynamic)
 
 #define plugin_option(name, type, description, set, arg) \
-	plugin_option_((name), (type), (description), (set), (arg), false, false, false)
+	plugin_option_((name), (type), (description), (set), (arg), false, NULL, NULL, false)
 
 #define plugin_option_dev(name, type, description, set, arg) \
-	plugin_option_((name), (type), (description), (set), (arg), true, false, false)
+	plugin_option_((name), (type), (description), (set), (arg), true, NULL, NULL, false)
 
 #define plugin_option_dynamic(name, type, description, set, arg) \
-	plugin_option_((name), (type), (description), (set), (arg), false, false, true)
+	plugin_option_((name), (type), (description), (set), (arg), false, NULL, NULL, true)
 
-#define plugin_option_deprecated(name, type, description, set, arg)	\
-	plugin_option_((name), (type), (description), (set), (arg), false, true, false)
+#define plugin_option_deprecated(name, type, description, depr_start, depr_end, set, arg) \
+	plugin_option_((name), (type), (description), (set), (arg), false, (depr_start), (depr_end), false)
 
 /* Standard helpers */
 char *u64_option(struct plugin *plugin, const char *arg, u64 *i);

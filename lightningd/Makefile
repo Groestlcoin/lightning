@@ -93,6 +93,7 @@ LIGHTNINGD_COMMON_OBJS :=			\
 	common/configdir.o			\
 	common/configvar.o			\
 	common/daemon.o				\
+	common/deprecation.o			\
 	common/derive_basepoints.o		\
 	common/ecdh_hsmd.o			\
 	common/features.o			\
@@ -103,6 +104,7 @@ LIGHTNINGD_COMMON_OBJS :=			\
 	common/status_wiregen.o			\
 	common/hash_u5.o			\
 	common/hmac.o				\
+	common/hsm_capable.o			\
 	common/hsm_encryption.o			\
 	common/htlc_state.o			\
 	common/htlc_trim.o			\
@@ -111,6 +113,7 @@ LIGHTNINGD_COMMON_OBJS :=			\
 	common/invoice_path_id.o		\
 	common/key_derive.o			\
 	common/keyset.o				\
+	common/json_channel_type.o		\
 	common/json_filter.o			\
 	common/json_param.o			\
 	common/json_parse.o			\

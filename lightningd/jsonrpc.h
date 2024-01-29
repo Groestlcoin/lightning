@@ -63,7 +63,7 @@ struct json_command {
 	const char *description;
 	const char *verbose;
 	bool dev_only;
-	bool deprecated;
+	const char *depr_start, *depr_end;
 };
 
 struct jsonrpc_notification {
@@ -175,6 +175,9 @@ void json_notify_fmt(struct command *cmd,
 
 /* FIXME: For the few cases where return value is indeterminate */
 struct command_result *command_its_complicated(const char *why);
+
+/* command can override ld->deprecated_ok */
+bool command_deprecated_ok_flag(const struct command *cmd);
 
 /**
  * Create a new jsonrpc to wrap all related information.

@@ -674,7 +674,6 @@ def newaddr2py(m):
     return remove_default({
         "p2tr": m.p2tr,  # PrimitiveField in generate_composite
         "bech32": m.bech32,  # PrimitiveField in generate_composite
-        "p2sh_segwit": m.p2sh_segwit,  # PrimitiveField in generate_composite
     })
 
 
@@ -1316,6 +1315,13 @@ def fetchinvoice_next_period2py(m):
 def fetchinvoice2py(m):
     return remove_default({
         "invoice": m.invoice,  # PrimitiveField in generate_composite
+    })
+
+
+def fundchannel_channel_type2py(m):
+    return remove_default({
+        "bits": [m.bits for i in m.bits], # ArrayField[primitive] in generate_composite
+        "names": [str(i) for i in m.names],  # ArrayField[composite] in generate_composite
     })
 
 

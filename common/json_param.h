@@ -83,7 +83,6 @@ const char *param_subcommand(struct command *cmd, const char *buffer,
 
 enum param_style {
 	PARAM_REQUIRED,
-	PARAM_REQUIRED_ALLOW_DUPS,
 	PARAM_OPTIONAL,
 	PARAM_OPTIONAL_WITH_DEFAULT,
 	PARAM_OPTIONAL_DEV_WITH_DEFAULT,
@@ -92,9 +91,10 @@ enum param_style {
 /*
  * Add a required parameter.
  */
-#define p_req(name, cbx, arg)				     \
+#define p_req_depr(name, depr_start, depr_end, cbx, arg)     \
 	      name"",                                        \
 	      PARAM_REQUIRED,                                \
+	      (depr_start), (depr_end),			     \
 	      (param_cbx)(cbx),				     \
 	      (arg) + 0*sizeof((cbx)((struct command *)NULL, \
 			       (const char *)NULL,           \
@@ -102,12 +102,15 @@ enum param_style {
 			       (const jsmntok_t *)NULL,      \
 			       (arg)) == (struct command_result *)NULL)
 
+#define p_req(name, cbx, arg) p_req_depr(name, NULL, NULL, (cbx), (arg))
+
 /*
  * Add an optional parameter.  *arg is set to NULL if it isn't found.
  */
-#define p_opt(name, cbx, arg)                                   \
+#define p_opt_depr(name, depr_start, depr_end, cbx, arg)	\
 	      name"",                                           \
 	      PARAM_OPTIONAL,                                   \
+	      (depr_start), (depr_end),				\
 	      (param_cbx)(cbx),                                 \
 	      ({ *arg = NULL;                                   \
 		 (arg) + 0*sizeof((cbx)((struct command *)NULL, \
@@ -116,19 +119,7 @@ enum param_style {
 				  (const jsmntok_t *)NULL,      \
 				  (arg)) == (struct command_result *)NULL); })
 
-/*
- * Add an required parameter, like p_req, but ignore duplicates.
- */
-#define p_req_dup_ok(name, cbx, arg)                            \
-	      name"",                                           \
-	      PARAM_REQUIRED_ALLOW_DUPS,                        \
-	      (param_cbx)(cbx),                                 \
-	      ({ *arg = NULL;                                   \
-		 (arg) + 0*sizeof((cbx)((struct command *)NULL, \
-		                  (const char *)NULL,           \
-				  (const char *)NULL,           \
-				  (const jsmntok_t *)NULL,      \
-				  (arg)) == (struct command_result *)NULL); })
+#define p_opt(name, cbx, arg) p_opt_depr(name, NULL, NULL, (cbx), (arg))
 
 /*
  * Add an optional parameter.  *arg is set to @def if it isn't found.
@@ -136,6 +127,7 @@ enum param_style {
 #define p_opt_def(name, cbx, arg, def)				    \
 		  name"",					    \
 		  PARAM_OPTIONAL_WITH_DEFAULT,			    \
+		  NULL, NULL,					    \
 		  (param_cbx)(cbx),				    \
 		  ({ (*arg) = tal((cmd), typeof(**arg));            \
 		     (**arg) = (def);                               \
@@ -151,6 +143,7 @@ enum param_style {
 #define p_opt_dev(name, cbx, arg, def)				    \
 		  name"",					    \
 		  PARAM_OPTIONAL_DEV_WITH_DEFAULT,		    \
+		  NULL, NULL,					    \
 		  (param_cbx)(cbx),				    \
 		  ({ (*arg) = tal((cmd), typeof(**arg));            \
 		     (**arg) = (def);                               \
@@ -161,7 +154,7 @@ enum param_style {
 				   (arg)) == (struct command_result *)NULL); })
 
 /* Special flag for 'check' which allows any parameters. */
-#define p_opt_any() "", PARAM_OPTIONAL, NULL, NULL
+#define p_opt_any() "", PARAM_OPTIONAL, NULL, NULL, NULL, NULL, NULL
 
 /* All the helper routines. */
 struct amount_msat;

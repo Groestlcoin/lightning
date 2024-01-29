@@ -74,6 +74,15 @@ exit with an error rather than upgrade, unless this is an official released
 version.  If you really want to upgrade to a non-release version, you can
 set this to *true* (or *false* to never allow a non-reversible upgrade!).
 
+* **i-promise-to-fix-broken-api-user**=*FEATURE*
+
+  Deprecated features get removed slowly (over 3 releases), but
+sometimes people still get surprised when they are finally removed.
+As long as they haven't been actually fully removed, this option will
+re-enable it.  Unless we've made a horrible mistake it's probably time
+to complain or fix to whatever is using the old API.  It can be
+specified multiple times for different features.
+
 ### Groestlcoin control options:
 
 Groestlcoin control options:
@@ -452,7 +461,7 @@ specified multuple times. (Added in v23.08).
 * **min-emergency-msat**=*msat*
 
   This is the amount of funds to keep in the wallet to close anchor channels (which don't carry their own transaction fees).  It defaults to 25000sat, and is only maintained if there are any anchor channels (or, when opening an anchor channel).  This amount may be insufficient for multiple closes at once, however.
-  
+
 
 ### Cleanup control options:
 

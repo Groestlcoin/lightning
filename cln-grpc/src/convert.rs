@@ -867,14 +867,12 @@ impl From<responses::WaitsendpayResponse> for pb::WaitsendpayResponse {
     }
 }
 
-#[allow(unused_variables,deprecated)]
+#[allow(unused_variables)]
 impl From<responses::NewaddrResponse> for pb::NewaddrResponse {
     fn from(c: responses::NewaddrResponse) -> Self {
         Self {
             p2tr: c.p2tr, // Rule #2 for type string?
             bech32: c.bech32, // Rule #2 for type string?
-            #[allow(deprecated)]
-            p2sh_segwit: c.p2sh_segwit, // Rule #2 for type string?
         }
     }
 }
@@ -1557,6 +1555,18 @@ impl From<responses::FetchinvoiceResponse> for pb::FetchinvoiceResponse {
 }
 
 #[allow(unused_variables)]
+impl From<responses::FundchannelChannel_type> for pb::FundchannelChannelType {
+    fn from(c: responses::FundchannelChannel_type) -> Self {
+        Self {
+            // Field: FundChannel.channel_type.bits[]
+            bits: c.bits.map(|arr| arr.into_iter().map(|i| i.into()).collect()).unwrap_or(vec![]), // Rule #3
+            // Field: FundChannel.channel_type.names[]
+            names: c.names.map(|arr| arr.into_iter().map(|i| i.into()).collect()).unwrap_or(vec![]), // Rule #3
+        }
+    }
+}
+
+#[allow(unused_variables)]
 impl From<responses::FundchannelResponse> for pb::FundchannelResponse {
     fn from(c: responses::FundchannelResponse) -> Self {
         Self {
@@ -1564,6 +1574,7 @@ impl From<responses::FundchannelResponse> for pb::FundchannelResponse {
             txid: hex::decode(&c.txid).unwrap(), // Rule #2 for type txid
             outnum: c.outnum, // Rule #2 for type u32
             channel_id: hex::decode(&c.channel_id).unwrap(), // Rule #2 for type hex
+            channel_type: c.channel_type.map(|v| v.into()),
             close_to: c.close_to.map(|v| hex::decode(v).unwrap()), // Rule #2 for type hex?
             mindepth: c.mindepth, // Rule #2 for type u32?
         }
@@ -2389,6 +2400,8 @@ impl From<requests::FundchannelRequest> for pb::FundchannelRequest {
             utxos: c.utxos.map(|arr| arr.into_iter().map(|i| i.into()).collect()).unwrap_or(vec![]), // Rule #3
             mindepth: c.mindepth, // Rule #2 for type u32?
             reserve: c.reserve.map(|f| f.into()), // Rule #2 for type msat?
+            // Field: FundChannel.channel_type[]
+            channel_type: c.channel_type.map(|arr| arr.into_iter().map(|i| i.into()).collect()).unwrap_or(vec![]), // Rule #3
         }
     }
 }
@@ -3128,6 +3141,7 @@ impl From<pb::FundchannelRequest> for requests::FundchannelRequest {
             utxos: Some(c.utxos.into_iter().map(|s| s.into()).collect()), // Rule #4
             mindepth: c.mindepth, // Rule #1 for type u32?
             reserve: c.reserve.map(|a| a.into()), // Rule #1 for type msat?
+            channel_type: Some(c.channel_type.into_iter().map(|s| s).collect()), // Rule #4
         }
     }
 }

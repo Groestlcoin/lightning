@@ -19,6 +19,7 @@
 #include <common/features.h>
 #include <common/htlc_trim.h>
 #include <common/initial_commit_tx.h>
+#include <common/json_channel_type.h>
 #include <common/json_command.h>
 #include <common/json_param.h>
 #include <common/jsonrpc_errors.h>
@@ -803,29 +804,6 @@ struct amount_msat channel_amount_receivable(const struct channel *channel)
 	}
 
 	return receivable;
-}
-
-void json_add_channel_type(struct json_stream *response,
-			   const char *fieldname,
-			   const struct channel_type *channel_type)
-{
-	const char **fnames;
-
-	json_object_start(response, fieldname);
-	json_array_start(response, "bits");
-	for (size_t i = 0; i < tal_bytelen(channel_type->features) * CHAR_BIT; i++) {
-		if (!feature_is_set(channel_type->features, i))
-			continue;
-		json_add_u64(response, NULL, i);
-	}
-	json_array_end(response);
-
-	json_array_start(response, "names");
-	fnames = channel_type_name(tmpctx, channel_type);
-	for (size_t i = 0; i < tal_count(fnames); i++)
-		json_add_string(response, NULL, fnames[i]);
-	json_array_end(response);
-	json_object_end(response);
 }
 
 static void json_add_channel(struct lightningd *ld,
@@ -2116,7 +2094,8 @@ static void json_add_peer(struct lightningd *ld,
 	/* Note: If !PEER_CONNECTED, peer may use different features on reconnect */
 	json_add_hex_talarr(response, "features", p->their_features);
 
-	if (ld->deprecated_apis) {
+	if (lightningd_deprecated_out_ok(ld, ld->deprecated_ok,
+					 "listpeers", "channels", "v23.02", "v24.02")) {
 		json_array_start(response, "channels");
 		json_add_uncommitted_channel(response, p->uncommitted_channel, NULL);
 

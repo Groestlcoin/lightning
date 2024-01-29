@@ -1661,6 +1661,8 @@ pub mod requests {
 	    pub mindepth: Option<u32>,
 	    #[serde(skip_serializing_if = "Option::is_none")]
 	    pub reserve: Option<Amount>,
+	    #[serde(skip_serializing_if = "crate::is_none_or_empty")]
+	    pub channel_type: Option<Vec<u32>>,
 	}
 
 	impl From<FundchannelRequest> for Request {
@@ -4129,10 +4131,6 @@ pub mod responses {
 	    pub p2tr: Option<String>,
 	    #[serde(skip_serializing_if = "Option::is_none")]
 	    pub bech32: Option<String>,
-	    #[deprecated]
-	    #[serde(rename = "p2sh-segwit")]
-	    #[serde(skip_serializing_if = "Option::is_none")]
-	    pub p2sh_segwit: Option<String>,
 	}
 
 	impl TryFrom<Response> for NewaddrResponse {
@@ -5299,11 +5297,21 @@ pub mod responses {
 	}
 
 	#[derive(Clone, Debug, Deserialize, Serialize)]
+	pub struct FundchannelChannel_type {
+	    #[serde(skip_serializing_if = "crate::is_none_or_empty")]
+	    pub bits: Option<Vec<u32>>,
+	    #[serde(skip_serializing_if = "crate::is_none_or_empty")]
+	    pub names: Option<Vec<ChannelTypeName>>,
+	}
+
+	#[derive(Clone, Debug, Deserialize, Serialize)]
 	pub struct FundchannelResponse {
 	    pub tx: String,
 	    pub txid: String,
 	    pub outnum: u32,
 	    pub channel_id: String,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub channel_type: Option<FundchannelChannel_type>,
 	    #[serde(skip_serializing_if = "Option::is_none")]
 	    pub close_to: Option<String>,
 	    #[serde(skip_serializing_if = "Option::is_none")]

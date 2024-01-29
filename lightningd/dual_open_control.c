@@ -9,6 +9,7 @@
 #include <ccan/mem/mem.h>
 #include <ccan/tal/str/str.h>
 #include <common/blockheight_states.h>
+#include <common/json_channel_type.h>
 #include <common/json_command.h>
 #include <common/json_param.h>
 #include <common/psbt_open.h>
@@ -131,6 +132,7 @@ void json_add_unsaved_channel(struct json_stream *response,
 	if (peer) {
 		json_add_node_id(response, "peer_id", &peer->id);
 		json_add_bool(response, "peer_connected", peer->connected == PEER_CONNECTED);
+		json_add_channel_type(response, "channel_type", channel->type);
 	}
 	json_add_string(response, "state", channel_state_name(channel));
 	json_add_string(response, "owner", channel->owner->name);
@@ -2884,6 +2886,7 @@ static struct json_stream *build_commit_response(struct command *cmd,
 				       struct channel_id,
 				       &channel->cid));
 	json_add_psbt(response, "psbt", inflight->funding_psbt);
+	json_add_channel_type(response, "channel_type", channel->type);
 	json_add_bool(response, "commitments_secured", inflight->last_tx != NULL);
 	/* For convenience sake, we include the funding outnum */
 	assert(inflight->funding);
@@ -3031,6 +3034,7 @@ static struct command_result *json_openchannel_init(struct command *cmd,
 	struct open_attempt *oa;
 	struct lease_rates *rates;
 	struct command_result *res;
+	struct channel_type *ctype;
 	int fds[2];
 
 	if (!param_check(cmd, buffer, params,
@@ -3043,6 +3047,7 @@ static struct command_result *json_openchannel_init(struct command *cmd,
 			 p_opt("close_to", param_bitcoin_address, &our_upfront_shutdown_script),
 			 p_opt_def("request_amt", param_sat, &request_amt, AMOUNT_SAT(0)),
 			 p_opt("compact_lease", param_lease_hex, &rates),
+			 p_opt("channel_type", param_channel_type, &ctype),
 			 NULL))
 		return command_param_failed();
 
@@ -3103,6 +3108,15 @@ static struct command_result *json_openchannel_init(struct command *cmd,
 				    "by peer");
 	}
 
+	if (ctype &&
+	    !cmd->ld->dev_any_channel_type &&
+	    !channel_type_accept(tmpctx,
+				 ctype->features,
+				 cmd->ld->our_features)) {
+		return command_fail(cmd, JSONRPC2_INVALID_PARAMS,
+				    "channel_type not supported");
+	}
+
 	/* BOLT #2:
 	 *  - if both nodes advertised `option_support_large_channel`:
 	 *    - MAY set `funding_satoshis` greater than or equal to 2^24 satoshi.
@@ -3133,14 +3147,14 @@ static struct command_result *json_openchannel_init(struct command *cmd,
 				    type_to_string(tmpctx, struct wally_psbt,
 						   psbt));
 
+	if (command_check_only(cmd))
+		return command_check_done(cmd);
+
 	if (socketpair(AF_LOCAL, SOCK_STREAM, 0, fds) != 0) {
 		return command_fail(cmd, FUND_MAX_EXCEEDED,
 				    "Failed to create socketpair: %s",
 				    strerror(errno));
 	}
-
-	if (command_check_only(cmd))
-		return command_check_done(cmd);
 
 	/* Now we can't fail, create channel */
 	channel = new_unsaved_channel(peer,
@@ -3194,6 +3208,7 @@ static struct command_result *json_openchannel_init(struct command *cmd,
 						NULL : request_amt,
 					   get_block_height(cmd->ld->topology),
 					   false,
+					   ctype,
 					   rates);
 
 	/* Start dualopend! */
@@ -3299,6 +3314,7 @@ static void handle_psbt_changed(struct subd *dualopend,
 	struct openchannel2_psbt_payload *payload;
 	struct open_attempt *oa;
 	struct command *cmd;
+	struct channel_type *channel_type;
 
 	assert(channel->open_attempt);
 	oa = channel->open_attempt;
@@ -3308,13 +3324,17 @@ static void handle_psbt_changed(struct subd *dualopend,
 					     &cid,
 					     &channel->req_confirmed_ins[REMOTE],
 					     &funding_serial,
-					     &psbt)) {
+					     &psbt,
+					     &channel_type)) {
 		channel_internal_error(channel,
 				       "Bad DUALOPEND_PSBT_CHANGED: %s",
 				       tal_hex(tmpctx, msg));
 		return;
 	}
 
+	/* This is often the first time we hear about channel details */
+	tal_free(channel->type);
+	channel->type = tal_steal(channel, channel_type);
 
 	switch (oa->role) {
 	case TX_INITIATOR:
@@ -3332,6 +3352,7 @@ static void handle_psbt_changed(struct subd *dualopend,
 				type_to_string(tmpctx, struct channel_id,
 					       &channel->cid));
 		json_add_psbt(response, "psbt", psbt);
+		json_add_channel_type(response, "channel_type", channel->type);
 		json_add_bool(response, "commitments_secured", false);
 		json_add_u64(response, "funding_serial", funding_serial);
 		json_add_bool(response, "requires_confirmed_inputs",
@@ -3765,7 +3786,7 @@ static struct command_result *json_queryrates(struct command *cmd,
 						NULL : request_amt,
 					   get_block_height(cmd->ld->topology),
 					   true,
-					   NULL);
+					   NULL, NULL);
 
 	if (socketpair(AF_LOCAL, SOCK_STREAM, 0, fds) != 0) {
 		return command_fail(cmd, FUND_MAX_EXCEEDED,
@@ -4030,7 +4051,8 @@ bool peer_start_dualopend(struct peer *peer,
 				    &channel->local_basepoints,
 				    &channel->local_funding_pubkey,
 				    channel->minimum_depth,
-				    peer->ld->config.require_confirmed_inputs);
+				    peer->ld->config.require_confirmed_inputs,
+				    peer->ld->dev_any_channel_type);
 	subd_send_msg(channel->owner, take(msg));
 	return true;
 }

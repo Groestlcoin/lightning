@@ -4,6 +4,7 @@
 #include <ccan/err/err.h>
 #include <ccan/strmap/strmap.h>
 #include <ccan/tal/str/str.h>
+#include <common/deprecation.h>
 #include <common/gossip_store.h>
 #include <common/json_param.h>
 #include <common/json_stream.h>
@@ -82,11 +83,14 @@ struct column {
 	const char *dbname, *jsonname;
 	enum fieldtype ftype;
 
+	/* Deprecation version range, if any. */
+	const char *depr_start, *depr_end;
 	/* If this is actually a subtable: */
 	struct table_desc *sub;
 };
 
 struct db_query {
+	struct command *cmd;
 	sqlite3_stmt *stmt;
 	struct table_desc **tables;
 	const char *authfail;
@@ -100,7 +104,7 @@ struct table_desc {
 	const char *name;
 	/* e.g. "payments" for listsendpays */
 	const char *arrname;
-	struct column *columns;
+	struct column **columns;
 	char *update_stmt;
 	/* If we are a subtable */
 	struct table_desc *parent;
@@ -242,6 +246,16 @@ static bool has_table_desc(struct table_desc **tables, struct table_desc *t)
 	return false;
 }
 
+static struct column *find_column(const struct table_desc *td,
+				  const char *dbname)
+{
+	for (size_t i = 0; i < tal_count(td->columns); i++) {
+		if (streq(td->columns[i]->dbname, dbname))
+			return td->columns[i];
+	}
+	return NULL;
+}
+
 static int sqlite_authorize(void *dbq_, int code,
 			    const char *a,
 			    const char *b,
@@ -254,9 +268,10 @@ static int sqlite_authorize(void *dbq_, int code,
 	if (code == SQLITE_SELECT)
 		return SQLITE_OK;
 
-	/* You can do a column read: takes a table name */
+	/* You can do a column read: takes a table name, column name */
 	if (code == SQLITE_READ) {
 		struct table_desc *td = strmap_get(&tablemap, a);
+		struct column *col;
 		if (!td) {
 			dbq->authfail = tal_fmt(dbq, "Unknown table %s", a);
 			return SQLITE_DENY;
@@ -266,6 +281,27 @@ static int sqlite_authorize(void *dbq_, int code,
 			td = td->parent;
 		if (!has_table_desc(dbq->tables, td))
 			tal_arr_expand(&dbq->tables, td);
+
+		/* Check column name, to control access to deprecated ones. */
+		col = find_column(td, b);
+		if (!col) {
+			/* Magic column names like id, __id__ etc. */
+			return SQLITE_OK;
+		}
+
+		/* Don't do tal if we are not deprecated at all */
+		if (!col->depr_start)
+			return SQLITE_OK;
+
+		/* Can this command see this? */
+		if (!command_deprecated_in_named_ok(dbq->cmd, td->cmdname,
+						    col->jsonname,
+						    col->depr_start,
+						    col->depr_end)) {
+			dbq->authfail = tal_fmt(dbq, "Deprecated column table %s.%s", a, b);
+			return SQLITE_DENY;
+		}
+
 		return SQLITE_OK;
 	}
 
@@ -430,7 +466,7 @@ static struct command_result *process_json_subobjs(struct command *cmd,
 						   u64 this_rowid)
 {
 	for (size_t i = 0; i < tal_count(td->columns); i++) {
-		const struct column *col = &td->columns[i];
+		const struct column *col = td->columns[i];
 		struct command_result *ret;
 		const jsmntok_t *coltok;
 
@@ -476,7 +512,7 @@ static struct command_result *process_json_obj(struct command *cmd,
 
 	/* FIXME: This is O(n^2): hash td->columns and look up the other way. */
 	for (size_t i = 0; i < tal_count(td->columns); i++) {
-		const struct column *col = &td->columns[i];
+		const struct column *col = td->columns[i];
 		const jsmntok_t *coltok;
 
 		if (col->sub) {
@@ -994,6 +1030,7 @@ static struct command_result *json_sql(struct command *cmd,
 
 	dbq->tables = tal_arr(dbq, struct table_desc *, 0);
 	dbq->authfail = NULL;
+	dbq->cmd = cmd;
 
 	/* This both checks we're not altering, *and* tells us what
 	 * tables to refresh. */
@@ -1053,13 +1090,13 @@ static void json_add_columns(struct json_stream *js,
 			     const struct table_desc *td)
 {
 	for (size_t i = 0; i < tal_count(td->columns); i++) {
-		if (td->columns[i].sub) {
-			if (td->columns[i].sub->is_subobject)
-				json_add_columns(js, td->columns[i].sub);
+		if (td->columns[i]->sub) {
+			if (td->columns[i]->sub->is_subobject)
+				json_add_columns(js, td->columns[i]->sub);
 			continue;
 		}
-		json_add_column(js, td->columns[i].dbname,
-				fieldtypemap[td->columns[i].ftype].sqltype);
+		json_add_column(js, td->columns[i]->dbname,
+				fieldtypemap[td->columns[i]->ftype].sqltype);
 	}
 }
 
@@ -1141,7 +1178,7 @@ static void add_sub_object(char **update_stmt, char **create_stmt,
 
 	/* sub-objects are folded into this table. */
 	for (size_t j = 0; j < tal_count(sub->columns); j++) {
-		const struct column *subcol = &sub->columns[j];
+		const struct column *subcol = sub->columns[j];
 
 		if (subcol->sub) {
 			add_sub_object(update_stmt, create_stmt, sep,
@@ -1191,7 +1228,7 @@ static void finish_td(struct plugin *plugin, struct table_desc *td)
 	}
 
 	for (size_t i = 0; i < tal_count(td->columns); i++) {
-		const struct column *col = &td->columns[i];
+		const struct column *col = td->columns[i];
 
 		if (col->sub) {
 			add_sub_object(&td->update_stmt, &create_stmt,
@@ -1215,7 +1252,7 @@ static void finish_td(struct plugin *plugin, struct table_desc *td)
 do_subtables:
 	/* Now do any children */
 	for (size_t i = 0; i < tal_count(td->columns); i++) {
-		const struct column *col = &td->columns[i];
+		const struct column *col = td->columns[i];
 		if (col->sub)
 			finish_td(plugin, col->sub);
 	}
@@ -1260,7 +1297,8 @@ static const char *db_table_name(const tal_t *ctx, const char *cmdname)
 	return ret;
 }
 
-static struct table_desc *new_table_desc(struct table_desc *parent,
+static struct table_desc *new_table_desc(const tal_t *ctx,
+					 struct table_desc *parent,
 					 const jsmntok_t *cmd,
 					 const jsmntok_t *arrname,
 					 bool is_subobject)
@@ -1268,7 +1306,7 @@ static struct table_desc *new_table_desc(struct table_desc *parent,
 	struct table_desc *td;
 	const char *name;
 
-	td = tal(parent, struct table_desc);
+	td = tal(ctx, struct table_desc);
 	td->cmdname = json_strdup(td, schemas, cmd);
 	name = db_table_name(tmpctx, td->cmdname);
 	if (!parent)
@@ -1278,7 +1316,7 @@ static struct table_desc *new_table_desc(struct table_desc *parent,
 	td->parent = parent;
 	td->is_subobject = is_subobject;
 	td->arrname = json_strdup(td, schemas, arrname);
-	td->columns = tal_arr(td, struct column, 0);
+	td->columns = tal_arr(td, struct column *, 0);
 	if (streq(td->name, "channels"))
 		td->refresh = channels_refresh;
 	else if (streq(td->name, "nodes"))
@@ -1293,16 +1331,6 @@ static struct table_desc *new_table_desc(struct table_desc *parent,
 	return td;
 }
 
-static bool find_column(const struct table_desc *td,
-			const char *dbname)
-{
-	for (size_t i = 0; i < tal_count(td->columns); i++) {
-		if (streq(td->columns[i].dbname, dbname))
-			return true;
-	}
-	return false;
-}
-
 /* Recursion */
 static void add_table_object(struct table_desc *td, const jsmntok_t *tok);
 
@@ -1311,41 +1339,44 @@ static void add_table_singleton(struct table_desc *td,
 				const jsmntok_t *name,
 				const jsmntok_t *tok)
 {
-	struct column col;
+	struct column *col = tal(td->columns, struct column);
 	const jsmntok_t *type;
 
 	/* FIXME: We would need to return false here and delete table! */
 	assert(!ignore_column(td, tok));
 	type = json_get_member(schemas, tok, "type");
 
-	col.ftype = find_fieldtype(type);
-	col.sub = NULL;
+	col->ftype = find_fieldtype(type);
+	col->sub = NULL;
 	/* We name column after the JSON parent field; but jsonname is NULL so we
 	 * know to expect an array not a member. */
-	col.dbname = db_column_name(td->columns, td, name);
-	col.jsonname = NULL;
+	col->dbname = db_column_name(col, td, name);
+	col->jsonname = NULL;
 	tal_arr_expand(&td->columns, col);
 }
 
-static bool is_deprecated(const jsmntok_t *deprecated_tok)
+static bool add_deprecated(const char *buffer, const jsmntok_t *tok,
+			   struct column *col)
 {
-	const char *deprstr;
+	const char *err;
+	u32 vnum;
 
-	if (!deprecated_tok)
+	col->depr_start = col->depr_end = NULL;
+	err = json_scan(tmpctx, schemas, tok,
+			"{deprecated?:[0:%,1:%]}",
+			JSON_SCAN_TAL(col, json_strdup, &col->depr_start),
+			JSON_SCAN_TAL(col, json_strdup, &col->depr_end));
+	assert(!err);
+	if (!col->depr_start)
+		return true;
+
+	/* If it was deprecated before our release, we don't want it at all. */
+	vnum = version_to_number(col->depr_start);
+	assert(vnum);
+	if (vnum <= version_to_number("v23.02"))
 		return false;
 
-	/* If deprecated APIs are globally disabled, we don't want them! */
-	if (!deprecated_apis)
-		return true;
-
-	/* If it was deprecated before our release, we don't want it; older ones
-	 * were simply 'deprecated: true' */
-	deprstr = json_strdup(tmpctx, schemas, deprecated_tok);
-	assert(strstarts(deprstr, "v"));
-	if (streq(deprstr, "v0.12.0") || streq(deprstr, "v23.02"))
-		return true;
-
-	return false;
+	return true;
 }
 
 static void add_table_properties(struct table_desc *td,
@@ -1355,8 +1386,8 @@ static void add_table_properties(struct table_desc *td,
 	size_t i;
 
 	json_for_each_obj(i, t, properties) {
-		const jsmntok_t *type, *deprecated_tok;
-		struct column col;
+		const jsmntok_t *type;
+		struct column *col;
 
 		if (ignore_column(td, t))
 			continue;
@@ -1366,11 +1397,13 @@ static void add_table_properties(struct table_desc *td,
 		if (!type)
 			continue;
 
-		/* Depends on when it was deprecated, and whether deprecations
-		 * are enabled! */
-		deprecated_tok = json_get_member(schemas, t+1, "deprecated");
-		if (is_deprecated(deprecated_tok))
+		col = tal(td->columns, struct column);
+
+		/* Some things are so old we ignore them. */
+		if (!add_deprecated(schemas, t+1, col)) {
+			tal_free(col);
 			continue;
+		}
 
 		if (json_tok_streq(schemas, type, "array")) {
 			const jsmntok_t *items;
@@ -1378,25 +1411,25 @@ static void add_table_properties(struct table_desc *td,
 			items = json_get_member(schemas, t+1, "items");
 			type = json_get_member(schemas, items, "type");
 
-			col.sub = new_table_desc(td, t, t, false);
+			col->sub = new_table_desc(col, td, t, t, false);
 			/* Array of primitives?  Treat as single-entry obj */
 			if (!json_tok_streq(schemas, type, "object"))
-				add_table_singleton(col.sub, t, items);
+				add_table_singleton(col->sub, t, items);
 			else
-				add_table_object(col.sub, items);
+				add_table_object(col->sub, items);
 		} else if (json_tok_streq(schemas, type, "object")) {
-			col.sub = new_table_desc(td, t, t, true);
-			add_table_object(col.sub, t+1);
+			col->sub = new_table_desc(col, td, t, t, true);
+			add_table_object(col->sub, t+1);
 		} else {
-			col.ftype = find_fieldtype(type);
-			col.sub = NULL;
+			col->ftype = find_fieldtype(type);
+			col->sub = NULL;
 		}
-		col.dbname = db_column_name(td->columns, td, t);
+		col->dbname = db_column_name(col, td, t);
 		/* Some schemas repeat, assume they're the same */
-		if (find_column(td, col.dbname)) {
-			tal_free(col.dbname);
+		if (find_column(td, col->dbname)) {
+			tal_free(col);
 		} else {
-			col.jsonname = json_strdup(td->columns, schemas, t);
+			col->jsonname = json_strdup(col, schemas, t);
 			tal_arr_expand(&td->columns, col);
 		}
 	}
@@ -1431,7 +1464,13 @@ static void add_table_object(struct table_desc *td, const jsmntok_t *tok)
 static void init_tablemap(struct plugin *plugin)
 {
 	const jsmntok_t *toks, *t;
+	const tal_t *ctx;
 	size_t i;
+
+	if (plugin)
+		ctx = plugin;
+	else
+		ctx = tmpctx;
 
 	strmap_init(&tablemap);
 
@@ -1448,11 +1487,7 @@ static void init_tablemap(struct plugin *plugin)
 		type = json_get_member(schemas, items, "type");
 		assert(json_tok_streq(schemas, type, "object"));
 
-		td = new_table_desc(NULL, t, cmd, false);
-		if (plugin)
-			tal_steal(plugin, td);
-		else
-			tal_steal(tmpctx, td);
+		td = new_table_desc(ctx, NULL, t, cmd, false);
 		add_table_object(td, items);
 
 		if (plugin)
@@ -1540,8 +1575,8 @@ static void print_columns(const struct table_desc *td, const char *indent,
 {
 	for (size_t i = 0; i < tal_count(td->columns); i++) {
 		const char *origin;
-		if (td->columns[i].sub) {
-			const struct table_desc *subtd = td->columns[i].sub;
+		if (td->columns[i]->sub) {
+			const struct table_desc *subtd = td->columns[i]->sub;
 
 			if (!subtd->is_subobject) {
 				const char *subindent;
@@ -1558,23 +1593,23 @@ static void print_columns(const struct table_desc *td, const char *indent,
 
 				subobjsrc = tal_fmt(tmpctx,
 						    ", from JSON object `%s`",
-						    td->columns[i].jsonname);
+						    td->columns[i]->jsonname);
 				print_columns(subtd, indent, subobjsrc);
 			}
 			continue;
 		}
 
 		if (streq(objsrc, "")
-		    && td->columns[i].jsonname
-		    && !streq(td->columns[i].dbname, td->columns[i].jsonname)) {
+		    && td->columns[i]->jsonname
+		    && !streq(td->columns[i]->dbname, td->columns[i]->jsonname)) {
 			origin = tal_fmt(tmpctx, ", from JSON field `%s`",
-					 td->columns[i].jsonname);
+					 td->columns[i]->jsonname);
 		} else
 			origin = "";
 		printf("%s- `%s` (type `%s`, sqltype `%s`%s%s)\n",
-		       indent, td->columns[i].dbname,
-		       fieldtypemap[td->columns[i].ftype].name,
-		       fieldtypemap[td->columns[i].ftype].sqltype,
+		       indent, td->columns[i]->dbname,
+		       fieldtypemap[td->columns[i]->ftype].name,
+		       fieldtypemap[td->columns[i]->ftype].sqltype,
 		       origin, objsrc);
 	}
 }

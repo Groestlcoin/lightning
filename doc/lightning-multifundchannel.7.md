@@ -4,7 +4,7 @@ lightning-multifundchannel -- Command for establishing many lightning channels
 SYNOPSIS
 --------
 
-**multifundchannel** *destinations* [*feerate*] [*minconf*] [*utxos*] [*minchannels*] [*commitment\_feerate*]
+**multifundchannel** *destinations* [*feerate*] [*minconf*] [*utxos*] [*minchannels*] [*commitment\_feerate*] [*channel\_type*]
 
 DESCRIPTION
 -----------
@@ -84,6 +84,25 @@ the funding process.
 *commitment\_feerate* is the initial feerate for commitment and HTLC
 transactions. See *feerate* for valid values.
 
+*channel\_type* *(added v24.02)* is an array of bit numbers, representing the explicit
+channel type to request.  BOLT 2 defines the following value types:
+
+```
+*channel\_type* *(added v24.02)* is an array of bit numbers, representing the explicit
+channel type to request.  BOLT 2 defines the following value types:
+
+```
+The currently defined basic types are:
+  - no features (no bits set) `[]`
+  - `option_static_remotekey` (`[12]`)
+  - `option_anchor_outputs` and `option_static_remotekey` (`[20, 12]`)
+  - `option_anchors_zero_fee_htlc_tx` and `option_static_remotekey` ([22, 12])
+
+Each basic type has the following variations allowed:
+  - `option_scid_alias` ([46])
+  - `option_zeroconf` ([50])
+```
+
 RETURN VALUE
 ------------
 
@@ -103,6 +122,11 @@ On success, an object is returned, containing:
   - **id** (pubkey): The peer we opened the channel with
   - **outnum** (u32): The 0-based output index showing which output funded the channel
   - **channel\_id** (hex): The channel\_id of the resulting channel (always 64 characters)
+  - **channel\_type** (object): channel\_type as negotiated with peer *(added v24.02)*:
+    - **bits** (array of u32s): Each bit set in this channel\_type *(added v24.02)*:
+      - Bit number
+    - **names** (array of strings): Feature name for each bit set in this channel\_type *(added v24.02)*:
+      - Name of feature bit (one of "static\_remotekey/even", "anchor\_outputs/even", "anchors\_zero\_fee\_htlc\_tx/even", "scid\_alias/even", "zeroconf/even")
   - **close\_to** (hex, optional): The raw scriptPubkey which mutual close will go to; only present if *close\_to* parameter was specified and peer supports `option_upfront_shutdown_script`
 - **failed** (array of objects, optional): any peers we failed to open with (if *minchannels* was specified less than the number of destinations):
   - **id** (pubkey): The peer we failed to open the channel with
@@ -153,20 +177,20 @@ $ lightning-cli multifundchannel '[{"id":"0201f42e167959c74d396ac57652fcea63c639
 {
    "tx": "02000000000101fbe3c68db87b72f82c3f5447b0bc032469c78e71f229ac99c230807ff378a9d80000000000fdffffff04400d0300000000002200202e9897ed5f9b237aa27fd5d02d24157cd452b0d3f0a5bb03d38ff73f9f8f384bffffff0000000000220020439d797ada249e1e12f8d27cabb7330de3c8de0456fb54892deb7b9c72b0ff7c1dc9b50400000000225120046e3966a2d5e43c1f1e0676161905782e1e7c00811485c618f5144f328f4e2bc0c62d0000000000220020e36fd5c03c3586c3763d8b4c9d8650f396ff1c8a460137fb09b60ee82536a3b20140ea4d564e91c919b50a2d32886f1d414de773491119beb1364b92f15d6d03e1810e5ddea89c265e42f2e96bb028dfb3aa0b5b30072ddcc78daad727503c53e37fa9010000",
    "txid": "90dc53922b70628fc9e7804ad0b8cd0fb41f050d94ffa2db3b16e918c96c022a",
-   "channel_ids": [
+   "channel\_ids": [
       {
          "id": "0201f42e167959c74d396ac57652fcea63c63940f78e8239cce5720df4d85ef857",
-         "channel_id": "25c8253e66a860d17916cc0c21386e310eba9900030a68ec6ff6f59a8401a872",
+         "channel\_id": "25c8253e66a860d17916cc0c21386e310eba9900030a68ec6ff6f59a8401a872",
          "outnum": 0
       },
       {
          "id": "0304a2468065535f9459567686e0f02b40f06e341d3eb2a62ec6763bcf2ccfd207",
-         "channel_id": "51749d724892a406896f6bf2e2f8c0b03399d0436691f294839897fa167e6521",
+         "channel\_id": "51749d724892a406896f6bf2e2f8c0b03399d0436691f294839897fa167e6521",
          "outnum": 3
       },
       {
          "id": "0391f4c475050bb15871da5a72b1f3a1798de3d2e5fb4ffa262899b8d8e1f0b764",
-         "channel_id": "7e1414e72c081f0754fa18c1657cedabe696aa9ffeaf0b936bfbe3a28f2829d1",
+         "channel\_id": "7e1414e72c081f0754fa18c1657cedabe696aa9ffeaf0b936bfbe3a28f2829d1",
          "outnum": 1
       }
    ],
@@ -190,4 +214,4 @@ RESOURCES
 
 Main web site: <https://github.com/ElementsProject/lightning>
 
-[comment]: # ( SHA256STAMP:9922effdfb4bcd5ab95057fb0c043f0597446f4da4e7d5033520a3138ffc8ff8)
+[comment]: # ( SHA256STAMP:eb35e768173dcc45cfd56c0847995fbc8ff9e182dbade3e11c192cf27b6bfcba)

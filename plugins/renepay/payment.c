@@ -5,7 +5,6 @@
 #include <common/json_stream.h>
 #include <common/memleak.h>
 #include <plugins/renepay/pay.h>
-#include <plugins/renepay/pay_flow.h>
 #include <plugins/renepay/payment.h>
 
 struct payment *payment_new(const tal_t *ctx,
@@ -200,7 +199,7 @@ void payment_assert_delivering_all(const struct payment *p)
 	}
 }
 
-static struct command_result *payment_success(struct payment *p)
+struct command_result *payment_success(struct payment *p)
 {
 	/* We only finish command once: its destructor clears this. */
 	if (!p->cmd)
@@ -457,4 +456,14 @@ void payment_reconsider(struct payment *payment)
 	errmsg = try_paying(tmpctx, payment, &ecode);
 	if (errmsg)
 		payment_fail(payment, ecode, "%s", errmsg);
+}
+
+/* Remove all flows with the given state. */
+void payment_remove_flows(struct payment *p, enum pay_flow_state state)
+{
+	struct pay_flow *pf, *next;
+	list_for_each_safe(&p->flows, pf, next, list) {
+		if(pf->state == state)
+			list_del(&pf->list);
+	}
 }

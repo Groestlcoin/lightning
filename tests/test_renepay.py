@@ -356,3 +356,44 @@ def test_hardmpp(node_factory):
     l1.wait_for_htlcs()
     invoice = only_one(l6.rpc.listinvoices('inv2')['invoices'])
     assert invoice['amount_received_msat'] >= Millisatoshi('1800000sat')
+
+
+def test_self_pay(node_factory):
+    l1, l2 = node_factory.line_graph(2, wait_for_announce=True)
+
+    inv = l1.rpc.invoice(10000, 'test', 'test')['bolt11']
+    l1.rpc.call('renepay', {'invstring': inv})
+
+    # We can pay twice, no problem!
+    l1.rpc.call('renepay', {'invstring': inv})
+
+    inv2 = l1.rpc.invoice(10000, 'test2', 'test2')['bolt11']
+    l1.rpc.delinvoice('test2', 'unpaid')
+
+    with pytest.raises(RpcError, match=r'Unknown invoice') as excinfo:
+        l1.rpc.call('renepay', {'invstring': inv2})
+    assert excinfo.value.error['code'] == 203
+
+
+def test_fee_allocation(node_factory):
+    '''
+    Topology:
+    1----2
+    |    |
+    3----4
+    This a payment that fails if fee is not allocated as part of the flow
+    constraints.
+    '''
+    # High fees at 3%
+    opts = [
+        {'disable-mpp': None, 'fee-base': 1000, 'fee-per-satoshi': 30000},
+    ]
+    l1, l2, l3, l4 = node_factory.get_nodes(4, opts=opts * 4)
+    start_channels([(l1, l2, 1000000), (l2, l4, 2000000),
+                    (l1, l3, 1000000), (l3, l4, 2000000)])
+
+    inv = l4.rpc.invoice("1500000sat", "inv", 'description')
+    l1.rpc.call('renepay', {'invstring': inv['bolt11'], 'maxfee': '75000sat'})
+    l1.wait_for_htlcs()
+    invoice = only_one(l4.rpc.listinvoices('inv')['invoices'])
+    assert invoice['amount_received_msat'] >= Millisatoshi('1500000sat')

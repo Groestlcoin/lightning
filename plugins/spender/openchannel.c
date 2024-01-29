@@ -2,6 +2,7 @@
 #include <bitcoin/psbt.h>
 #include <ccan/ccan/array_size/array_size.h>
 #include <ccan/ccan/mem/mem.h>
+#include <common/json_channel_type.h>
 #include <common/json_stream.h>
 #include <common/lease_rates.h>
 #include <common/psbt_open.h>
@@ -917,49 +918,28 @@ openchannel_init_ok(struct command *cmd,
 		    struct multifundchannel_destination *dest)
 {
 	struct multifundchannel_command *mfc = dest->mfc;
-	const jsmntok_t *psbt_tok;
-	const jsmntok_t *channel_id_tok;
-	const jsmntok_t *funding_serial_tok;
+	const char *err;
 
 	plugin_log(mfc->cmd->plugin, LOG_DBG,
 		   "mfc %"PRIu64", dest %u: openchannel_init %s done.",
 		   mfc->id, dest->index,
 		   node_id_to_hexstr(tmpctx, &dest->id));
 
-	/* We've got the PSBT and channel_id here */
-	psbt_tok = json_get_member(buf, result, "psbt");
-	if (!psbt_tok)
+	err = json_scan(mfc, buf, result,
+			"{psbt:%,"
+			"channel_id:%,"
+			"funding_serial:%,"
+			"channel_type:{bits:%}}",
+			JSON_SCAN_TAL(mfc, json_to_psbt, &dest->updated_psbt),
+			JSON_SCAN(json_to_channel_id, &dest->channel_id),
+			JSON_SCAN(json_to_u64, &dest->funding_serial),
+			JSON_SCAN_TAL(mfc, json_bits_to_channel_type, &dest->channel_type));
+	if (err) {
 		plugin_err(cmd->plugin,
-			   "openchannel_init did not return "
-			   "'psbt': %.*s",
+			   "openchannel_init bad return %.*s: %s",
 			   json_tok_full_len(result),
-			   json_tok_full(buf, result));
-	dest->updated_psbt = json_to_psbt(dest->mfc, buf, psbt_tok);
-	if (!dest->updated_psbt)
-		plugin_err(cmd->plugin,
-			   "openchannel_init returned invalid "
-			   "'psbt': %.*s",
-			   json_tok_full_len(result),
-			   json_tok_full(buf, result));
-
-	channel_id_tok = json_get_member(buf, result, "channel_id");
-	if (!channel_id_tok)
-		plugin_err(cmd->plugin,
-			   "openchannel_init did not return "
-			   "'channel_id': %.*s",
-			   json_tok_full_len(result),
-			   json_tok_full(buf, result));
-	json_to_channel_id(buf, channel_id_tok, &dest->channel_id);
-
-	funding_serial_tok = json_get_member(buf, result,
-					     "funding_serial");
-	if (!funding_serial_tok)
-		plugin_err(cmd->plugin,
-			   "openchannel_init did not return "
-			   "'funding_serial': %.*s",
-			   json_tok_full_len(result),
-			   json_tok_full(buf, result));
-	json_to_u64(buf, funding_serial_tok, &dest->funding_serial);
+			   json_tok_full(buf, result), err);
+	}
 
 	dest->state = MULTIFUNDCHANNEL_STARTED;
 
@@ -1053,6 +1033,10 @@ openchannel_init_dest(struct multifundchannel_destination *dest)
 				lease_rates_tohex(tmpctx, dest->rates));
 	}
 
+	if (dest->channel_type) {
+		json_add_channel_type_arr(req->js,
+					  "channel_type", dest->channel_type);
+	}
 	return send_outreq(cmd->plugin, req);
 }
 

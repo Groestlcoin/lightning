@@ -1380,7 +1380,8 @@ def test_forward_pad_fees_and_cltv(node_factory, bitcoind):
     wallet = accts[0]
     chan_acct = accts[1]
     assert wallet['account'] == 'wallet'
-    assert only_one(wallet['balances'])['balance_msat'] == Millisatoshi(0)
+    # We no longer make a zero balance entry for the wallet at start
+    assert wallet['balances'] == []
     assert incomes[0]['tag'] == 'invoice'
     assert only_one(chan_acct['balances'])['balance_msat'] == incomes[0]['debit_msat']
     inve = only_one([e for e in l1.rpc.bkpr_listaccountevents()['events'] if e['tag'] == 'invoice'])
@@ -5125,26 +5126,6 @@ def test_pay_middle_fail(node_factory, bitcoind, executor):
     # And that will fail upstream
     with pytest.raises(RpcError, match=r'WIRE_INCORRECT_OR_UNKNOWN_PAYMENT_DETAILS'):
         l1.rpc.waitsendpay('00' * 32)
-
-
-def test_sendpay_dual_amounts(node_factory):
-    """Test that handing *both* msatoshi and amount_msat to sendpay works"""
-    l1 = node_factory.get_node(options={'allow-deprecated-apis': True})
-
-    route = [{'amount_msat': 1011,
-              'msatoshi': 1011,
-              'id': '022d223620a359a47ff7f7ac447c85c46c923da53389221a0054c11c1e3ca31d59',
-              'delay': 20,
-              'channel': '1x1x1'},
-             {'amount_msat': 1000,
-              'msatoshi': 1000,
-              'id': '035d2b1192dfba134e10e540875d366ebc8bc353d5aa766b80c090b39c3a5d885d',
-              'delay': 10,
-              'channel': '2x2x2'}]
-    l1.rpc.check("sendpay", route=route, payment_hash="00" * 32)
-
-    with pytest.raises(RpcError, match=r'No connection to first peer found'):
-        l1.rpc.sendpay(route=route, payment_hash="00" * 32)
 
 
 @unittest.skipIf(TEST_NETWORK != 'regtest', "Invoice is network specific")

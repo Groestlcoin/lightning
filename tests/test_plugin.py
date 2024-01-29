@@ -1629,7 +1629,9 @@ def test_libplugin_deprecated(node_factory):
     plugin = os.path.join(os.getcwd(), "tests/plugins/test_libplugin")
     l1 = node_factory.get_node(options={"plugin": plugin,
                                         'somearg-deprecated': 'test_opt depr',
-                                        'allow-deprecated-apis': True})
+                                        'allow-deprecated-apis': True},
+                               # testrpc-deprecated causes a complaint!
+                               allow_broken_log=True)
 
     assert l1.daemon.is_in_log("somearg = test_opt depr")
     l1.rpc.help('testrpc-deprecated')
@@ -1659,7 +1661,7 @@ def test_plugin_feature_announce(node_factory):
 
     # Check the featurebits we've set in the `init` message from
     # feature-test.py.
-    assert l1.daemon.is_in_log(r'\[OUT\] 001000022100....{}'
+    assert l1.daemon.is_in_log(r'\[OUT\] 001000021100....{}'
                                .format(expected_peer_features(extra=[201])))
 
     # Check the invoice featurebit we set in feature-test.py

@@ -109,6 +109,12 @@ struct command_result *command_check_done(struct command *cmd)
 /* Generated stub for command_check_only */
 bool command_check_only(const struct command *cmd UNNEEDED)
 { fprintf(stderr, "command_check_only called!\n"); abort(); }
+/* Generated stub for command_deprecated_in_ok */
+bool command_deprecated_in_ok(struct command *cmd UNNEEDED,
+			      const char *param UNNEEDED,
+			      const char *depr_start UNNEEDED,
+			      const char *depr_end UNNEEDED)
+{ fprintf(stderr, "command_deprecated_in_ok called!\n"); abort(); }
 /* Generated stub for command_fail */
 struct command_result *command_fail(struct command *cmd UNNEEDED, enum jsonrpc_errcode code UNNEEDED,
 				    const char *fmt UNNEEDED, ...)
@@ -260,6 +266,9 @@ bool fromwire_hsmd_client_hsmfd_reply(const void *p UNNEEDED)
 /* Generated stub for fromwire_hsmd_derive_secret_reply */
 bool fromwire_hsmd_derive_secret_reply(const void *p UNNEEDED, struct secret *secret UNNEEDED)
 { fprintf(stderr, "fromwire_hsmd_derive_secret_reply called!\n"); abort(); }
+/* Generated stub for fromwire_hsmd_forget_channel_reply */
+bool fromwire_hsmd_forget_channel_reply(const void *p UNNEEDED)
+{ fprintf(stderr, "fromwire_hsmd_forget_channel_reply called!\n"); abort(); }
 /* Generated stub for fromwire_hsmd_get_output_scriptpubkey_reply */
 bool fromwire_hsmd_get_output_scriptpubkey_reply(const tal_t *ctx UNNEEDED, const void *p UNNEEDED, u8 **script UNNEEDED)
 { fprintf(stderr, "fromwire_hsmd_get_output_scriptpubkey_reply called!\n"); abort(); }
@@ -272,9 +281,6 @@ bool fromwire_hsmd_init_reply_v4(const tal_t *ctx UNNEEDED, const void *p UNNEED
 /* Generated stub for fromwire_hsmd_new_channel_reply */
 bool fromwire_hsmd_new_channel_reply(const void *p UNNEEDED)
 { fprintf(stderr, "fromwire_hsmd_new_channel_reply called!\n"); abort(); }
-/* Generated stub for fromwire_hsmd_forget_channel_reply */
-bool fromwire_hsmd_forget_channel_reply(const void *p UNNEEDED)
-{ fprintf(stderr, "fromwire_hsmd_forget_channel_reply called!\n"); abort(); }
 /* Generated stub for fromwire_hsmd_sign_commitment_tx_reply */
 bool fromwire_hsmd_sign_commitment_tx_reply(const void *p UNNEEDED, struct bitcoin_signature *sig UNNEEDED)
 { fprintf(stderr, "fromwire_hsmd_sign_commitment_tx_reply called!\n"); abort(); }
@@ -376,6 +382,11 @@ void json_add_channel_id(struct json_stream *response UNNEEDED,
 			 const char *fieldname UNNEEDED,
 			 const struct channel_id *cid UNNEEDED)
 { fprintf(stderr, "json_add_channel_id called!\n"); abort(); }
+/* Generated stub for json_add_channel_type */
+void json_add_channel_type(struct json_stream *response UNNEEDED,
+			   const char *fieldname UNNEEDED,
+			   const struct channel_type *channel_type UNNEEDED)
+{ fprintf(stderr, "json_add_channel_type called!\n"); abort(); }
 /* Generated stub for json_add_hex */
 void json_add_hex(struct json_stream *result UNNEEDED, const char *fieldname UNNEEDED,
 		  const void *data UNNEEDED, size_t len UNNEEDED)
@@ -549,6 +560,24 @@ bool json_tok_streq(const char *buffer UNNEEDED, const jsmntok_t *tok UNNEEDED, 
 void kill_uncommitted_channel(struct uncommitted_channel *uc UNNEEDED,
 			      const char *why UNNEEDED)
 { fprintf(stderr, "kill_uncommitted_channel called!\n"); abort(); }
+/* Generated stub for lightningd_deprecated_in_ok */
+bool lightningd_deprecated_in_ok(struct lightningd *ld UNNEEDED,
+				 struct logger *log UNNEEDED,
+				 bool deprecated_apis UNNEEDED,
+				 const char *subsys UNNEEDED,
+				 const char *api UNNEEDED,
+				 const char *start UNNEEDED,
+				 const char *end UNNEEDED,
+				 const char *details UNNEEDED)
+{ fprintf(stderr, "lightningd_deprecated_in_ok called!\n"); abort(); }
+/* Generated stub for lightningd_deprecated_out_ok */
+bool lightningd_deprecated_out_ok(struct lightningd *ld UNNEEDED,
+				  bool deprecated_apis UNNEEDED,
+				  const char *subsys UNNEEDED,
+				  const char *api UNNEEDED,
+				  const char *start UNNEEDED,
+				  const char *end UNNEEDED)
+{ fprintf(stderr, "lightningd_deprecated_out_ok called!\n"); abort(); }
 /* Generated stub for lockin_complete */
 void lockin_complete(struct channel *channel UNNEEDED,
 		     enum channel_state expected_state UNNEEDED)
@@ -644,8 +673,10 @@ void notify_forward_event(struct lightningd *ld UNNEEDED,
 			  u64 updated_index UNNEEDED)
 { fprintf(stderr, "notify_forward_event called!\n"); abort(); }
 /* Generated stub for notify_invoice_payment */
-void notify_invoice_payment(struct lightningd *ld UNNEEDED, struct amount_msat amount UNNEEDED,
-			    struct preimage preimage UNNEEDED, const struct json_escape *label UNNEEDED,
+void notify_invoice_payment(struct lightningd *ld UNNEEDED,
+			    struct amount_msat amount UNNEEDED,
+			    const struct preimage *preimage UNNEEDED,
+			    const struct json_escape *label UNNEEDED,
 			    const struct bitcoin_outpoint *outpoint UNNEEDED)
 { fprintf(stderr, "notify_invoice_payment called!\n"); abort(); }
 /* Generated stub for notify_sendpay_failure */
@@ -1002,6 +1033,9 @@ u8 *towire_hsmd_client_hsmfd(const tal_t *ctx UNNEEDED, const struct node_id *id
 /* Generated stub for towire_hsmd_derive_secret */
 u8 *towire_hsmd_derive_secret(const tal_t *ctx UNNEEDED, const u8 *info UNNEEDED)
 { fprintf(stderr, "towire_hsmd_derive_secret called!\n"); abort(); }
+/* Generated stub for towire_hsmd_forget_channel */
+u8 *towire_hsmd_forget_channel(const tal_t *ctx UNNEEDED, const struct node_id *id UNNEEDED, u64 dbid UNNEEDED)
+{ fprintf(stderr, "towire_hsmd_forget_channel called!\n"); abort(); }
 /* Generated stub for towire_hsmd_get_output_scriptpubkey */
 u8 *towire_hsmd_get_output_scriptpubkey(const tal_t *ctx UNNEEDED, u64 channel_id UNNEEDED, const struct node_id *peer_id UNNEEDED, const struct pubkey *commitment_point UNNEEDED)
 { fprintf(stderr, "towire_hsmd_get_output_scriptpubkey called!\n"); abort(); }
@@ -1011,9 +1045,6 @@ u8 *towire_hsmd_init(const tal_t *ctx UNNEEDED, const struct bip32_key_version *
 /* Generated stub for towire_hsmd_new_channel */
 u8 *towire_hsmd_new_channel(const tal_t *ctx UNNEEDED, const struct node_id *id UNNEEDED, u64 dbid UNNEEDED)
 { fprintf(stderr, "towire_hsmd_new_channel called!\n"); abort(); }
-/* Generated stub for towire_hsmd_forget_channel */
-u8 *towire_hsmd_forget_channel(const tal_t *ctx UNNEEDED, const struct node_id *id UNNEEDED, u64 dbid UNNEEDED)
-{ fprintf(stderr, "towire_hsmd_forget_channel called!\n"); abort(); }
 /* Generated stub for towire_hsmd_sign_commitment_tx */
 u8 *towire_hsmd_sign_commitment_tx(const tal_t *ctx UNNEEDED, const struct node_id *peer_id UNNEEDED, u64 channel_dbid UNNEEDED, const struct bitcoin_tx *tx UNNEEDED, const struct pubkey *remote_funding_key UNNEEDED, u64 commit_num UNNEEDED)
 { fprintf(stderr, "towire_hsmd_sign_commitment_tx called!\n"); abort(); }

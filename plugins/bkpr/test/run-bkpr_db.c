@@ -32,6 +32,15 @@ void daemon_setup(const char *argv0 UNNEEDED,
 		  void (*backtrace_print)(const char *fmt UNNEEDED, ...) UNNEEDED,
 		  void (*backtrace_exit)(void))
 { fprintf(stderr, "daemon_setup called!\n"); abort(); }
+/* Generated stub for deprecated_ok_ */
+bool  deprecated_ok_(bool deprecated_apis UNNEEDED,
+		    const char *feature UNNEEDED,
+		    const char *start UNNEEDED,
+		    const char *end UNNEEDED,
+		    const char **begs UNNEEDED,
+		    void (*complain)(const char *feat UNNEEDED, bool allowing UNNEEDED, void *) UNNEEDED,
+		    void *cbarg UNNEEDED)
+{ fprintf(stderr, "deprecated_ok_ called!\n"); abort(); }
 /* Generated stub for first_fee_state */
 enum htlc_state first_fee_state(enum side opener UNNEEDED)
 { fprintf(stderr, "first_fee_state called!\n"); abort(); }
@@ -251,13 +260,11 @@ static struct db *create_test_db(void)
 static bool test_db_migrate(struct plugin *plugin)
 {
 	struct db *db = create_test_db();
-	bool created;
 
 	CHECK(db);
 	db_begin_transaction(db);
 	CHECK(db_get_version(db) == -1);
-	CHECK(db_migrate(plugin, db, &created) == true);
-	CHECK(created);
+	CHECK(db_migrate(plugin, db) == true);
 	db_commit_transaction(db);
 
 	db_begin_transaction(db);
@@ -265,8 +272,7 @@ static bool test_db_migrate(struct plugin *plugin)
 	db_commit_transaction(db);
 
 	db_begin_transaction(db);
-	CHECK(db_migrate(plugin, db, &created) == false);
-	CHECK(!created);
+	CHECK(db_migrate(plugin, db) == false);
 	db_commit_transaction(db);
 
 	tal_free(db);

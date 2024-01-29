@@ -110,9 +110,6 @@ const char *channel_state_str(enum channel_state state UNNEEDED)
 /* Generated stub for channel_type_has */
 bool channel_type_has(const struct channel_type *type UNNEEDED, int feature UNNEEDED)
 { fprintf(stderr, "channel_type_has called!\n"); abort(); }
-/* Generated stub for channel_type_name */
-const char **channel_type_name(const tal_t *ctx UNNEEDED, const struct channel_type *t UNNEEDED)
-{ fprintf(stderr, "channel_type_name called!\n"); abort(); }
 /* Generated stub for channel_unsaved_close_conn */
 void channel_unsaved_close_conn(struct channel *channel UNNEEDED, const char *why UNNEEDED)
 { fprintf(stderr, "channel_unsaved_close_conn called!\n"); abort(); }
@@ -237,19 +234,10 @@ bool feature_negotiated(const struct feature_set *our_features UNNEEDED,
 /* Generated stub for featurebits_or */
 u8 *featurebits_or(const tal_t *ctx UNNEEDED, const u8 *f1 TAKES UNNEEDED, const u8 *f2 TAKES UNNEEDED)
 { fprintf(stderr, "featurebits_or called!\n"); abort(); }
-/* Generated stub for find_channel_by_alias */
-struct channel *find_channel_by_alias(const struct peer *peer UNNEEDED,
-				      const struct short_channel_id *alias UNNEEDED,
-				      enum side side UNNEEDED)
-{ fprintf(stderr, "find_channel_by_alias called!\n"); abort(); }
 /* Generated stub for find_channel_by_id */
 struct channel *find_channel_by_id(const struct peer *peer UNNEEDED,
 				   const struct channel_id *cid UNNEEDED)
 { fprintf(stderr, "find_channel_by_id called!\n"); abort(); }
-/* Generated stub for find_channel_by_scid */
-struct channel *find_channel_by_scid(const struct peer *peer UNNEEDED,
-				     const struct short_channel_id *scid UNNEEDED)
-{ fprintf(stderr, "find_channel_by_scid called!\n"); abort(); }
 /* Generated stub for find_plugin_for_command */
 struct plugin *find_plugin_for_command(struct lightningd *ld UNNEEDED,
 				       const char *cmd_name UNNEEDED)
@@ -489,6 +477,11 @@ void json_add_bolt11(struct json_stream *response UNNEEDED,
 void json_add_bool(struct json_stream *result UNNEEDED, const char *fieldname UNNEEDED,
 		   bool value UNNEEDED)
 { fprintf(stderr, "json_add_bool called!\n"); abort(); }
+/* Generated stub for json_add_channel_type */
+void json_add_channel_type(struct json_stream *response UNNEEDED,
+			   const char *fieldname UNNEEDED,
+			   const struct channel_type *channel_type UNNEEDED)
+{ fprintf(stderr, "json_add_channel_type called!\n"); abort(); }
 /* Generated stub for json_add_escaped_string */
 void json_add_escaped_string(struct json_stream *result UNNEEDED,
 			     const char *fieldname UNNEEDED,
@@ -664,6 +657,24 @@ struct jsonrpc_request *jsonrpc_request_start_(
 void kill_uncommitted_channel(struct uncommitted_channel *uc UNNEEDED,
 			      const char *why UNNEEDED)
 { fprintf(stderr, "kill_uncommitted_channel called!\n"); abort(); }
+/* Generated stub for lightningd_deprecated_in_ok */
+bool lightningd_deprecated_in_ok(struct lightningd *ld UNNEEDED,
+				 struct logger *log UNNEEDED,
+				 bool deprecated_apis UNNEEDED,
+				 const char *subsys UNNEEDED,
+				 const char *api UNNEEDED,
+				 const char *start UNNEEDED,
+				 const char *end UNNEEDED,
+				 const char *details UNNEEDED)
+{ fprintf(stderr, "lightningd_deprecated_in_ok called!\n"); abort(); }
+/* Generated stub for lightningd_deprecated_out_ok */
+bool lightningd_deprecated_out_ok(struct lightningd *ld UNNEEDED,
+				  bool deprecated_apis UNNEEDED,
+				  const char *subsys UNNEEDED,
+				  const char *api UNNEEDED,
+				  const char *start UNNEEDED,
+				  const char *end UNNEEDED)
+{ fprintf(stderr, "lightningd_deprecated_out_ok called!\n"); abort(); }
 /* Generated stub for lockin_complete */
 void lockin_complete(struct channel *channel UNNEEDED,
 		     enum channel_state expected_state UNNEEDED)
@@ -721,12 +732,16 @@ void notify_connect(struct lightningd *ld UNNEEDED,
 void notify_disconnect(struct lightningd *ld UNNEEDED, struct node_id *nodeid UNNEEDED)
 { fprintf(stderr, "notify_disconnect called!\n"); abort(); }
 /* Generated stub for notify_invoice_creation */
-void notify_invoice_creation(struct lightningd *ld UNNEEDED, struct amount_msat *amount UNNEEDED,
-			    struct preimage preimage UNNEEDED, const struct json_escape *label UNNEEDED)
+void notify_invoice_creation(struct lightningd *ld UNNEEDED,
+			     const struct amount_msat *amount UNNEEDED,
+			     const struct preimage *preimage UNNEEDED,
+			     const struct json_escape *label UNNEEDED)
 { fprintf(stderr, "notify_invoice_creation called!\n"); abort(); }
 /* Generated stub for notify_invoice_payment */
-void notify_invoice_payment(struct lightningd *ld UNNEEDED, struct amount_msat amount UNNEEDED,
-			    struct preimage preimage UNNEEDED, const struct json_escape *label UNNEEDED,
+void notify_invoice_payment(struct lightningd *ld UNNEEDED,
+			    struct amount_msat amount UNNEEDED,
+			    const struct preimage *preimage UNNEEDED,
+			    const struct json_escape *label UNNEEDED,
 			    const struct bitcoin_outpoint *outpoint UNNEEDED)
 { fprintf(stderr, "notify_invoice_payment called!\n"); abort(); }
 /* Generated stub for onchaind_funding_spent */

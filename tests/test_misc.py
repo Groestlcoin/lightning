@@ -2243,12 +2243,12 @@ def test_dev_demux(node_factory):
 def test_list_features_only(node_factory):
     features = subprocess.check_output(['lightningd/lightningd',
                                         '--list-features-only']).decode('utf-8').splitlines()
-    expected = ['option_data_loss_protect/odd',
+    expected = ['option_data_loss_protect/even',
                 'option_upfront_shutdown_script/odd',
-                'option_gossip_queries/odd',
+                'option_gossip_queries/even',
                 'option_var_onion_optin/even',
                 'option_gossip_queries_ex/odd',
-                'option_static_remotekey/odd',
+                'option_static_remotekey/even',
                 'option_payment_secret/even',
                 'option_basic_mpp/odd',
                 'option_support_large_channel/odd',
@@ -2687,7 +2687,7 @@ def test_custommsg_triggers_notification(node_factory):
 
     # Connect l1 to l2
     l1.connect(l2)
-    wait_for(lambda: l2.rpc.listpeers(l1.info['id'])['peers'][0]['connected'])
+    wait_for(lambda: [p['connected'] for p in l2.rpc.listpeers(l1.info['id'])['peers']] == [True])
 
     # Send a custommsg from l2 to l1
     # The message id 7777 is chosen to be sufficiently high and shouldn't be used by the
