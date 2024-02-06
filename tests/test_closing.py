@@ -297,6 +297,12 @@ def test_closing_specified_destination(node_factory, bitcoind, chainparams):
 
     mine_funding_to_announce(bitcoind, [l1, l2, l3, l4])
 
+    # Make sure they all see all the gossip before close, otherwise they might
+    # get upset with "bad gossip!"
+    for n in [l1, l2, l3, l4]:
+        wait_for(lambda: len(n.rpc.listchannels()['channels']) == 6)
+        wait_for(lambda: ['alias' in node for node in n.rpc.listnodes()['nodes']] == [True] * 4)
+
     addr = chainparams['example_addr']
     l1.rpc.close(chan12, None, addr)
     l1.rpc.call('close', {'id': chan13, 'destination': addr})
@@ -1801,7 +1807,8 @@ def test_onchaind_replay(node_factory, bitcoind):
     l1, l2 = node_factory.line_graph(2, opts=[{'watchtime-blocks': 201, 'cltv-delta': 101,
                                                'disconnect': disconnects,
                                                'feerates': (7500, 7500, 7500, 7500)},
-                                              {'watchtime-blocks': 201, 'cltv-delta': 101}])
+                                              {'watchtime-blocks': 201, 'cltv-delta': 101}],
+                                     wait_for_announce=True)
 
     inv = l2.rpc.invoice(10**8, 'onchaind_replay', 'desc')
     rhash = inv['payment_hash']
@@ -2419,6 +2426,9 @@ def test_onchain_their_unilateral_out(node_factory, bitcoind, chainparams, ancho
                 assert acc['account_closed']
                 assert acc['account_resolved']
                 assert acc['resolved_at_block'] > 0
+
+    # Have l1 send all funds to check that the unilateral close info is correct
+    l1.rpc.withdraw(l1.rpc.newaddr('bech32')['bech32'], 'all', minconf=0)
 
 
 def test_listfunds_after_their_unilateral(node_factory, bitcoind):

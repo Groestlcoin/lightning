@@ -3506,7 +3506,9 @@ def test_sql(node_factory, bitcoind):
                         {'name': 'last_commitment_fee_msat',
                          'type': 'msat'},
                         {'name': 'close_cause',
-                         'type': 'string'}]},
+                         'type': 'string'},
+                        {'name': 'last_stable_connection',
+                         'type': 'u64'}]},
         'closedchannels_channel_type_bits': {
             'columns': [{'name': 'row',
                          'type': 'u64'},
@@ -3840,6 +3842,10 @@ def test_sql(node_factory, bitcoind):
                          'type': 'u64'},
                         {'name': 'out_fulfilled_msat',
                          'type': 'msat'},
+                        {'name': 'last_stable_connection',
+                         'type': 'u64'},
+                        {'name': 'reestablished',
+                         'type': 'boolean'},
                         {'name': 'close_to_addr',
                          'type': 'string'},
                         {'name': 'last_tx_fee_msat',
@@ -4125,8 +4131,8 @@ def test_sql(node_factory, bitcoind):
     # This has to wait for the hold_invoice plugin to let go!
     txid = l1.rpc.close(l2.info['id'])['txid']
     bitcoind.generate_block(13, wait_for_mempool=txid)
-    wait_for(lambda: len(l3.rpc.listchannels()['channels']) == 2)
-    assert len(l3.rpc.sql("SELECT * FROM channels;")['rows']) == 2
+    wait_for(lambda: len(l3.rpc.listchannels(source=l1.info['id'])['channels']) == 0)
+    assert len(l3.rpc.sql("SELECT * FROM channels WHERE source = X'{}';".format(l1.info['id']))['rows']) == 0
     l3.daemon.wait_for_log("Deleting channel: {}".format(scid))
 
     # No deprecated fields!

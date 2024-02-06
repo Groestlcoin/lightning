@@ -1168,6 +1168,7 @@ impl From<responses::ListpeerchannelsChannels> for pb::ListpeerchannelsChannels 
             out_offered_msat: c.out_offered_msat.map(|f| f.into()), // Rule #2 for type msat?
             out_payments_fulfilled: c.out_payments_fulfilled, // Rule #2 for type u64?
             out_fulfilled_msat: c.out_fulfilled_msat.map(|f| f.into()), // Rule #2 for type msat?
+            last_stable_connection: c.last_stable_connection, // Rule #2 for type u64?
             // Field: ListPeerChannels.channels[].htlcs[]
             htlcs: c.htlcs.map(|arr| arr.into_iter().map(|i| i.into()).collect()).unwrap_or(vec![]), // Rule #3
             close_to_addr: c.close_to_addr, // Rule #2 for type string?
@@ -1222,6 +1223,7 @@ impl From<responses::ListclosedchannelsClosedchannels> for pb::Listclosedchannel
             last_commitment_txid: c.last_commitment_txid.map(|v| <Sha256 as AsRef<[u8]>>::as_ref(&v).to_vec()), // Rule #2 for type hash?
             last_commitment_fee_msat: c.last_commitment_fee_msat.map(|f| f.into()), // Rule #2 for type msat?
             close_cause: c.close_cause as i32,
+            last_stable_connection: c.last_stable_connection, // Rule #2 for type u64?
         }
     }
 }
@@ -1809,6 +1811,34 @@ impl From<responses::StaticbackupResponse> for pb::StaticbackupResponse {
         Self {
             // Field: StaticBackup.scb[]
             scb: c.scb.into_iter().map(|i| hex::decode(i).unwrap()).collect(), // Rule #3 for type hex
+        }
+    }
+}
+
+#[allow(unused_variables)]
+impl From<responses::BkprlistincomeIncome_events> for pb::BkprlistincomeIncomeEvents {
+    fn from(c: responses::BkprlistincomeIncome_events) -> Self {
+        Self {
+            account: c.account, // Rule #2 for type string
+            tag: c.tag, // Rule #2 for type string
+            credit_msat: Some(c.credit_msat.into()), // Rule #2 for type msat
+            debit_msat: Some(c.debit_msat.into()), // Rule #2 for type msat
+            currency: c.currency, // Rule #2 for type string
+            timestamp: c.timestamp, // Rule #2 for type u32
+            description: c.description, // Rule #2 for type string?
+            outpoint: c.outpoint, // Rule #2 for type string?
+            txid: c.txid.map(|v| hex::decode(v).unwrap()), // Rule #2 for type txid?
+            payment_id: c.payment_id.map(|v| hex::decode(v).unwrap()), // Rule #2 for type hex?
+        }
+    }
+}
+
+#[allow(unused_variables)]
+impl From<responses::BkprlistincomeResponse> for pb::BkprlistincomeResponse {
+    fn from(c: responses::BkprlistincomeResponse) -> Self {
+        Self {
+            // Field: Bkpr-ListIncome.income_events[]
+            income_events: c.income_events.into_iter().map(|i| i.into()).collect(), // Rule #3 for type BkprlistincomeIncome_events
         }
     }
 }
@@ -2568,6 +2598,17 @@ impl From<requests::StaticbackupRequest> for pb::StaticbackupRequest {
     }
 }
 
+#[allow(unused_variables)]
+impl From<requests::BkprlistincomeRequest> for pb::BkprlistincomeRequest {
+    fn from(c: requests::BkprlistincomeRequest) -> Self {
+        Self {
+            consolidate_fees: c.consolidate_fees, // Rule #2 for type boolean?
+            start_time: c.start_time, // Rule #2 for type u32?
+            end_time: c.end_time, // Rule #2 for type u32?
+        }
+    }
+}
+
 
 #[allow(unused_variables)]
 impl From<pb::GetinfoRequest> for requests::GetinfoRequest {
@@ -3303,6 +3344,17 @@ impl From<pb::PreapproveinvoiceRequest> for requests::PreapproveinvoiceRequest {
 impl From<pb::StaticbackupRequest> for requests::StaticbackupRequest {
     fn from(c: pb::StaticbackupRequest) -> Self {
         Self {
+        }
+    }
+}
+
+#[allow(unused_variables)]
+impl From<pb::BkprlistincomeRequest> for requests::BkprlistincomeRequest {
+    fn from(c: pb::BkprlistincomeRequest) -> Self {
+        Self {
+            consolidate_fees: c.consolidate_fees, // Rule #1 for type boolean?
+            start_time: c.start_time, // Rule #1 for type u32?
+            end_time: c.end_time, // Rule #1 for type u32?
         }
     }
 }

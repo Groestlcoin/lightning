@@ -5,7 +5,7 @@ use futures::sink::SinkExt;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 extern crate log;
 use log::trace;
-use messages::{Configuration, NotificationTopic};
+use messages::{Configuration, NotificationTopic, FeatureBits};
 use options::ConfigOption;
 use std::collections::HashMap;
 use std::future::Future;
@@ -47,6 +47,8 @@ where
     rpcmethods: HashMap<String, RpcMethod<S>>,
     subscriptions: HashMap<String, Subscription<S>>,
     notifications: Vec<NotificationTopic>,
+    custommessages : Vec<u16>,
+    featurebits: FeatureBits,
     dynamic: bool,
     // Do we want the plugin framework to automatically register a logging handler?
     logging: bool,
@@ -121,7 +123,9 @@ where
             options: vec![],
             rpcmethods: HashMap::new(),
             notifications: vec![],
+            featurebits: FeatureBits::default(),
             dynamic: false,
+            custommessages : vec![],
             logging: true,
         }
     }
@@ -217,6 +221,17 @@ where
         self
     }
 
+    /// Sets the "featurebits" in the "getmanifest" response
+    pub fn featurebits(mut self, kind: FeatureBitsKind, hex: String) -> Self {
+        match kind {
+            FeatureBitsKind::Node => self.featurebits.node = Some(hex),
+            FeatureBitsKind::Channel => self.featurebits.channel = Some(hex),
+            FeatureBitsKind::Init => self.featurebits.init = Some(hex),
+            FeatureBitsKind::Invoice => self.featurebits.invoice = Some(hex),
+        }
+        self
+    }
+
     /// Should the plugin automatically register a logging handler? If
     /// not you may need to register a logging handler yourself. Be
     /// careful not to print raw lines to `stdout` if you do, since
@@ -225,6 +240,13 @@ where
     /// look like.
     pub fn with_logging(mut self, log: bool) -> Builder<S, I, O> {
         self.logging = log;
+        self
+    }
+
+    /// Tells lightningd explicitly to allow custommmessages of the provided
+    /// type
+    pub fn custommessages(mut self, custommessages : Vec<u16>) -> Self {
+        self.custommessages = custommessages;
         self
     }
 
@@ -352,8 +374,10 @@ where
             hooks: self.hooks.keys().map(|s| s.clone()).collect(),
             rpcmethods,
             notifications: self.notifications.clone(),
+            featurebits: self.featurebits.clone(),
             dynamic: self.dynamic,
             nonnumericids: true,
+            custommessages : self.custommessages.clone()
         }
     }
 
@@ -761,5 +785,24 @@ where
             .send(())
             .context("error waiting for shutdown")?;
         Ok(())
+    }
+}
+
+pub enum FeatureBitsKind {
+    Node,
+    Channel,
+    Invoice,
+    Init,
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[tokio::test]
+    async fn init() {
+        let state = ();
+        let builder = Builder::new(tokio::io::stdin(), tokio::io::stdout());
+        let _ = builder.start(state);
     }
 }

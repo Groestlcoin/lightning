@@ -5,7 +5,7 @@ import pytest
 import unittest
 import time
 from utils import (
-    wait_for, TEST_NETWORK, first_scid, only_one
+    sync_blockheight, wait_for, TEST_NETWORK, first_scid, only_one
 )
 
 
@@ -37,7 +37,6 @@ def test_splice(node_factory, bitcoind):
 
     l2.daemon.wait_for_log(r'CHANNELD_AWAITING_SPLICE to CHANNELD_NORMAL')
     l1.daemon.wait_for_log(r'CHANNELD_AWAITING_SPLICE to CHANNELD_NORMAL')
-    l1.daemon.wait_for_log(r'private channel announcement from channeld for ' + first_scid(l1, l2))
 
     inv = l2.rpc.invoice(10**2, '3', 'no_3')
     l1.rpc.pay(inv['bolt11'])
@@ -81,7 +80,7 @@ def test_splice_gossip(node_factory, bitcoind):
     assert post_splice_scid != pre_splice_scid
 
     # l3 should see the new channel now.
-    wait_for(lambda: l3.rpc.listchannels(short_channel_id=post_splice_scid)['channels'] != [])
+    wait_for(lambda: len(l3.rpc.listchannels(short_channel_id=post_splice_scid)['channels']) == 2)
     assert len(l3.rpc.listchannels(short_channel_id=pre_splice_scid)['channels']) == 2
 
     bitcoind.generate_block(7)
@@ -132,7 +131,6 @@ def test_splice_listnodes(node_factory, bitcoind):
 
     l2.daemon.wait_for_log(r'CHANNELD_AWAITING_SPLICE to CHANNELD_NORMAL')
     l1.daemon.wait_for_log(r'CHANNELD_AWAITING_SPLICE to CHANNELD_NORMAL')
-    l1.daemon.wait_for_log(r'private channel announcement from channeld for ' + first_scid(l1, l2))
 
     bitcoind.generate_block(7)
 
@@ -166,7 +164,6 @@ def test_splice_out(node_factory, bitcoind):
 
     l2.daemon.wait_for_log(r'CHANNELD_AWAITING_SPLICE to CHANNELD_NORMAL')
     l1.daemon.wait_for_log(r'CHANNELD_AWAITING_SPLICE to CHANNELD_NORMAL')
-    l1.daemon.wait_for_log(r'private channel announcement from channeld for ' + first_scid(l1, l2))
 
     inv = l2.rpc.invoice(10**2, '3', 'no_3')
     l1.rpc.pay(inv['bolt11'])
@@ -223,7 +220,6 @@ def test_invalid_splice(node_factory, bitcoind):
 
     l2.daemon.wait_for_log(r'CHANNELD_AWAITING_SPLICE to CHANNELD_NORMAL')
     l1.daemon.wait_for_log(r'CHANNELD_AWAITING_SPLICE to CHANNELD_NORMAL')
-    l1.daemon.wait_for_log(r'private channel announcement from channeld for ' + first_scid(l1, l2))
 
     inv = l2.rpc.invoice(10**2, '3', 'no_3')
     l1.rpc.pay(inv['bolt11'])
@@ -273,7 +269,6 @@ def test_commit_crash_splice(node_factory, bitcoind):
 
     l2.daemon.wait_for_log(r'CHANNELD_AWAITING_SPLICE to CHANNELD_NORMAL')
     l1.daemon.wait_for_log(r'CHANNELD_AWAITING_SPLICE to CHANNELD_NORMAL')
-    l1.daemon.wait_for_log(r'private channel announcement from channeld for ' + first_scid(l1, l2))
 
     time.sleep(1)
 
@@ -318,7 +313,10 @@ def test_splice_stuck_htlc(node_factory, bitcoind, executor):
     assert len(list(mempool.keys())) == 1
     assert result['txid'] in list(mempool.keys())
 
-    bitcoind.generate_block(6, wait_for_mempool=1)
+    bitcoind.generate_block(1, wait_for_mempool=1)
+    # Don't have l2, l3 reject channel_announcement as too far in future.
+    sync_blockheight(bitcoind, [l1, l2, l3])
+    bitcoind.generate_block(5)
 
     l2.daemon.wait_for_log(r'CHANNELD_AWAITING_SPLICE to CHANNELD_NORMAL')
     l1.daemon.wait_for_log(r'CHANNELD_AWAITING_SPLICE to CHANNELD_NORMAL')

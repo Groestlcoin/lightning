@@ -111,7 +111,7 @@ def test_remote_addr(node_factory, bitcoind):
 
     def_port = default_ln_port(l2.info["network"])
 
-    # when we restart l1 with a channel and reconnect, node_annoucement update
+    # when we restart l1 with a channel and reconnect, node_announcement update
     # must not yet be send as we need the same `remote_addr` confirmed from a
     # another peer we have a channel with.
     # Note: In this state l2 stores remote_addr as reported by l1
@@ -125,26 +125,13 @@ def test_remote_addr(node_factory, bitcoind):
     assert not l2.daemon.is_in_log("Update our node_announcement for discovered address: 127.0.0.1:{}".format(def_port))
     assert len(l2.rpc.getinfo()['address']) == 0
 
-    # connect second node. This will not yet trigger `node_annoucement` update,
-    # as we again do not have a channel at the time we connected.
-    l2.rpc.connect(l3.info['id'], 'localhost', l3.port)
-    l2.daemon.wait_for_log("Peer says it sees our address as: 127.0.0.1:[0-9]{5}")
-
-    # fund channel and check we didn't send Update earlier already
-    l2.fundchannel(l3, wait_for_active=True)
-    bitcoind.generate_block(5)
-    assert not l2.daemon.is_in_log("Update our node_announcement for discovered address: 127.0.0.1:{}".format(def_port))
-    assert len(l2.rpc.getinfo()['address']) == 0
-
-    # restart, reconnect and re-check for updated node_annoucement. This time
-    # l2 sees that two different peers with channel reported the same `remote_addr`.
-    l3.restart()
+    # connect second node. This will trigger `node_announcement` update.
     l2.rpc.connect(l3.info['id'], 'localhost', l3.port)
     l2.daemon.wait_for_log("Peer says it sees our address as: 127.0.0.1:[0-9]{5}")
     l2.daemon.wait_for_log("Update our node_announcement for discovered address: 127.0.0.1:{}".format(def_port))
-    l1.daemon.wait_for_log(f"Received node_announcement for node {l2.info['id']}")
 
     # check l1 sees the updated node announcement via CLI listnodes
+    l1.daemon.wait_for_log(f"Received node_announcement for node {l2.info['id']}")
     address = l1.rpc.listnodes(l2.info['id'])['nodes'][0]['addresses'][0]
     assert address['type'] == "ipv4"
     assert address['address'] == "127.0.0.1"
@@ -159,7 +146,7 @@ def test_remote_addr(node_factory, bitcoind):
 
 
 def test_remote_addr_disabled(node_factory, bitcoind):
-    """Simply tests that IP address discovery annoucements can be turned off
+    """Simply tests that IP address discovery announcements can be turned off
 
        We perform logic tests on L2, setup:
         l1 --> [l2] <-- l3
@@ -192,7 +179,7 @@ def test_remote_addr_disabled(node_factory, bitcoind):
     l2.daemon.wait_for_log(f"{l3.info['id']}.*Already have funding locked in")
 
     # if ip discovery would have been enabled, we would have send an updated
-    # node_annoucement by now. Check we didn't...
+    # node_announcement by now. Check we didn't...
     bitcoind.generate_block(6)  # ugly, but we need to wait for gossip...
     assert not l2.daemon.is_in_log("Update our node_announcement for discovered address")
 
@@ -238,7 +225,7 @@ def test_remote_addr_port(node_factory, bitcoind):
     l2.rpc.connect(l3.info['id'], 'localhost', l3.port)
 
     # if ip discovery would have been enabled, we would have send an updated
-    # node_annoucement by now. Check we didn't...
+    # node_announcement by now. Check we didn't...
     l2.daemon.wait_for_logs(["Already have funding locked in",
                              "Update our node_announcement for discovered address"])
     info = l2.rpc.getinfo()
@@ -971,37 +958,44 @@ def test_shutdown_reconnect(node_factory):
     assert l1.bitcoin.rpc.getmempoolinfo()['size'] == 1
 
 
+@unittest.skipIf(os.getenv('TEST_DB_PROVIDER', 'sqlite3') != 'sqlite3', "sqlite3-specific DB manip")
 def test_reconnect_remote_sends_no_sigs(node_factory):
     """We re-announce, even when remote node doesn't send its announcement_signatures on reconnect.
     """
-    l1, l2 = node_factory.line_graph(2, wait_for_announce=True, opts={'may_reconnect': True})
+    l1, l2 = node_factory.line_graph(2, wait_for_announce=True, opts={'may_reconnect': True,
+                                                                      'dev-no-reconnect': None})
 
-    # When l1 restarts (with rescan=1), make it think it hasn't
-    # reached announce_depth, so it wont re-send announcement_signatures
-    def no_blocks_above(req):
-        if req['params'][0] > 107:
-            return {"result": None,
-                    "error": {"code": -8, "message": "Block height out of range"}, "id": req['id']}
-        else:
-            return {'result': l1.bitcoin.rpc.getblockhash(req['params'][0]),
-                    "error": None, 'id': req['id']}
-
-    l1.daemon.rpcproxy.mock_rpc('getblockhash', no_blocks_above)
-    l1.restart()
+    # Wipe l2's gossip_store
+    l2.stop()
+    gs_path = os.path.join(l2.daemon.lightning_dir, TEST_NETWORK, 'gossip_store')
+    os.unlink(gs_path)
+    l2.start()
 
     # l2 will now uses (REMOTE's) announcement_signatures it has stored
-    wait_for(lambda: only_one(l2.rpc.listpeerchannels()['channels'])['status'] == [
-        'CHANNELD_NORMAL:Reconnected, and reestablished.',
-        'CHANNELD_NORMAL:Channel ready for use. Channel announced.'])
+    wait_for(lambda: l2.rpc.listchannels()['channels'] != [])
 
-    # But l2 still sends its own sigs on reconnect
-    l2.daemon.wait_for_logs([r'peer_out WIRE_ANNOUNCEMENT_SIGNATURES',
-                             r'peer_out WIRE_ANNOUNCEMENT_SIGNATURES'])
+    # Remove remote signatures from l1 so it asks for them (and delete gossip store)
+    l1.db_manip("UPDATE channels SET remote_ann_node_sig=NULL, remote_ann_bitcoin_sig=NULL")
+    gs_path = os.path.join(l1.daemon.lightning_dir, TEST_NETWORK, 'gossip_store')
+    os.unlink(gs_path)
+    l1.restart()
 
-    count = ''.join(l1.daemon.logs).count(r'peer_out WIRE_ANNOUNCEMENT_SIGNATURES')
+    l1.connect(l2)
+    l1needle = l1.daemon.logsearch_start
+    l2needle = l2.daemon.logsearch_start
 
-    # l1 only did send them the first time
-    assert(count == 1 or count == 2)
+    # l1 asks once, l2 replies once.
+    # Make sure we get all the msgs!
+    time.sleep(5)
+
+    l1.daemon.wait_for_log('peer_out WIRE_ANNOUNCEMENT_SIGNATURES')
+    l2.daemon.wait_for_log('peer_out WIRE_ANNOUNCEMENT_SIGNATURES')
+
+    l1msgs = [l.split()[4] for l in l1.daemon.logs[l1needle:] if 'WIRE_ANNOUNCEMENT_SIGNATURES' in l]
+    assert l1msgs == ['peer_out', 'peer_in']
+
+    # l2 only sends one.
+    assert len([l for l in l2.daemon.logs[l2needle:] if 'peer_out WIRE_ANNOUNCEMENT_SIGNATURES' in l]) == 1
 
 
 @pytest.mark.openchannel('v1')
@@ -1863,7 +1857,7 @@ def test_multifunding_v2_exclusive(node_factory, bitcoind):
                      "amount": 50000}]
 
     l1.rpc.multifundchannel(destinations)
-    bitcoind.generate_block(6, wait_for_mempool=1)
+    mine_funding_to_announce(bitcoind, [l1, l2, l3], num_blocks=6, wait_for_mempool=1)
 
     for node in [l1, l2, l3, l4]:
         node.daemon.wait_for_log(r'to CHANNELD_NORMAL')
@@ -1897,7 +1891,10 @@ def test_multifunding_simple(node_factory, bitcoind):
                      "amount": 50000}]
 
     l1.rpc.multifundchannel(destinations)
-    bitcoind.generate_block(6, wait_for_mempool=1)
+    bitcoind.generate_block(1, wait_for_mempool=1)
+    # Don't have others reject channel_announcement as too far in future.
+    sync_blockheight(bitcoind, [l1, l2, l3, l4])
+    bitcoind.generate_block(5)
 
     for node in [l1, l2, l3, l4]:
         node.daemon.wait_for_log(r'to CHANNELD_NORMAL')
@@ -1956,7 +1953,8 @@ def test_multifunding_one(node_factory, bitcoind):
 
     l1.rpc.multifundchannel(destinations, minconf=0)
 
-    bitcoind.generate_block(6, wait_for_mempool=1)
+    mine_funding_to_announce(bitcoind, [l1, l2, l3], num_blocks=6)
+
     for node in [l1, l2, l3]:
         node.daemon.wait_for_log(r'to CHANNELD_NORMAL')
 
@@ -3478,6 +3476,8 @@ def test_wumbo_channels(node_factory, bitcoind):
     # Get that mined, and announced.
     bitcoind.generate_block(6, wait_for_mempool=1)
 
+    # Make sure l3 is ready to receive channel announcement!
+    sync_blockheight(bitcoind, [l1, l2, l3])
     # Connect l3, get gossip.
     l3.rpc.connect(l1.info['id'], 'localhost', port=l1.port)
 
@@ -3528,9 +3528,6 @@ def test_wumbo_channels(node_factory, bitcoind):
 
     # And we can wumbo pay, right?
     inv = l2.rpc.invoice(str(1 << 24) + "sat", "test_wumbo_channels", "wumbo payment")
-    # We actually do warn about capacity: l2 sees that *l1* doesn't have
-    # enough incoming to pay (not knowing that l1 is the intended payer).
-    assert 'warning_capacity' in inv
     assert 'warning_mpp' not in inv
 
     l1.rpc.pay(inv['bolt11'])
@@ -3786,6 +3783,7 @@ def test_upgrade_statickey_onchaind(node_factory, executor, bitcoind):
 
     bitcoind.generate_block(100, wait_for_mempool=txid)
     # This works even if they disconnect and listpeerchannels() is empty:
+    wait_for(lambda: l1.rpc.listpeerchannels()['channels'] == [])
     wait_for(lambda: l2.rpc.listpeerchannels()['channels'] == [])
 
     # TEST 2: Cheat from post-upgrade.
@@ -3818,6 +3816,7 @@ def test_upgrade_statickey_onchaind(node_factory, executor, bitcoind):
 
     bitcoind.generate_block(100, wait_for_mempool=txid)
     # This works even if they disconnect and listpeers() is empty:
+    wait_for(lambda: len(l1.rpc.listpeerchannels()['channels']) == 0)
     wait_for(lambda: len(l2.rpc.listpeerchannels()['channels']) == 0)
 
     # TEST 3: Unilateral close from pre-upgrade
@@ -3853,6 +3852,7 @@ def test_upgrade_statickey_onchaind(node_factory, executor, bitcoind):
     bitcoind.generate_block(100, wait_for_mempool=txid)
 
     # This works even if they disconnect and listpeerchannels() is empty:
+    wait_for(lambda: len(l1.rpc.listpeerchannels()['channels']) == 0)
     wait_for(lambda: len(l2.rpc.listpeerchannels()['channels']) == 0)
 
     # TEST 4: Unilateral close from post-upgrade
@@ -4025,7 +4025,7 @@ def test_multichan_stress(node_factory, executor, bitcoind):
     assert(len(l3.rpc.listpeerchannels(l2.info['id'])['channels']) == 2)
 
     # Make sure gossip works.
-    bitcoind.generate_block(6, wait_for_mempool=1)
+    mine_funding_to_announce(bitcoind, [l1, l2, l3], num_blocks=6, wait_for_mempool=1)
     wait_for(lambda: len(l1.rpc.listchannels(source=l3.info['id'])['channels']) == 2)
 
     def send_many_payments():
@@ -4463,3 +4463,34 @@ def test_offline_fd_check(node_factory):
     # if get_node starts it, it'll expect an address, so do it manually.
     l1 = node_factory.get_node(options={"offline": None}, start=False)
     l1.daemon.start()
+
+
+def test_last_stable_connection(node_factory):
+    l1, l2 = node_factory.line_graph(2, opts={'may_reconnect': True})
+
+    # We wait a minute to be stable.
+    STABLE_TIME = 60
+    assert 'last_stable_connection' not in only_one(l1.rpc.listpeerchannels()['channels'])
+    assert 'last_stable_connection' not in only_one(l2.rpc.listpeerchannels()['channels'])
+
+    recon_time = time.time()
+
+    # This take a minute, so don't fail if TIMEOUT is set to 10.
+    wait_for(lambda: 'last_stable_connection' in only_one(l1.rpc.listpeerchannels()['channels']), timeout=STABLE_TIME + 15)
+    l1stable = only_one(l1.rpc.listpeerchannels()['channels'])['last_stable_connection']
+    wait_for(lambda: 'last_stable_connection' in only_one(l2.rpc.listpeerchannels()['channels']))
+    l2stable = only_one(l2.rpc.listpeerchannels()['channels'])['last_stable_connection']
+
+    # Disconnect, and/or restart then reconnect.
+    l1.rpc.disconnect(l2.info['id'], force=True)
+    recon_time = time.time()
+    l2.restart()
+    l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
+
+    assert only_one(l1.rpc.listpeerchannels()['channels'])['last_stable_connection'] == l1stable
+    assert only_one(l2.rpc.listpeerchannels()['channels'])['last_stable_connection'] == l2stable
+    wait_for(lambda: only_one(l1.rpc.listpeerchannels()['channels'])['last_stable_connection'] != l1stable, timeout=STABLE_TIME + 15)
+    wait_for(lambda: only_one(l2.rpc.listpeerchannels()['channels'])['last_stable_connection'] != l2stable)
+
+    assert only_one(l1.rpc.listpeerchannels()['channels'])['last_stable_connection'] > recon_time + STABLE_TIME
+    assert only_one(l2.rpc.listpeerchannels()['channels'])['last_stable_connection'] > recon_time + STABLE_TIME

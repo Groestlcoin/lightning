@@ -67,6 +67,7 @@
 #include <lightningd/chaintopology.h>
 #include <lightningd/channel.h>
 #include <lightningd/channel_control.h>
+#include <lightningd/channel_gossip.h>
 #include <lightningd/coin_mvts.h>
 #include <lightningd/connect_control.h>
 #include <lightningd/gossip_control.h>
@@ -235,8 +236,8 @@ static struct lightningd *new_lightningd(const tal_t *ctx)
 	 * so we disable this by default for now. */
 	ld->announce_dns = false;
 
-	ld->remote_addr_v4 = NULL;
-	ld->remote_addr_v6 = NULL;
+	ld->lease_rates = NULL;
+	ld->node_announcement = NULL;
 	ld->discovered_ip_v4 = NULL;
 	ld->discovered_ip_v6 = NULL;
 	ld->listen = true;
@@ -245,6 +246,7 @@ static struct lightningd *new_lightningd(const tal_t *ctx)
 	ld->try_reexec = false;
 	ld->recover_secret = NULL;
 	ld->db_upgrade_ok = NULL;
+	ld->num_startup_connects = 0;
 
 	/* --experimental-upgrade-protocol */
 	ld->experimental_upgrade_protocol = false;
@@ -755,6 +757,7 @@ void notify_new_block(struct lightningd *ld, u32 block_height)
 	/* Inform our subcomponents individually. */
 	htlcs_notify_new_block(ld, block_height);
 	channel_notify_new_block(ld, block_height);
+	channel_gossip_notify_new_block(ld, block_height);
 	gossip_notify_new_block(ld, block_height);
 	waitblockheight_notify_new_block(ld, block_height);
 }

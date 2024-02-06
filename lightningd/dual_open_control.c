@@ -22,6 +22,7 @@
 #include <lightningd/chaintopology.h>
 #include <lightningd/channel.h>
 #include <lightningd/channel_control.h>
+#include <lightningd/channel_gossip.h>
 #include <lightningd/closing_control.h>
 #include <lightningd/connect_control.h>
 #include <lightningd/dual_open_control.h>
@@ -33,7 +34,6 @@
 #include <lightningd/peer_fd.h>
 #include <lightningd/plugin_hook.h>
 #include <openingd/dualopend_wiregen.h>
-#include <sodium/randombytes.h>
 
 struct commit_rcvd {
 	struct channel *channel;
@@ -1465,12 +1465,6 @@ wallet_commit_channel(struct lightningd *ld,
 			= p2tr_for_keyidx(channel, channel->peer->ld,
 					    channel->final_key_idx);
 
-	 /* Can't have gotten their alias for this channel yet. */
-	channel->alias[REMOTE] = NULL;
-	/* We do generate one ourselves however. */
-	channel->alias[LOCAL] = tal(channel, struct short_channel_id);
-	randombytes_buf(channel->alias[LOCAL], sizeof(struct short_channel_id));
-
 	channel->remote_upfront_shutdown_script
 		= tal_steal(channel, remote_upfront_shutdown_script);
 
@@ -1583,10 +1577,14 @@ static void handle_peer_wants_to_close(struct subd *dualopend,
 
 		/* Get connectd to send warning, and kill subd. */
 		subd_send_msg(ld->connectd,
-			      take(towire_connectd_peer_final_msg(NULL,
-								  &channel->peer->id,
-								  channel->peer->connectd_counter,
-								  warning)));
+			      take(towire_connectd_peer_send_msg(NULL,
+								 &channel->peer->id,
+								 channel->peer->connectd_counter,
+								 warning)));
+		subd_send_msg(ld->connectd,
+			      take(towire_connectd_discard_peer(NULL,
+								&channel->peer->id,
+								channel->peer->connectd_counter)));
 		channel_fail_transient(channel, true, "Bad shutdown scriptpubkey %s",
 				       tal_hex(tmpctx, scriptpubkey));
 		return;
@@ -1633,24 +1631,6 @@ static void handle_channel_closed(struct subd *dualopend,
 			  CLOSINGD_SIGEXCHANGE,
 			  REASON_UNKNOWN,
 			  "Start closingd");
-}
-
-static void handle_local_private_channel(struct subd *dualopend,
-					 const u8 *msg)
-{
-	struct amount_sat capacity;
-	u8 *features;
-
-	if (!fromwire_dualopend_local_private_channel(msg, msg, &capacity,
-						      &features)) {
-		channel_internal_error(dualopend->channel,
-				       "bad dualopend_local_private_channel %s",
-				       tal_hex(msg, msg));
-		return;
-	}
-
-	tell_gossipd_local_private_channel(dualopend->ld, dualopend->channel,
-					   capacity, features);
 }
 
 struct channel_send {
@@ -1940,8 +1920,11 @@ static void handle_peer_locked(struct subd *dualopend, const u8 *msg)
 {
 	struct pubkey remote_per_commit;
 	struct channel *channel = dualopend->channel;
+	struct short_channel_id *remote_alias;
 
-	if (!fromwire_dualopend_peer_locked(msg, &remote_per_commit)) {
+	if (!fromwire_dualopend_peer_locked(msg, msg,
+					    &remote_per_commit,
+					    &remote_alias)) {
 		channel_internal_error(channel,
 				       "Bad WIRE_DUALOPEND_PEER_LOCKED: %s",
 				       tal_hex(msg, msg));
@@ -1950,7 +1933,7 @@ static void handle_peer_locked(struct subd *dualopend, const u8 *msg)
 
 	/* Updates channel with the next per-commit point etc, calls
 	 * channel_internal_error on failure */
-	if (!channel_on_channel_ready(channel, &remote_per_commit))
+	if (!channel_on_channel_ready(channel, &remote_per_commit, remote_alias))
 		return;
 
 	/* Remember that we got the lock-in */
@@ -3433,6 +3416,9 @@ static void handle_commit_ready(struct subd *dualopend,
 
 	/* First time (not an RBF) */
 	if (channel->state == DUALOPEND_OPEN_INIT) {
+		/* Now we know if it's public or not, we can init channel_gossip */
+		assert(channel->channel_gossip == NULL);
+		channel_gossip_init(channel, NULL);
 		if (!(inflight = wallet_commit_channel(ld, channel,
 						       &funding,
 						       total_funding,
@@ -3642,9 +3628,6 @@ static unsigned int dual_opend_msg(struct subd *dualopend,
 			return 0;
 		case WIRE_DUALOPEND_FAIL_FALLEN_BEHIND:
 			channel_fail_fallen_behind(dualopend, msg);
-			return 0;
-		case WIRE_DUALOPEND_LOCAL_PRIVATE_CHANNEL:
-			handle_local_private_channel(dualopend, msg);
 			return 0;
 		case WIRE_DUALOPEND_VALIDATE_INPUTS:
 			handle_validate_inputs(dualopend, msg);
@@ -4052,6 +4035,7 @@ bool peer_start_dualopend(struct peer *peer,
 				    &channel->local_funding_pubkey,
 				    channel->minimum_depth,
 				    peer->ld->config.require_confirmed_inputs,
+				    channel->alias[LOCAL],
 				    peer->ld->dev_any_channel_type);
 	subd_send_msg(channel->owner, take(msg));
 	return true;
@@ -4165,7 +4149,8 @@ bool peer_restart_dualopend(struct peer *peer,
 					      NULL : &inflight->lease_amt,
 				      channel->type,
 				      channel->req_confirmed_ins[LOCAL],
-				      channel->req_confirmed_ins[REMOTE]);
+				      channel->req_confirmed_ins[REMOTE],
+				      channel->alias[LOCAL]);
 
 	subd_send_msg(channel->owner, take(msg));
 	return true;

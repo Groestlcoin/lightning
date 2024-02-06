@@ -5,11 +5,12 @@ GOSSIPD_HEADERS_WSRC := gossipd/gossipd_wiregen.h \
 	gossipd/gossip_store_wiregen.h			\
 	gossipd/gossipd.h				\
 	gossipd/gossip_store.h				\
+	gossipd/gossmap_manage.h			\
 	gossipd/queries.h				\
-	gossipd/gossip_generation.h			\
-	gossipd/routing.h				\
+	gossipd/txout_failures.h			\
+	gossipd/sigcheck.h				\
 	gossipd/seeker.h
-GOSSIPD_HEADERS := $(GOSSIPD_HEADERS_WSRC) gossipd/broadcast.h
+GOSSIPD_HEADERS := $(GOSSIPD_HEADERS_WSRC)
 
 GOSSIPD_SRC := $(GOSSIPD_HEADERS_WSRC:.h=.c)
 GOSSIPD_OBJS := $(GOSSIPD_SRC:.c=.o)
@@ -43,6 +44,8 @@ GOSSIPD_COMMON_OBJS :=				\
 	common/dev_disconnect.o			\
 	common/ecdh_hsmd.o			\
 	common/features.o			\
+	common/gossmap.o			\
+	common/fp16.o				\
 	common/status_wiregen.o			\
 	common/key_derive.o			\
 	common/lease_rates.o			\
@@ -54,7 +57,6 @@ GOSSIPD_COMMON_OBJS :=				\
 	common/ping.o				\
 	common/psbt_open.o			\
 	common/pseudorand.o			\
-	common/private_channel_announcement.o	\
 	common/random_select.o			\
 	common/setup.o				\
 	common/status.o				\

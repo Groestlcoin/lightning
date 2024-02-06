@@ -918,6 +918,7 @@ def listpeerchannels_channels2py(m):
         "out_offered_msat": amount2msat(m.out_offered_msat),  # PrimitiveField in generate_composite
         "out_payments_fulfilled": m.out_payments_fulfilled,  # PrimitiveField in generate_composite
         "out_fulfilled_msat": amount2msat(m.out_fulfilled_msat),  # PrimitiveField in generate_composite
+        "last_stable_connection": m.last_stable_connection,  # PrimitiveField in generate_composite
         "htlcs": [listpeerchannels_channels_htlcs2py(i) for i in m.htlcs],  # ArrayField[composite] in generate_composite
         "close_to_addr": m.close_to_addr,  # PrimitiveField in generate_composite
     })
@@ -967,6 +968,7 @@ def listclosedchannels_closedchannels2py(m):
         "last_commitment_txid": hexlify(m.last_commitment_txid),  # PrimitiveField in generate_composite
         "last_commitment_fee_msat": amount2msat(m.last_commitment_fee_msat),  # PrimitiveField in generate_composite
         "close_cause": str(m.close_cause),  # EnumField in generate_composite
+        "last_stable_connection": m.last_stable_connection,  # PrimitiveField in generate_composite
     })
 
 
@@ -1499,4 +1501,25 @@ def preapproveinvoice2py(m):
 def staticbackup2py(m):
     return remove_default({
         "scb": [hexlify(m.scb) for i in hexlify(m.scb)], # ArrayField[primitive] in generate_composite
+    })
+
+
+def bkpr_listincome_income_events2py(m):
+    return remove_default({
+        "account": m.account,  # PrimitiveField in generate_composite
+        "tag": m.tag,  # PrimitiveField in generate_composite
+        "credit_msat": amount2msat(m.credit_msat),  # PrimitiveField in generate_composite
+        "debit_msat": amount2msat(m.debit_msat),  # PrimitiveField in generate_composite
+        "currency": m.currency,  # PrimitiveField in generate_composite
+        "timestamp": m.timestamp,  # PrimitiveField in generate_composite
+        "description": m.description,  # PrimitiveField in generate_composite
+        "outpoint": m.outpoint,  # PrimitiveField in generate_composite
+        "txid": hexlify(m.txid),  # PrimitiveField in generate_composite
+        "payment_id": hexlify(m.payment_id),  # PrimitiveField in generate_composite
+    })
+
+
+def bkpr_listincome2py(m):
+    return remove_default({
+        "income_events": [bkpr_listincome_income_events2py(i) for i in m.income_events],  # ArrayField[composite] in generate_composite
     })

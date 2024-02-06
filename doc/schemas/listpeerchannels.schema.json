@@ -28,6 +28,7 @@
             "type": "boolean",
             "description": "A boolean flag that is set to true if the peer is online"
           },
+          "reestablished": {},
           "state": {
             "type": "string",
             "enum": [
@@ -555,6 +556,11 @@
             "type": "msat",
             "description": "Total amount of successful outgoing payment attempts"
           },
+          "last_stable_connection": {
+            "type": "u64",
+            "added": "v24.02",
+            "description": "Last time we reestablished the open channel and stayed connected for 1 minute"
+          },
           "htlcs": {
             "type": "array",
             "description": "current HTLCs in this channel",
@@ -634,6 +640,7 @@
                       "alias": {},
                       "peer_id": {},
                       "peer_connected": {},
+                      "reestablished": {},
                       "state": {
                         "type": "string",
                         "enum": [
@@ -679,6 +686,7 @@
                       "status": {},
                       "peer_id": {},
                       "peer_connected": {},
+                      "reestablished": {},
                       "state": {
                         "type": "string",
                         "enum": [
@@ -705,6 +713,26 @@
         "allOf": [
           {
             "if": {
+              "properties": {
+                "peer_connected": {
+                  "type": "boolean",
+                  "enum": [
+                    true
+                  ]
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "reestablished": {
+                  "type": "boolean",
+                  "description": "True if we have successfully exchanged reestablish messages this connection"
+                }
+              }
+            }
+          },
+          {
+            "if": {
               "required": [
                 "close_to"
               ]
@@ -716,6 +744,7 @@
                 "state": {},
                 "peer_id": {},
                 "peer_connected": {},
+                "reestablished": {},
                 "scratch_txid": {},
                 "channel_type": {},
                 "feerate": {},
@@ -778,6 +807,7 @@
                 "out_payments_fulfilled": {},
                 "out_fulfilled_msat": {},
                 "out_msatoshi_fulfilled": {},
+                "last_stable_connection": {},
                 "htlcs": {},
                 "initial_feerate": {},
                 "last_feerate": {},
@@ -807,6 +837,7 @@
                 "state": {},
                 "peer_id": {},
                 "peer_connected": {},
+                "reestablished": {},
                 "alias": {},
                 "scratch_txid": {},
                 "channel_type": {},
@@ -870,6 +901,7 @@
                 "out_payments_fulfilled": {},
                 "out_fulfilled_msat": {},
                 "out_msatoshi_fulfilled": {},
+                "last_stable_connection": {},
                 "htlcs": {},
                 "initial_feerate": {},
                 "last_feerate": {},
@@ -898,6 +930,7 @@
                 "alias": {},
                 "peer_id": {},
                 "peer_connected": {},
+                "reestablished": {},
                 "state": {},
                 "scratch_txid": {},
                 "channel_type": {},
@@ -961,6 +994,7 @@
                 "out_payments_fulfilled": {},
                 "out_fulfilled_msat": {},
                 "out_msatoshi_fulfilled": {},
+                "last_stable_connection": {},
                 "htlcs": {},
                 "initial_feerate": {},
                 "last_feerate": {},
@@ -991,6 +1025,7 @@
                 "state": {},
                 "peer_id": {},
                 "peer_connected": {},
+                "reestablished": {},
                 "scratch_txid": {},
                 "channel_type": {},
                 "feerate": {},
@@ -1053,6 +1088,7 @@
                 "out_payments_fulfilled": {},
                 "out_fulfilled_msat": {},
                 "out_msatoshi_fulfilled": {},
+                "last_stable_connection": {},
                 "htlcs": {},
                 "inflight": {},
                 "close_to_addr": {},

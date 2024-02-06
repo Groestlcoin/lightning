@@ -29,6 +29,7 @@ msgdata,dualopend_init,our_funding_pubkey,pubkey,
 # Constraints in case the other end tries to open a channel.
 msgdata,dualopend_init,minimum_depth,u32,
 msgdata,dualopend_init,require_confirmed_inputs,bool,
+msgdata,dualopend_init,local_alias,short_channel_id,
 msgdata,dualopend_init,dev_accept_any_channel_type,bool,
 
 # master-dualopend: peer has reconnected
@@ -77,6 +78,7 @@ msgdata,dualopend_reinit,requested_lease,?amount_sat,
 msgdata,dualopend_reinit,channel_type,channel_type,
 msgdata,dualopend_reinit,we_require_confirmed_inputs,bool,
 msgdata,dualopend_reinit,they_require_confirmed_inputs,bool,
+msgdata,dualopend_reinit,local_alias,short_channel_id,
 
 # dualopend->master: they offered channel, should we continue?
 msgtype,dualopend_got_offer,7005
@@ -222,6 +224,7 @@ msgtype,dualopend_tx_sigs_sent,7012
 # dualopend->peer peer locked channel
 msgtype,dualopend_peer_locked,7018
 msgdata,dualopend_peer_locked,remote_per_commit,pubkey,
+msgdata,dualopend_peer_locked,remote_alias,?short_channel_id,
 
 # dualopend->master this channel has been locked
 msgtype,dualopend_channel_locked,7019
@@ -279,9 +282,3 @@ msgdata,dualopend_validate_lease,their_pubkey,pubkey,
 
 msgtype,dualopend_validate_lease_reply,7127
 msgdata,dualopend_validate_lease_reply,err_msg,?wirestring,
-
-# Tell gossipd about this (as-yet) unannounced channel
-msgtype,dualopend_local_private_channel,7015
-msgdata,dualopend_local_private_channel,capacity,amount_sat,
-msgdata,dualopend_local_private_channel,len,u16,
-msgdata,dualopend_local_private_channel,features,u8,len

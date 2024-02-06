@@ -50,29 +50,11 @@ struct daemon {
 	/* Connection to connect daemon. */
 	struct daemon_conn *connectd;
 
-	/* Routing information */
-	struct routing_state *rstate;
+	/* Manager of writing to the gossip_store */
+	struct gossmap_manage *gm;
 
 	/* Timers: we batch gossip, and also refresh announcements */
 	struct timers timers;
-
-	/* Alias (not NUL terminated) and favorite color for node_announcement */
-	u8 alias[32];
-	u8 rgb[3];
-
-	/* What addresses we can actually announce. */
-	struct wireaddr *announceable;
-
-	/* verified remote_addr as reported by recent peers */
-	struct wireaddr *discovered_ip_v4;
-	struct wireaddr *discovered_ip_v6;
-	enum opt_autobool ip_discovery;
-
-	/* Timer until we can send an updated node_announcement */
-	struct oneshot *node_announce_timer;
-
-	/* Timer until we should force a new new node_announcement */
-	struct oneshot *node_announce_regen_timer;
 
 	/* Channels we have an announce for, but aren't deep enough. */
 	struct short_channel_id *deferred_txouts;
@@ -83,11 +65,20 @@ struct daemon {
 	/* Features lightningd told us to set. */
 	struct feature_set *our_features;
 
-	/* The channel lease rates we're advertising */
-	const struct lease_rates *rates;
+	/* Gossip store */
+	struct gossip_store *gs;
 
-	/* Any of our channel_updates we're deferring. */
-	struct list_head deferred_updates;
+	/* Was there anything in the gossip store at startup? */
+	bool gossip_store_populated;
+
+	/* Override local time for gossip messages */
+	struct timeabs *dev_gossip_time;
+
+	/* Speed up gossip. */
+	bool dev_fast_gossip;
+
+	/* Speed up pruning. */
+	bool dev_fast_gossip_prune;
 };
 
 struct range_query_reply {
@@ -153,11 +144,30 @@ struct peer *next_random_peer(struct daemon *daemon,
 
 /* Queue a gossip message for the peer: the subdaemon on the other end simply
  * forwards it to the peer. */
-void queue_peer_msg(struct peer *peer, const u8 *msg TAKES);
+void queue_peer_msg(struct daemon *daemon,
+		    const struct node_id *peer,
+		    const u8 *msg TAKES);
 
-/* Queue a gossip_store message for the peer: the subdaemon on the
- * other end simply forwards it to the peer. */
-void queue_peer_from_store(struct peer *peer,
-			   const struct broadcastable *bcast);
+/* We have an update for one of our channels (or unknown). */
+void tell_lightningd_peer_update(struct daemon *daemon,
+				 const struct node_id *source_peer,
+				 struct short_channel_id scid,
+				 u32 fee_base_msat,
+				 u32 fee_ppm,
+				 u16 cltv_delta,
+				 struct amount_msat htlc_minimum,
+				 struct amount_msat htlc_maximum);
+
+/**
+ * Get the local time.
+ *
+ * This gets overridden in dev mode so we can use canned (stale) gossip.
+ */
+struct timeabs gossip_time_now(const struct daemon *daemon);
+
+/**
+ * Is this gossip timestamp reasonable?
+ */
+bool timestamp_reasonable(const struct daemon *daemon, u32 timestamp);
 
 #endif /* LIGHTNING_GOSSIPD_GOSSIPD_H */

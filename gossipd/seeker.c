@@ -3,19 +3,22 @@
 #include <bitcoin/chainparams.h>
 #include <ccan/array_size/array_size.h>
 #include <ccan/asort/asort.h>
+#include <ccan/intmap/intmap.h>
 #include <ccan/tal/str/str.h>
 #include <common/decode_array.h>
+#include <common/gossmap.h>
+#include <common/memleak.h>
 #include <common/pseudorand.h>
 #include <common/random_select.h>
 #include <common/status.h>
 #include <common/timeout.h>
 #include <gossipd/gossipd.h>
+#include <gossipd/gossmap_manage.h>
 #include <gossipd/queries.h>
-#include <gossipd/routing.h>
 #include <gossipd/seeker.h>
 
 #define GOSSIP_SEEKER_INTERVAL(seeker) \
-	DEV_FAST_GOSSIP((seeker)->daemon->rstate->dev_fast_gossip, 5, 60)
+	DEV_FAST_GOSSIP((seeker)->daemon->dev_fast_gossip, 5, 60)
 
 enum seeker_state {
 	/* Still streaming gossip from single peer. */
@@ -203,29 +206,33 @@ static void disable_gossip_stream(struct seeker *seeker, struct peer *peer)
 					     &chainparams->genesis_blockhash,
 					     UINT32_MAX,
 					     UINT32_MAX);
-	queue_peer_msg(peer, take(msg));
+	queue_peer_msg(peer->daemon, &peer->id, take(msg));
 }
 
 static void enable_gossip_stream(struct seeker *seeker, struct peer *peer)
 {
-	/* We seek some way back, to take into account propagation time */
-	const u32 polltime = GOSSIP_SEEKER_INTERVAL(seeker) * 10;
-	u32 start = seeker->daemon->rstate->last_timestamp;
+	u32 start;
 	u8 *msg;
 
-	if (start > polltime)
-		start -= polltime;
-	else
+	/* Modern timestamp_filter is a trinary: 0 = all, FFFFFFFF = none,
+	 * other = from now on */
+	if (seeker->daemon->gossip_store_populated) {
+		/* Just in case they care */
+		start = time_now().ts.tv_sec - GOSSIP_SEEKER_INTERVAL(seeker) * 10;
+	} else {
 		start = 0;
+	}
 
-	status_peer_debug(&peer->id, "seeker: starting gossip");
+	status_peer_debug(&peer->id, "seeker: starting gossip (%s)",
+			  seeker->daemon->gossip_store_populated
+			  ? "streaming" : "EVERTHING");
 
 	/* This is allowed even if they don't understand it (odd) */
 	msg = towire_gossip_timestamp_filter(NULL,
 					     &chainparams->genesis_blockhash,
 					     start,
 					     UINT32_MAX);
-	queue_peer_msg(peer, take(msg));
+	queue_peer_msg(peer->daemon, &peer->id, take(msg));
 }
 
 static void normal_gossip_start(struct seeker *seeker, struct peer *peer)
@@ -436,37 +443,38 @@ static int cmp_scid(const struct short_channel_id *a,
 
 /* We can't ask for channels by node_id, so probe at random */
 static bool get_unannounced_nodes(const tal_t *ctx,
-				  struct routing_state *rstate,
+				  struct daemon *daemon,
 				  size_t max,
 				  struct short_channel_id **scids,
 				  u8 **query_flags)
 {
-	size_t num = 0;
-	u64 offset;
-	double total_weight = 0.0;
+	size_t num = 0, off, max_idx;
+	struct gossmap *gossmap = gossmap_manage_get_gossmap(daemon->gm);
 
-	/* Pick an example short_channel_id at random to query.  As a
-	 * side-effect this gets the node. */
+	/* No nodes?  Nothing to ask for */
+	max_idx = gossmap_max_node_idx(gossmap);
+	if (max_idx == 0 || max == 0)
+		return false;
+
+	/* Start at random index */
+	off = pseudorand(max_idx);
 	*scids = tal_arr(ctx, struct short_channel_id, max);
 
-	/* FIXME: This is inefficient!  Reuse next_block_range here! */
-	for (struct chan *c = uintmap_first(&rstate->chanmap, &offset);
-	     c;
-	     c = uintmap_after(&rstate->chanmap, &offset)) {
-		/* Local-only?  Don't ask. */
-		if (!is_chan_public(c))
+	for (size_t i = 0; i < max_idx; i++) {
+		const struct gossmap_node *node = gossmap_node_byidx(gossmap, (off + i) % max_idx);
+		const struct gossmap_chan *chan;
+
+		if (!node)
+			continue;
+		if (gossmap_node_announced(node))
 			continue;
 
-		if (c->nodes[0]->bcast.index && c->nodes[1]->bcast.index)
-			continue;
+		/* Query first chan. */
+		chan = gossmap_nth_chan(gossmap, node, 0, NULL);
+		(*scids)[num++] = gossmap_chan_scid(gossmap, chan);
 
-		if (num < max) {
-			(*scids)[num++] = c->scid;
-		} else {
-			/* Maybe replace one: approx. reservoir sampling */
-			if (random_select(1.0, &total_weight))
-				(*scids)[pseudorand(max)] = c->scid;
-		}
+		if (num == max)
+			break;
 	}
 
 	if (num == 0) {
@@ -477,18 +485,23 @@ static bool get_unannounced_nodes(const tal_t *ctx,
 	if (num < max)
 		tal_resize(scids, num);
 
-	/* Sort them into order. */
+	/* Sort them into order, and remove duplicates! */
 	asort(*scids, num, cmp_scid, NULL);
+	for (size_t i = 1; i < tal_count(*scids); i++) {
+		if (short_channel_id_eq(&(*scids)[i], &(*scids)[i-1])) {
+			tal_arr_remove(scids, i);
+		}
+	}
 
 	/* Now get flags. */
-	*query_flags = tal_arr(ctx, u8, num);
+	*query_flags = tal_arr(ctx, u8, tal_count(*scids));
 	for (size_t i = 0; i < tal_count(*scids); i++) {
-		struct chan *c = get_channel(rstate, &(*scids)[i]);
+		const struct gossmap_chan *chan = gossmap_find_chan(gossmap, &(*scids)[i]);
 
 		(*query_flags)[i] = 0;
-		if (!c->nodes[0]->bcast.index)
+		if (!gossmap_node_announced(gossmap_nth_node(gossmap, chan, 0)))
 			(*query_flags)[i] |= SCID_QF_NODE1;
-		if (!c->nodes[1]->bcast.index)
+		if (!gossmap_node_announced(gossmap_nth_node(gossmap, chan, 1)))
 			(*query_flags)[i] |= SCID_QF_NODE2;
 	}
 	return true;
@@ -499,9 +512,10 @@ static void peer_gossip_probe_nannounces(struct seeker *seeker);
 
 static void nodeannounce_query_done(struct peer *peer, bool complete)
 {
-	struct seeker *seeker = peer->daemon->seeker;
-	struct routing_state *rstate = seeker->daemon->rstate;
+	struct daemon *daemon = peer->daemon;
+	struct seeker *seeker = daemon->seeker;
 	size_t new_nannounce = 0, num_scids;
+	struct gossmap *gossmap = gossmap_manage_get_gossmap(daemon->gm);
 
 	/* We might have given up on them, then they replied. */
 	if (seeker->random_peer != peer) {
@@ -513,16 +527,16 @@ static void nodeannounce_query_done(struct peer *peer, bool complete)
 
 	num_scids = tal_count(seeker->nannounce_scids);
 	for (size_t i = 0; i < num_scids; i++) {
-		struct chan *c = get_channel(rstate,
-					     &seeker->nannounce_scids[i]);
+		struct gossmap_chan *c = gossmap_find_chan(gossmap,
+							   &seeker->nannounce_scids[i]);
 		/* Could have closed since we asked. */
 		if (!c)
 			continue;
 		if ((seeker->nannounce_query_flags[i] & SCID_QF_NODE1)
-		    && c->nodes[0]->bcast.index)
+		    && gossmap_node_announced(gossmap_nth_node(gossmap, c, 0)))
 			new_nannounce++;
 		if ((seeker->nannounce_query_flags[i] & SCID_QF_NODE2)
-		    && c->nodes[1]->bcast.index)
+		    && gossmap_node_announced(gossmap_nth_node(gossmap, c, 1)))
 			new_nannounce++;
 	}
 
@@ -549,7 +563,7 @@ static void nodeannounce_query_done(struct peer *peer, bool complete)
 	if (num_scids > 7000)
 		num_scids = 7000;
 
-	if (!get_unannounced_nodes(seeker, seeker->daemon->rstate, num_scids,
+	if (!get_unannounced_nodes(seeker, seeker->daemon, num_scids,
 				   &seeker->nannounce_scids,
 				   &seeker->nannounce_query_flags)) {
 		/* Nothing unknown at all?  Great, we're done */
@@ -582,26 +596,34 @@ static void peer_gossip_probe_nannounces(struct seeker *seeker)
 }
 
 /* They have update with this timestamp: do we want it? */
-static bool want_update(struct seeker *seeker,
-			u32 timestamp, const struct half_chan *hc)
+static bool want_update(struct gossmap *gossmap,
+			u32 timestamp,
+			const struct gossmap_chan *chan,
+			int dir)
 {
-	if (!is_halfchan_defined(hc))
+	u32 our_timestamp;
+
+	if (!gossmap_chan_set(chan, dir))
 		return timestamp != 0;
 
-	if (timestamp <= hc->bcast.timestamp)
+	gossmap_chan_get_update_details(gossmap, chan, dir, &our_timestamp,
+					NULL, NULL, NULL, NULL, NULL, NULL);
+	if (timestamp <= our_timestamp)
 		return false;
 
-	return !would_ratelimit_cupdate(seeker->daemon->rstate, hc, timestamp);
+	return true;
 }
 
 /* They gave us timestamps.  Do we want updated versions? */
 static void check_timestamps(struct seeker *seeker,
-			     struct chan *c,
+			     struct gossmap *gossmap,
+			     struct gossmap_chan *c,
 			     const struct channel_update_timestamps *ts,
 			     struct peer *peer)
 {
 	u8 *stale;
 	u8 query_flag = 0;
+	struct short_channel_id scid;
 
 	/* BOLT #7:
 	 * * `timestamp_node_id_1` is the timestamp of the `channel_update`
@@ -611,46 +633,63 @@ static void check_timestamps(struct seeker *seeker,
 	 *    for `node_id_2`, or 0 if there was no `channel_update` from that
 	 *    node.
 	 */
-	if (want_update(seeker, ts->timestamp_node_id_1, &c->half[0]))
+	if (want_update(gossmap, ts->timestamp_node_id_1, c, 0))
 		query_flag |= SCID_QF_UPDATE1;
-	if (want_update(seeker, ts->timestamp_node_id_2, &c->half[1]))
+	if (want_update(gossmap, ts->timestamp_node_id_2, c, 1))
 		query_flag |= SCID_QF_UPDATE2;
 
 	if (!query_flag)
 		return;
 
 	/* Add in flags if we're already getting it. */
-	stale = uintmap_get(&seeker->stale_scids, c->scid.u64);
+	scid = gossmap_chan_scid(gossmap, c);
+	stale = uintmap_get(&seeker->stale_scids, scid.u64);
 	if (!stale) {
 		stale = talz(seeker, u8);
-		uintmap_add(&seeker->stale_scids, c->scid.u64, stale);
+		uintmap_add(&seeker->stale_scids, scid.u64, stale);
 		set_preferred_peer(seeker, peer);
 	}
 	*stale |= query_flag;
+}
+
+static bool add_unknown_scid(struct seeker *seeker,
+			     struct short_channel_id scid,
+			     struct peer *peer)
+{
+	/* Check we're not already getting this one. */
+	if (!uintmap_add(&seeker->unknown_scids, scid.u64, true))
+		return false;
+
+	set_preferred_peer(seeker, peer);
+	return true;
 }
 
 static void process_scid_probe(struct peer *peer,
 			       u32 first_blocknum, u32 number_of_blocks,
 			       const struct range_query_reply *replies)
 {
-	struct seeker *seeker = peer->daemon->seeker;
+	struct daemon *daemon = peer->daemon;
+	struct seeker *seeker = daemon->seeker;
 	bool new_unknown_scids = false;
+	struct gossmap *gossmap;
 
 	/* We might have given up on them, then they replied. */
 	if (seeker->random_peer != peer)
 		return;
 
 	seeker->random_peer = NULL;
+	gossmap = gossmap_manage_get_gossmap(daemon->gm);
 
 	for (size_t i = 0; i < tal_count(replies); i++) {
-		struct chan *c = get_channel(seeker->daemon->rstate,
-					     &replies[i].scid);
+		struct gossmap_chan *c = gossmap_find_chan(gossmap,
+							   &replies[i].scid);
 		if (c) {
-			check_timestamps(seeker, c, &replies[i].ts, peer);
+			check_timestamps(seeker, gossmap, c, &replies[i].ts, peer);
 			continue;
 		}
 
-		new_unknown_scids |= add_unknown_scid(seeker, &replies[i].scid,
+		new_unknown_scids |= add_unknown_scid(seeker,
+						      replies[i].scid,
 						      peer);
 	}
 
@@ -672,7 +711,7 @@ static void process_scid_probe(struct peer *peer,
 	}
 
 	/* Channel probe finished, try asking for 128 unannounced nodes. */
-	if (!get_unannounced_nodes(seeker, seeker->daemon->rstate, 128,
+	if (!get_unannounced_nodes(seeker, seeker->daemon, 128,
 				   &seeker->nannounce_scids,
 				   &seeker->nannounce_query_flags)) {
 		/* No unknown nodes.  Great! */
@@ -935,34 +974,26 @@ bool remove_unknown_scid(struct seeker *seeker,
 	return uintmap_del(&seeker->unknown_scids, scid->u64);
 }
 
-bool add_unknown_scid(struct seeker *seeker,
-		      const struct short_channel_id *scid,
-		      struct peer *peer)
-{
-	/* Check we're not already getting this one. */
-	if (!uintmap_add(&seeker->unknown_scids, scid->u64, true))
-		return false;
-
-	set_preferred_peer(seeker, peer);
-	return true;
-}
-
 /* This peer told us about an update to an unknown channel.  Ask it for a
  * channel_announcement. */
 void query_unknown_channel(struct daemon *daemon,
-			   struct peer *peer,
-			   const struct short_channel_id *id)
+			   const struct node_id *source_peer,
+			   struct short_channel_id unknown_scid)
 {
-	/* Too many, or duplicate? */
-	if (!add_unknown_scid(daemon->seeker, id, peer))
-		return;
+	add_unknown_scid(daemon->seeker,
+			 unknown_scid,
+			 source_peer ? find_peer(daemon, source_peer) : NULL);
 }
 
 /* This peer told us about an unknown node.  Start probing it. */
-void query_unknown_node(struct seeker *seeker, struct peer *peer)
+void query_unknown_node(struct daemon *daemon,
+			const struct node_id *source_peer,
+			const struct node_id *unknown_node)
 {
-	seeker->unknown_nodes = true;
-	set_preferred_peer(seeker, peer);
+	daemon->seeker->unknown_nodes = true;
+	if (source_peer)
+		set_preferred_peer(daemon->seeker,
+				   find_peer(daemon, source_peer));
 }
 
 /* Peer has died, NULL out any pointers we have */
@@ -978,4 +1009,9 @@ void seeker_peer_gone(struct seeker *seeker, const struct peer *peer)
 
 	if (seeker->preferred_peer == peer)
 		seeker->preferred_peer = NULL;
+}
+
+void dev_seeker_memleak(struct htable *memtable, struct seeker *seeker)
+{
+	memleak_scan_uintmap(memtable, &seeker->stale_scids);
 }

@@ -10,13 +10,16 @@
 #include <errno.h>
 #include <hsmd/hsmd_wiregen.h>
 #include <lightningd/channel.h>
+#include <lightningd/channel_gossip.h>
 #include <lightningd/channel_state_names_gen.h>
 #include <lightningd/connect_control.h>
+#include <lightningd/gossip_control.h>
 #include <lightningd/hsm_control.h>
 #include <lightningd/notification.h>
 #include <lightningd/opening_common.h>
 #include <lightningd/peer_control.h>
 #include <lightningd/subd.h>
+#include <sodium/randombytes.h>
 #include <wallet/txfilter.h>
 #include <wire/peer_wire.h>
 
@@ -251,6 +254,7 @@ struct channel *new_unsaved_channel(struct peer *peer,
 	channel->state = DUALOPEND_OPEN_INIT;
 	channel->owner = NULL;
 	channel->scb = NULL;
+	channel->reestablished = false;
 	memset(&channel->billboard, 0, sizeof(channel->billboard));
 	channel->billboard.transient = tal_fmt(channel, "%s",
 					       "Empty channel init'd");
@@ -276,9 +280,10 @@ struct channel *new_unsaved_channel(struct peer *peer,
 		= CLOSING_FEE_NEGOTIATION_STEP_UNIT_PERCENTAGE;
 	channel->shutdown_wrong_funding = NULL;
 	channel->closing_feerate_range = NULL;
-	channel->peer_update = NULL;
-	channel->channel_update = NULL;
-	channel->alias[LOCAL] = channel->alias[REMOTE] = NULL;
+	channel->alias[REMOTE] = NULL;
+	/* We don't even bother checking for clashes. */
+	channel->alias[LOCAL] = tal(channel, struct short_channel_id);
+	randombytes_buf(channel->alias[LOCAL], sizeof(struct short_channel_id));
 
 	channel->shutdown_scriptpubkey[REMOTE] = NULL;
 	channel->last_was_revoke = false;
@@ -308,6 +313,8 @@ struct channel *new_unsaved_channel(struct peer *peer,
 
 	channel->lease_commit_sig = NULL;
 	channel->ignore_fee_limits = ld->config.ignore_fee_limits;
+	channel->last_stable_connection = 0;
+	channel->stable_conn_timer = NULL;
 
 	/* No shachain yet */
 	channel->their_shachain.id = 0;
@@ -323,6 +330,8 @@ struct channel *new_unsaved_channel(struct peer *peer,
 			       &channel->local_basepoints,
 			       &channel->local_funding_pubkey);
 
+	/* channel->channel_gossip gets populated once we know if it's public. */
+	channel->channel_gossip = NULL;
 	channel->forgets = tal_arr(channel, struct command *, 0);
 	list_add_tail(&peer->channels, &channel->list);
 	channel->rr_number = peer->ld->rr_counter++;
@@ -397,7 +406,7 @@ struct channel *new_channel(struct peer *peer, u64 dbid,
 			    bool remote_channel_ready,
 			    /* NULL or stolen */
 			    struct short_channel_id *scid,
-			    struct short_channel_id *alias_local STEALS,
+			    struct short_channel_id *alias_local TAKES,
 			    struct short_channel_id *alias_remote STEALS,
 			    struct channel_id *cid,
 			    struct amount_msat our_msat,
@@ -442,7 +451,8 @@ struct channel *new_channel(struct peer *peer, u64 dbid,
 			    struct amount_msat htlc_maximum_msat,
 			    bool ignore_fee_limits,
 			    /* NULL or stolen */
-			    struct peer_update *peer_update STEALS)
+			    struct peer_update *peer_update STEALS,
+			    u64 last_stable_connection)
 {
 	struct channel *channel = tal(peer->ld, struct channel);
 	struct amount_msat htlc_min, htlc_max;
@@ -455,6 +465,7 @@ struct channel *new_channel(struct peer *peer, u64 dbid,
 	channel->peer = peer;
 	channel->dbid = dbid;
 	channel->unsaved_dbid = 0;
+	channel->reestablished = false;
 	channel->error = NULL;
 	channel->open_attempt = NULL;
 	channel->openchannel_signed_cmd = NULL;
@@ -508,7 +519,7 @@ struct channel *new_channel(struct peer *peer, u64 dbid,
 	channel->our_funds = our_funds;
 	channel->remote_channel_ready = remote_channel_ready;
 	channel->scid = tal_steal(channel, scid);
-	channel->alias[LOCAL] = tal_steal(channel, alias_local);
+	channel->alias[LOCAL] = tal_dup_or_null(channel, struct short_channel_id, alias_local);
 	channel->alias[REMOTE] = tal_steal(channel, alias_remote);  /* Haven't gotten one yet. */
 	channel->cid = *cid;
 	channel->our_msat = our_msat;
@@ -568,9 +579,7 @@ struct channel *new_channel(struct peer *peer, u64 dbid,
 	channel->lease_commit_sig = tal_steal(channel, lease_commit_sig);
 	channel->lease_chan_max_msat = lease_chan_max_msat;
 	channel->lease_chan_max_ppt = lease_chan_max_ppt;
-	channel->peer_update = tal_steal(channel, peer_update);
 	channel->blockheight_states = dup_height_states(channel, height_states);
-	channel->channel_update = NULL;
 
 	/* DB migration, for example, sets min to 0, max to large: fixup */
 	htlc_min = channel->channel_info.their_config.htlc_minimum;
@@ -594,6 +603,10 @@ struct channel *new_channel(struct peer *peer, u64 dbid,
 	channel->close_blockheight = NULL;
 	channel->state_change_cause = reason;
 	channel->ignore_fee_limits = ignore_fee_limits;
+	channel->last_stable_connection = last_stable_connection;
+	channel->stable_conn_timer = NULL;
+ 	/* Populate channel->channel_gossip */
+	channel_gossip_init(channel, take(peer_update));
 
 	/* Make sure we see any spends using this key */
 	if (!local_shutdown_scriptpubkey) {
@@ -1094,3 +1107,11 @@ channel_scid_or_local_alias(const struct channel *chan)
 	else
 		return chan->alias[LOCAL];
 }
+
+const u8 *channel_update_for_error(const tal_t *ctx,
+				   struct channel *channel)
+{
+	/* FIXME: Call directly from callers */
+	return channel_gossip_update_for_error(ctx, channel);
+}
+

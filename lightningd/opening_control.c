@@ -50,7 +50,8 @@ void json_add_uncommitted_channel(struct json_stream *response,
 	if (peer) {
 		json_add_node_id(response, "peer_id", &peer->id);
 		json_add_bool(response, "peer_connected", peer->connected == PEER_CONNECTED);
-		json_add_channel_type(response, "channel_type", uc->fc->channel_type);
+		if (uc->fc->channel_type)
+			json_add_channel_type(response, "channel_type", uc->fc->channel_type);
 	}
 	json_add_string(response, "state", "OPENINGD");
 	json_add_string(response, "owner", "lightning_openingd");
@@ -112,7 +113,7 @@ wallet_commit_channel(struct lightningd *ld,
 	s64 final_key_idx;
 	u64 static_remotekey_start;
 	u32 lease_start_blockheight = 0; /* No leases on v1 */
-	struct short_channel_id *alias_local;
+	struct short_channel_id local_alias;
 	struct timeabs timestamp;
 	bool any_active = peer_any_channel(uc->peer, channel_state_wants_peercomms, NULL);
 
@@ -174,8 +175,8 @@ wallet_commit_channel(struct lightningd *ld,
 	else
 		static_remotekey_start = 0x7FFFFFFFFFFFFFFF;
 
-	alias_local = tal(NULL, struct short_channel_id);
-	randombytes_buf(alias_local, sizeof(struct short_channel_id));
+	/* This won't clash, we don't even bother checking */
+	randombytes_buf(&local_alias, sizeof(local_alias));
 
 	channel = new_channel(uc->peer, uc->dbid,
 			      NULL, /* No shachain yet */
@@ -194,7 +195,7 @@ wallet_commit_channel(struct lightningd *ld,
 			      local_funding,
 			      false, /* !remote_channel_ready */
 			      NULL, /* no scid yet */
-			      alias_local, /* But maybe we have an alias we want to use? */
+			      &local_alias,
 			      NULL, /* They haven't told us an alias yet */
 			      cid,
 			      /* The three arguments below are msatoshi_to_us,
@@ -235,7 +236,8 @@ wallet_commit_channel(struct lightningd *ld,
 			      ld->config.htlc_minimum_msat,
 			      ld->config.htlc_maximum_msat,
 			      ld->config.ignore_fee_limits,
-			      NULL);
+			      NULL,
+			      0);
 
 	/* Now we finally put it in the database. */
 	wallet_channel_insert(ld->wallet, channel);
@@ -1173,13 +1175,17 @@ static struct command_result *json_fundchannel_start(struct command *cmd,
 			 NULL))
 		return command_param_failed();
 
-	if (ctype &&
-	    !cmd->ld->dev_any_channel_type &&
-	    !channel_type_accept(tmpctx,
-				 ctype->features,
-				 cmd->ld->our_features)) {
-		return command_fail(cmd, JSONRPC2_INVALID_PARAMS,
-				    "channel_type not supported");
+	if (ctype) {
+		fc->channel_type = tal_steal(fc, ctype);
+		if (!cmd->ld->dev_any_channel_type &&
+		    !channel_type_accept(tmpctx,
+					 ctype->features,
+					 cmd->ld->our_features)) {
+			return command_fail(cmd, JSONRPC2_INVALID_PARAMS,
+					    "channel_type not supported");
+		}
+	} else {
+		fc->channel_type = NULL;
 	}
 
 	if (push_msat && amount_msat_greater_sat(*push_msat, *amount))
@@ -1504,7 +1510,11 @@ static struct channel *stub_chan(struct command *cmd,
 			      ld->config.htlc_minimum_msat,
 			      ld->config.htlc_maximum_msat,
 			      false,
-			      NULL);
+			      NULL,
+			      0);
+
+	/* We don't want to gossip about this, ever. */
+	channel->channel_gossip = tal_free(channel->channel_gossip);
 
 	return channel;
 }

@@ -1724,10 +1724,9 @@ def test_zeroconf_public(bitcoind, node_factory, chainparams):
     l1.connect(l2)
     l1.rpc.fundchannel(l2.info['id'], 'all', mindepth=0, push_msat=push_msat)
 
-    # Wait for the update to be signed (might not be the most reliable
-    # signal)
-    l1.daemon.wait_for_log(r'Got WIRE_HSMD_CUPDATE_SIG_REQ')
-    l2.daemon.wait_for_log(r'Got WIRE_HSMD_CUPDATE_SIG_REQ')
+    # Wait for the alias to be sent to peer.
+    wait_for(lambda: 'remote' in only_one(l1.rpc.listpeerchannels()['channels'])['updates'])
+    wait_for(lambda: 'remote' in only_one(l2.rpc.listpeerchannels()['channels'])['updates'])
 
     l1chan = only_one(l1.rpc.listpeerchannels()['channels'])
     l2chan = only_one(l2.rpc.listpeerchannels()['channels'])
@@ -1830,6 +1829,7 @@ def test_zeroconf_forward(node_factory, bitcoind):
     l2.fundwallet(10**7)
     l2.rpc.fundchannel(l3.info['id'], 10**6, mindepth=0)
     wait_for(lambda: l3.rpc.listincoming()['incoming'] != [])
+    wait_for(lambda: only_one(l3.rpc.listincoming()['incoming'])['incoming_capacity_msat'] != 0)
 
     # Make sure (esp in non-dev-mode) blockheights agree so we don't WIRE_EXPIRY_TOO_SOON...
     sync_blockheight(bitcoind, [l1, l2, l3])
@@ -2075,6 +2075,9 @@ def test_zeroconf_multichan_forward(node_factory):
     # Just making sure the allowlisted node_id matches.
     assert l2.info['id'] == node_id
 
+    # Create invoice which doesn't use zeroconf channel as routehint!
+    inv = l3.rpc.invoice(amount_msat=10000, label='lbl1', description='desc')['bolt11']
+
     # Now create a channel that is twice as large as the real channel,
     # and don't announce it.
     l2.fundwallet(10**7)
@@ -2083,7 +2086,6 @@ def test_zeroconf_multichan_forward(node_factory):
     l2.daemon.wait_for_log(r'peer_in WIRE_CHANNEL_READY')
     l3.daemon.wait_for_log(r'peer_in WIRE_CHANNEL_READY')
 
-    inv = l3.rpc.invoice(amount_msat=10000, label='lbl1', description='desc')['bolt11']
     l1.rpc.pay(inv)
 
     for c in l2.rpc.listpeerchannels(l3.info['id'])['channels']:
@@ -2541,10 +2543,6 @@ def test_anchor_min_emergency(bitcoind, node_factory):
 
     with pytest.raises(RpcError, match=r'We would not have enough left for min-emergency-msat 25000sat'):
         l1.rpc.withdraw(addr2, 'all')
-
-    # Make sure channeld tells gossipd about channel before we close, otherwise
-    # we get spurious "bad gossip" complaints if l2 sends channel_updates.
-    l1.daemon.wait_for_log("received private channel announcement from channeld")
 
     # Even with onchain anchor channel, it still keeps reserve (just in case!).
     l1.rpc.close(l2.info['id'])

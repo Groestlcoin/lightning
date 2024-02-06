@@ -78,6 +78,7 @@ pub enum Request {
 	PreApproveKeysend(requests::PreapprovekeysendRequest),
 	PreApproveInvoice(requests::PreapproveinvoiceRequest),
 	StaticBackup(requests::StaticbackupRequest),
+	BkprListIncome(requests::BkprlistincomeRequest),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -145,6 +146,7 @@ pub enum Response {
 	PreApproveKeysend(responses::PreapprovekeysendResponse),
 	PreApproveInvoice(responses::PreapproveinvoiceResponse),
 	StaticBackup(responses::StaticbackupResponse),
+	BkprListIncome(responses::BkprlistincomeResponse),
 }
 
 
@@ -2226,6 +2228,33 @@ pub mod requests {
 
 	    fn method(&self) -> &str {
 	        "staticbackup"
+	    }
+	}
+	#[derive(Clone, Debug, Deserialize, Serialize)]
+	pub struct BkprlistincomeRequest {
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub consolidate_fees: Option<bool>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub start_time: Option<u32>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub end_time: Option<u32>,
+	}
+
+	impl From<BkprlistincomeRequest> for Request {
+	    fn from(r: BkprlistincomeRequest) -> Self {
+	        Request::BkprListIncome(r)
+	    }
+	}
+
+	impl IntoRequest for BkprlistincomeRequest {
+	    type Response = super::responses::BkprlistincomeResponse;
+	}
+
+	impl TypedRequest for BkprlistincomeRequest {
+	    type Response = super::responses::BkprlistincomeResponse;
+
+	    fn method(&self) -> &str {
+	        "bkprlistincome"
 	    }
 	}
 }
@@ -4676,6 +4705,8 @@ pub mod responses {
 	    pub out_payments_fulfilled: Option<u64>,
 	    #[serde(skip_serializing_if = "Option::is_none")]
 	    pub out_fulfilled_msat: Option<Amount>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub last_stable_connection: Option<u64>,
 	    #[serde(skip_serializing_if = "crate::is_none_or_empty")]
 	    pub htlcs: Option<Vec<ListpeerchannelsChannelsHtlcs>>,
 	    #[serde(skip_serializing_if = "Option::is_none")]
@@ -4788,6 +4819,8 @@ pub mod responses {
 	    pub last_commitment_fee_msat: Option<Amount>,
 	    // Path `ListClosedChannels.closedchannels[].close_cause`
 	    pub close_cause: ListclosedchannelsClosedchannelsClose_cause,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub last_stable_connection: Option<u64>,
 	}
 
 	#[derive(Clone, Debug, Deserialize, Serialize)]
@@ -5852,6 +5885,40 @@ pub mod responses {
 	    fn try_from(response: Response) -> Result<Self, Self::Error> {
 	        match response {
 	            Response::StaticBackup(response) => Ok(response),
+	            _ => Err(TryFromResponseError)
+	        }
+	    }
+	}
+
+	#[derive(Clone, Debug, Deserialize, Serialize)]
+	pub struct BkprlistincomeIncome_events {
+	    pub account: String,
+	    pub tag: String,
+	    pub credit_msat: Amount,
+	    pub debit_msat: Amount,
+	    pub currency: String,
+	    pub timestamp: u32,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub description: Option<String>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub outpoint: Option<String>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub txid: Option<String>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub payment_id: Option<String>,
+	}
+
+	#[derive(Clone, Debug, Deserialize, Serialize)]
+	pub struct BkprlistincomeResponse {
+	    pub income_events: Vec<BkprlistincomeIncome_events>,
+	}
+
+	impl TryFrom<Response> for BkprlistincomeResponse {
+	    type Error = super::TryFromResponseError;
+
+	    fn try_from(response: Response) -> Result<Self, Self::Error> {
+	        match response {
+	            Response::BkprListIncome(response) => Ok(response),
 	            _ => Err(TryFromResponseError)
 	        }
 	    }

@@ -141,6 +141,9 @@ struct channel {
 	/* Is there a single subdaemon responsible for us? */
 	struct subd *owner;
 
+	/* Telling the world (or just our peer) about us */
+	struct channel_gossip *channel_gossip;
+
 	/* History */
 	struct logger *log;
 	struct billboard billboard;
@@ -280,6 +283,9 @@ struct channel {
 	/* Block height we saw closing tx at */
 	u32 *close_blockheight;
 
+	/* Channeld said we've successfully exchanged reestablish. */
+	bool reestablished;
+
 	/* Last known state_change cause */
 	enum state_change state_change_cause;
 
@@ -298,21 +304,19 @@ struct channel {
 	/* Lease commited max part per thousandth channel fee (ppm * 1000) */
 	u16 lease_chan_max_ppt;
 
-	/* Channel incoming fee rates, cltv delta min/max htlc from
-	 * peer. Used to generate route hints, blinded paths. */
-	const struct peer_update *peer_update;
-
-	/* Latest channel_update, for use in error messages. */
-	u8 *channel_update;
-
 	/* `Channel-shell` of this channel
 	 * (Minimum information required to backup this channel). */
 	struct scb_chan *scb;
 
 	/* Do we allow the peer to set any fee it wants? */
 	bool ignore_fee_limits;
+
+	/* Last time we had a stable connection, if any (0 = none) */
+	u64 last_stable_connection;
+	struct oneshot *stable_conn_timer;
 };
 
+/* Is channel owned (and should be talking to peer) */
 bool channel_is_connected(const struct channel *channel);
 
 /* For v2 opens, a channel that has not yet been committed/saved to disk */
@@ -390,7 +394,8 @@ struct channel *new_channel(struct peer *peer, u64 dbid,
 			    struct amount_msat htlc_maximum_msat,
 			    bool ignore_fee_limits,
 			    /* NULL or stolen */
-			    struct peer_update *peer_update STEALS);
+			    struct peer_update *peer_update STEALS,
+			    u64 last_stable_connection);
 
 /* new_inflight - Create a new channel_inflight for a channel */
 struct channel_inflight *new_inflight(struct channel *channel,
@@ -788,7 +793,10 @@ void channel_set_billboard(struct channel *channel, bool perm,
 struct htlc_in *channel_has_htlc_in(struct channel *channel);
 struct htlc_out *channel_has_htlc_out(struct channel *channel);
 
-const u8 *get_channel_update(struct channel *channel);
+const u8 *channel_update_for_error(const tal_t *ctx,
+				   struct channel *channel);
 
 struct amount_msat htlc_max_possible_send(const struct channel *channel);
+
+
 #endif /* LIGHTNING_LIGHTNINGD_CHANNEL_H */

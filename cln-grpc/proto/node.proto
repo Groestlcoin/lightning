@@ -69,6 +69,7 @@ service Node {
 	rpc PreApproveKeysend(PreapprovekeysendRequest) returns (PreapprovekeysendResponse) {}
 	rpc PreApproveInvoice(PreapproveinvoiceRequest) returns (PreapproveinvoiceResponse) {}
 	rpc StaticBackup(StaticbackupRequest) returns (StaticbackupResponse) {}
+	rpc BkprListIncome(BkprlistincomeRequest) returns (BkprlistincomeResponse) {}
 }
 
 message GetinfoRequest {
@@ -1235,6 +1236,7 @@ message ListpeerchannelsChannels {
 	optional Amount out_offered_msat = 49;
 	optional uint64 out_payments_fulfilled = 50;
 	optional Amount out_fulfilled_msat = 51;
+	optional uint64 last_stable_connection = 56;
 	repeated ListpeerchannelsChannelsHtlcs htlcs = 52;
 	optional string close_to_addr = 53;
 }
@@ -1345,6 +1347,7 @@ message ListclosedchannelsClosedchannels {
 	optional bytes last_commitment_txid = 22;
 	optional Amount last_commitment_fee_msat = 23;
 	ListclosedchannelsClosedchannelsClose_cause close_cause = 24;
+	optional uint64 last_stable_connection = 25;
 }
 
 message ListclosedchannelsClosedchannelsAlias {
@@ -1926,4 +1929,27 @@ message StaticbackupRequest {
 
 message StaticbackupResponse {
 	repeated bytes scb = 1;
+}
+
+message BkprlistincomeRequest {
+	optional bool consolidate_fees = 1;
+	optional uint32 start_time = 2;
+	optional uint32 end_time = 3;
+}
+
+message BkprlistincomeResponse {
+	repeated BkprlistincomeIncome_events income_events = 1;
+}
+
+message BkprlistincomeIncome_events {
+	string account = 1;
+	string tag = 2;
+	Amount credit_msat = 3;
+	Amount debit_msat = 4;
+	string currency = 5;
+	uint32 timestamp = 6;
+	optional string description = 7;
+	optional string outpoint = 8;
+	optional bytes txid = 9;
+	optional bytes payment_id = 10;
 }

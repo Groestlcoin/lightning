@@ -12,6 +12,7 @@
 #include <gossipd/gossipd_wiregen.h>
 #include <hsmd/permissions.h>
 #include <lightningd/channel.h>
+#include <lightningd/channel_gossip.h>
 #include <lightningd/connect_control.h>
 #include <lightningd/dual_open_control.h>
 #include <lightningd/hsm_control.h>
@@ -565,6 +566,15 @@ void connectd_start_shutdown(struct subd *connectd)
 	while (io_loop(NULL, NULL) != connectd);
 }
 
+static void startup_connect_one_done(struct lightningd *ld)
+{
+	if (!ld->num_startup_connects)
+		return;
+
+	if (--ld->num_startup_connects == 0)
+		channel_gossip_startup_done(ld);
+}
+
 static unsigned connectd_msg(struct subd *connectd, const u8 *msg, const int *fds)
 {
 	enum connectd_wire t = fromwire_peektype(msg);
@@ -578,7 +588,7 @@ static unsigned connectd_msg(struct subd *connectd, const u8 *msg, const int *fd
 	case WIRE_CONNECTD_DEV_MEMLEAK:
 	case WIRE_CONNECTD_DEV_SUPPRESS_GOSSIP:
 	case WIRE_CONNECTD_DEV_REPORT_FDS:
-	case WIRE_CONNECTD_PEER_FINAL_MSG:
+	case WIRE_CONNECTD_PEER_SEND_MSG:
 	case WIRE_CONNECTD_PEER_CONNECT_SUBD:
 	case WIRE_CONNECTD_PING:
 	case WIRE_CONNECTD_SEND_ONIONMSG:
@@ -594,6 +604,7 @@ static unsigned connectd_msg(struct subd *connectd, const u8 *msg, const int *fd
 		break;
 
 	case WIRE_CONNECTD_PEER_CONNECTED:
+		startup_connect_one_done(connectd->ld);
 		peer_connected(connectd->ld, msg);
 		break;
 
@@ -606,6 +617,7 @@ static unsigned connectd_msg(struct subd *connectd, const u8 *msg, const int *fd
 		break;
 
 	case WIRE_CONNECTD_CONNECT_FAILED:
+		startup_connect_one_done(connectd->ld);
 		handle_connect_failed(connectd->ld, msg);
 		break;
 

@@ -169,6 +169,7 @@ The following tables are currently supported:
   - `last_commitment_txid` (type `hash`, sqltype `BLOB`)
   - `last_commitment_fee_msat` (type `msat`, sqltype `INTEGER`)
   - `close_cause` (type `string`, sqltype `TEXT`)
+  - `last_stable_connection` (type `u64`, sqltype `INTEGER`)
 
 - `forwards` indexed by `in_channel and in_htlc_id` (see lightning-listforwards(7))
   - `created_index` (type `u64`, sqltype `INTEGER`)
@@ -341,6 +342,7 @@ The following tables are currently supported:
   - `out_offered_msat` (type `msat`, sqltype `INTEGER`)
   - `out_payments_fulfilled` (type `u64`, sqltype `INTEGER`)
   - `out_fulfilled_msat` (type `msat`, sqltype `INTEGER`)
+  - `last_stable_connection` (type `u64`, sqltype `INTEGER`)
   - related table `peerchannels_htlcs`
     - `row` (reference to `peerchannels.rowid`, sqltype `INTEGER`)
     - `arrindex` (index within array, sqltype `INTEGER`)
@@ -352,6 +354,7 @@ The following tables are currently supported:
     - `local_trimmed` (type `boolean`, sqltype `INTEGER`)
     - `status` (type `string`, sqltype `TEXT`)
     - `state` (type `string`, sqltype `TEXT`)
+  - `reestablished` (type `boolean`, sqltype `INTEGER`)
   - `close_to_addr` (type `string`, sqltype `TEXT`)
   - `last_tx_fee_msat` (type `msat`, sqltype `INTEGER`)
   - `direction` (type `u32`, sqltype `INTEGER`)
@@ -530,4 +533,4 @@ RESOURCES
 ---------
 
 Main web site: <https://github.com/ElementsProject/lightning>
-[comment]: # ( SHA256STAMP:5c5e14f8fde75b877080c0c10feb786f1d2fefbb61a62aecb8d003d1d54627e9)
+[comment]: # ( SHA256STAMP:299446e88b1f847a82ae63c2087ce28a36b7c8fea2b102d4e3d87c420a9268e9)

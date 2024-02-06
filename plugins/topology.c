@@ -264,16 +264,29 @@ static void json_add_halfchan(struct json_stream *response,
 		json_add_node_id(response, "destination", &node_id[!dir]);
 		json_add_short_channel_id(response, "short_channel_id", &scid);
 		json_add_num(response, "direction", dir);
-		json_add_bool(response, "public", !c->private);
+		json_add_bool(response, "public", !gossmap_chan_is_localmod(gossmap, c));
 
-		gossmap_chan_get_update_details(gossmap, c, dir,
-						&timestamp,
-						&message_flags,
-						&channel_flags,
-						&fee_base_msat,
-						&fee_proportional_millionths,
-						&htlc_minimum_msat,
-						&htlc_maximum_msat);
+		if (gossmap_chan_is_localmod(gossmap, c)) {
+			/* Local additions don't have a channel_update
+			 * in gossmap.  This is deprecated anyway, but
+			 * fill in values from entry we added. */
+			timestamp = time_now().ts.tv_sec;
+			message_flags = (ROUTING_OPT_HTLC_MAX_MSAT|ROUTING_OPT_DONT_FORWARD);
+			channel_flags = node_id_idx(&node_id[dir], &node_id[!dir]);
+			fee_base_msat = c->half[dir].base_fee;
+			fee_proportional_millionths = c->half[dir].proportional_fee;
+			htlc_minimum_msat = amount_msat(fp16_to_u64(c->half[dir].htlc_min));
+			htlc_maximum_msat = amount_msat(fp16_to_u64(c->half[dir].htlc_max));
+		} else {
+			gossmap_chan_get_update_details(gossmap, c, dir,
+							&timestamp,
+							&message_flags,
+							&channel_flags,
+							&fee_base_msat,
+							&fee_proportional_millionths,
+							&htlc_minimum_msat,
+							&htlc_maximum_msat);
+		}
 
 		json_add_amount_sat_msat(response, "amount_msat", capacity);
 		json_add_num(response, "message_flags", message_flags);
@@ -653,7 +666,7 @@ listpeerchannels_listincoming_done(struct command *cmd,
 		json_add_u32(js, "cltv_expiry_delta", ourchan->half[!dir].delay);
 		json_add_amount_msat(js, "incoming_capacity_msat",
 				     peer_capacity(gossmap, me, peer, ourchan));
-		json_add_bool(js, "public", !ourchan->private);
+		json_add_bool(js, "public", !gossmap_chan_is_localmod(gossmap, ourchan));
 		peer_features = gossmap_node_get_features(tmpctx, gossmap, peer);
 		if (peer_features)
 			json_add_hex_talarr(js, "peer_features", peer_features);

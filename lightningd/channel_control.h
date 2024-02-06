@@ -33,16 +33,14 @@ struct command_result *cancel_channel_before_broadcast(struct command *cmd,
 
 /* Update the channel info on channel_ready */
 bool channel_on_channel_ready(struct channel *channel,
-			      struct pubkey *next_per_commitment_point);
+			      const struct pubkey *next_per_commitment_point,
+			      const struct short_channel_id *remote_alias);
 
 /* Record channel open (coin movement notifications) */
 void channel_record_open(struct channel *channel, u32 blockheight, bool record_push);
 
 /* A channel has unrecoverably fallen behind */
 void channel_fallen_behind(struct channel *channel, const u8 *msg);
-
-/* Fresh channel_update for this channel. */
-void channel_replace_update(struct channel *channel, u8 *update TAKES);
 
 /* Tell channel about new feerates (owner must be channeld!) */
 void channel_update_feerates(struct lightningd *ld, const struct channel *channel);

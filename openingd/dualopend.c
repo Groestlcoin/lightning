@@ -227,6 +227,9 @@ struct state {
 	/* Does this negotation require confirmed inputs? */
 	bool require_confirmed_inputs[NUM_SIDES];
 
+	/* Our alias */
+	struct short_channel_id local_alias;
+
 	bool dev_accept_any_channel_type;
 };
 
@@ -1563,7 +1566,7 @@ static u8 *handle_channel_ready(struct state *state, u8 *msg)
 	/* We save when the peer locks, so we do the right
 	 * thing on reconnects */
 	if (!state->channel_ready[REMOTE]) {
-		msg = towire_dualopend_peer_locked(NULL, &remote_per_commit);
+		msg = towire_dualopend_peer_locked(NULL, &remote_per_commit, tlvs->short_channel_id);
 		wire_sync_write(REQ_FD, take(msg));
 	}
 
@@ -3869,6 +3872,7 @@ static void send_channel_ready(struct state *state)
 	/* Figure out the next local commit */
 	hsm_per_commitment_point(1, &next_local_per_commit);
 
+	tlvs->short_channel_id = &state->local_alias;
 	msg = towire_channel_ready(NULL, &state->channel_id,
 				    &next_local_per_commit, tlvs);
 	peer_write(state->pps, take(msg));
@@ -3876,38 +3880,6 @@ static void send_channel_ready(struct state *state)
 	state->channel_ready[LOCAL] = true;
 	check_mutual_channel_ready(state);
 	billboard_update(state);
-}
-
-/* FIXME: Maybe cache this? */
-static struct amount_sat channel_size(struct state *state)
-{
-	u32 funding_outnum;
-	const u8 *funding_wscript =
-		bitcoin_redeem_2of2(tmpctx,
-				    &state->our_funding_pubkey,
-				    &state->their_funding_pubkey);
-
-	if (!find_txout(state->tx_state->psbt,
-			scriptpubkey_p2wsh(tmpctx, funding_wscript),
-			&funding_outnum)) {
-		open_err_fatal(state, "Cannot fund txout");
-	}
-
-	return psbt_output_get_amount(state->tx_state->psbt, funding_outnum);
-}
-
-static void tell_gossipd_new_channel(struct state *state)
-{
-	u8 *msg;
-	const u8 *annfeatures = get_agreed_channelfeatures(tmpctx,
-							   state->our_features,
-							   state->their_features);
-
-	/* Tell lightningd about local channel. */
-	msg = towire_dualopend_local_private_channel(NULL,
-						     channel_size(state),
-						     annfeatures);
- 	wire_sync_write(REQ_FD, take(msg));
 }
 
 static u8 *handle_funding_depth(struct state *state, u8 *msg)
@@ -3923,9 +3895,6 @@ static u8 *handle_funding_depth(struct state *state, u8 *msg)
 
 	/* We check this before we arrive here, but for sanity */
 	assert(state->minimum_depth <= depth);
-
-	/* Tell gossipd the new channel exists before we tell peer. */
-	tell_gossipd_new_channel(state);
 
 	send_channel_ready(state);
 	if (state->channel_ready[REMOTE])
@@ -4207,7 +4176,6 @@ static u8 *handle_master_in(struct state *state)
 	case WIRE_DUALOPEND_FAIL_FALLEN_BEHIND:
 	case WIRE_DUALOPEND_DRY_RUN:
 	case WIRE_DUALOPEND_VALIDATE_LEASE:
-	case WIRE_DUALOPEND_LOCAL_PRIVATE_CHANNEL:
 	case WIRE_DUALOPEND_VALIDATE_INPUTS:
 		break;
 	}
@@ -4382,6 +4350,7 @@ int main(int argc, char *argv[])
 				    &state->our_funding_pubkey,
 				    &state->minimum_depth,
 				    &state->require_confirmed_inputs[LOCAL],
+				    &state->local_alias,
 				    &state->dev_accept_any_channel_type)) {
 		/*~ Initially we're not associated with a channel, but
 		 * handle_peer_gossip_or_error compares this. */
@@ -4446,7 +4415,8 @@ int main(int argc, char *argv[])
 					     &requested_lease,
 					     &state->channel_type,
 					     &state->require_confirmed_inputs[LOCAL],
-					     &state->require_confirmed_inputs[REMOTE])) {
+					     &state->require_confirmed_inputs[REMOTE],
+					     &state->local_alias)) {
 
 		bool ok;
 

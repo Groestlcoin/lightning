@@ -172,6 +172,9 @@ struct lightningd {
 	/* Do we want to reconnect to other peers? */
 	bool reconnect;
 
+	/* How many outstanding startup connection attempts? */
+	size_t num_startup_connects;
+
 	/* Do we want to listen for other peers? */
 	bool listen;
 
@@ -183,19 +186,19 @@ struct lightningd {
 	/* Setup: And the bitset for each, whether to listen, announce or both */
 	enum addr_listen_announce *proposed_listen_announce;
 
-	/* Actual bindings and announceables from gossipd */
+	/* Actual bindings and announceables from connectd */
 	struct wireaddr_internal *binding;
 	struct wireaddr *announceable;
 
-	/* unverified remote_addr as reported by recent peers */
-	struct wireaddr *remote_addr_v4;
-	struct wireaddr *remote_addr_v6;
-	struct node_id remote_addr_v4_peer;
-	struct node_id remote_addr_v6_peer;
+	/* Current node announcement (if any) */
+	const u8 *node_announcement;
 
-	/* verified discovered IPs to be used for anouncement */
-	struct wireaddr *discovered_ip_v4;
-	struct wireaddr *discovered_ip_v6;
+	/* Lease rates to advertize, set by json_setleaserates */
+	struct lease_rates *lease_rates;
+
+	/* Popular discovered IPs to be used for announcement */
+	const struct wireaddr *discovered_ip_v4;
+	const struct wireaddr *discovered_ip_v6;
 
 	/* Bearer of all my secrets. */
 	int hsm_fd;

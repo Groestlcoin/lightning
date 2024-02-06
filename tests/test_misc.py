@@ -1311,7 +1311,8 @@ def test_funding_reorg_remote_lags(node_factory, bitcoind):
     bitcoind.generate_block(1)
     l1.daemon.wait_for_log(r'Short channel id changed from 103x1x0->104x1x0')
 
-    l2.daemon.wait_for_logs([r'Peer transient failure in CHANNELD_NORMAL: channeld sent Bad node_signature*'])
+    # We are OK with this!
+    l2.daemon.wait_for_log(r'channel_gossip: received announcement sigs for 104x1x0 \(we have 103x1x0\)')
 
     # Unblinding l2 brings it back in sync, restarts channeld and sends its announce sig
     l2.daemon.rpcproxy.mock_rpc('getblockhash', None)
@@ -1319,9 +1320,7 @@ def test_funding_reorg_remote_lags(node_factory, bitcoind):
     wait_for(lambda: l2.is_local_channel_active('104x1x0'))
     assert [c for c in l2.rpc.listpeerchannels()['channels'] if c['short_channel_id'] == '103x1x0'] == []
 
-    wait_for(lambda: only_one(l2.rpc.listpeerchannels()['channels'])['status'] == [
-        'CHANNELD_NORMAL:Reconnected, and reestablished.',
-        'CHANNELD_NORMAL:Channel ready for use. Channel announced.'])
+    wait_for(lambda: [c['short_channel_id'] for c in l2.rpc.listchannels()['channels']] == ['104x1x0'] * 2)
 
     l1.rpc.close(l2.info['id'])
     bitcoind.generate_block(1, True)
@@ -2796,7 +2795,8 @@ def test_restorefrompeer(node_factory, bitcoind):
     """
     l1, l2 = node_factory.get_nodes(2, [{'allow_broken_log': True,
                                          'experimental-peer-storage': None,
-                                         'may_reconnect': True},
+                                         'may_reconnect': True,
+                                         'allow_bad_gossip': True},
                                         {'experimental-peer-storage': None,
                                          'may_reconnect': True}])
 

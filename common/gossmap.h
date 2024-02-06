@@ -18,9 +18,8 @@ struct gossmap_node {
 
 struct gossmap_chan {
 	u32 cann_off;
-	u32 private: 1;
 	/* Technically redundant, but we have a hole anyway: from cann_off */
-	u32 plus_scid_off: 31;
+	u32 plus_scid_off;
 	/* Offsets of cupdates (0 if missing).  Logically inside half_chan,
 	 * but that would add padding. */
 	u32 cupdate_off[2];
@@ -45,9 +44,43 @@ struct gossmap_chan {
 struct gossmap *gossmap_load(const tal_t *ctx, const char *filename,
 			     size_t *num_channel_updates_rejected);
 
+/* Version which uses existing fd */
+#define gossmap_load_fd(ctx, fd, cupdate_fail, unknown_record, cbarg)	\
+	gossmap_load_fd_((ctx), (fd),					\
+			 typesafe_cb_preargs(void, void *, (cupdate_fail), (cbarg), \
+					     struct gossmap *,		\
+					     const struct short_channel_id_dir *, \
+					     u16 cltv_expiry_delta,	\
+					     u32 fee_base_msat,		\
+					     u32 fee_proportional_millionths), \
+			 typesafe_cb_preargs(bool, void *, (unknown_record), (cbarg), \
+					     struct gossmap *,		\
+					     int type,			\
+					     size_t off,		\
+					     size_t msglen),		\
+			 (cbarg))
+
+struct gossmap *gossmap_load_fd_(const tal_t *ctx, int fd,
+				 void (*cupdate_fail)(struct gossmap *map,
+						      const struct short_channel_id_dir *scidd,
+						      u16 cltv_expiry_delta,
+						      u32 fee_base_msat,
+						      u32 fee_proportional_millionths,
+						      void *cb_arg),
+				 bool (*unknown_record)(struct gossmap *map,
+							int type,
+							size_t off,
+							size_t msglen,
+							void *cb_arg),
+				 void *cb_arg);
+
+
 /* Call this before using to ensure it's up-to-date.  Returns true if something
  * was updated. Note: this can scramble node and chan indexes! */
 bool gossmap_refresh(struct gossmap *map, size_t *num_channel_updates_rejected);
+
+/* Call this if you have set unknown_cb, and thus this can fail! */
+bool gossmap_refresh_mayfail(struct gossmap *map, bool *updated);
 
 /* Local modifications. */
 struct gossmap_localmods *gossmap_localmods_new(const tal_t *ctx);
@@ -84,6 +117,10 @@ void gossmap_apply_localmods(struct gossmap *map,
 /* Remove localmods from this map */
 void gossmap_remove_localmods(struct gossmap *map,
 			      const struct gossmap_localmods *localmods);
+
+/* Is this channel a localmod? */
+bool gossmap_chan_is_localmod(const struct gossmap *map,
+			      const struct gossmap_chan *c);
 
 /* Each channel has a unique (low) index. */
 u32 gossmap_node_idx(const struct gossmap *map, const struct gossmap_node *node);
@@ -124,10 +161,16 @@ bool gossmap_chan_get_capacity(const struct gossmap *map,
 			       const struct gossmap_chan *c,
 			       struct amount_sat *amount);
 
-/* Get the announcement msg which created this chan */
+/* Get the announcement msg which created this chan (NULL for localmods) */
 u8 *gossmap_chan_get_announce(const tal_t *ctx,
 			      const struct gossmap *map,
 			      const struct gossmap_chan *c);
+
+/* Do we have a node_announcement for this onde ? */
+static inline bool gossmap_node_announced(const struct gossmap_node *node)
+{
+	return node->nann_off != 0;
+}
 
 /* Get the announcement msg (if any) for this node. */
 u8 *gossmap_node_get_announce(const tal_t *ctx,
@@ -154,8 +197,14 @@ u8 *gossmap_node_get_features(const tal_t *ctx,
 			      const struct gossmap *map,
 			      const struct gossmap_node *n);
 
+/* Return the channel_update (or NULL if !gossmap_chan_set) */
+u8 *gossmap_chan_get_update(const tal_t *ctx,
+			    const struct gossmap *map,
+			    const struct gossmap_chan *chan,
+			    int dir);
+
 /* Returns details from channel_update (must be gossmap_chan_set, and
- * does not work for local_updatechan! */
+ * does not work for local_updatechan)! */
 void gossmap_chan_get_update_details(const struct gossmap *map,
 				     const struct gossmap_chan *chan,
 				     int dir,
@@ -180,9 +229,9 @@ struct gossmap_node *gossmap_nth_node(const struct gossmap *map,
 				      int n);
 
 /* Can this channel send this amount? */
-bool gossmap_chan_capacity(const struct gossmap_chan *chan,
-			   int direction,
-			   struct amount_msat amount);
+bool gossmap_chan_has_capacity(const struct gossmap_chan *chan,
+			       int direction,
+			       struct amount_msat amount);
 
 /* Remove a channel from the map (warning! realloc can move gossmap_chan
  * and gossmap_node ptrs!) */

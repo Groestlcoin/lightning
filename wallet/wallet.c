@@ -16,6 +16,7 @@
 #include <db/utils.h>
 #include <lightningd/chaintopology.h>
 #include <lightningd/channel.h>
+#include <lightningd/channel_gossip.h>
 #include <lightningd/closed_channel.h>
 #include <lightningd/coin_mvts.h>
 #include <lightningd/notification.h>
@@ -1075,16 +1076,17 @@ wallet_htlc_sigs_load(const tal_t *ctx, struct wallet *w, u64 channelid,
 	return htlc_sigs;
 }
 
-bool wallet_remote_ann_sigs_load(const tal_t *ctx, struct wallet *w, u64 id,
-				 secp256k1_ecdsa_signature **remote_ann_node_sig,
-				 secp256k1_ecdsa_signature **remote_ann_bitcoin_sig)
+bool wallet_remote_ann_sigs_load(struct wallet *w,
+				 const struct channel *chan,
+				 secp256k1_ecdsa_signature *remote_ann_node_sig,
+				 secp256k1_ecdsa_signature *remote_ann_bitcoin_sig)
 {
 	struct db_stmt *stmt;
 	bool res;
 	stmt = db_prepare_v2(
 	    w->db, SQL("SELECT remote_ann_node_sig, remote_ann_bitcoin_sig"
 		       " FROM channels WHERE id = ?"));
-	db_bind_u64(stmt, id);
+	db_bind_u64(stmt, chan->dbid);
 	db_query_prepared(stmt);
 
 	res = db_step(stmt);
@@ -1096,29 +1098,31 @@ bool wallet_remote_ann_sigs_load(const tal_t *ctx, struct wallet *w, u64 id,
 	if (db_col_is_null(stmt, "remote_ann_node_sig")
 	    || db_col_is_null(stmt, "remote_ann_bitcoin_sig")) {
 		db_col_ignore(stmt, "remote_ann_bitcoin_sig");
-		*remote_ann_node_sig = *remote_ann_bitcoin_sig = NULL;
 		tal_free(stmt);
-		return true;
+		return false;
 	}
 
-	/* the case left over is both sigs exist */
-	*remote_ann_node_sig = tal(ctx, secp256k1_ecdsa_signature);
-	*remote_ann_bitcoin_sig = tal(ctx, secp256k1_ecdsa_signature);
+	if (!db_col_signature(stmt, "remote_ann_node_sig", remote_ann_node_sig))
+		db_fatal(w->db, "Failed to decode remote_ann_node_sig for id %"PRIu64, chan->dbid);
 
-	if (!db_col_signature(stmt, "remote_ann_node_sig", *remote_ann_node_sig))
-		goto fail;
-
-	if (!db_col_signature(stmt, "remote_ann_bitcoin_sig", *remote_ann_bitcoin_sig))
-		goto fail;
+	if (!db_col_signature(stmt, "remote_ann_bitcoin_sig", remote_ann_bitcoin_sig))
+		db_fatal(w->db, "Failed to decode remote_ann_bitcoin_sig for id %"PRIu64, chan->dbid);
 
 	tal_free(stmt);
 	return true;
+}
 
-fail:
-	*remote_ann_node_sig = tal_free(*remote_ann_node_sig);
-	*remote_ann_bitcoin_sig = tal_free(*remote_ann_bitcoin_sig);
-	tal_free(stmt);
-	return false;
+void wallet_remote_ann_sigs_clear(struct wallet *w, const struct channel *chan)
+{
+	struct db_stmt *stmt;
+	stmt = db_prepare_v2(w->db,
+			     SQL("UPDATE channels"
+				 " SET remote_ann_node_sig=?, remote_ann_bitcoin_sig=?"
+				 " WHERE id = ?"));
+	db_bind_null(stmt);
+	db_bind_null(stmt);
+	db_bind_u64(stmt, chan->dbid);
+	db_exec_prepared_v2(take(stmt));
 }
 
 static struct fee_states *wallet_channel_fee_states_load(struct wallet *w,
@@ -1759,7 +1763,8 @@ static struct channel *wallet_stmt2channel(struct wallet *w, struct db_stmt *stm
 			   htlc_minimum_msat,
 			   htlc_maximum_msat,
 			   ignore_fee_limits,
-			   remote_update);
+			   remote_update,
+			   db_col_u64(stmt, "last_stable_connection"));
 
 	if (!wallet_channel_load_inflights(w, chan)) {
 		tal_free(chan);
@@ -1796,6 +1801,7 @@ static struct closed_channel *wallet_stmt2closed_channel(const tal_t *ctx,
 	cc->our_msat = db_col_amount_msat(stmt, "msatoshi_local");
 	cc->msat_to_us_min = db_col_amount_msat(stmt, "msatoshi_to_us_min");
 	cc->msat_to_us_max = db_col_amount_msat(stmt, "msatoshi_to_us_max");
+	cc->last_stable_connection = db_col_u64(stmt, "last_stable_connection");
 	/* last_tx is null for stub channels used for recovering funds through
 	 * Static channel backups. */
 	if (!db_col_is_null(stmt, "last_tx"))
@@ -1841,6 +1847,7 @@ struct closed_channel **wallet_load_closed_channels(const tal_t *ctx,
 					", channel_type"
 					", state_change_reason"
 					", lease_commit_sig"
+					", last_stable_connection"
 					" FROM channels"
 					" LEFT JOIN peers p ON p.id = peer_id"
                                         " WHERE state = ?;"));
@@ -1952,6 +1959,7 @@ static bool wallet_channels_load_active(struct wallet *w)
 					", remote_cltv_expiry_delta"
 					", remote_htlc_minimum_msat"
 					", remote_htlc_maximum_msat"
+					", last_stable_connection"
 					" FROM channels"
                                         " WHERE state != ?;")); //? 0
 	db_bind_int(stmt, CLOSED);
@@ -2215,6 +2223,7 @@ void wallet_channel_save(struct wallet *w, struct channel *chan)
 {
 	struct db_stmt *stmt;
 	u8 *last_sent_commit;
+	const struct peer_update *peer_update;
 	assert(chan->first_blocknum);
 
 	wallet_channel_config_save(w, &chan->our_config);
@@ -2270,8 +2279,9 @@ void wallet_channel_save(struct wallet *w, struct channel *chan)
 					"  remote_feerate_ppm=?," // 48
 					"  remote_cltv_expiry_delta=?," // 49
 					"  remote_htlc_minimum_msat=?," // 50
-					"  remote_htlc_maximum_msat=?" // 51
-					" WHERE id=?")); // 52
+					"  remote_htlc_maximum_msat=?,"
+					"  last_stable_connection=?"
+					" WHERE id=?"));
 	db_bind_u64(stmt, chan->their_shachain.id);
 	if (chan->scid)
 		db_bind_short_channel_id(stmt, chan->scid);
@@ -2353,12 +2363,13 @@ void wallet_channel_save(struct wallet *w, struct channel *chan)
 		db_bind_null(stmt);
 
 	db_bind_int(stmt, chan->ignore_fee_limits);
-	if (chan->peer_update) {
-		db_bind_int(stmt, chan->peer_update->fee_base);
-		db_bind_int(stmt, chan->peer_update->fee_ppm);
-		db_bind_int(stmt, chan->peer_update->cltv_delta);
-		db_bind_amount_msat(stmt, &chan->peer_update->htlc_minimum_msat);
-		db_bind_amount_msat(stmt, &chan->peer_update->htlc_maximum_msat);
+	peer_update = channel_gossip_get_remote_update(chan);
+	if (peer_update) {
+		db_bind_int(stmt, peer_update->fee_base);
+		db_bind_int(stmt, peer_update->fee_ppm);
+		db_bind_int(stmt, peer_update->cltv_delta);
+		db_bind_amount_msat(stmt, &peer_update->htlc_minimum_msat);
+		db_bind_amount_msat(stmt, &peer_update->htlc_maximum_msat);
 	} else {
 		db_bind_null(stmt);
 		db_bind_null(stmt);
@@ -2366,6 +2377,7 @@ void wallet_channel_save(struct wallet *w, struct channel *chan)
 		db_bind_null(stmt);
 		db_bind_null(stmt);
 	}
+	db_bind_u64(stmt, chan->last_stable_connection);
 	db_bind_u64(stmt, chan->dbid);
 	db_exec_prepared_v2(take(stmt));
 
@@ -2455,6 +2467,8 @@ void wallet_channel_save(struct wallet *w, struct channel *chan)
 	db_bind_talarr(stmt, last_sent_commit);
 	db_bind_u64(stmt, chan->dbid);
 	db_exec_prepared_v2(take(stmt));
+
+	channel_gossip_update(chan);
 }
 
 void wallet_state_change_add(struct wallet *w,

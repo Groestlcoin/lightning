@@ -116,6 +116,7 @@ On success, an object containing **channels** is returned.  It is an array of ob
 - **out\_offered\_msat** (msat, optional): Total amount of outgoing payment attempts
 - **out\_payments\_fulfilled** (u64, optional): Number of successful outgoing payment attempts
 - **out\_fulfilled\_msat** (msat, optional): Total amount of successful outgoing payment attempts
+- **last\_stable\_connection** (u64, optional): Last time we reestablished the open channel and stayed connected for 1 minute *(added v24.02)*
 - **htlcs** (array of objects, optional): current HTLCs in this channel:
   - **direction** (string): Whether it came from peer, or is going to peer (one of "in", "out")
   - **id** (u64): Unique ID for this htlc on this channel in this direction
@@ -132,6 +133,10 @@ On success, an object containing **channels** is returned.  It is an array of ob
   If **direction** is "in":
 
     - **state** (string): Status of the HTLC (one of "RCVD\_ADD\_HTLC", "RCVD\_ADD\_COMMIT", "SENT\_ADD\_REVOCATION", "SENT\_ADD\_ACK\_COMMIT", "RCVD\_ADD\_ACK\_REVOCATION", "SENT\_REMOVE\_HTLC", "SENT\_REMOVE\_COMMIT", "RCVD\_REMOVE\_REVOCATION", "RCVD\_REMOVE\_ACK\_COMMIT", "SENT\_REMOVE\_ACK\_REVOCATION")
+
+If **peer\_connected** is *true*:
+
+  - **reestablished** (boolean, optional): True if we have successfully exchanged reestablish messages this connection
 
 If **close\_to** is present:
 
@@ -215,4 +220,4 @@ Main web site: <https://github.com/ElementsProject/lightning> Lightning
 RFC site (BOLT \#9):
 <https://github.com/lightningnetwork/lightning-rfc/blob/master/09-features.md>
 
-[comment]: # ( SHA256STAMP:a7fc3b30593a04b6b04c1516aeb2039f6ab4e29cf12f81b306a8a068273c3604)
+[comment]: # ( SHA256STAMP:c2ab91a2357b83264415f923b9d5195e5294a17b7424d9e75ac9ea704bea8fc5)
