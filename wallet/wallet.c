@@ -674,10 +674,9 @@ struct utxo *wallet_find_utxo(const tal_t *ctx, struct wallet *w,
 bool wallet_has_funds(struct wallet *w,
 		      const struct utxo **excludes,
 		      u32 current_blockheight,
-		      struct amount_sat sats)
+		      struct amount_sat *needed)
 {
 	struct db_stmt *stmt;
-	struct amount_sat total = AMOUNT_SAT(0);
 
 	stmt = db_prepare_v2(w->db, SQL("SELECT"
 					"  prev_out_tx"
@@ -712,17 +711,9 @@ bool wallet_has_funds(struct wallet *w,
 			continue;
 		}
 
-		/* Overflow Should Not Happen */
-		if (!amount_sat_add(&total, total, utxo->amount)) {
-			db_fatal(w->db, "Invalid value for %s: %s",
-				 type_to_string(tmpctx,
-						struct bitcoin_outpoint,
-						&utxo->outpoint),
-				 fmt_amount_sat(tmpctx, utxo->amount));
-		}
-
 		/* If we've found enough, answer is yes. */
-		if (amount_sat_greater_eq(total, sats)) {
+		if (!amount_sat_sub(needed, *needed, utxo->amount)) {
+			*needed = AMOUNT_SAT(0);
 			tal_free(stmt);
 			return true;
 		}
@@ -1266,6 +1257,22 @@ void wallet_inflight_add(struct wallet *w, struct channel_inflight *inflight)
 	db_exec_prepared_v2(stmt);
 	assert(!stmt->error);
 	tal_free(stmt);
+}
+
+void wallet_inflight_del(struct wallet *w, const struct channel *chan,
+			 const struct channel_inflight *inflight)
+{
+	struct db_stmt *stmt;
+
+	/* Remove inflight from the channel */
+	stmt = db_prepare_v2(w->db, SQL("DELETE FROM channel_funding_inflights"
+					" WHERE channel_id = ?"
+					"   AND funding_tx_id = ?"
+					"   AND funding_tx_outnum = ?"));
+	db_bind_u64(stmt, chan->dbid);
+	db_bind_txid(stmt, &inflight->funding->outpoint.txid);
+	db_bind_int(stmt, inflight->funding->outpoint.n);
+	db_exec_prepared_v2(take(stmt));
 }
 
 void wallet_inflight_save(struct wallet *w,
@@ -2279,9 +2286,10 @@ void wallet_channel_save(struct wallet *w, struct channel *chan)
 					"  remote_feerate_ppm=?," // 48
 					"  remote_cltv_expiry_delta=?," // 49
 					"  remote_htlc_minimum_msat=?," // 50
-					"  remote_htlc_maximum_msat=?,"
-					"  last_stable_connection=?"
-					" WHERE id=?"));
+					"  remote_htlc_maximum_msat=?," // 51
+					"  last_stable_connection=?," // 52
+					"  require_confirm_inputs_remote=?" // 53
+					" WHERE id=?")); // 54
 	db_bind_u64(stmt, chan->their_shachain.id);
 	if (chan->scid)
 		db_bind_short_channel_id(stmt, chan->scid);
@@ -2378,6 +2386,8 @@ void wallet_channel_save(struct wallet *w, struct channel *chan)
 		db_bind_null(stmt);
 	}
 	db_bind_u64(stmt, chan->last_stable_connection);
+
+	db_bind_int(stmt, chan->req_confirmed_ins[REMOTE]);
 	db_bind_u64(stmt, chan->dbid);
 	db_exec_prepared_v2(take(stmt));
 

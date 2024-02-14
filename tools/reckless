@@ -1,19 +1,23 @@
 #!/usr/bin/env python3
 
-from subprocess import Popen, PIPE, TimeoutExpired, run
 import sys
-import json
-import os
 import argparse
+import copy
+import datetime
+from enum import Enum
+import json
+import logging
+import os
 from pathlib import Path, PosixPath
 import shutil
+from subprocess import Popen, PIPE, TimeoutExpired, run
 import tempfile
+import time
+import types
 from typing import Union
 from urllib.parse import urlparse
 from urllib.request import urlopen
-import logging
-import copy
-from enum import Enum
+import venv
 
 
 logging.basicConfig(
@@ -230,7 +234,7 @@ class Source(Enum):
                 # returns 0 if git repository
                 proc = run(['git', '-C', source, 'rev-parse'],
                            cwd=os.path.realpath(source), stdout=PIPE,
-                           stderr=PIPE, text=True, timeout=3)
+                           stderr=PIPE, text=True, timeout=5)
                 if proc.returncode == 0:
                     return cls(2)
                 return cls(1)
@@ -474,10 +478,10 @@ class Config():
                         # The white space is getting excessive.
                         remove_these_lines.append(n)
                         continue
-            if not addline:
+            if not addline and not write_required:
                 return
             # No write necessary if addline is already in config.
-            if not write_required:
+            if addline and not write_required:
                 for line in original:
                     if line.strip() == addline.strip():
                         return
@@ -490,7 +494,7 @@ class Config():
                             conf_write.write(f'\n{l.strip()}')
                         else:
                             conf_write.write(l.strip())
-                        if addline.strip() == l.strip():
+                        if addline and addline.strip() == l.strip():
                             # addline is idempotent
                             line_exists = True
                 if not line_exists:
@@ -588,16 +592,129 @@ class InferInstall():
         raise Exception(f'plugin entrypoint not found in {self.dir}')
 
 
-python3pip = Installer('python3pip', 'text/x-python', exe='python3',
-                       manager='pip', entry='{name}.py')
-python3pip.add_entrypoint('{name}')
-python3pip.add_entrypoint('__init__.py')
-python3pip.add_dependency_file('requirements.txt')
-python3pip.add_dependency_call(['pip', 'install', '-r', 'requirements.txt'])
+class InstallationFailure(Exception):
+    "raised when pip fails to complete dependency installation"
 
-python3pip3 = python3pip.copy()
-python3pip3.manager = 'pip3'
-python3pip3.dependency_call = [['pip3', 'install', '-r', 'requirements.txt']]
+
+def create_python3_venv(staged_plugin: InstInfo) -> InstInfo:
+    "Create a virtual environment, install dependencies and test plugin."
+    env_path = Path('.venv')
+    env_path_full = Path(staged_plugin.source_loc) / env_path
+    plugin_path = Path(staged_plugin.source_loc) / 'source'
+
+    # subdir should always be None at this point
+    if staged_plugin.subdir:
+        logging.warning("cloned plugin contains subdirectory")
+        plugin_path = plugin_path / staged_plugin.subdir
+
+    if shutil.which('poetry') and staged_plugin.deps == 'pyproject.toml':
+        logging.debug('configuring a python virtual environment (poetry) in '
+                      f'{env_path_full}')
+        # The virtual environment should be located with the plugin.
+        # This installs it to .venv instead of in the global location.
+        mod_poetry_env = os.environ
+        mod_poetry_env['POETRY_VIRTUALENVS_IN_PROJECT'] = 'true'
+        # This ensures poetry installs to a new venv even though one may
+        # already be active (i.e., under CI)
+        if 'VIRTUAL_ENV' in mod_poetry_env:
+            del mod_poetry_env['VIRTUAL_ENV']
+        # to avoid relocating and breaking the venv, symlink pyroject.toml
+        # to the location of poetry's .venv dir
+        (Path(staged_plugin.source_loc) / 'pyproject.toml') \
+            .symlink_to(plugin_path / 'pyproject.toml')
+        (Path(staged_plugin.source_loc) / 'poetry.lock') \
+            .symlink_to(plugin_path / 'poetry.lock')
+
+        # Avoid redirecting stdout in order to stream progress.
+        # Timeout excluded as armv7 grpcio build/install can take 1hr.
+        pip = run(['poetry', 'install', '--no-root'], check=False,
+                  cwd=staged_plugin.source_loc, env=mod_poetry_env)
+
+        (Path(staged_plugin.source_loc) / 'pyproject.toml').unlink()
+        (Path(staged_plugin.source_loc) / 'poetry.lock').unlink()
+
+    else:
+        builder = venv.EnvBuilder(with_pip=True)
+        builder.create(env_path_full)
+        logging.debug('configuring a python virtual environment (pip) in '
+                      f'{env_path_full}')
+        logging.debug(f'virtual environment created in {env_path_full}.')
+        if staged_plugin.deps == 'pyproject.toml':
+            pip = run(['bin/pip', 'install', str(plugin_path)],
+                      check=False, cwd=plugin_path)
+        elif staged_plugin.deps == 'requirements.txt':
+            pip = run([str(env_path_full / 'bin/pip'), 'install', '-r',
+                       str(plugin_path / 'requirements.txt')],
+                      check=False, cwd=plugin_path)
+        else:
+            logging.debug("no python dependency file")
+    if pip and pip.returncode != 0:
+        logging.debug("install to virtual environment failed")
+        print('error encountered installing dependencies')
+        raise InstallationFailure
+
+    staged_plugin.venv = env_path
+    print('dependencies installed successfully')
+    return staged_plugin
+
+
+def create_wrapper(plugin: InstInfo):
+    '''The wrapper will activate the virtual environment for this plugin and
+    then run the plugin from within the same process.'''
+    assert hasattr(plugin, 'venv')
+    venv_full_path = Path(plugin.source_loc) / plugin.venv
+    with open(Path(plugin.source_loc) / plugin.entry, 'w') as wrapper:
+        wrapper.write((f"#!{venv_full_path}/bin/python\n"
+                       "import sys\n"
+                       "import runpy\n\n"
+                       f"if '{plugin.source_loc}/source' not in sys.path:\n"
+                       f"    sys.path.append('{plugin.source_loc}/source')\n"
+                       f"if '{plugin.source_loc}' in sys.path:\n"
+                       f"    sys.path.remove('{plugin.source_loc}')\n"
+                       f"runpy.run_module(\"{plugin.name}\", "
+                       "{}, \"__main__\")"))
+    wrapper_file = Path(plugin.source_loc) / plugin.entry
+    wrapper_file.chmod(0o755)
+
+
+def install_to_python_virtual_environment(cloned_plugin: InstInfo):
+    '''Called during install in place of a subprocess.run list'''
+    # Delete symlink so that a venv wrapper can take it's place
+    (Path(cloned_plugin.source_loc) / cloned_plugin.entry).unlink()
+    # The original entrypoint is imported as a python module - ensure
+    # it has a .py extension. The wrapper can keep the original naming.
+    entry = Path(cloned_plugin.source_loc) / 'source' / cloned_plugin.entry
+    entry.rename(entry.with_suffix('.py'))
+    create_python3_venv(cloned_plugin)
+    if not hasattr(cloned_plugin, 'venv'):
+        raise InstallationFailure
+    logging.debug('virtual environment for cloned plugin: '
+                  f'{cloned_plugin.venv}')
+    create_wrapper(cloned_plugin)
+    return cloned_plugin
+
+
+python3venv = Installer('python3venv', 'text/x-python', exe='python3',
+                        manager='pip', entry='{name}.py')
+python3venv.add_entrypoint('{name}')
+python3venv.add_entrypoint('__init__.py')
+python3venv.add_dependency_file('requirements.txt')
+python3venv.dependency_call = install_to_python_virtual_environment
+
+poetryvenv = Installer('poetryvenv', 'text/x-python', exe='python3',
+                       manager='poetry', entry='{name}.py')
+poetryvenv.add_entrypoint('{name}')
+poetryvenv.add_entrypoint('__init__.py')
+poetryvenv.add_dependency_file('pyproject.toml')
+poetryvenv.dependency_call = install_to_python_virtual_environment
+
+pyprojectViaPip = Installer('pyprojectViaPip', 'text/x-python', exe='python3',
+                            manager='pip', entry='{name}.py')
+pyprojectViaPip.add_entrypoint('{name}')
+pyprojectViaPip.add_entrypoint('__init__.py')
+pyprojectViaPip.add_dependency_file('pyproject.toml')
+pyprojectViaPip.dependency_call = install_to_python_virtual_environment
+
 
 # Nodejs plugin installer
 nodejs = Installer('nodejs', 'application/javascript', exe='node',
@@ -606,7 +723,7 @@ nodejs.add_entrypoint('{name}')
 nodejs.add_dependency_call(['npm', 'install', '--omit=dev'])
 nodejs.add_dependency_file('package.json')
 
-INSTALLERS = {python3pip, python3pip3, nodejs}
+INSTALLERS = [python3venv, poetryvenv, pyprojectViaPip, nodejs]
 
 
 def help_alias(targets: list):
@@ -648,6 +765,71 @@ def _git_clone(src: InstInfo, dest: Union[PosixPath, str]) -> bool:
     return True
 
 
+def get_temp_reckless_dir() -> PosixPath:
+    random_dir = 'reckless-{}'.format(str(hash(os.times()))[-9:])
+    new_path = Path(tempfile.gettempdir()) / random_dir
+    return new_path
+
+
+def add_installation_metadata(installed: InstInfo,
+                              original_request: InstInfo):
+    """Document the install request and installation details for use when
+    updating the plugin."""
+    install_dir = Path(installed.source_loc)
+    assert install_dir.is_dir()
+    data = ('installation date\n'
+            f'{datetime.date.today().isoformat()}\n'
+            'installation time\n'
+            f'{int(time.time())}\n'
+            'original source\n'
+            f'{original_request.source_loc}\n'
+            'requested commit\n'
+            f'{original_request.commit}\n'
+            'installed commit\n'
+            f'{installed.commit}\n')
+    with open(install_dir / '.metadata', 'w') as metadata:
+        metadata.write(data)
+
+
+def _checkout_commit(orig_src: InstInfo,
+                     cloned_src: InstInfo,
+                     cloned_path: PosixPath):
+    # Check out and verify commit/tag if source was a repository
+    if orig_src.srctype in [Source.LOCAL_REPO, Source.GITHUB_REPO,
+                            Source.OTHER_URL]:
+        if orig_src.commit:
+            logging.debug(f"Checking out {orig_src.commit}")
+            checkout = Popen(['git', 'checkout', orig_src.commit],
+                             cwd=str(cloned_path),
+                             stdout=PIPE, stderr=PIPE)
+            checkout.wait()
+            if checkout.returncode != 0:
+                print('failed to checkout referenced '
+                      f'commit {orig_src.commit}')
+                return None
+        else:
+            logging.debug("using latest commit of default branch")
+
+        # Log the commit we actually used (for installation metadata)
+        git = run(['git', 'rev-parse', 'HEAD'], cwd=str(cloned_path),
+                  stdout=PIPE, stderr=PIPE, text=True, check=False, timeout=60)
+        if git.returncode == 0:
+            head_commit = git.stdout.splitlines()[0]
+            logging.debug(f'checked out HEAD: {head_commit}')
+            cloned_src.commit = head_commit
+        else:
+            logging.debug(f'unable to collect commit: {git.stderr}')
+    else:
+        if orig_src.commit:
+            logging.warning("unable to checkout commit/tag on non-repository "
+                            "source")
+        return cloned_path
+
+    if cloned_src.subdir is not None:
+        return Path(cloned_src.source_loc) / cloned_src.subdir
+    return cloned_path
+
+
 def _install_plugin(src: InstInfo) -> Union[InstInfo, None]:
     """make sure the repo exists and clone it."""
     logging.debug(f'Install requested from {src}.')
@@ -656,8 +838,15 @@ def _install_plugin(src: InstInfo) -> Union[InstInfo, None]:
         sys.exit(2)
 
     # Use a unique directory for each cloned repo.
-    clone_path = 'reckless-{}'.format(str(hash(os.times()))[-9:])
-    clone_path = Path(tempfile.gettempdir()) / clone_path
+    tmp_path = get_temp_reckless_dir()
+    if not create_dir(tmp_path):
+        logging.debug(f'failed to create {tmp_path}')
+        return None
+    clone_path = tmp_path / 'clone'
+    if not create_dir(tmp_path):
+        logging.debug(f'failed to create {clone_path}')
+        return None
+    # we rename the original repo here.
     plugin_path = clone_path / src.name
     inst_path = Path(RECKLESS_CONFIG.reckless_dir) / src.name
     if Path(clone_path).exists():
@@ -681,16 +870,11 @@ def _install_plugin(src: InstInfo) -> Union[InstInfo, None]:
     if not cloned_src:
         logging.debug('failed to find plugin after cloning repo.')
         return None
-    if cloned_src.subdir is not None:
-        plugin_path = Path(cloned_src.source_loc) / cloned_src.subdir
-    if cloned_src.commit:
-        logging.debug(f"Checking out commit {cloned_src.commit}")
-        checkout = Popen(['git', 'checkout', cloned_src.commit],
-                         cwd=str(plugin_path), stdout=PIPE, stderr=PIPE)
-        checkout.wait()
-        if checkout.returncode != 0:
-            print(f'failed to checkout referenced commit {cloned_src.commit}')
-            return None
+
+    # If a specific commit or tag was requested, check it out now.
+    plugin_path = _checkout_commit(src, cloned_src, plugin_path)
+    if not plugin_path:
+        return None
 
     # Find a suitable installer
     INSTALLER = None
@@ -709,33 +893,56 @@ def _install_plugin(src: InstInfo) -> Union[InstInfo, None]:
     if not cloned_src.entry:
         # The plugin entrypoint may not be discernable prior to cloning.
         # Need to search the newly cloned directory, not the original
-        cloned_src.src_loc = plugin_path
+        cloned_src.source_loc = plugin_path
+
+    # Relocate plugin to a staging directory prior to testing
+    staging_path = inst_path / 'source'
+    shutil.copytree(str(plugin_path), staging_path)
+    staged_src = cloned_src
+    # Because the source files are copied to a 'source' directory, the
+    # get_inst_details function no longer works. (dir must match plugin name)
+    # Set these manually instead.
+    staged_src.source_loc = str(staging_path.parent)
+    staged_src.srctype = Source.DIRECTORY
+    staged_src.subdir = None
+    # Create symlink in staging tree to redirect to the plugins entrypoint
+    Path(staging_path.parent / cloned_src.entry).\
+        symlink_to(staging_path / cloned_src.entry)
+
     # try it out
     if INSTALLER.dependency_call:
-        for call in INSTALLER.dependency_call:
-            logging.debug(f"Install: invoking '{' '.join(call)}'")
-            if logging.root.level < logging.WARNING:
-                pip = Popen(call, cwd=plugin_path, text=True)
-            else:
-                pip = Popen(call, cwd=plugin_path, stdout=PIPE, stderr=PIPE,
-                            text=True)
-            pip.wait()
-            # FIXME: handle output of multiple calls
-
-        if pip.returncode == 0:
-            print('dependencies installed successfully')
+        if isinstance(INSTALLER.dependency_call, types.FunctionType):
+            try:
+                staged_src = INSTALLER.dependency_call(staged_src)
+            except InstallationFailure:
+                return None
         else:
-            print('error encountered installing dependencies')
-            if pip.stdout:
-                logging.debug(pip.stdout.read())
-            return None
+            for call in INSTALLER.dependency_call:
+                logging.debug(f"Install: invoking '{' '.join(call)}'")
+                if logging.root.level < logging.WARNING:
+                    pip = Popen(call, cwd=staging_path, text=True)
+                else:
+                    pip = Popen(call, cwd=staging_path, stdout=PIPE,
+                                stderr=PIPE, text=True)
+                pip.wait()
+                # FIXME: handle output of multiple calls
+
+            if pip.returncode == 0:
+                print('dependencies installed successfully')
+            else:
+                print('error encountered installing dependencies')
+                if pip.stdout:
+                    logging.debug(pip.stdout.read())
+                remove_dir(clone_path)
+                remove_dir(inst_path)
+                return None
     test_log = []
     try:
-        test = run([Path(plugin_path).joinpath(cloned_src.entry)],
-                   cwd=str(plugin_path), stdout=PIPE, stderr=PIPE,
-                   text=True, timeout=3)
-        for line in test.stderr:
-            test_log.append(line.strip('\n'))
+        test = run([Path(staged_src.source_loc).joinpath(staged_src.entry)],
+                   cwd=str(staging_path), stdout=PIPE, stderr=PIPE,
+                   text=True, timeout=10)
+        for line in test.stderr.splitlines():
+            test_log.append(line)
         returncode = test.returncode
     except TimeoutExpired:
         # If the plugin is still running, it's assumed to be okay.
@@ -745,24 +952,31 @@ def _install_plugin(src: InstInfo) -> Union[InstInfo, None]:
         for line in test_log:
             logging.debug(f'  {line}')
         print('plugin testing failed')
+        remove_dir(clone_path)
+        remove_dir(inst_path)
         return None
 
-    # Find this cute little plugin a forever home
-    shutil.copytree(str(plugin_path), inst_path)
+    add_installation_metadata(staged_src, src)
     print(f'plugin installed: {inst_path}')
     remove_dir(clone_path)
-    return cloned_src
+    return staged_src
 
 
 def install(plugin_name: str):
     """downloads plugin from source repos, installs and activates plugin"""
     assert isinstance(plugin_name, str)
-    logging.debug(f"Searching for {plugin_name}")
-    src = search(plugin_name)
-    # print('src:', src)
+    # Specify a tag or commit to checkout by adding @<tag> to plugin name
+    if '@' in plugin_name:
+        logging.debug("testing for a commit/tag in plugin name")
+        name, commit = plugin_name.split('@', 1)
+    else:
+        name = plugin_name
+        commit = None
+    logging.debug(f"Searching for {name}")
+    src = search(name)
     if src:
+        src.commit = commit
         logging.debug(f'Retrieving {src.name} from {src.source_loc}')
-        # if not _install_plugin(src):
         installed = _install_plugin(src)
         if not installed:
             print('installation aborted')
@@ -927,7 +1141,7 @@ def load_config(reckless_dir: Union[str, None] = None,
     net_conf = None
     # Does the lightning-cli already reference an explicit config?
     try:
-        active_config = lightning_cli('listconfigs', timeout=3)['configs']
+        active_config = lightning_cli('listconfigs', timeout=10)['configs']
         if 'conf' in active_config:
             net_conf = LightningBitcoinConfig(path=active_config['conf']
                                               ['value_str'])

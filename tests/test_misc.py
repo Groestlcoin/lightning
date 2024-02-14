@@ -295,15 +295,16 @@ def test_htlc_sig_persistence(node_factory, bitcoind, executor):
     _, txid, blocks = l1.wait_for_onchaind_tx('OUR_HTLC_TIMEOUT_TO_US',
                                               'THEIR_UNILATERAL/OUR_HTLC')
     assert blocks == 5
+
     bitcoind.generate_block(5)
     bitcoind.generate_block(1, wait_for_mempool=txid)
     l1.daemon.wait_for_logs([
         r'Owning output . (\d+)sat .SEGWIT. txid',
     ])
 
-    # We should now have a) the change from funding, b) the
-    # unilateral to us, and c) the HTLC respend to us
-    assert len(l1.rpc.listfunds()['outputs']) == 3
+    # We should now have 1) the unilateral to us, and b) the HTLC respend to us
+    # and maybe (c) change.
+    assert 2 <= len(l1.rpc.listfunds()['outputs']) <= 3
 
 
 def test_htlc_out_timeout(node_factory, bitcoind, executor):
@@ -358,7 +359,14 @@ def test_htlc_out_timeout(node_factory, bitcoind, executor):
     # We hit deadline (we give 1 block grace), then mined another.
     assert blocks2 == -2
 
-    bitcoind.generate_block(1, wait_for_mempool=txid)
+    # If we try to reuse the same output as we used for the anchor spend, then
+    # bitcoind can reject it.  In that case we'll try again after we get change
+    # from anchor spend.
+    if txid not in bitcoind.rpc.getrawmempool():
+        bitcoind.generate_block(1)
+        bitcoind.generate_block(1, wait_for_mempool=1)
+    else:
+        bitcoind.generate_block(1)
 
     rawtx, txid, blocks = l1.wait_for_onchaind_tx('OUR_DELAYED_RETURN_TO_WALLET',
                                                   'OUR_HTLC_TIMEOUT_TX/DELAYED_OUTPUT_TO_US')
@@ -385,6 +393,8 @@ def test_htlc_in_timeout(node_factory, bitcoind, executor):
                                options={'dev-no-reconnect': None},
                                feerates=(7500, 7500, 7500, 7500))
     l2 = node_factory.get_node()
+    # Give it some sats for anchor spend!
+    l2.fundwallet(25000, mine_block=False)
 
     l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
     chanid, _ = l1.fundchannel(l2, 10**6)
@@ -421,7 +431,16 @@ def test_htlc_in_timeout(node_factory, bitcoind, executor):
     _, txid, blocks = l2.wait_for_onchaind_tx('OUR_HTLC_SUCCESS_TX',
                                               'OUR_UNILATERAL/THEIR_HTLC')
     assert blocks == 0
-    bitcoind.generate_block(1, wait_for_mempool=txid)
+
+    # If we try to reuse the same output as we used for the anchor spend, then
+    # bitcoind can reject it.  In that case we'll try again after we get change
+    # from anchor spend.
+    if txid not in bitcoind.rpc.getrawmempool():
+        bitcoind.generate_block(1)
+        bitcoind.generate_block(1, wait_for_mempool=1)
+    else:
+        bitcoind.generate_block(1)
+
     rawtx, txid, blocks = l2.wait_for_onchaind_tx('OUR_DELAYED_RETURN_TO_WALLET',
                                                   'OUR_HTLC_SUCCESS_TX/DELAYED_OUTPUT_TO_US')
     assert blocks == 4
@@ -1587,8 +1606,8 @@ def test_ipv4_and_ipv6(node_factory):
 def test_feerates(node_factory, anchors):
     opts = {'log-level': 'io',
             'dev-no-fake-fees': True}
-    if anchors:
-        opts['experimental-anchors'] = None
+    if anchors is False:
+        opts['dev-force-features'] = "-23"
 
     l1 = node_factory.get_node(options=opts, start=False)
     l1.daemon.rpcproxy.mock_rpc('estimatesmartfee', {
@@ -2040,8 +2059,8 @@ def test_bitcoind_fail_first(node_factory, bitcoind):
 def test_bitcoind_feerate_floor(node_factory, bitcoind, anchors):
     """Don't return a feerate less than minrelaytxfee/mempoolminfee."""
     opts = {}
-    if anchors:
-        opts['experimental-anchors'] = None
+    if anchors is False:
+        opts['dev-force-features'] = "-23"
     l1 = node_factory.get_node(options=opts)
 
     assert l1.rpc.feerates('perkb') == {
@@ -2251,6 +2270,7 @@ def test_list_features_only(node_factory):
                 'option_payment_secret/even',
                 'option_basic_mpp/odd',
                 'option_support_large_channel/odd',
+                'option_anchors_zero_fee_htlc_tx/odd',
                 'option_route_blinding/odd',
                 'option_shutdown_anysegwit/odd',
                 'option_channel_type/odd',
@@ -3876,9 +3896,15 @@ def test_set_feerate_offset(node_factory, bitcoind):
 
     l1.pay(l2, 200000000)
     # First payment causes fee update, which should reflect the feerate offset.
-    l1.daemon.wait_for_log('lightningd: update_feerates: feerate = 11100, '
-                           'min=1875, max=150000, penalty=7500')
-    l2.daemon.wait_for_log('peer updated fee to 11100')
+    if 'anchors_zero_fee_htlc_tx/even' in only_one(l1.rpc.listpeerchannels()['channels'])['channel_type']['names']:
+        feerate = 3850
+        min_feerate = 253
+    else:
+        feerate = 11100
+        min_feerate = 1875
+    l1.daemon.wait_for_log(f'lightningd: update_feerates: feerate = {feerate}, '
+                           f'min={min_feerate}, max=150000, penalty=7500')
+    l2.daemon.wait_for_log(f'peer updated fee to {feerate}')
     l2.pay(l1, 100000000)
 
     # Now shutdown cleanly.

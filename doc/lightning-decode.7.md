@@ -37,7 +37,7 @@ If **type** is "bolt12 offer", and **valid** is *true*:
   - **offer\_node\_id** (pubkey): public key of the offering node
   - **offer\_chains** (array of hashs, optional): which blockchains this offer is for (missing implies bitcoin mainnet only):
     - the genesis blockhash
-  - **offer\_metadata** (hex, optional): any metadata the creater of the offer includes
+  - **offer\_metadata** (hex, optional): any metadata the creator of the offer includes
   - **offer\_currency** (string, optional): ISO 4217 code of the currency (missing implies Bitcoin) (always 3 characters)
   - **currency\_minor\_unit** (u32, optional): the number of decimal places to apply to amount (if currency known)
   - **offer\_amount** (u64, optional): the amount in the `offer_currency` adjusted by `currency_minor_unit`, if any
@@ -57,12 +57,12 @@ If **type** is "bolt12 offer", and **valid** is *true*:
     - **period** (u32): how many `time_unit` per payment period
     - **time\_unit\_name** (string, optional): the name of `time_unit` (if valid)
     - **basetime** (u64, optional): period starts at this UNIX timestamp
-    - **start\_any\_period** (u64, optional): you can start at any period (only if `basetime` present)
+    - **start\_any\_period** (boolean, optional): you can start at any period (only if `basetime` present)
     - **limit** (u32, optional): maximum period number for recurrence
     - **paywindow** (object, optional): when within a period will payment be accepted (default is prior and during the period):
       - **seconds\_before** (u32): seconds prior to period start
       - **seconds\_after** (u32): seconds after to period start
-      - **proportional\_amount** (boolean, optional): amount should be scaled if payed after period start (always *true*)
+      - **proportional\_amount** (boolean, optional): amount should be scaled if paid after period start (always *true*)
   - **unknown\_offer\_tlvs** (array of objects, optional): Any extra fields we didn't know how to parse:
     - **type** (u64): The type
     - **length** (u64): The length
@@ -109,12 +109,12 @@ If **type** is "bolt12 invoice\_request", and **valid** is *true*:
     - **period** (u32): how many `time_unit` per payment period
     - **time\_unit\_name** (string, optional): the name of `time_unit` (if valid)
     - **basetime** (u64, optional): period starts at this UNIX timestamp
-    - **start\_any\_period** (u64, optional): you can start at any period (only if `basetime` present)
+    - **start\_any\_period** (boolean, optional): you can start at any period (only if `basetime` present)
     - **limit** (u32, optional): maximum period number for recurrence
     - **paywindow** (object, optional): when within a period will payment be accepted (default is prior and during the period):
       - **seconds\_before** (u32): seconds prior to period start
       - **seconds\_after** (u32): seconds after to period start
-      - **proportional\_amount** (boolean, optional): amount should be scaled if payed after period start (always *true*)
+      - **proportional\_amount** (boolean, optional): amount should be scaled if paid after period start (always *true*)
   - **invreq\_chain** (hex, optional): which blockchain this offer is for (missing implies bitcoin mainnet only) (always 64 characters)
   - **invreq\_amount\_msat** (msat, optional): the amount the invoice should be for
   - **invreq\_features** (hex, optional): the feature bits of the invoice\_request
@@ -186,12 +186,12 @@ If **type** is "bolt12 invoice", and **valid** is *true*:
     - **period** (u32): how many `time_unit` per payment period
     - **time\_unit\_name** (string, optional): the name of `time_unit` (if valid)
     - **basetime** (u64, optional): period starts at this UNIX timestamp
-    - **start\_any\_period** (u64, optional): you can start at any period (only if `basetime` present)
+    - **start\_any\_period** (boolean, optional): you can start at any period (only if `basetime` present)
     - **limit** (u32, optional): maximum period number for recurrence
     - **paywindow** (object, optional): when within a period will payment be accepted (default is prior and during the period):
       - **seconds\_before** (u32): seconds prior to period start
       - **seconds\_after** (u32): seconds after to period start
-      - **proportional\_amount** (boolean, optional): amount should be scaled if payed after period start (always *true*)
+      - **proportional\_amount** (boolean, optional): amount should be scaled if paid after period start (always *true*)
   - **invreq\_chain** (hex, optional): which blockchain this offer is for (missing implies bitcoin mainnet only) (always 64 characters)
   - **invreq\_amount\_msat** (msat, optional): the amount the invoice should be for
   - **invreq\_features** (hex, optional): the feature bits of the invoice\_request
@@ -310,4 +310,4 @@ RESOURCES
 
 Main web site: <https://github.com/ElementsProject/lightning>
 
-[comment]: # ( SHA256STAMP:b02cea039b40deb3f248f8cac575602a3fe34d1d85dbf6fdb8a0b63b778e5883)
+[comment]: # ( SHA256STAMP:59bcc38bf3c4b2aa6f4258c1327d16171c4ba37276ac3a96528a2f12a2ef3ad5)

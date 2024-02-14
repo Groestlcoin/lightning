@@ -388,7 +388,7 @@ use the RPC call lightning-setchannel(7).
 
   Explicitly control the usage of discovered public IPs in `node_announcement` updates.
   Default: 'auto' - Only if we don't have anything else to announce.
-  Note: You also need to open TCP port 9735 on your router towords your node.
+  Note: You also need to open TCP port 9735 on your router towards your node.
   Note: Will always be disabled if you use 'always-use-proxy'.
 
 * **announce-addr-discovered-port**=*PORT*
@@ -462,7 +462,6 @@ specified multuple times. (Added in v23.08).
 
   This is the amount of funds to keep in the wallet to close anchor channels (which don't carry their own transaction fees).  It defaults to 25000sat, and is only maintained if there are any anchor channels (or, when opening an anchor channel).  This amount may be insufficient for multiple closes at once, however.
 
-
 ### Cleanup control options:
 
 * **autoclean-cycle**=*SECONDS* [plugin `autoclean`, *dynamic*]
@@ -529,7 +528,7 @@ IP discovery is only active if no other addresses are announced.
 You can instead use *addr* to override this (eg. to change the port), or
 precisely control where to bind and what to announce with the
 *bind-addr* and *announce-addr* options. These will **disable** the
-*autolisten* logic, so you must specifiy exactly what you want!
+*autolisten* logic, so you must specify exactly what you want!
 
 * **addr**=*\[IPADDRESS\[:PORT\]\]|autotor:TORIPADDRESS\[:SERVICEPORT\]\[/torport=TORPORT\]|statictor:TORIPADDRESS\[:SERVICEPORT\]\[/torport=TORPORT\]\[/torblob=\[blob\]\]|HOSTNAME\[:PORT\]*
 
@@ -692,7 +691,7 @@ is currently unspecified.
 * **clear-plugins**
 
   This option clears all *plugin*, *important-plugin*, and *plugin-dir* options
-preceeding it,
+preceding it,
 including the default built-in plugin directory. You can still add
 *plugin-dir*, *plugin*, and *important-plugin* options following this
 and they will have the normal effect.
@@ -793,15 +792,6 @@ protocol to update channel types.  At the moment, we only support setting
 this option.
 
 
-* **experimental-anchors**
-
-  Specifying this option turns on the `option_anchors_zero_fee_htlc_tx`
-feature, meaning we can open anchor-based channels.  This will become
-the default for new channels in future, after more testing.  Anchor-based
-channels use larger commitment transactions, with the trade-off that they
-don't have to use a worst-case fee, but can bump the commitment transaction
-if it's needed.  Note that this means that we need to keep
-some funds aside: see `min-emergency-msat`.
 
 BUGS
 ----

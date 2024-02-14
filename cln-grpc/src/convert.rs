@@ -1638,6 +1638,30 @@ impl From<responses::ListforwardsResponse> for pb::ListforwardsResponse {
 }
 
 #[allow(unused_variables)]
+impl From<responses::ListoffersOffers> for pb::ListoffersOffers {
+    fn from(c: responses::ListoffersOffers) -> Self {
+        Self {
+            offer_id: <Sha256 as AsRef<[u8]>>::as_ref(&c.offer_id).to_vec(), // Rule #2 for type hash
+            active: c.active, // Rule #2 for type boolean
+            single_use: c.single_use, // Rule #2 for type boolean
+            bolt12: c.bolt12, // Rule #2 for type string
+            used: c.used, // Rule #2 for type boolean
+            label: c.label, // Rule #2 for type string?
+        }
+    }
+}
+
+#[allow(unused_variables)]
+impl From<responses::ListoffersResponse> for pb::ListoffersResponse {
+    fn from(c: responses::ListoffersResponse) -> Self {
+        Self {
+            // Field: ListOffers.offers[]
+            offers: c.offers.into_iter().map(|i| i.into()).collect(), // Rule #3 for type ListoffersOffers
+        }
+    }
+}
+
+#[allow(unused_variables)]
 impl From<responses::ListpaysPays> for pb::ListpaysPays {
     fn from(c: responses::ListpaysPays) -> Self {
         Self {
@@ -1690,6 +1714,21 @@ impl From<responses::ListhtlcsResponse> for pb::ListhtlcsResponse {
         Self {
             // Field: ListHtlcs.htlcs[]
             htlcs: c.htlcs.into_iter().map(|i| i.into()).collect(), // Rule #3 for type ListhtlcsHtlcs
+        }
+    }
+}
+
+#[allow(unused_variables)]
+impl From<responses::OfferResponse> for pb::OfferResponse {
+    fn from(c: responses::OfferResponse) -> Self {
+        Self {
+            offer_id: <Sha256 as AsRef<[u8]>>::as_ref(&c.offer_id).to_vec(), // Rule #2 for type hash
+            active: c.active, // Rule #2 for type boolean
+            single_use: c.single_use, // Rule #2 for type boolean
+            bolt12: c.bolt12, // Rule #2 for type string
+            used: c.used, // Rule #2 for type boolean
+            created: c.created, // Rule #2 for type boolean
+            label: c.label, // Rule #2 for type string?
         }
     }
 }
@@ -2468,6 +2507,16 @@ impl From<requests::ListforwardsRequest> for pb::ListforwardsRequest {
 }
 
 #[allow(unused_variables)]
+impl From<requests::ListoffersRequest> for pb::ListoffersRequest {
+    fn from(c: requests::ListoffersRequest) -> Self {
+        Self {
+            offer_id: c.offer_id.map(|v| <Sha256 as AsRef<[u8]>>::as_ref(&v).to_vec()), // Rule #2 for type hash?
+            active_only: c.active_only, // Rule #2 for type boolean?
+        }
+    }
+}
+
+#[allow(unused_variables)]
 impl From<requests::ListpaysRequest> for pb::ListpaysRequest {
     fn from(c: requests::ListpaysRequest) -> Self {
         Self {
@@ -2483,6 +2532,25 @@ impl From<requests::ListhtlcsRequest> for pb::ListhtlcsRequest {
     fn from(c: requests::ListhtlcsRequest) -> Self {
         Self {
             id: c.id, // Rule #2 for type string?
+        }
+    }
+}
+
+#[allow(unused_variables)]
+impl From<requests::OfferRequest> for pb::OfferRequest {
+    fn from(c: requests::OfferRequest) -> Self {
+        Self {
+            amount: c.amount, // Rule #2 for type string
+            description: c.description, // Rule #2 for type string
+            issuer: c.issuer, // Rule #2 for type string?
+            label: c.label, // Rule #2 for type string?
+            quantity_max: c.quantity_max, // Rule #2 for type u64?
+            absolute_expiry: c.absolute_expiry, // Rule #2 for type u64?
+            recurrence: c.recurrence, // Rule #2 for type string?
+            recurrence_base: c.recurrence_base, // Rule #2 for type string?
+            recurrence_paywindow: c.recurrence_paywindow, // Rule #2 for type string?
+            recurrence_limit: c.recurrence_limit, // Rule #2 for type u64?
+            single_use: c.single_use, // Rule #2 for type boolean?
         }
     }
 }
@@ -3218,6 +3286,16 @@ impl From<pb::ListforwardsRequest> for requests::ListforwardsRequest {
 }
 
 #[allow(unused_variables)]
+impl From<pb::ListoffersRequest> for requests::ListoffersRequest {
+    fn from(c: pb::ListoffersRequest) -> Self {
+        Self {
+            offer_id: c.offer_id.map(|v| Sha256::from_slice(&v).unwrap()), // Rule #1 for type hash?
+            active_only: c.active_only, // Rule #1 for type boolean?
+        }
+    }
+}
+
+#[allow(unused_variables)]
 impl From<pb::ListpaysRequest> for requests::ListpaysRequest {
     fn from(c: pb::ListpaysRequest) -> Self {
         Self {
@@ -3233,6 +3311,25 @@ impl From<pb::ListhtlcsRequest> for requests::ListhtlcsRequest {
     fn from(c: pb::ListhtlcsRequest) -> Self {
         Self {
             id: c.id, // Rule #1 for type string?
+        }
+    }
+}
+
+#[allow(unused_variables)]
+impl From<pb::OfferRequest> for requests::OfferRequest {
+    fn from(c: pb::OfferRequest) -> Self {
+        Self {
+            amount: c.amount, // Rule #1 for type string
+            description: c.description, // Rule #1 for type string
+            issuer: c.issuer, // Rule #1 for type string?
+            label: c.label, // Rule #1 for type string?
+            quantity_max: c.quantity_max, // Rule #1 for type u64?
+            absolute_expiry: c.absolute_expiry, // Rule #1 for type u64?
+            recurrence: c.recurrence, // Rule #1 for type string?
+            recurrence_base: c.recurrence_base, // Rule #1 for type string?
+            recurrence_paywindow: c.recurrence_paywindow, // Rule #1 for type string?
+            recurrence_limit: c.recurrence_limit, // Rule #1 for type u64?
+            single_use: c.single_use, // Rule #1 for type boolean?
         }
     }
 }

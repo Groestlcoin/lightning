@@ -759,9 +759,9 @@ static char *opt_force_featureset(const char *optarg,
 			return "Invalid feature number";
 
 		f = feature_set_for_feature(NULL, n);
-		if (strstarts(optarg, "-")
-		    && !feature_set_sub(ld->our_features, take(f)))
-			return "Feature unknown";
+		if (strstarts(optarg, "-")) {
+			feature_set_sub(ld->our_features, take(f));
+		}
 
 		if (strstarts(optarg, "+")
 		    && !feature_set_or(ld->our_features, take(f)))
@@ -804,6 +804,10 @@ static void dev_register_opts(struct lightningd *ld)
 		     opt_set_invbool,
 		     &ld->reconnect,
 		     "Disable automatic reconnect-attempts by this node, but accept incoming");
+	clnopt_noarg("--dev-no-reconnect-private", OPT_DEV,
+		     opt_set_invbool,
+		     &ld->reconnect_private,
+		     "Disable automatic reconnect-attempts to peers with private channel(s) only, but accept incoming");
 	clnopt_noarg("--dev-fast-reconnect", OPT_DEV,
 		     opt_set_bool,
 		     &ld->dev_fast_reconnect,
@@ -1262,10 +1266,7 @@ static char *opt_set_quiesce(struct lightningd *ld)
 
 static char *opt_set_anchor_zero_fee_htlc_tx(struct lightningd *ld)
 {
-	/* Requires static_remotekey, but we always set that */
-	feature_set_or(ld->our_features,
-		       take(feature_set_for_feature(NULL,
-						    OPTIONAL_FEATURE(OPT_ANCHORS_ZERO_FEE_HTLC_TX))));
+	/* FIXME: deprecated_apis! */
 	return NULL;
 }
 
@@ -1473,8 +1474,7 @@ static void register_opts(struct lightningd *ld)
 				 " channels.");
 	opt_register_early_noarg("--experimental-anchors",
 				 opt_set_anchor_zero_fee_htlc_tx, ld,
-				 "EXPERIMENTAL: enable option_anchors_zero_fee_htlc_tx"
-				 " to open zero-fee-anchor channels");
+				 opt_hidden);
 	clnopt_witharg("--announce-addr-dns", OPT_EARLY|OPT_SHOWBOOL,
 		       opt_set_bool_arg, opt_show_bool,
 		       &ld->announce_dns,
@@ -1792,6 +1792,13 @@ void handle_early_opts(struct lightningd *ld, int argc, char *argv[])
 		ld->config = testnet_config;
 	else
 		ld->config = mainnet_config;
+
+	/* No anchors if we're elements */
+	if (chainparams->is_elements) {
+		feature_set_sub(ld->our_features,
+				feature_set_for_feature(tmpctx,
+							OPTIONAL_FEATURE(OPT_ANCHORS_ZERO_FEE_HTLC_TX)));
+	}
 
 	/* Set the ln_port given from chainparams */
 	ld->config.ip_discovery_port = chainparams->ln_port;

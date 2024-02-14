@@ -254,6 +254,11 @@ class NodeStub(object):
                 request_serializer=node__pb2.ListforwardsRequest.SerializeToString,
                 response_deserializer=node__pb2.ListforwardsResponse.FromString,
                 )
+        self.ListOffers = channel.unary_unary(
+                '/cln.Node/ListOffers',
+                request_serializer=node__pb2.ListoffersRequest.SerializeToString,
+                response_deserializer=node__pb2.ListoffersResponse.FromString,
+                )
         self.ListPays = channel.unary_unary(
                 '/cln.Node/ListPays',
                 request_serializer=node__pb2.ListpaysRequest.SerializeToString,
@@ -263,6 +268,11 @@ class NodeStub(object):
                 '/cln.Node/ListHtlcs',
                 request_serializer=node__pb2.ListhtlcsRequest.SerializeToString,
                 response_deserializer=node__pb2.ListhtlcsResponse.FromString,
+                )
+        self.Offer = channel.unary_unary(
+                '/cln.Node/Offer',
+                request_serializer=node__pb2.OfferRequest.SerializeToString,
+                response_deserializer=node__pb2.OfferResponse.FromString,
                 )
         self.Ping = channel.unary_unary(
                 '/cln.Node/Ping',
@@ -617,6 +627,12 @@ class NodeServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def ListOffers(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
     def ListPays(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
@@ -624,6 +640,12 @@ class NodeServicer(object):
         raise NotImplementedError('Method not implemented!')
 
     def ListHtlcs(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def Offer(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -944,6 +966,11 @@ def add_NodeServicer_to_server(servicer, server):
                     request_deserializer=node__pb2.ListforwardsRequest.FromString,
                     response_serializer=node__pb2.ListforwardsResponse.SerializeToString,
             ),
+            'ListOffers': grpc.unary_unary_rpc_method_handler(
+                    servicer.ListOffers,
+                    request_deserializer=node__pb2.ListoffersRequest.FromString,
+                    response_serializer=node__pb2.ListoffersResponse.SerializeToString,
+            ),
             'ListPays': grpc.unary_unary_rpc_method_handler(
                     servicer.ListPays,
                     request_deserializer=node__pb2.ListpaysRequest.FromString,
@@ -953,6 +980,11 @@ def add_NodeServicer_to_server(servicer, server):
                     servicer.ListHtlcs,
                     request_deserializer=node__pb2.ListhtlcsRequest.FromString,
                     response_serializer=node__pb2.ListhtlcsResponse.SerializeToString,
+            ),
+            'Offer': grpc.unary_unary_rpc_method_handler(
+                    servicer.Offer,
+                    request_deserializer=node__pb2.OfferRequest.FromString,
+                    response_serializer=node__pb2.OfferResponse.SerializeToString,
             ),
             'Ping': grpc.unary_unary_rpc_method_handler(
                     servicer.Ping,
@@ -1841,6 +1873,23 @@ class Node(object):
             insecure, call_credentials, compression, wait_for_ready, timeout, metadata)
 
     @staticmethod
+    def ListOffers(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(request, target, '/cln.Node/ListOffers',
+            node__pb2.ListoffersRequest.SerializeToString,
+            node__pb2.ListoffersResponse.FromString,
+            options, channel_credentials,
+            insecure, call_credentials, compression, wait_for_ready, timeout, metadata)
+
+    @staticmethod
     def ListPays(request,
             target,
             options=(),
@@ -1871,6 +1920,23 @@ class Node(object):
         return grpc.experimental.unary_unary(request, target, '/cln.Node/ListHtlcs',
             node__pb2.ListhtlcsRequest.SerializeToString,
             node__pb2.ListhtlcsResponse.FromString,
+            options, channel_credentials,
+            insecure, call_credentials, compression, wait_for_ready, timeout, metadata)
+
+    @staticmethod
+    def Offer(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(request, target, '/cln.Node/Offer',
+            node__pb2.OfferRequest.SerializeToString,
+            node__pb2.OfferResponse.FromString,
             options, channel_credentials,
             insecure, call_credentials, compression, wait_for_ready, timeout, metadata)
 

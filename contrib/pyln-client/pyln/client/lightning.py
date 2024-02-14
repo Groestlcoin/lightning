@@ -410,7 +410,7 @@ class UnixDomainSocketRpc(object):
         sock.close()
 
         if not isinstance(resp, dict):
-            raise ValueError("Malformed response, response is not a dictionary %s." % resp)
+            raise TypeError("Malformed response, response is not a dictionary %s." % resp)
         elif "error" in resp:
             raise RpcError(method, payload, resp['error'])
         elif "result" not in resp:
@@ -1244,6 +1244,16 @@ class LightningRpc(UnixDomainSocketRpc):
             "subcommand": "rescan"
         }
         return self.call("plugin", payload)
+
+    def sendcustommsg(self, peer_id, message):
+        """
+        Sending custom message {message} to {peer_id}.
+        """
+        payload = {
+            "node_id": peer_id,
+            "msg": message
+        }
+        return self.call("sendcustommsg", payload)
 
     def sendpay(self, route, payment_hash, label=None, amount_msat=None, bolt11=None, payment_secret=None, partid=None, groupid=None, payment_metadata=None):
         """
