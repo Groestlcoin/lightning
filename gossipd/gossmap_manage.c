@@ -276,6 +276,10 @@ static void remove_channel(struct gossmap_manage *gm,
 
 		node = gossmap_nth_node(gossmap, chan, dir);
 
+		/* Don't get confused if a node has a channel with self! */
+		if (dir == 1 && node == gossmap_nth_node(gossmap, chan, 0))
+			continue;
+
 		/* If there was a node announcement, we might need to fix things up. */
 		if (!gossmap_node_announced(node))
 			continue;
@@ -642,8 +646,7 @@ void gossmap_manage_handle_get_txout_reply(struct gossmap_manage *gm, const u8 *
 		goto bad;
 	}
 
-	if (!memeq(outscript, tal_bytelen(outscript),
-		   pca->scriptpubkey, tal_bytelen(pca->scriptpubkey))) {
+	if (!tal_arr_eq(outscript, pca->scriptpubkey)) {
 		peer_warning(gm, pca->source_peer,
 			     "channel_announcement: txout %s expected %s, got %s",
 			     short_channel_id_to_str(tmpctx, &scid),
@@ -1147,7 +1150,6 @@ static void kill_spent_channel(struct gossmap_manage *gm,
 void gossmap_manage_new_block(struct gossmap_manage *gm, u32 new_blockheight)
 {
 	u64 idx;
-	struct gossmap *gossmap = gossmap_manage_get_gossmap(gm);
 
 	for (struct pending_cannounce *pca = uintmap_first(&gm->early_ann_map.map, &idx);
 	     pca != NULL;
@@ -1177,9 +1179,14 @@ void gossmap_manage_new_block(struct gossmap_manage *gm, u32 new_blockheight)
 	}
 
 	for (size_t i = 0; i < tal_count(gm->dying_channels); i++) {
+		struct gossmap *gossmap;
+
 		if (gm->dying_channels[i].deadline > new_blockheight)
 			continue;
 
+		/* Refresh gossmap each time in case we move things in the loop:
+		 * in particular, we might move a node_announcement twice! */
+		gossmap = gossmap_manage_get_gossmap(gm);
 		kill_spent_channel(gm, gossmap, gm->dying_channels[i].scid);
 		gossip_store_del(gm->daemon->gs,
 				 gm->dying_channels[i].gossmap_offset,

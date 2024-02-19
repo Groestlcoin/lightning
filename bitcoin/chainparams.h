@@ -27,9 +27,9 @@ struct chainparams {
 	 *
 	 * The default TCP port depends on the network used. The most common networks are:
 	 *
-	 * - Groestlcoin mainet with port number 9735 or the corresponding hexadecimal `0x2607`;
+	 * - Groestlcoin mainnet with port number 9735 or the corresponding hexadecimal `0x2607`;
 	 * - Groestlcoin testnet with port number 19735 (`0x4D17`);
-	 * - Groestlcoin signet with port number 39735 (`0xF87`).
+	 * - Groestlcoin signet with port number 39735 (`0x9B37`).
 	 */
 	const int ln_port;
 	const char *cli;

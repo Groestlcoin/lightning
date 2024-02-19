@@ -135,6 +135,16 @@ static struct command_result *addgossip_done(struct command *cmd,
 	 * happen later. */
 	pay_flow_finished_adding_gossip(adg->pf);
 
+	bool gossmap_changed = gossmap_refresh(pay_plugin->gossmap, NULL);
+
+	if (pay_plugin->gossmap == NULL)
+		plugin_err(pay_plugin->plugin, "Failed to refresh gossmap: %s",
+			   strerror(errno));
+
+	if (gossmap_changed)
+		uncertainty_network_update(pay_plugin->gossmap,
+					   pay_plugin->chan_extra_map);
+
 	return command_still_pending(cmd);
 }
 
@@ -424,7 +434,7 @@ const char *try_paying(const tal_t *ctx,
 			       payment,
 			       remaining, feebudget,
 			       /* is entire payment? */
-			       amount_msat_eq(payment->total_delivering, AMOUNT_MSAT(0)),
+			       amount_msat_eq(remaining, AMOUNT_MSAT(0)),
 			       ecode);
 	gossmap_remove_localmods(pay_plugin->gossmap, payment->local_gossmods);
 
@@ -708,7 +718,7 @@ payment_listsendpays_previous(
 
 		/* If we decide to create a new group, we base it on max_group_id */
 		if (groupid > max_group_id)
-			max_group_id = 1;
+			max_group_id = groupid;
 
 		/* status could be completed, pending or failed */
 		if (streq(status, "complete")) {
@@ -739,6 +749,15 @@ payment_listsendpays_previous(
 			pending_group_id = groupid;
 			if (partid > max_pending_partid)
 				max_pending_partid = partid;
+
+			if (!amount_msat_add(&pending_msat, pending_msat,
+					     this_msat) ||
+			    !amount_msat_add(&pending_sent, pending_sent,
+					     this_sent))
+				plugin_err(pay_plugin->plugin,
+					   "%s (line %d) msat overflow.",
+					   __PRETTY_FUNCTION__, __LINE__);
+
 		} else
 			assert(streq(status, "failed"));
 	}
