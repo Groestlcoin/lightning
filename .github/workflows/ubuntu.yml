@@ -12,7 +12,7 @@ jobs:
       - name: create release folder
         run: mkdir release
       - name: Building using the builder image
-        run: sudo docker run --rm -v $(pwd):/build -t cl-repro-focal
+        run: sudo docker run --rm -v $(pwd):/repo -t cl-repro-focal
       - name: Upload Artifact
         uses: actions/upload-artifact@v3
         with:
@@ -34,7 +34,7 @@ jobs:
       - name: create release folder
         run: mkdir release
       - name: Building using the builder image
-        run: sudo docker run --rm -v $(pwd):/build -t cl-repro-jammy
+        run: sudo docker run --rm -v $(pwd):/repo -t cl-repro-jammy
       - name: Upload Artifact
         uses: actions/upload-artifact@v3
         with:

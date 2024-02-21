@@ -12,6 +12,7 @@ ENV PROTOC_VERSION=22.0
 RUN apt-get update \
 	&& apt-get install -y --no-install-recommends \
 	autoconf \
+	automake \
 	build-essential \
 	ca-certificates \
 	file \
@@ -67,6 +68,5 @@ WORKDIR /build
 CMD git clone /repo . \
     && poetry export -o requirements.txt --without-hashes \
     && pip install -r requirements.txt \
-    && tools/build-release.sh zipfile \
     && tools/repro-build.sh \
     && cp *.xz /repo/release/

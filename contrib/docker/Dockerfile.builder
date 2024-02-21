@@ -17,7 +17,6 @@ RUN apt-get -qq update && \
 	eatmydata \
 	software-properties-common \
 	build-essential \
-	autoconf \
 	locales \
 	libtool \
 	libprotobuf-c-dev \

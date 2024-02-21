@@ -117,8 +117,6 @@ echo "Tarball File: $TARBALL"
 echo "Current Timestamp: $DATE"
 
 # submodcheck needs to know if we have lowdown
-pip install mako grpcio-tools
-sudo apt-get install -y gettext libtool automake
 ./configure --reconfigure
 # If it's a completely clean directory, we need submodules!
 make submodcheck
