@@ -747,10 +747,10 @@ static bool payment_route_can_carry_even_disabled(const struct gossmap *map,
  * \mu*fee(amt) which is the linearized version which for small amounts and
  * suitable value of \mu should be good enough)
  */
-static u64 capacity_bias(const struct gossmap *map,
-			 const struct gossmap_chan *c,
-			 int dir,
-			 struct amount_msat amount)
+static double capacity_bias(const struct gossmap *map,
+			    const struct gossmap_chan *c,
+			    int dir,
+			    struct amount_msat amount)
 {
 	struct amount_sat capacity;
 	u64 amtmsat = amount.millisatoshis; /* Raw: lengthy math */
@@ -765,22 +765,40 @@ static u64 capacity_bias(const struct gossmap *map,
 }
 
 /* Prioritize costs over distance, but bias to larger channels. */
-static u64 route_score(u32 distance,
-		       struct amount_msat cost,
+static u64 route_score(struct amount_msat fee,
 		       struct amount_msat risk,
+		       struct amount_msat total,
 		       int dir,
 		       const struct gossmap_chan *c)
 {
-	u64 cmsat = cost.millisatoshis; /* Raw: lengthy math */
-	u64 rmsat = risk.millisatoshis; /* Raw: lengthy math */
-	u64 bias = capacity_bias(global_gossmap, c, dir, cost);
+	double score;
+	struct amount_msat msat;
 
-	/* Smoothed harmonic mean to avoid division by 0 */
-	u64 costs = (cmsat * rmsat * bias) / (cmsat + rmsat + bias + 1);
+	/* These two are comparable, so simply sum them. */
+	if (!amount_msat_add(&msat, fee, risk))
+		msat = AMOUNT_MSAT(-1ULL);
 
-	if (costs > 0xFFFFFFFF)
-		costs = 0xFFFFFFFF;
-	return costs;
+	/* Slight tiebreaker bias: 1 msat per distance */
+	if (!amount_msat_add(&msat, msat, AMOUNT_MSAT(1)))
+		msat = AMOUNT_MSAT(-1ULL);
+
+	/* Percent penalty at different channel capacities:
+	 * 1%: 1%
+	 * 10%: 11%
+	 * 25%: 29%
+	 * 50%: 69%
+	 * 75%: 138%
+	 * 90%: 230%
+	 * 95%: 300%
+	 * 99%: 461%
+	 */
+	score = (capacity_bias(global_gossmap, c, dir, total) + 1)
+		* msat.millisatoshis; /* Raw: Weird math */
+	if (score > 0xFFFFFFFF)
+		return 0xFFFFFFFF;
+
+	/* Cast unnecessary, but be explicit! */
+	return (u64)score;
 }
 
 static struct route_hop *route(const tal_t *ctx,
@@ -945,7 +963,7 @@ payment_listpeerchannels_success(struct command *cmd,
 				 struct payment *p)
 {
 	p->mods = gossmods_from_listpeerchannels(p, p->local_id,
-						 buffer, toks,
+						 buffer, toks, true,
 						 gossmod_add_localchan,
 						 NULL);
 	return payment_getroute(p);
@@ -3371,7 +3389,7 @@ static struct command_result *direct_pay_listpeerchannels(struct command *cmd,
 	/* We may still need local mods! */
 	if (!p->mods)
 		p->mods = gossmods_from_listpeerchannels(p, p->local_id,
-							 buffer, toks,
+							 buffer, toks, true,
 							 gossmod_add_localchan,
 							 NULL);
 
@@ -3818,6 +3836,11 @@ check_preapproveinvoice_allow(struct command *cmd,
 			      struct payment *p)
 {
 	/* On success, an empty object is returned. */
+//	struct preapproveinvoice_data *d
+
+	struct preapproveinvoice_data *d = payment_mod_check_preapproveinvoice_get_data(payment_root(p));
+	d->approved = true;
+	paymod_log(p, LOG_DBG, "Result from preapproveinvoice: allow");
 	payment_continue(p);
 	return command_still_pending(cmd);
 }
@@ -3833,8 +3856,20 @@ static struct command_result *preapproveinvoice_rpc_failure(struct command *cmd,
 	return command_still_pending(cmd);
 }
 
-static void check_preapproveinvoice_start(void *d UNUSED, struct payment *p)
+static void check_preapproveinvoice_start(struct preapproveinvoice_data *d UNUSED, struct payment *p)
 {
+	struct payment *root = payment_root(p);
+
+	struct preapproveinvoice_data *data =
+	    payment_mod_check_preapproveinvoice_get_data(root);
+	/* If the root payment was used to send the
+	 * `preapproveinvoice` message to the signer, we don't need to
+	 * do that again. */
+	if (data->approved) {
+		return payment_continue(p);
+	}
+
+	paymod_log(p, LOG_DBG, "Calling preapproveinvoice on signer for payment=%"PRIu64, root->id);
 	/* Ask the HSM if the invoice is OK to pay */
 	struct out_req *req;
 	req = jsonrpc_request_start(p->plugin, NULL, "preapproveinvoice",
@@ -3845,7 +3880,23 @@ static void check_preapproveinvoice_start(void *d UNUSED, struct payment *p)
 	(void) send_outreq(p->plugin, req);
 }
 
-REGISTER_PAYMENT_MODIFIER(check_preapproveinvoice, void *, NULL,
+static struct preapproveinvoice_data* preapproveinvoice_data_init(struct payment *p)
+{
+	struct preapproveinvoice_data *d;
+	/* Only keep state on the root. We will use the root's flag
+	 * for all payments. */
+	if (p == payment_root(p)) {
+		d = tal(p, struct preapproveinvoice_data);
+		d->approved = false;
+		return d;
+	} else {
+		return NULL;
+	}
+}
+
+REGISTER_PAYMENT_MODIFIER(check_preapproveinvoice,
+			  struct preapproveinvoice_data *,
+			  preapproveinvoice_data_init,
 			  check_preapproveinvoice_start);
 
 static struct route_exclusions_data *

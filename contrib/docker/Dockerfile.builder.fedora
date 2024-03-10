@@ -13,6 +13,8 @@ RUN dnf update -y && \
 		python3-devel \
 		python3-mako \
 		python3-pip \
+		python3-virtualenv \
+		python3-setuptools \
 		redhat-lsb \
 		net-tools \
 		valgrind \
@@ -30,5 +32,7 @@ RUN wget https://github.com/Groestlcoin/groestlcoin/releases/download/v$GROESTLC
 		mv groestlcoin-$GROESTLCOIN_VERSION/share/man/man1/* /usr/share/man/man1 && \
     rm -rf groestlcoin.tar.gz groestlcoin-$GROESTLCOIN_VERSION
 
-RUN python3 -m pip install --force-reinstall -U pip setuptools && \
-    python3 -m pip install python-bitcoinlib pytest pytest-test-groups flake8 pytest-rerunfailures ephemeral-port-reserve grpcio-tools
+ENV PATH=/opt/venv/bin:${PATH}
+RUN python3 -m pip install pip wheel && \
+    python3 -m virtualenv /opt/venv && \
+    /opt/venv/bin/python3 -m pip install --force-reinstall -U pip poetry wheel
