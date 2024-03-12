@@ -9,7 +9,7 @@ jobs:
         os: ['Ubuntu-22.04', 'Ubuntu-20.04']
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Set up Python 3.8
         uses: actions/setup-python@v4
@@ -30,7 +30,7 @@ jobs:
           make install DESTDIR=inst RUST_PROFILE=release
           cd inst/ && tar --sort=name --owner=0 --group=0 --numeric-owner -cvaf ../clightning-v-${{ matrix.os }}.tar.xz .
       - name: Upload artifacts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: clightning-${{ github.sha }}-${{ matrix.os }}
           path: |
@@ -38,6 +38,6 @@ jobs:
           if-no-files-found: error
           retention-days: 7
       - name: Download artifacts
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: clightning-${{ github.sha }}-${{ matrix.os }}

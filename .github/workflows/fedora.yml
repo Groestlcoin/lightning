@@ -6,17 +6,17 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - name: Building using the builder image
         run: ./tools/build-release.sh bin-Fedora-28-amd64
       - name: Upload Artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: clightning-${{ github.sha }}-fedora
           path: release/*.tar.gz
           if-no-files-found: error
           retention-days: 7
       - name: Download artifacts
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: clightning-${{ github.sha }}-fedora
