@@ -33,6 +33,7 @@ RUN apt-get -qq update && \
 	libxml2-utils \
 	lowdown \
 	wget \
+	jq \
 	gettext \
 	xsltproc \
 	zlib1g-dev && \

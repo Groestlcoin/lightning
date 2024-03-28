@@ -14,7 +14,9 @@
 /* BIP 125: Any nsequence < 0xFFFFFFFE is replacable.
  * And bitcoind uses this value. */
 #define BITCOIN_TX_RBF_SEQUENCE 0xFFFFFFFD
+
 struct wally_psbt;
+struct ripemd160;
 
 struct bitcoin_txid {
 	struct sha256_double shad;
@@ -144,33 +146,6 @@ wally_tx_output_get_amount(const struct wally_tx_output *output);
 void bitcoin_tx_output_set_amount(struct bitcoin_tx *tx, int outnum,
 				  struct amount_sat amount);
 
-/**
- * Helper to get the script of a script's output as a tal_arr
- *
- * Internally we use a `wally_tx` to represent the transaction. The script
- * attached to a `wally_tx_output` is not a `tal_arr`, so in order to keep the
- * comfort of being able to call `tal_bytelen` and similar on a script we just
- * return a `tal_arr` clone of the original script.
- */
-const u8 *bitcoin_tx_output_get_script(const tal_t *ctx, const struct bitcoin_tx *tx, int outnum);
-
-/**
- * Return `true` if the given output is a P2WSH output.
- *
- * This is useful if you want to peek at the script, without having to
- * extract it first.
- */
-bool bitcoin_tx_output_script_is_p2wsh(const struct bitcoin_tx *tx, int outnum);
-
-/**
- * Helper to get the script of a script's output as a tal_arr
- *
- * The script attached to a `wally_tx_output` is not a `tal_arr`, so in order to keep the
- * comfort of being able to call `tal_bytelen` and similar on a script we just
- * return a `tal_arr` clone of the original script.
- */
-const u8 *cln_wally_tx_output_get_script(const tal_t *ctx,
-					 const struct wally_tx_output *output);
 /**
  * Helper to get a witness script for an output.
  */
@@ -313,6 +288,13 @@ void fromwire_bitcoin_outpoint(const u8 **cursor, size_t *max,
 			       struct bitcoin_outpoint *outp);
 char *fmt_bitcoin_tx(const tal_t *ctx, const struct bitcoin_tx *tx);
 char *fmt_bitcoin_txid(const tal_t *ctx, const struct bitcoin_txid *txid);
+char *fmt_bitcoin_outpoint(const tal_t *ctx,
+			   const struct bitcoin_outpoint *outpoint);
+char *fmt_wally_tx(const tal_t *ctx, const struct wally_tx *tx);
+
+/* For want of somewhere better to define them! */
+char *fmt_sha256(const tal_t *ctx, const struct sha256 *sha256);
+char *fmt_ripemd160(const tal_t *ctx, const struct ripemd160 *ripemd160);
 
 /* Various weights of transaction parts. */
 size_t bitcoin_tx_core_weight(size_t num_inputs, size_t num_outputs);

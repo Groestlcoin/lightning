@@ -6,7 +6,7 @@
 #include <ccan/cast/cast.h>
 #include <ccan/str/hex/hex.h>
 #include <ccan/tal/str/str.h>
-#include <common/type_to_string.h>
+#include <common/utils.h>
 #include <wally_psbt.h>
 #include <wire/wire.h>
 
@@ -300,38 +300,6 @@ void bitcoin_tx_output_set_amount(struct bitcoin_tx *tx, int outnum,
 		output->satoshi = satoshis;
 	}
 	wally_psbt_output_set_amount(&tx->psbt->outputs[outnum], satoshis);
-}
-
-const u8 *cln_wally_tx_output_get_script(const tal_t *ctx,
-					 const struct wally_tx_output *output)
-{
-	if (output->script == NULL) {
-		/* This can happen for coinbase transactions and pegin
-		 * transactions */
-		return NULL;
-	}
-
-	return tal_dup_arr(ctx, u8, output->script, output->script_len, 0);
-}
-
-const u8 *bitcoin_tx_output_get_script(const tal_t *ctx,
-				       const struct bitcoin_tx *tx, int outnum)
-{
-	const struct wally_tx_output *output;
-	assert(outnum < tx->wtx->num_outputs);
-	output = &tx->wtx->outputs[outnum];
-
-	return cln_wally_tx_output_get_script(ctx, output);
-}
-
-bool bitcoin_tx_output_script_is_p2wsh(const struct bitcoin_tx *tx, int outnum)
-{	const struct wally_tx_output *output;
-	assert(outnum < tx->wtx->num_outputs);
-	output = &tx->wtx->outputs[outnum];
-
-	return output->script_len == BITCOIN_SCRIPTPUBKEY_P2WSH_LEN &&
-	       output->script[0] == OP_0 &&
-	       output->script[1] == OP_PUSHBYTES(sizeof(struct sha256));
 }
 
 u8 *bitcoin_tx_output_get_witscript(const tal_t *ctx, const struct bitcoin_tx *tx,
@@ -770,15 +738,15 @@ char *fmt_bitcoin_txid(const tal_t *ctx, const struct bitcoin_txid *txid)
 	return hexstr;
 }
 
-static char *fmt_bitcoin_outpoint(const tal_t *ctx,
-				  const struct bitcoin_outpoint *outpoint)
+char *fmt_bitcoin_outpoint(const tal_t *ctx,
+			   const struct bitcoin_outpoint *outpoint)
 {
 	return tal_fmt(ctx, "%s:%u",
 		       fmt_bitcoin_txid(tmpctx, &outpoint->txid),
 		       outpoint->n);
 }
 
-static char *fmt_wally_tx(const tal_t *ctx, const struct wally_tx *tx)
+char *fmt_wally_tx(const tal_t *ctx, const struct wally_tx *tx)
 {
 	u8 *lin = linearize_wtx(ctx, tx);
 	char *s = tal_hex(ctx, lin);
@@ -786,10 +754,15 @@ static char *fmt_wally_tx(const tal_t *ctx, const struct wally_tx *tx)
 	return s;
 }
 
-REGISTER_TYPE_TO_STRING(bitcoin_tx, fmt_bitcoin_tx);
-REGISTER_TYPE_TO_STRING(bitcoin_txid, fmt_bitcoin_txid);
-REGISTER_TYPE_TO_STRING(bitcoin_outpoint, fmt_bitcoin_outpoint);
-REGISTER_TYPE_TO_STRING(wally_tx, fmt_wally_tx);
+char *fmt_sha256(const tal_t *ctx, const struct sha256 *sha256)
+{
+	return tal_hexstr(ctx, sha256, sizeof(*sha256));
+}
+
+char *fmt_ripemd160(const tal_t *ctx, const struct ripemd160 *ripemd160)
+{
+	return tal_hexstr(ctx, ripemd160, sizeof(*ripemd160));
+}
 
 void fromwire_bitcoin_txid(const u8 **cursor, size_t *max,
 			   struct bitcoin_txid *txid)

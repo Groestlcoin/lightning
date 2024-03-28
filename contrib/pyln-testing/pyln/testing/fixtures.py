@@ -348,6 +348,16 @@ def _extra_validator(is_request: bool):
         except TypeError:
             return False
 
+    def is_sat(checker, instance):
+        """sat fields can be raw integers, sats, btc."""
+        try:
+            # For plain integers, this gives the wrong value by 1000,
+            # but all we care about is the type here.
+            Millisatoshi(instance)
+            return True
+        except TypeError:
+            return False
+
     def is_msat_response(checker, instance):
         """A positive integer"""
         return type(instance) is int and instance >= 0
@@ -382,6 +392,13 @@ def _extra_validator(is_request: bool):
             return True
         return is_msat_request(checker, instance)
 
+    def is_currency(checker, instance):
+        """currency including currency code"""
+        pattern = re.compile(r'^\d+(\.\d+)?[A-Z][A-Z][A-Z]$')
+        if pattern.match(instance):
+            return True
+        return False
+
     # "msat" for request can be many forms
     if is_request:
         is_msat = is_msat_request
@@ -396,9 +413,11 @@ def _extra_validator(is_request: bool):
         "u16": is_u16,
         "u8": is_u8,
         "pubkey": is_pubkey,
+        "sat": is_sat,
         "msat": is_msat,
         "msat_or_all": is_msat_or_all,
         "msat_or_any": is_msat_or_any,
+        "currency": is_currency,
         "txid": is_txid,
         "signature": is_signature,
         "bip340sig": is_bip340sig,
@@ -413,15 +432,16 @@ def _extra_validator(is_request: bool):
                                         type_checker=type_checker)
 
 
-def _load_schema(filename, is_request):
+def _load_schema(filename):
     """Load the schema from @filename and create a validator for it"""
     with open(filename, 'r') as f:
-        return _extra_validator(is_request)(json.load(f))
+        data = json.load(f)
+        return [_extra_validator(True)(data.get('request', {})), _extra_validator(False)(data.get('response', {}))]
 
 
 @pytest.fixture(autouse=True)
 def jsonschemas():
-    """Load schema files if they exist: returns request/response schemas by pairs"""
+    """Load schema file if it exist: returns request/response schemas by pairs"""
     try:
         schemafiles = os.listdir('doc/schemas')
     except FileNotFoundError:
@@ -429,20 +449,10 @@ def jsonschemas():
 
     schemas = {}
     for fname in schemafiles:
-        if fname.endswith('.schema.json'):
-            base = fname.rpartition('.schema')[0]
-            is_request = False
-            index = 1
-        elif fname.endswith('.request.json'):
-            base = fname.rpartition('.request')[0]
-            is_request = True
-            index = 0
-        else:
-            continue
-        if base not in schemas:
-            schemas[base] = [None, None]
-        schemas[base][index] = _load_schema(os.path.join('doc/schemas', fname),
-                                            is_request)
+        if fname.startswith('lightning-') and fname.endswith('.json'):
+            base = fname.replace('lightning-', '').replace('.json', '')
+            # Request is 0 and Response is 1
+            schemas[base] = _load_schema(os.path.join('doc/schemas', fname))
     return schemas
 
 

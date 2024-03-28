@@ -15,7 +15,6 @@
 #include <common/json_param.h>
 #include <common/shutdown_scriptpubkey.h>
 #include <common/timeout.h>
-#include <common/type_to_string.h>
 #include <common/utils.h>
 #include <connectd/connectd_wiregen.h>
 #include <errno.h>
@@ -179,26 +178,22 @@ static struct amount_sat calc_tx_fee(struct amount_sat sat_in,
 {
 	struct amount_asset amt;
 	struct amount_sat fee = sat_in;
-	const u8 *oscript;
-	size_t scriptlen;
-	for (size_t i = 0; i < tx->wtx->num_outputs; i++) {
-		amt = bitcoin_tx_output_get_amount(tx, i);
-		oscript = bitcoin_tx_output_get_script(NULL, tx, i);
-		scriptlen = tal_bytelen(oscript);
-		tal_free(oscript);
 
-		if (chainparams->is_elements && scriptlen == 0)
+	for (size_t i = 0; i < tx->wtx->num_outputs; i++) {
+		const struct wally_tx_output *txout = &tx->wtx->outputs[i];
+		if (chainparams->is_elements && !txout->script_len)
 			continue;
 
 		/* Ignore outputs that are not denominated in our main
 		 * currency. */
+		amt = bitcoin_tx_output_get_amount(tx, i);
 		if (!amount_asset_is_main(&amt))
 			continue;
 
 		if (!amount_sat_sub(&fee, fee, amount_asset_to_sat(&amt)))
 			fatal("Tx spends more than input %s? %s",
-			      type_to_string(tmpctx, struct amount_sat, &sat_in),
-			      type_to_string(tmpctx, struct bitcoin_tx, tx));
+			      fmt_amount_sat(tmpctx, sat_in),
+			      fmt_bitcoin_tx(tmpctx, tx));
 	}
 	return fee;
 }
@@ -222,8 +217,8 @@ static bool closing_fee_is_acceptable(struct lightningd *ld,
 
 	log_debug(channel->log, "Their actual closing tx fee is %s"
 		 " vs previous %s: weight is %"PRIu64,
-		  type_to_string(tmpctx, struct amount_sat, &fee),
-		  type_to_string(tmpctx, struct amount_sat, &last_fee),
+		  fmt_amount_sat(tmpctx, fee),
+		  fmt_amount_sat(tmpctx, last_fee),
 		  weight);
 
 	if (!channel->ignore_fee_limits && !ld->config.ignore_fee_limits) {
@@ -237,7 +232,7 @@ static bool closing_fee_is_acceptable(struct lightningd *ld,
 		if (amount_sat_less(fee, min_fee)) {
 			log_debug(channel->log, "... That's below our min %s"
 				  " for weight %"PRIu64" at feerate %u",
-				  type_to_string(tmpctx, struct amount_sat, &min_fee),
+				  fmt_amount_sat(tmpctx, min_fee),
 				  weight, min_feerate);
 			return false;
 		}
@@ -446,10 +441,8 @@ void peer_start_closingd(struct channel *channel, struct peer_fd *peer_fd)
 	if (!amount_sat_sub_msat(&their_msat,
 				 channel->funding_sats, channel->our_msat)) {
 		log_broken(channel->log, "our_msat overflow funding %s minus %s",
-			  type_to_string(tmpctx, struct amount_sat,
-					 &channel->funding_sats),
-			  type_to_string(tmpctx, struct amount_msat,
-					 &channel->our_msat));
+			  fmt_amount_sat(tmpctx, channel->funding_sats),
+			  fmt_amount_msat(tmpctx, channel->our_msat));
 		channel_fail_permanent(channel,
 				       REASON_LOCAL,
 				       "our_msat overflow on closing");
@@ -461,12 +454,10 @@ void peer_start_closingd(struct channel *channel, struct peer_fd *peer_fd)
 	struct ext_key *local_wallet_ext_key = NULL;
 	u32 index_val;
 	struct ext_key ext_key_val;
-	bool is_p2sh;
 	if (wallet_can_spend(
 		    ld->wallet,
 		    channel->shutdown_scriptpubkey[LOCAL],
-		    &index_val,
-		    &is_p2sh)) {
+		    &index_val)) {
 		if (bip32_key_from_parent(
 			    ld->bip32_base,
 			    index_val,
@@ -690,8 +681,6 @@ static struct command_result *json_close(struct command *cmd,
 	assert(channel->final_key_idx <= UINT32_MAX);
 
 	if (close_to_script) {
-		bool is_p2sh;
-
 		if (!tal_arr_eq(close_to_script, channel->shutdown_scriptpubkey[LOCAL])
 		    && !cmd->ld->dev_allow_shutdown_destination_change) {
 			const u8 *defp2tr, *defp2wpkh;
@@ -727,7 +716,7 @@ static struct command_result *json_close(struct command *cmd,
 
 		/* If they give a local address, adjust final_key_idx. */
 		if (!wallet_can_spend(cmd->ld->wallet, close_to_script,
-				      &final_key_idx, &is_p2sh)) {
+				      &final_key_idx)) {
 			final_key_idx = channel->final_key_idx;
 		}
 	} else {

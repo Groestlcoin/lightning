@@ -10,6 +10,9 @@
 #include <common/utils.h>
 #include <sodium/randombytes.h>
 
+/* To push 0-75 bytes onto stack. */
+#define OP_PUSHBYTES(val) (val)
+
 /* Bitcoin's OP_HASH160 is RIPEMD(SHA256()) */
 static void hash160(struct ripemd160 *redeemhash, const void *mem, size_t len)
 {
@@ -473,10 +476,8 @@ u8 *p2wpkh_scriptcode(const tal_t *ctx, const struct pubkey *key)
 	return script;
 }
 
-bool is_p2pkh(const u8 *script, struct bitcoin_address *addr)
+bool is_p2pkh(const u8 *script, size_t script_len, struct bitcoin_address *addr)
 {
-	size_t script_len = tal_count(script);
-
 	if (script_len != BITCOIN_SCRIPTPUBKEY_P2PKH_LEN)
 		return false;
 	if (script[0] != OP_DUP)
@@ -494,10 +495,8 @@ bool is_p2pkh(const u8 *script, struct bitcoin_address *addr)
 	return true;
 }
 
-bool is_p2sh(const u8 *script, struct ripemd160 *addr)
+bool is_p2sh(const u8 *script, size_t script_len, struct ripemd160 *addr)
 {
-	size_t script_len = tal_count(script);
-
 	if (script_len != BITCOIN_SCRIPTPUBKEY_P2SH_LEN)
 		return false;
 	if (script[0] != OP_HASH160)
@@ -511,10 +510,8 @@ bool is_p2sh(const u8 *script, struct ripemd160 *addr)
 	return true;
 }
 
-bool is_p2wsh(const u8 *script, struct sha256 *addr)
+bool is_p2wsh(const u8 *script, size_t script_len, struct sha256 *addr)
 {
-	size_t script_len = tal_count(script);
-
 	if (script_len != BITCOIN_SCRIPTPUBKEY_P2WSH_LEN)
 		return false;
 	if (script[0] != OP_0)
@@ -526,10 +523,8 @@ bool is_p2wsh(const u8 *script, struct sha256 *addr)
 	return true;
 }
 
-bool is_p2wpkh(const u8 *script, struct bitcoin_address *addr)
+bool is_p2wpkh(const u8 *script, size_t script_len, struct bitcoin_address *addr)
 {
-	size_t script_len = tal_count(script);
-
 	if (script_len != BITCOIN_SCRIPTPUBKEY_P2WPKH_LEN)
 		return false;
 	if (script[0] != OP_0)
@@ -541,10 +536,8 @@ bool is_p2wpkh(const u8 *script, struct bitcoin_address *addr)
 	return true;
 }
 
-bool is_p2tr(const u8 *script, u8 xonly_pubkey[32])
+bool is_p2tr(const u8 *script, size_t script_len, u8 xonly_pubkey[32])
 {
-	size_t script_len = tal_count(script);
-
 	if (script_len != BITCOIN_SCRIPTPUBKEY_P2TR_LEN)
 		return false;
 	if (script[0] != OP_1)
@@ -557,17 +550,20 @@ bool is_p2tr(const u8 *script, u8 xonly_pubkey[32])
 	return true;
 }
 
-bool is_known_scripttype(const u8 *script)
+bool is_known_scripttype(const u8 *script, size_t script_len)
 {
-	return is_p2wpkh(script, NULL) || is_p2wsh(script, NULL)
-		|| is_p2sh(script, NULL) || is_p2pkh(script, NULL)
-		|| is_p2tr(script, NULL);
+	return is_p2wpkh(script, script_len, NULL)
+		|| is_p2wsh(script, script_len, NULL)
+		|| is_p2sh(script, script_len, NULL)
+		|| is_p2pkh(script, script_len, NULL)
+		|| is_p2tr(script, script_len, NULL);
 }
 
-bool is_known_segwit_scripttype(const u8 *script)
+bool is_known_segwit_scripttype(const u8 *script, size_t script_len)
 {
-	return is_p2wpkh(script, NULL) || is_p2wsh(script, NULL)
-		|| is_p2tr(script, NULL);
+	return is_p2wpkh(script, script_len, NULL)
+		|| is_p2wsh(script, script_len, NULL)
+		|| is_p2tr(script, script_len, NULL);
 }
 
 u8 **bitcoin_witness_sig_and_element(const tal_t *ctx,
@@ -990,12 +986,8 @@ bool is_anchor_witness_script(const u8 *script, size_t script_len)
 
 bool scripteq(const u8 *s1, const u8 *s2)
 {
-	memcheck(s1, tal_count(s1));
-	memcheck(s2, tal_count(s2));
-
-	if (tal_count(s1) != tal_count(s2))
-		return false;
-	if (tal_count(s1) == 0)
-		return true;
-	return memcmp(s1, s2, tal_count(s1)) == 0;
+	size_t s1_len = tal_count(s1), s2_len = tal_count(s2);
+	memcheck(s1, s1_len);
+	memcheck(s2, s2_len);
+	return memeq(s1, s1_len, s2, s2_len);
 }

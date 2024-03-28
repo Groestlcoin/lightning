@@ -323,7 +323,7 @@ static const char *decode_n(struct bolt11 *b11,
 		if (!pubkey_from_node_id(&k, &b11->receiver_id))
 			return tal_fmt(
 			    b11, "invalid public key %s",
-			    node_id_to_hexstr(tmpctx, &b11->receiver_id));
+			    fmt_node_id(tmpctx, &b11->receiver_id));
 	}
 
 	return err;
@@ -450,7 +450,7 @@ static bool fromwire_route_info(const u8 **cursor, size_t *max,
 				struct route_info *route_info)
 {
 	fromwire_node_id(cursor, max, &route_info->pubkey);
-	fromwire_short_channel_id(cursor, max, &route_info->short_channel_id);
+	route_info->short_channel_id = fromwire_short_channel_id(cursor, max);
 	route_info->fee_base_msat = fromwire_u32(cursor, max);
 	route_info->fee_proportional_millionths = fromwire_u32(cursor, max);
 	route_info->cltv_expiry_delta = fromwire_u16(cursor, max);
@@ -460,7 +460,7 @@ static bool fromwire_route_info(const u8 **cursor, size_t *max,
 static void towire_route_info(u8 **pptr, const struct route_info *route_info)
 {
 	towire_node_id(pptr, &route_info->pubkey);
-	towire_short_channel_id(pptr, &route_info->short_channel_id);
+	towire_short_channel_id(pptr, route_info->short_channel_id);
 	towire_u32(pptr, route_info->fee_base_msat);
 	towire_u32(pptr, route_info->fee_proportional_millionths);
 	towire_u16(pptr, route_info->cltv_expiry_delta);
@@ -1133,6 +1133,7 @@ static void encode_f(u5 **data, const u8 *fallback)
 	struct bitcoin_address pkh;
 	struct ripemd160 sh;
 	struct sha256 wsh;
+	const size_t fallback_len = tal_bytelen(fallback);
 
 	/* BOLT #11:
 	 *
@@ -1140,15 +1141,15 @@ static void encode_f(u5 **data, const u8 *fallback)
 	 * witness version and program, OR to `17` followed by a
 	 * public key hash, OR to `18` followed by a script hash.
 	 */
-	if (is_p2pkh(fallback, &pkh)) {
+	if (is_p2pkh(fallback, fallback_len, &pkh)) {
 		push_fallback_addr(data, 17, &pkh, sizeof(pkh));
-	} else if (is_p2sh(fallback, &sh)) {
+	} else if (is_p2sh(fallback, fallback_len, &sh)) {
 		push_fallback_addr(data, 18, &sh, sizeof(sh));
-	} else if (is_p2wpkh(fallback, &pkh)) {
+	} else if (is_p2wpkh(fallback, fallback_len, &pkh)) {
 		push_fallback_addr(data, 0, &pkh, sizeof(pkh));
-	} else if (is_p2wsh(fallback, &wsh)) {
+	} else if (is_p2wsh(fallback, fallback_len, &wsh)) {
 		push_fallback_addr(data, 0, &wsh, sizeof(wsh));
-	} else if (tal_count(fallback) > 1
+	} else if (fallback_len > 1
 		   && fallback[0] >= 0x50
 		   && fallback[0] < (0x50+16)) {
 		/* Other (future) witness versions: turn OP_N into N */
@@ -1157,7 +1158,7 @@ static void encode_f(u5 **data, const u8 *fallback)
 	} else {
 		/* Copy raw. */
 		push_field(data, 'f',
-			   fallback, tal_count(fallback) * CHAR_BIT);
+			   fallback, fallback_len * CHAR_BIT);
 	}
 }
 

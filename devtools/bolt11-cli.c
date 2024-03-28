@@ -11,7 +11,6 @@
 #include <common/bolt11.h>
 #include <common/features.h>
 #include <common/setup.h>
-#include <common/type_to_string.h>
 #include <common/version.h>
 #include <inttypes.h>
 #include <stdio.h>
@@ -92,14 +91,14 @@ int main(int argc, char *argv[])
 	printf("expiry: %"PRIu64" (%s)\n",
 	       b11->expiry, fmt_time(ctx, b11->timestamp + b11->expiry));
 	printf("payee: %s\n",
-	       type_to_string(ctx, struct node_id, &b11->receiver_id));
+	       fmt_node_id(ctx, &b11->receiver_id));
 	printf("payment_hash: %s\n",
 	       tal_hexstr(ctx, &b11->payment_hash, sizeof(b11->payment_hash)));
 	printf("min_final_cltv_expiry: %u\n", b11->min_final_cltv_expiry);
         if (b11->msat) {
 		printf("msatoshi: %"PRIu64"\n", b11->msat->millisatoshis); /* Raw: raw int for backwards compat */
 		printf("amount_msat: %s\n",
-		       type_to_string(tmpctx, struct amount_msat, b11->msat));
+		       fmt_amount_msat(tmpctx, *b11->msat));
 	}
         if (b11->description)
                 printf("description: '%s'\n", b11->description);
@@ -123,23 +122,25 @@ int main(int argc, char *argv[])
                 struct bitcoin_address pkh;
                 struct ripemd160 sh;
                 struct sha256 wsh;
+                const u8 *fallback = b11->fallbacks[i];
+                const size_t fallback_len = tal_bytelen(fallback);
 
-		printf("fallback: %s\n", tal_hex(ctx, b11->fallbacks[i]));
-                if (is_p2pkh(b11->fallbacks[i], &pkh)) {
+		printf("fallback: %s\n", tal_hex(ctx, fallback));
+                if (is_p2pkh(fallback, fallback_len, &pkh)) {
 			printf("fallback-P2PKH: %s\n",
 			       bitcoin_to_base58(ctx, b11->chain,
 						 &pkh));
-                } else if (is_p2sh(b11->fallbacks[i], &sh)) {
+                } else if (is_p2sh(fallback, fallback_len, &sh)) {
 			printf("fallback-P2SH: %s\n",
 			       p2sh_to_base58(ctx,
 					      b11->chain,
 					      &sh));
-                } else if (is_p2wpkh(b11->fallbacks[i], &pkh)) {
+                } else if (is_p2wpkh(fallback, fallback_len, &pkh)) {
                         char out[73 + strlen(b11->chain->onchain_hrp)];
                         if (segwit_addr_encode(out, b11->chain->onchain_hrp, 0,
                                                (const u8 *)&pkh, sizeof(pkh)))
 				printf("fallback-P2WPKH: %s\n", out);
-                } else if (is_p2wsh(b11->fallbacks[i], &wsh)) {
+                } else if (is_p2wsh(fallback, fallback_len, &wsh)) {
                         char out[73 + strlen(b11->chain->onchain_hrp)];
                         if (segwit_addr_encode(out, b11->chain->onchain_hrp, 0,
                                                (const u8 *)&wsh, sizeof(wsh)))
@@ -151,10 +152,10 @@ int main(int argc, char *argv[])
 		printf("route: (node/chanid/fee/expirydelta) ");
 		for (size_t n = 0; n < tal_count(b11->routes[i]); n++) {
 			printf(" %s/%s/%u/%u/%u",
-			       type_to_string(ctx, struct node_id,
-					      &b11->routes[i][n].pubkey),
-			       type_to_string(ctx, struct short_channel_id,
-					      &b11->routes[i][n].short_channel_id),
+			       fmt_node_id(ctx,
+					   &b11->routes[i][n].pubkey),
+			       fmt_short_channel_id(ctx,
+						    b11->routes[i][n].short_channel_id),
 			       b11->routes[i][n].fee_base_msat,
 			       b11->routes[i][n].fee_proportional_millionths,
 			       b11->routes[i][n].cltv_expiry_delta);
@@ -178,7 +179,7 @@ int main(int argc, char *argv[])
 	}
 
 	printf("signature: %s\n",
-	       type_to_string(ctx, secp256k1_ecdsa_signature, &b11->sig));
+	       fmt_secp256k1_ecdsa_signature(ctx, &b11->sig));
 	tal_free(ctx);
 	common_shutdown();
 	return NO_ERROR;

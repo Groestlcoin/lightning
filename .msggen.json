@@ -235,6 +235,12 @@
             "ONCHAIN": 8,
             "OPENINGD": 0
         },
+        "ListpeersLevel": {
+            "debug": 1,
+            "info": 2,
+            "io": 0,
+            "unusual": 3
+        },
         "ListpeersPeersChannelsHtlcsDirection": {
             "in": 0,
             "out": 1
@@ -333,6 +339,9 @@
         "SendpayStatus": {
             "complete": 1,
             "pending": 0
+        },
+        "StopResult": {
+            "Shutdown complete": 0
         },
         "WaitIndexname": {
             "created": 0,
@@ -489,6 +498,9 @@
         "DatastoreusageDatastoreusage": {
             "DatastoreUsage.datastoreusage.key": 1,
             "DatastoreUsage.datastoreusage.total_bytes": 2
+        },
+        "DatastoreusageRequest": {
+            "DatastoreUsage.key": 1
         },
         "DatastoreusageResponse": {
             "DatastoreUsage.datastoreusage": 1
@@ -1206,6 +1218,7 @@
             "ListPeerChannels.channels[].peer_id": 1,
             "ListPeerChannels.channels[].private": 18,
             "ListPeerChannels.channels[].receivable_msat": 34,
+            "ListPeerChannels.channels[].reestablished": 58,
             "ListPeerChannels.channels[].scratch_txid": 4,
             "ListPeerChannels.channels[].short_channel_id": 8,
             "ListPeerChannels.channels[].spendable_msat": 33,
@@ -1406,6 +1419,7 @@
             "ListSendPays.payments[].amount_sent_msat": 8,
             "ListSendPays.payments[].bolt11": 10,
             "ListSendPays.payments[].bolt12": 11,
+            "ListSendPays.payments[].completed_at": 18,
             "ListSendPays.payments[].created_at": 7,
             "ListSendPays.payments[].created_index": 16,
             "ListSendPays.payments[].description": 14,
@@ -1518,6 +1532,7 @@
             "Pay.maxfee": 11,
             "Pay.maxfeepercent": 4,
             "Pay.msatoshi": 2,
+            "Pay.partial_msat": 15,
             "Pay.retry_for": 5,
             "Pay.riskfactor": 8
         },
@@ -1563,6 +1578,7 @@
         "SendonionRequest": {
             "SendOnion.amount_msat": 12,
             "SendOnion.bolt11": 7,
+            "SendOnion.description": 14,
             "SendOnion.destination": 9,
             "SendOnion.first_hop": 2,
             "SendOnion.groupid": 11,
@@ -1595,6 +1611,7 @@
         "SendpayRequest": {
             "SendPay.amount_msat": 10,
             "SendPay.bolt11": 5,
+            "SendPay.description": 13,
             "SendPay.groupid": 9,
             "SendPay.label": 3,
             "SendPay.localinvreqid": 11,
@@ -1602,6 +1619,7 @@
             "SendPay.msatoshi": 4,
             "SendPay.partid": 7,
             "SendPay.payment_hash": 2,
+            "SendPay.payment_metadata": 12,
             "SendPay.payment_secret": 6,
             "SendPay.route[]": 1
         },
@@ -1686,6 +1704,9 @@
         },
         "StaticbackupResponse": {
             "StaticBackup.scb[]": 1
+        },
+        "StopResponse": {
+            "Stop.result": 1
         },
         "TxdiscardRequest": {
             "TxDiscard.txid": 1
@@ -2195,6 +2216,10 @@
             "deprecated": false
         },
         "DatastoreUsage.datastoreusage.total_bytes": {
+            "added": "v23.11",
+            "deprecated": false
+        },
+        "DatastoreUsage.key": {
             "added": "v23.11",
             "deprecated": false
         },
@@ -4678,6 +4703,10 @@
             "added": "v23.02",
             "deprecated": false
         },
+        "ListPeerChannels.channels[].reestablished": {
+            "added": "v24.02",
+            "deprecated": false
+        },
         "ListPeerChannels.channels[].scratch_txid": {
             "added": "v23.02",
             "deprecated": false
@@ -5226,6 +5255,10 @@
             "added": "pre-v0.10.1",
             "deprecated": false
         },
+        "ListSendPays.payments[].completed_at": {
+            "added": "pre-v0.10.1",
+            "deprecated": false
+        },
         "ListSendPays.payments[].created_at": {
             "added": "pre-v0.10.1",
             "deprecated": false
@@ -5542,6 +5575,10 @@
             "added": "pre-v0.10.1",
             "deprecated": false
         },
+        "Pay.partial_msat": {
+            "added": "v23.05",
+            "deprecated": false
+        },
         "Pay.parts": {
             "added": "pre-v0.10.1",
             "deprecated": false
@@ -5658,6 +5695,10 @@
             "added": "v23.11",
             "deprecated": false
         },
+        "SendOnion.description": {
+            "added": "v0.11.0",
+            "deprecated": false
+        },
         "SendOnion.destination": {
             "added": "pre-v0.10.1",
             "deprecated": false
@@ -5758,6 +5799,10 @@
             "added": "v23.11",
             "deprecated": false
         },
+        "SendPay.description": {
+            "added": "v0.11.0",
+            "deprecated": false
+        },
         "SendPay.destination": {
             "added": "pre-v0.10.1",
             "deprecated": false
@@ -5788,6 +5833,10 @@
         },
         "SendPay.payment_hash": {
             "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "SendPay.payment_metadata": {
+            "added": "v0.11.0",
             "deprecated": false
         },
         "SendPay.payment_preimage": {
@@ -5981,6 +6030,10 @@
         "Stop": {
             "added": "pre-v0.10.1",
             "deprecated": null
+        },
+        "Stop.result": {
+            "added": "v24.05",
+            "deprecated": false
         },
         "TxDiscard": {
             "added": "pre-v0.10.1",

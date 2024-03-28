@@ -76,7 +76,7 @@ Get dependencies:
 ```shell
 sudo apt-get update
 sudo apt-get install -y \
-  autoconf automake build-essential git libtool libsqlite3-dev \
+  jq autoconf automake build-essential git libtool libsqlite3-dev \
   python3 python3-pip net-tools zlib1g-dev libsodium-dev gettext
 pip3 install --upgrade pip
 pip3 install --user poetry
@@ -109,7 +109,7 @@ For development or running tests, get additional dependencies:
 
 ```shell
 sudo apt-get install -y valgrind libpq-dev shellcheck cppcheck \
-  libsecp256k1-dev jq lowdown
+  libsecp256k1-dev lowdown
 ```
 
 If you can't install `lowdown`, a version will be built in-tree.
@@ -187,6 +187,7 @@ sudo dnf update -y && \
                 net-tools \
                 valgrind \
                 wget \
+                jq \
                 zlib-devel \
 				libsodium-devel && \
         sudo dnf clean all

@@ -104,8 +104,7 @@ Everything should be declared static and const by default.  Note that `tal_free(
 
 ## Typesafety Is Worth Some Pain
 
-If code is typesafe, refactoring is as simple as changing a type and compiling to find where to refactor.  We rely on this, so most places in the code will break if you hand the wrong type, eg  
-`type_to_string` and `structeq`.
+If code is typesafe, refactoring is as simple as changing a type and compiling to find where to refactor.  We rely on this, so most places in the code will break if you hand the wrong type, eg `structeq` and `tal`.
 
 The two tools we have to help us are complicated macros in `ccan/typesafe_cb` allow you to create callbacks which must match the type of their argument, rather than using `void *`.  The other is `ARRAY_SIZE`, a macro which won't compile if you hand it a pointer instead of an actual array.
 
@@ -170,4 +169,4 @@ In case you think the pull request is small enough not to require a changelog en
 
 Under some circumstances a feature may be removed even without deprecation warning if it was not part of a released version yet, or the removal is urgent.
 
-In order to ensure that each pull request has the required `Changelog-*:` line for the changelog our trusty @groestlcoin-bot will check logs whenever a pull request is created or updated and search for the required line. If there is no such line it'll mark the pull request as `pending` to call out the need for an entry.
+In order to ensure that each pull request has the required `Changelog-*:` line for the changelog our trusty @bitcoin-bot will check logs whenever a pull request is created or updated and search for the required line. If there is no such line it'll mark the pull request as `pending` to call out the need for an entry.

@@ -21,7 +21,6 @@
 #include <common/setup.h>
 #include <common/status.h>
 #include <common/subdaemon.h>
-#include <common/type_to_string.h>
 #include <common/wire_error.h>
 
 /*
@@ -80,13 +79,15 @@ static bool is_segwit_output(const tal_t *ctx,
 			     struct wally_tx_output *output,
 			     const u8 *redeemscript)
 {
-	const u8 *maybe_witness;
-	if (tal_bytelen(redeemscript) > 0)
-		maybe_witness = redeemscript;
-	else
-		maybe_witness = cln_wally_tx_output_get_script(ctx, output);
+	const u8 *maybe_witness = redeemscript;
+	size_t script_len = tal_bytelen(maybe_witness);
 
-	return is_known_segwit_scripttype(maybe_witness);
+	if (!script_len) {
+		maybe_witness = output->script;
+		script_len = output->script_len;
+        }
+
+	return is_known_segwit_scripttype(maybe_witness, script_len);
 }
 
 /* Return first non-handled message or NULL if connection is aborted */
@@ -482,9 +483,7 @@ char *process_interactivetx_updates(const tal_t *ctx,
 					      NULL))
 				return tal_fmt(ctx,
 					       "Invalid tx sent. Not SegWit %s",
-					       type_to_string(ctx,
-							      struct bitcoin_tx,
-							      tx));
+					       fmt_bitcoin_tx(ctx, tx));
 
 			/*
 			 * BOLT-f53ca2301232db780843e894f55d95d512f297f9 #2:
@@ -499,9 +498,7 @@ char *process_interactivetx_updates(const tal_t *ctx,
 				return tal_fmt(ctx,
 					       "Unable to add input %s- "
 					       "already present",
-					       type_to_string(ctx,
-							      struct bitcoin_outpoint,
-							      &outpoint));
+					       fmt_bitcoin_outpoint(ctx, &outpoint));
 
 			/*
 			 * BOLT-f53ca2301232db780843e894f55d95d512f297f9 #2:
@@ -526,9 +523,7 @@ char *process_interactivetx_updates(const tal_t *ctx,
 			if (!in)
 				return tal_fmt(ctx,
 					       "Unable to add input %s",
-					       type_to_string(ctx,
-							      struct bitcoin_outpoint,
-							      &outpoint));
+					       fmt_bitcoin_outpoint(ctx, &outpoint));
 
 			tal_wally_start();
 			wally_psbt_input_set_utxo(in, tx->wtx);
@@ -627,7 +622,7 @@ char *process_interactivetx_updates(const tal_t *ctx,
 			 * The receiving node: ...
 			 * - MAY fail the negotiation if `script`
 			 *   is non-standard */
-			if (!is_known_scripttype(scriptpubkey))
+			if (!is_known_scripttype(scriptpubkey, tal_bytelen(scriptpubkey)))
 				return tal_fmt(ctx, "Script is not standard");
 
 			/*
