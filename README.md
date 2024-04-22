@@ -118,6 +118,13 @@ lightning-cli newaddr
 
 `lightningd` will register the funds once the transaction is confirmed.
 
+Alternatively you can generate a taproot address should your source of funds support it:
+
+```bash
+# Return a taproot address
+lightning-cli newaddr p2tr
+```
+
 Confirm `lightningd` got funds by:
 
 # Returns an array of on-chain funds.
