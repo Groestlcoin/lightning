@@ -656,7 +656,7 @@ static struct command_result *process_getrawblock(struct bitcoin_cli *bcli)
 		struct getrawblock_stash *stash = bcli->stash;
 
 		plugin_log(bcli->cmd->plugin, LOG_DBG,
-			   "failed to fetch block %s from the bitcoin backend (maybe pruned).",
+			   "failed to fetch block %s from the groestlcoin backend (maybe pruned).",
 			   stash->block_hash);
 
 		if (bitcoind->version >= 230000) {
