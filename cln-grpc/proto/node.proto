@@ -15,6 +15,8 @@ service Node {
 	rpc ListChannels(ListchannelsRequest) returns (ListchannelsResponse) {}
 	rpc AddGossip(AddgossipRequest) returns (AddgossipResponse) {}
 	rpc AutoCleanInvoice(AutocleaninvoiceRequest) returns (AutocleaninvoiceResponse) {}
+	rpc AutoCleanOnce(AutocleanonceRequest) returns (AutocleanonceResponse) {}
+	rpc AutoCleanStatus(AutocleanstatusRequest) returns (AutocleanstatusResponse) {}
 	rpc CheckMessage(CheckmessageRequest) returns (CheckmessageResponse) {}
 	rpc Close(CloseRequest) returns (CloseResponse) {}
 	rpc ConnectPeer(ConnectRequest) returns (ConnectResponse) {}
@@ -49,10 +51,17 @@ service Node {
 	rpc ListClosedChannels(ListclosedchannelsRequest) returns (ListclosedchannelsResponse) {}
 	rpc DecodePay(DecodepayRequest) returns (DecodepayResponse) {}
 	rpc Decode(DecodeRequest) returns (DecodeResponse) {}
+	rpc DelPay(DelpayRequest) returns (DelpayResponse) {}
+	rpc DelForward(DelforwardRequest) returns (DelforwardResponse) {}
+	rpc DisableOffer(DisableofferRequest) returns (DisableofferResponse) {}
 	rpc Disconnect(DisconnectRequest) returns (DisconnectResponse) {}
 	rpc Feerates(FeeratesRequest) returns (FeeratesResponse) {}
 	rpc FetchInvoice(FetchinvoiceRequest) returns (FetchinvoiceResponse) {}
+	rpc FundChannel_Cancel(Fundchannel_cancelRequest) returns (Fundchannel_cancelResponse) {}
+	rpc FundChannel_Complete(Fundchannel_completeRequest) returns (Fundchannel_completeResponse) {}
 	rpc FundChannel(FundchannelRequest) returns (FundchannelResponse) {}
+	rpc FundChannel_Start(Fundchannel_startRequest) returns (Fundchannel_startResponse) {}
+	rpc GetLog(GetlogRequest) returns (GetlogResponse) {}
 	rpc GetRoute(GetrouteRequest) returns (GetrouteResponse) {}
 	rpc ListForwards(ListforwardsRequest) returns (ListforwardsResponse) {}
 	rpc ListOffers(ListoffersRequest) returns (ListoffersResponse) {}
@@ -76,6 +85,11 @@ service Node {
 	rpc PreApproveKeysend(PreapprovekeysendRequest) returns (PreapprovekeysendResponse) {}
 	rpc PreApproveInvoice(PreapproveinvoiceRequest) returns (PreapproveinvoiceResponse) {}
 	rpc StaticBackup(StaticbackupRequest) returns (StaticbackupResponse) {}
+	rpc BkprChannelsApy(BkprchannelsapyRequest) returns (BkprchannelsapyResponse) {}
+	rpc BkprDumpIncomeCsv(BkprdumpincomecsvRequest) returns (BkprdumpincomecsvResponse) {}
+	rpc BkprInspect(BkprinspectRequest) returns (BkprinspectResponse) {}
+	rpc BkprListAccountEvents(BkprlistaccounteventsRequest) returns (BkprlistaccounteventsResponse) {}
+	rpc BkprListBalances(BkprlistbalancesRequest) returns (BkprlistbalancesResponse) {}
 	rpc BkprListIncome(BkprlistincomeRequest) returns (BkprlistincomeResponse) {}
 }
 
@@ -318,6 +332,107 @@ message AutocleaninvoiceResponse {
 	bool enabled = 1;
 	optional uint64 expired_by = 2;
 	optional uint64 cycle_seconds = 3;
+}
+
+message AutocleanonceRequest {
+	AutocleanSubsystem subsystem = 1;
+	uint64 age = 2;
+}
+
+message AutocleanonceResponse {
+	AutocleanonceAutoclean autoclean = 1;
+}
+
+message AutocleanonceAutoclean {
+	optional AutocleanonceAutocleanSucceededforwards succeededforwards = 1;
+	optional AutocleanonceAutocleanFailedforwards failedforwards = 2;
+	optional AutocleanonceAutocleanSucceededpays succeededpays = 3;
+	optional AutocleanonceAutocleanFailedpays failedpays = 4;
+	optional AutocleanonceAutocleanPaidinvoices paidinvoices = 5;
+	optional AutocleanonceAutocleanExpiredinvoices expiredinvoices = 6;
+}
+
+message AutocleanonceAutocleanSucceededforwards {
+	uint64 cleaned = 1;
+	uint64 uncleaned = 2;
+}
+
+message AutocleanonceAutocleanFailedforwards {
+	uint64 cleaned = 1;
+	uint64 uncleaned = 2;
+}
+
+message AutocleanonceAutocleanSucceededpays {
+	uint64 cleaned = 1;
+	uint64 uncleaned = 2;
+}
+
+message AutocleanonceAutocleanFailedpays {
+	uint64 cleaned = 1;
+	uint64 uncleaned = 2;
+}
+
+message AutocleanonceAutocleanPaidinvoices {
+	uint64 cleaned = 1;
+	uint64 uncleaned = 2;
+}
+
+message AutocleanonceAutocleanExpiredinvoices {
+	uint64 cleaned = 1;
+	uint64 uncleaned = 2;
+}
+
+message AutocleanstatusRequest {
+	optional AutocleanSubsystem subsystem = 1;
+}
+
+message AutocleanstatusResponse {
+	AutocleanstatusAutoclean autoclean = 1;
+}
+
+message AutocleanstatusAutoclean {
+	optional AutocleanstatusAutocleanSucceededforwards succeededforwards = 1;
+	optional AutocleanstatusAutocleanFailedforwards failedforwards = 2;
+	optional AutocleanstatusAutocleanSucceededpays succeededpays = 3;
+	optional AutocleanstatusAutocleanFailedpays failedpays = 4;
+	optional AutocleanstatusAutocleanPaidinvoices paidinvoices = 5;
+	optional AutocleanstatusAutocleanExpiredinvoices expiredinvoices = 6;
+}
+
+message AutocleanstatusAutocleanSucceededforwards {
+	bool enabled = 1;
+	uint64 cleaned = 2;
+	optional uint64 age = 3;
+}
+
+message AutocleanstatusAutocleanFailedforwards {
+	bool enabled = 1;
+	uint64 cleaned = 2;
+	optional uint64 age = 3;
+}
+
+message AutocleanstatusAutocleanSucceededpays {
+	bool enabled = 1;
+	uint64 cleaned = 2;
+	optional uint64 age = 3;
+}
+
+message AutocleanstatusAutocleanFailedpays {
+	bool enabled = 1;
+	uint64 cleaned = 2;
+	optional uint64 age = 3;
+}
+
+message AutocleanstatusAutocleanPaidinvoices {
+	bool enabled = 1;
+	uint64 cleaned = 2;
+	optional uint64 age = 3;
+}
+
+message AutocleanstatusAutocleanExpiredinvoices {
+	bool enabled = 1;
+	uint64 cleaned = 2;
+	optional uint64 age = 3;
 }
 
 message CheckmessageRequest {
@@ -1455,6 +1570,76 @@ message DecodeRestrictions {
 	string summary = 2;
 }
 
+message DelpayRequest {
+	// DelPay.status
+	enum DelpayStatus {
+		COMPLETE = 0;
+		FAILED = 1;
+	}
+	bytes payment_hash = 1;
+	DelpayStatus status = 2;
+	optional uint64 partid = 3;
+	optional uint64 groupid = 4;
+}
+
+message DelpayResponse {
+	repeated DelpayPayments payments = 1;
+}
+
+message DelpayPayments {
+	// DelPay.payments[].status
+	enum DelpayPaymentsStatus {
+		PENDING = 0;
+		FAILED = 1;
+		COMPLETE = 2;
+	}
+	optional uint64 created_index = 1;
+	uint64 id = 2;
+	bytes payment_hash = 3;
+	DelpayPaymentsStatus status = 4;
+	Amount amount_sent_msat = 5;
+	optional uint64 partid = 6;
+	optional bytes destination = 7;
+	optional Amount amount_msat = 8;
+	uint64 created_at = 9;
+	optional uint64 updated_index = 10;
+	optional uint64 completed_at = 11;
+	optional uint64 groupid = 12;
+	optional bytes payment_preimage = 13;
+	optional string label = 14;
+	optional string bolt11 = 15;
+	optional string bolt12 = 16;
+	optional bytes erroronion = 17;
+}
+
+message DelforwardRequest {
+	// DelForward.status
+	enum DelforwardStatus {
+		SETTLED = 0;
+		LOCAL_FAILED = 1;
+		FAILED = 2;
+	}
+	string in_channel = 1;
+	uint64 in_htlc_id = 2;
+	DelforwardStatus status = 3;
+}
+
+message DelforwardResponse {
+}
+
+message DisableofferRequest {
+	bytes offer_id = 1;
+}
+
+message DisableofferResponse {
+	bytes offer_id = 1;
+	bool active = 2;
+	bool single_use = 3;
+	string bolt12 = 4;
+	bool used = 5;
+	optional string label = 6;
+}
+
 message DisconnectRequest {
 	bytes id = 1;
 	optional bool force = 2;
@@ -1561,6 +1746,24 @@ message FetchinvoiceNext_period {
 	uint64 paywindow_end = 5;
 }
 
+message Fundchannel_cancelRequest {
+	bytes id = 1;
+}
+
+message Fundchannel_cancelResponse {
+	string cancelled = 1;
+}
+
+message Fundchannel_completeRequest {
+	bytes id = 1;
+	string psbt = 2;
+}
+
+message Fundchannel_completeResponse {
+	bytes channel_id = 1;
+	bool commitments_secured = 2;
+}
+
 message FundchannelRequest {
 	AmountOrAll amount = 1;
 	optional Feerate feerate = 2;
@@ -1590,6 +1793,71 @@ message FundchannelResponse {
 message FundchannelChannel_type {
 	repeated uint32 bits = 1;
 	repeated ChannelTypeName names = 2;
+}
+
+message Fundchannel_startRequest {
+	bytes id = 1;
+	Amount amount = 2;
+	optional Feerate feerate = 3;
+	optional bool announce = 4;
+	optional string close_to = 5;
+	optional Amount push_msat = 6;
+	optional uint32 mindepth = 7;
+	optional Amount reserve = 8;
+	repeated uint32 channel_type = 9;
+}
+
+message Fundchannel_startResponse {
+	string funding_address = 1;
+	bytes scriptpubkey = 2;
+	optional Fundchannel_startChannel_type channel_type = 3;
+	optional bytes close_to = 4;
+	string warning_usage = 5;
+	optional uint32 mindepth = 6;
+}
+
+message Fundchannel_startChannel_type {
+	repeated uint32 bits = 1;
+	repeated ChannelTypeName names = 2;
+}
+
+message GetlogRequest {
+	// GetLog.level
+	enum GetlogLevel {
+		BROKEN = 0;
+		UNUSUAL = 1;
+		INFO = 2;
+		DEBUG = 3;
+		IO = 4;
+	}
+	optional GetlogLevel level = 1;
+}
+
+message GetlogResponse {
+	string created_at = 1;
+	uint32 bytes_used = 2;
+	uint32 bytes_max = 3;
+	repeated GetlogLog log = 4;
+}
+
+message GetlogLog {
+	// GetLog.log[].type
+	enum GetlogLogType {
+		SKIPPED = 0;
+		BROKEN = 1;
+		UNUSUAL = 2;
+		INFO = 3;
+		DEBUG = 4;
+		IO_IN = 5;
+		IO_OUT = 6;
+	}
+	GetlogLogType item_type = 1;
+	optional uint32 num_skipped = 2;
+	optional string time = 3;
+	optional string source = 4;
+	optional string log = 5;
+	optional bytes node_id = 6;
+	optional bytes data = 7;
 }
 
 message GetrouteRequest {
@@ -2091,6 +2359,144 @@ message StaticbackupRequest {
 
 message StaticbackupResponse {
 	repeated bytes scb = 1;
+}
+
+message BkprchannelsapyRequest {
+	optional uint64 start_time = 1;
+	optional uint64 end_time = 2;
+}
+
+message BkprchannelsapyResponse {
+	repeated BkprchannelsapyChannels_apy channels_apy = 1;
+}
+
+message BkprchannelsapyChannels_apy {
+	string account = 1;
+	Amount routed_out_msat = 2;
+	Amount routed_in_msat = 3;
+	Amount lease_fee_paid_msat = 4;
+	Amount lease_fee_earned_msat = 5;
+	Amount pushed_out_msat = 6;
+	Amount pushed_in_msat = 7;
+	Amount our_start_balance_msat = 8;
+	Amount channel_start_balance_msat = 9;
+	Amount fees_out_msat = 10;
+	optional Amount fees_in_msat = 11;
+	string utilization_out = 12;
+	optional string utilization_out_initial = 13;
+	string utilization_in = 14;
+	optional string utilization_in_initial = 15;
+	string apy_out = 16;
+	optional string apy_out_initial = 17;
+	string apy_in = 18;
+	optional string apy_in_initial = 19;
+	string apy_total = 20;
+	optional string apy_total_initial = 21;
+	optional string apy_lease = 22;
+}
+
+message BkprdumpincomecsvRequest {
+	string csv_format = 1;
+	optional string csv_file = 2;
+	optional bool consolidate_fees = 3;
+	optional uint64 start_time = 4;
+	optional uint64 end_time = 5;
+}
+
+message BkprdumpincomecsvResponse {
+	// Bkpr-DumpIncomeCsv.csv_format
+	enum BkprdumpincomecsvCsv_format {
+		COINTRACKER = 0;
+		KOINLY = 1;
+		HARMONY = 2;
+		QUICKBOOKS = 3;
+	}
+	string csv_file = 1;
+	BkprdumpincomecsvCsv_format csv_format = 2;
+}
+
+message BkprinspectRequest {
+	string account = 1;
+}
+
+message BkprinspectResponse {
+	repeated BkprinspectTxs txs = 1;
+}
+
+message BkprinspectTxs {
+	bytes txid = 1;
+	optional uint32 blockheight = 2;
+	Amount fees_paid_msat = 3;
+	repeated BkprinspectTxsOutputs outputs = 4;
+}
+
+message BkprinspectTxsOutputs {
+	string account = 1;
+	uint32 outnum = 2;
+	Amount output_value_msat = 3;
+	string currency = 4;
+	optional Amount credit_msat = 5;
+	optional Amount debit_msat = 6;
+	optional string originating_account = 7;
+	optional string output_tag = 8;
+	optional string spend_tag = 9;
+	optional bytes spending_txid = 10;
+	optional bytes payment_id = 11;
+}
+
+message BkprlistaccounteventsRequest {
+	optional string account = 1;
+}
+
+message BkprlistaccounteventsResponse {
+	repeated BkprlistaccounteventsEvents events = 1;
+}
+
+message BkprlistaccounteventsEvents {
+	// Bkpr-ListAccountEvents.events[].type
+	enum BkprlistaccounteventsEventsType {
+		ONCHAIN_FEE = 0;
+		CHAIN = 1;
+		CHANNEL = 2;
+	}
+	string account = 1;
+	BkprlistaccounteventsEventsType item_type = 2;
+	string tag = 3;
+	Amount credit_msat = 4;
+	Amount debit_msat = 5;
+	string currency = 6;
+	uint32 timestamp = 7;
+	optional string outpoint = 8;
+	optional uint32 blockheight = 9;
+	optional string origin = 10;
+	optional bytes payment_id = 11;
+	optional bytes txid = 12;
+	optional string description = 13;
+	optional Amount fees_msat = 14;
+	optional bool is_rebalance = 15;
+	optional uint32 part_id = 16;
+}
+
+message BkprlistbalancesRequest {
+}
+
+message BkprlistbalancesResponse {
+	repeated BkprlistbalancesAccounts accounts = 1;
+}
+
+message BkprlistbalancesAccounts {
+	string account = 1;
+	repeated BkprlistbalancesAccountsBalances balances = 2;
+	optional bytes peer_id = 3;
+	optional bool we_opened = 4;
+	optional bool account_closed = 5;
+	optional bool account_resolved = 6;
+	optional uint32 resolved_at_block = 7;
+}
+
+message BkprlistbalancesAccountsBalances {
+	Amount balance_msat = 1;
+	string coin_type = 2;
 }
 
 message BkprlistincomeRequest {

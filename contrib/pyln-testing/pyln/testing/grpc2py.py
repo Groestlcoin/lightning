@@ -194,6 +194,116 @@ def autocleaninvoice2py(m):
     })
 
 
+def autoclean_once_autoclean_expiredinvoices2py(m):
+    return remove_default({
+        "cleaned": m.cleaned,  # PrimitiveField in generate_composite
+        "uncleaned": m.uncleaned,  # PrimitiveField in generate_composite
+    })
+
+
+def autoclean_once_autoclean_failedforwards2py(m):
+    return remove_default({
+        "cleaned": m.cleaned,  # PrimitiveField in generate_composite
+        "uncleaned": m.uncleaned,  # PrimitiveField in generate_composite
+    })
+
+
+def autoclean_once_autoclean_failedpays2py(m):
+    return remove_default({
+        "cleaned": m.cleaned,  # PrimitiveField in generate_composite
+        "uncleaned": m.uncleaned,  # PrimitiveField in generate_composite
+    })
+
+
+def autoclean_once_autoclean_paidinvoices2py(m):
+    return remove_default({
+        "cleaned": m.cleaned,  # PrimitiveField in generate_composite
+        "uncleaned": m.uncleaned,  # PrimitiveField in generate_composite
+    })
+
+
+def autoclean_once_autoclean_succeededforwards2py(m):
+    return remove_default({
+        "cleaned": m.cleaned,  # PrimitiveField in generate_composite
+        "uncleaned": m.uncleaned,  # PrimitiveField in generate_composite
+    })
+
+
+def autoclean_once_autoclean_succeededpays2py(m):
+    return remove_default({
+        "cleaned": m.cleaned,  # PrimitiveField in generate_composite
+        "uncleaned": m.uncleaned,  # PrimitiveField in generate_composite
+    })
+
+
+def autoclean_once_autoclean2py(m):
+    return remove_default({
+    })
+
+
+def autoclean_once2py(m):
+    return remove_default({
+    })
+
+
+def autoclean_status_autoclean_expiredinvoices2py(m):
+    return remove_default({
+        "age": m.age,  # PrimitiveField in generate_composite
+        "cleaned": m.cleaned,  # PrimitiveField in generate_composite
+        "enabled": m.enabled,  # PrimitiveField in generate_composite
+    })
+
+
+def autoclean_status_autoclean_failedforwards2py(m):
+    return remove_default({
+        "age": m.age,  # PrimitiveField in generate_composite
+        "cleaned": m.cleaned,  # PrimitiveField in generate_composite
+        "enabled": m.enabled,  # PrimitiveField in generate_composite
+    })
+
+
+def autoclean_status_autoclean_failedpays2py(m):
+    return remove_default({
+        "age": m.age,  # PrimitiveField in generate_composite
+        "cleaned": m.cleaned,  # PrimitiveField in generate_composite
+        "enabled": m.enabled,  # PrimitiveField in generate_composite
+    })
+
+
+def autoclean_status_autoclean_paidinvoices2py(m):
+    return remove_default({
+        "age": m.age,  # PrimitiveField in generate_composite
+        "cleaned": m.cleaned,  # PrimitiveField in generate_composite
+        "enabled": m.enabled,  # PrimitiveField in generate_composite
+    })
+
+
+def autoclean_status_autoclean_succeededforwards2py(m):
+    return remove_default({
+        "age": m.age,  # PrimitiveField in generate_composite
+        "cleaned": m.cleaned,  # PrimitiveField in generate_composite
+        "enabled": m.enabled,  # PrimitiveField in generate_composite
+    })
+
+
+def autoclean_status_autoclean_succeededpays2py(m):
+    return remove_default({
+        "age": m.age,  # PrimitiveField in generate_composite
+        "cleaned": m.cleaned,  # PrimitiveField in generate_composite
+        "enabled": m.enabled,  # PrimitiveField in generate_composite
+    })
+
+
+def autoclean_status_autoclean2py(m):
+    return remove_default({
+    })
+
+
+def autoclean_status2py(m):
+    return remove_default({
+    })
+
+
 def checkmessage2py(m):
     return remove_default({
         "pubkey": hexlify(m.pubkey),  # PrimitiveField in generate_composite
@@ -1148,6 +1258,50 @@ def decode2py(m):
     })
 
 
+def delpay_payments2py(m):
+    return remove_default({
+        "status": str(m.status),  # EnumField in generate_composite
+        "amount_msat": amount2msat(m.amount_msat),  # PrimitiveField in generate_composite
+        "amount_sent_msat": amount2msat(m.amount_sent_msat),  # PrimitiveField in generate_composite
+        "bolt11": m.bolt11,  # PrimitiveField in generate_composite
+        "bolt12": m.bolt12,  # PrimitiveField in generate_composite
+        "completed_at": m.completed_at,  # PrimitiveField in generate_composite
+        "created_at": m.created_at,  # PrimitiveField in generate_composite
+        "created_index": m.created_index,  # PrimitiveField in generate_composite
+        "destination": hexlify(m.destination),  # PrimitiveField in generate_composite
+        "erroronion": hexlify(m.erroronion),  # PrimitiveField in generate_composite
+        "groupid": m.groupid,  # PrimitiveField in generate_composite
+        "id": m.id,  # PrimitiveField in generate_composite
+        "label": m.label,  # PrimitiveField in generate_composite
+        "partid": m.partid,  # PrimitiveField in generate_composite
+        "payment_hash": hexlify(m.payment_hash),  # PrimitiveField in generate_composite
+        "payment_preimage": hexlify(m.payment_preimage),  # PrimitiveField in generate_composite
+        "updated_index": m.updated_index,  # PrimitiveField in generate_composite
+    })
+
+
+def delpay2py(m):
+    return remove_default({
+        "payments": [delpay_payments2py(i) for i in m.payments],  # ArrayField[composite] in generate_composite
+    })
+
+
+def delforward2py(m):
+    return remove_default({
+    })
+
+
+def disableoffer2py(m):
+    return remove_default({
+        "active": m.active,  # PrimitiveField in generate_composite
+        "bolt12": m.bolt12,  # PrimitiveField in generate_composite
+        "label": m.label,  # PrimitiveField in generate_composite
+        "offer_id": hexlify(m.offer_id),  # PrimitiveField in generate_composite
+        "single_use": m.single_use,  # PrimitiveField in generate_composite
+        "used": m.used,  # PrimitiveField in generate_composite
+    })
+
+
 def disconnect2py(m):
     return remove_default({
     })
@@ -1244,6 +1398,19 @@ def fetchinvoice2py(m):
     })
 
 
+def fundchannel_cancel2py(m):
+    return remove_default({
+        "cancelled": m.cancelled,  # PrimitiveField in generate_composite
+    })
+
+
+def fundchannel_complete2py(m):
+    return remove_default({
+        "channel_id": hexlify(m.channel_id),  # PrimitiveField in generate_composite
+        "commitments_secured": m.commitments_secured,  # PrimitiveField in generate_composite
+    })
+
+
 def fundchannel_channel_type2py(m):
     return remove_default({
         "bits": [m.bits for i in m.bits], # ArrayField[primitive] in generate_composite
@@ -1259,6 +1426,44 @@ def fundchannel2py(m):
         "outnum": m.outnum,  # PrimitiveField in generate_composite
         "tx": hexlify(m.tx),  # PrimitiveField in generate_composite
         "txid": hexlify(m.txid),  # PrimitiveField in generate_composite
+    })
+
+
+def fundchannel_start_channel_type2py(m):
+    return remove_default({
+        "bits": [m.bits for i in m.bits], # ArrayField[primitive] in generate_composite
+        "names": [str(i) for i in m.names],  # ArrayField[composite] in generate_composite
+    })
+
+
+def fundchannel_start2py(m):
+    return remove_default({
+        "close_to": hexlify(m.close_to),  # PrimitiveField in generate_composite
+        "funding_address": m.funding_address,  # PrimitiveField in generate_composite
+        "mindepth": m.mindepth,  # PrimitiveField in generate_composite
+        "scriptpubkey": hexlify(m.scriptpubkey),  # PrimitiveField in generate_composite
+        "warning_usage": m.warning_usage,  # PrimitiveField in generate_composite
+    })
+
+
+def getlog_log2py(m):
+    return remove_default({
+        "type": str(m.item_type),  # EnumField in generate_composite
+        "data": hexlify(m.data),  # PrimitiveField in generate_composite
+        "log": m.log,  # PrimitiveField in generate_composite
+        "node_id": hexlify(m.node_id),  # PrimitiveField in generate_composite
+        "num_skipped": m.num_skipped,  # PrimitiveField in generate_composite
+        "source": m.source,  # PrimitiveField in generate_composite
+        "time": m.time,  # PrimitiveField in generate_composite
+    })
+
+
+def getlog2py(m):
+    return remove_default({
+        "log": [getlog_log2py(i) for i in m.log],  # ArrayField[composite] in generate_composite
+        "bytes_max": m.bytes_max,  # PrimitiveField in generate_composite
+        "bytes_used": m.bytes_used,  # PrimitiveField in generate_composite
+        "created_at": m.created_at,  # PrimitiveField in generate_composite
     })
 
 
@@ -1582,6 +1787,129 @@ def preapproveinvoice2py(m):
 def staticbackup2py(m):
     return remove_default({
         "scb": [hexlify(m.scb) for i in hexlify(m.scb)], # ArrayField[primitive] in generate_composite
+    })
+
+
+def bkpr_channelsapy_channels_apy2py(m):
+    return remove_default({
+        "account": m.account,  # PrimitiveField in generate_composite
+        "apy_in": m.apy_in,  # PrimitiveField in generate_composite
+        "apy_in_initial": m.apy_in_initial,  # PrimitiveField in generate_composite
+        "apy_lease": m.apy_lease,  # PrimitiveField in generate_composite
+        "apy_out": m.apy_out,  # PrimitiveField in generate_composite
+        "apy_out_initial": m.apy_out_initial,  # PrimitiveField in generate_composite
+        "apy_total": m.apy_total,  # PrimitiveField in generate_composite
+        "apy_total_initial": m.apy_total_initial,  # PrimitiveField in generate_composite
+        "channel_start_balance_msat": amount2msat(m.channel_start_balance_msat),  # PrimitiveField in generate_composite
+        "fees_in_msat": amount2msat(m.fees_in_msat),  # PrimitiveField in generate_composite
+        "fees_out_msat": amount2msat(m.fees_out_msat),  # PrimitiveField in generate_composite
+        "lease_fee_earned_msat": amount2msat(m.lease_fee_earned_msat),  # PrimitiveField in generate_composite
+        "lease_fee_paid_msat": amount2msat(m.lease_fee_paid_msat),  # PrimitiveField in generate_composite
+        "our_start_balance_msat": amount2msat(m.our_start_balance_msat),  # PrimitiveField in generate_composite
+        "pushed_in_msat": amount2msat(m.pushed_in_msat),  # PrimitiveField in generate_composite
+        "pushed_out_msat": amount2msat(m.pushed_out_msat),  # PrimitiveField in generate_composite
+        "routed_in_msat": amount2msat(m.routed_in_msat),  # PrimitiveField in generate_composite
+        "routed_out_msat": amount2msat(m.routed_out_msat),  # PrimitiveField in generate_composite
+        "utilization_in": m.utilization_in,  # PrimitiveField in generate_composite
+        "utilization_in_initial": m.utilization_in_initial,  # PrimitiveField in generate_composite
+        "utilization_out": m.utilization_out,  # PrimitiveField in generate_composite
+        "utilization_out_initial": m.utilization_out_initial,  # PrimitiveField in generate_composite
+    })
+
+
+def bkpr_channelsapy2py(m):
+    return remove_default({
+        "channels_apy": [bkpr_channelsapy_channels_apy2py(i) for i in m.channels_apy],  # ArrayField[composite] in generate_composite
+    })
+
+
+def bkpr_dumpincomecsv2py(m):
+    return remove_default({
+        "csv_format": str(m.csv_format),  # EnumField in generate_composite
+        "csv_file": m.csv_file,  # PrimitiveField in generate_composite
+    })
+
+
+def bkpr_inspect_txs_outputs2py(m):
+    return remove_default({
+        "account": m.account,  # PrimitiveField in generate_composite
+        "credit_msat": amount2msat(m.credit_msat),  # PrimitiveField in generate_composite
+        "currency": m.currency,  # PrimitiveField in generate_composite
+        "debit_msat": amount2msat(m.debit_msat),  # PrimitiveField in generate_composite
+        "originating_account": m.originating_account,  # PrimitiveField in generate_composite
+        "outnum": m.outnum,  # PrimitiveField in generate_composite
+        "output_tag": m.output_tag,  # PrimitiveField in generate_composite
+        "output_value_msat": amount2msat(m.output_value_msat),  # PrimitiveField in generate_composite
+        "payment_id": hexlify(m.payment_id),  # PrimitiveField in generate_composite
+        "spend_tag": m.spend_tag,  # PrimitiveField in generate_composite
+        "spending_txid": hexlify(m.spending_txid),  # PrimitiveField in generate_composite
+    })
+
+
+def bkpr_inspect_txs2py(m):
+    return remove_default({
+        "outputs": [bkpr_inspect_txs_outputs2py(i) for i in m.outputs],  # ArrayField[composite] in generate_composite
+        "blockheight": m.blockheight,  # PrimitiveField in generate_composite
+        "fees_paid_msat": amount2msat(m.fees_paid_msat),  # PrimitiveField in generate_composite
+        "txid": hexlify(m.txid),  # PrimitiveField in generate_composite
+    })
+
+
+def bkpr_inspect2py(m):
+    return remove_default({
+        "txs": [bkpr_inspect_txs2py(i) for i in m.txs],  # ArrayField[composite] in generate_composite
+    })
+
+
+def bkpr_listaccountevents_events2py(m):
+    return remove_default({
+        "type": str(m.item_type),  # EnumField in generate_composite
+        "account": m.account,  # PrimitiveField in generate_composite
+        "blockheight": m.blockheight,  # PrimitiveField in generate_composite
+        "credit_msat": amount2msat(m.credit_msat),  # PrimitiveField in generate_composite
+        "currency": m.currency,  # PrimitiveField in generate_composite
+        "debit_msat": amount2msat(m.debit_msat),  # PrimitiveField in generate_composite
+        "description": m.description,  # PrimitiveField in generate_composite
+        "fees_msat": amount2msat(m.fees_msat),  # PrimitiveField in generate_composite
+        "is_rebalance": m.is_rebalance,  # PrimitiveField in generate_composite
+        "origin": m.origin,  # PrimitiveField in generate_composite
+        "outpoint": m.outpoint,  # PrimitiveField in generate_composite
+        "part_id": m.part_id,  # PrimitiveField in generate_composite
+        "payment_id": hexlify(m.payment_id),  # PrimitiveField in generate_composite
+        "tag": m.tag,  # PrimitiveField in generate_composite
+        "timestamp": m.timestamp,  # PrimitiveField in generate_composite
+        "txid": hexlify(m.txid),  # PrimitiveField in generate_composite
+    })
+
+
+def bkpr_listaccountevents2py(m):
+    return remove_default({
+        "events": [bkpr_listaccountevents_events2py(i) for i in m.events],  # ArrayField[composite] in generate_composite
+    })
+
+
+def bkpr_listbalances_accounts_balances2py(m):
+    return remove_default({
+        "balance_msat": amount2msat(m.balance_msat),  # PrimitiveField in generate_composite
+        "coin_type": m.coin_type,  # PrimitiveField in generate_composite
+    })
+
+
+def bkpr_listbalances_accounts2py(m):
+    return remove_default({
+        "balances": [bkpr_listbalances_accounts_balances2py(i) for i in m.balances],  # ArrayField[composite] in generate_composite
+        "account": m.account,  # PrimitiveField in generate_composite
+        "account_closed": m.account_closed,  # PrimitiveField in generate_composite
+        "account_resolved": m.account_resolved,  # PrimitiveField in generate_composite
+        "peer_id": hexlify(m.peer_id),  # PrimitiveField in generate_composite
+        "resolved_at_block": m.resolved_at_block,  # PrimitiveField in generate_composite
+        "we_opened": m.we_opened,  # PrimitiveField in generate_composite
+    })
+
+
+def bkpr_listbalances2py(m):
+    return remove_default({
+        "accounts": [bkpr_listbalances_accounts2py(i) for i in m.accounts],  # ArrayField[composite] in generate_composite
     })
 
 
