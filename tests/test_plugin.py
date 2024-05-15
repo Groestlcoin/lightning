@@ -1627,6 +1627,17 @@ def test_libplugin(node_factory):
     del l1.daemon.opts["somearg-deprecated"]
     l1.start()
 
+    # Test that check works as expected.
+    assert only_one(l1.rpc.checkthis(["test_libplugin", "name"])['datastore'])['string'] == "foobar"
+    with pytest.raises(RpcError, match="key: should be an array"):
+        assert l1.rpc.checkthis("badkey")
+
+    with pytest.raises(RpcError, match="key: should be an array"):
+        assert l1.rpc.check('checkthis', key="badkey")
+
+    # This works
+    assert l1.rpc.check('checkthis', key=["test_libplugin", "name"]) == {'command_to_check': 'checkthis'}
+
 
 def test_libplugin_deprecated(node_factory):
     """Sanity checks for plugins made with libplugin using deprecated args"""
@@ -2180,7 +2191,8 @@ def test_important_plugin(node_factory):
 
     n = node_factory.get_node(options={"important-plugin": os.path.join(pluginsdir, "nonexistent")},
                               may_fail=True, expect_fail=True,
-                              broken_log='Plugin marked as important, shutting down lightningd',
+                              # Other plugins can complain as lightningd stops suddenly:
+                              broken_log='Plugin marked as important, shutting down lightningd|Reading JSON input: Connection reset by peer',
                               start=False)
 
     n.daemon.start(wait_for_initialized=False, stderr_redir=True)
@@ -2268,7 +2280,6 @@ def test_htlc_accepted_hook_crash(node_factory, executor):
         f.result(10)
 
 
-@pytest.mark.skip("With newer GCC versions reports a '*** buffer overflow detected ***: terminated'")
 def test_notify(node_factory):
     """Test that notifications from plugins get ignored"""
     plugins = [os.path.join(os.getcwd(), 'tests/plugins/notify.py'),
@@ -2292,17 +2303,17 @@ def test_notify(node_factory):
         else:
             assert out[2 + i].endswith("|\r")
 
-    assert out[102] == '# Beginning stage 2\n'
-    assert out[103] == '\r'
-
+    # These messages are DEBUG level, and default is INFO, so there is no
+    # "'# Beginning stage 2\n'
+    assert out[102] == '\r'
     for i in range(10):
-        assert out[104 + i].startswith("# Stage 2/2 {:>2}/10 |".format(1 + i))
+        assert out[103 + i].startswith("# Stage 2/2 {:>2}/10 |".format(1 + i))
         if i == 9:
-            assert out[104 + i].endswith("|\n")
+            assert out[103 + i].endswith("|\n")
         else:
-            assert out[104 + i].endswith("|\r")
-    assert out[114] == '"This worked"\n'
-    assert len(out) == 115
+            assert out[103 + i].endswith("|\r")
+    assert out[113] == '"This worked"\n'
+    assert len(out) == 114
 
     # At debug level, we get the second prompt.
     out = subprocess.check_output(['cli/lightning-cli',
@@ -3122,6 +3133,14 @@ def test_autoclean(node_factory):
     # It must be an integer!
     with pytest.raises(RpcError, match=r'is not a number'):
         l3.rpc.setconfig('autoclean-expiredinvoices-age', 'xxx')
+
+    # check gives the same answer.
+    with pytest.raises(RpcError, match=r'is not a number'):
+        l3.rpc.check('setconfig', config='autoclean-expiredinvoices-age', val='xxx')
+
+    # check does not actually set!
+    l3.rpc.check('setconfig', config='autoclean-expiredinvoices-age', val=2) == {'command_to_check': 'setconfig'}
+    assert l3.rpc.autoclean_status()['autoclean']['expiredinvoices']['enabled'] is False
 
     l3.rpc.setconfig('autoclean-expiredinvoices-age', 2)
     assert l3.rpc.autoclean_status()['autoclean']['expiredinvoices']['enabled'] is True

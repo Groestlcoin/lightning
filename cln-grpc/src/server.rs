@@ -2170,6 +2170,134 @@ async fn ping(
 
 }
 
+async fn plugin(
+    &self,
+    request: tonic::Request<pb::PluginRequest>,
+) -> Result<tonic::Response<pb::PluginResponse>, tonic::Status> {
+    let req = request.into_inner();
+    let req: requests::PluginRequest = req.into();
+    debug!("Client asked for plugin");
+    trace!("plugin request: {:?}", req);
+    let mut rpc = ClnRpc::new(&self.rpc_path)
+        .await
+        .map_err(|e| Status::new(Code::Internal, e.to_string()))?;
+    let result = rpc.call(Request::Plugin(req))
+        .await
+        .map_err(|e| Status::new(
+           Code::Unknown,
+           format!("Error calling method Plugin: {:?}", e)))?;
+    match result {
+        Response::Plugin(r) => {
+           trace!("plugin response: {:?}", r);
+           Ok(tonic::Response::new(r.into()))
+        },
+        r => Err(Status::new(
+            Code::Internal,
+            format!(
+                "Unexpected result {:?} to method call Plugin",
+                r
+            )
+        )),
+    }
+
+}
+
+async fn rene_pay_status(
+    &self,
+    request: tonic::Request<pb::RenepaystatusRequest>,
+) -> Result<tonic::Response<pb::RenepaystatusResponse>, tonic::Status> {
+    let req = request.into_inner();
+    let req: requests::RenepaystatusRequest = req.into();
+    debug!("Client asked for rene_pay_status");
+    trace!("rene_pay_status request: {:?}", req);
+    let mut rpc = ClnRpc::new(&self.rpc_path)
+        .await
+        .map_err(|e| Status::new(Code::Internal, e.to_string()))?;
+    let result = rpc.call(Request::RenePayStatus(req))
+        .await
+        .map_err(|e| Status::new(
+           Code::Unknown,
+           format!("Error calling method RenePayStatus: {:?}", e)))?;
+    match result {
+        Response::RenePayStatus(r) => {
+           trace!("rene_pay_status response: {:?}", r);
+           Ok(tonic::Response::new(r.into()))
+        },
+        r => Err(Status::new(
+            Code::Internal,
+            format!(
+                "Unexpected result {:?} to method call RenePayStatus",
+                r
+            )
+        )),
+    }
+
+}
+
+async fn rene_pay(
+    &self,
+    request: tonic::Request<pb::RenepayRequest>,
+) -> Result<tonic::Response<pb::RenepayResponse>, tonic::Status> {
+    let req = request.into_inner();
+    let req: requests::RenepayRequest = req.into();
+    debug!("Client asked for rene_pay");
+    trace!("rene_pay request: {:?}", req);
+    let mut rpc = ClnRpc::new(&self.rpc_path)
+        .await
+        .map_err(|e| Status::new(Code::Internal, e.to_string()))?;
+    let result = rpc.call(Request::RenePay(req))
+        .await
+        .map_err(|e| Status::new(
+           Code::Unknown,
+           format!("Error calling method RenePay: {:?}", e)))?;
+    match result {
+        Response::RenePay(r) => {
+           trace!("rene_pay response: {:?}", r);
+           Ok(tonic::Response::new(r.into()))
+        },
+        r => Err(Status::new(
+            Code::Internal,
+            format!(
+                "Unexpected result {:?} to method call RenePay",
+                r
+            )
+        )),
+    }
+
+}
+
+async fn reserve_inputs(
+    &self,
+    request: tonic::Request<pb::ReserveinputsRequest>,
+) -> Result<tonic::Response<pb::ReserveinputsResponse>, tonic::Status> {
+    let req = request.into_inner();
+    let req: requests::ReserveinputsRequest = req.into();
+    debug!("Client asked for reserve_inputs");
+    trace!("reserve_inputs request: {:?}", req);
+    let mut rpc = ClnRpc::new(&self.rpc_path)
+        .await
+        .map_err(|e| Status::new(Code::Internal, e.to_string()))?;
+    let result = rpc.call(Request::ReserveInputs(req))
+        .await
+        .map_err(|e| Status::new(
+           Code::Unknown,
+           format!("Error calling method ReserveInputs: {:?}", e)))?;
+    match result {
+        Response::ReserveInputs(r) => {
+           trace!("reserve_inputs response: {:?}", r);
+           Ok(tonic::Response::new(r.into()))
+        },
+        r => Err(Status::new(
+            Code::Internal,
+            format!(
+                "Unexpected result {:?} to method call ReserveInputs",
+                r
+            )
+        )),
+    }
+
+}
+
 async fn send_custom_msg(
     &self,
     request: tonic::Request<pb::SendcustommsgRequest>,
@@ -2195,6 +2323,38 @@ async fn send_custom_msg(
             Code::Internal,
             format!(
                 "Unexpected result {:?} to method call SendCustomMsg",
+                r
+            )
+        )),
+    }
+
+}
+
+async fn send_invoice(
+    &self,
+    request: tonic::Request<pb::SendinvoiceRequest>,
+) -> Result<tonic::Response<pb::SendinvoiceResponse>, tonic::Status> {
+    let req = request.into_inner();
+    let req: requests::SendinvoiceRequest = req.into();
+    debug!("Client asked for send_invoice");
+    trace!("send_invoice request: {:?}", req);
+    let mut rpc = ClnRpc::new(&self.rpc_path)
+        .await
+        .map_err(|e| Status::new(Code::Internal, e.to_string()))?;
+    let result = rpc.call(Request::SendInvoice(req))
+        .await
+        .map_err(|e| Status::new(
+           Code::Unknown,
+           format!("Error calling method SendInvoice: {:?}", e)))?;
+    match result {
+        Response::SendInvoice(r) => {
+           trace!("send_invoice response: {:?}", r);
+           Ok(tonic::Response::new(r.into()))
+        },
+        r => Err(Status::new(
+            Code::Internal,
+            format!(
+                "Unexpected result {:?} to method call SendInvoice",
                 r
             )
         )),
@@ -2291,6 +2451,134 @@ async fn sign_message(
             Code::Internal,
             format!(
                 "Unexpected result {:?} to method call SignMessage",
+                r
+            )
+        )),
+    }
+
+}
+
+async fn splice_init(
+    &self,
+    request: tonic::Request<pb::SpliceInitRequest>,
+) -> Result<tonic::Response<pb::SpliceInitResponse>, tonic::Status> {
+    let req = request.into_inner();
+    let req: requests::Splice_initRequest = req.into();
+    debug!("Client asked for splice_init");
+    trace!("splice_init request: {:?}", req);
+    let mut rpc = ClnRpc::new(&self.rpc_path)
+        .await
+        .map_err(|e| Status::new(Code::Internal, e.to_string()))?;
+    let result = rpc.call(Request::Splice_Init(req))
+        .await
+        .map_err(|e| Status::new(
+           Code::Unknown,
+           format!("Error calling method Splice_Init: {:?}", e)))?;
+    match result {
+        Response::Splice_Init(r) => {
+           trace!("splice_init response: {:?}", r);
+           Ok(tonic::Response::new(r.into()))
+        },
+        r => Err(Status::new(
+            Code::Internal,
+            format!(
+                "Unexpected result {:?} to method call Splice_Init",
+                r
+            )
+        )),
+    }
+
+}
+
+async fn splice_signed(
+    &self,
+    request: tonic::Request<pb::SpliceSignedRequest>,
+) -> Result<tonic::Response<pb::SpliceSignedResponse>, tonic::Status> {
+    let req = request.into_inner();
+    let req: requests::Splice_signedRequest = req.into();
+    debug!("Client asked for splice_signed");
+    trace!("splice_signed request: {:?}", req);
+    let mut rpc = ClnRpc::new(&self.rpc_path)
+        .await
+        .map_err(|e| Status::new(Code::Internal, e.to_string()))?;
+    let result = rpc.call(Request::Splice_Signed(req))
+        .await
+        .map_err(|e| Status::new(
+           Code::Unknown,
+           format!("Error calling method Splice_Signed: {:?}", e)))?;
+    match result {
+        Response::Splice_Signed(r) => {
+           trace!("splice_signed response: {:?}", r);
+           Ok(tonic::Response::new(r.into()))
+        },
+        r => Err(Status::new(
+            Code::Internal,
+            format!(
+                "Unexpected result {:?} to method call Splice_Signed",
+                r
+            )
+        )),
+    }
+
+}
+
+async fn splice_update(
+    &self,
+    request: tonic::Request<pb::SpliceUpdateRequest>,
+) -> Result<tonic::Response<pb::SpliceUpdateResponse>, tonic::Status> {
+    let req = request.into_inner();
+    let req: requests::Splice_updateRequest = req.into();
+    debug!("Client asked for splice_update");
+    trace!("splice_update request: {:?}", req);
+    let mut rpc = ClnRpc::new(&self.rpc_path)
+        .await
+        .map_err(|e| Status::new(Code::Internal, e.to_string()))?;
+    let result = rpc.call(Request::Splice_Update(req))
+        .await
+        .map_err(|e| Status::new(
+           Code::Unknown,
+           format!("Error calling method Splice_Update: {:?}", e)))?;
+    match result {
+        Response::Splice_Update(r) => {
+           trace!("splice_update response: {:?}", r);
+           Ok(tonic::Response::new(r.into()))
+        },
+        r => Err(Status::new(
+            Code::Internal,
+            format!(
+                "Unexpected result {:?} to method call Splice_Update",
+                r
+            )
+        )),
+    }
+
+}
+
+async fn unreserve_inputs(
+    &self,
+    request: tonic::Request<pb::UnreserveinputsRequest>,
+) -> Result<tonic::Response<pb::UnreserveinputsResponse>, tonic::Status> {
+    let req = request.into_inner();
+    let req: requests::UnreserveinputsRequest = req.into();
+    debug!("Client asked for unreserve_inputs");
+    trace!("unreserve_inputs request: {:?}", req);
+    let mut rpc = ClnRpc::new(&self.rpc_path)
+        .await
+        .map_err(|e| Status::new(Code::Internal, e.to_string()))?;
+    let result = rpc.call(Request::UnreserveInputs(req))
+        .await
+        .map_err(|e| Status::new(
+           Code::Unknown,
+           format!("Error calling method UnreserveInputs: {:?}", e)))?;
+    match result {
+        Response::UnreserveInputs(r) => {
+           trace!("unreserve_inputs response: {:?}", r);
+           Ok(tonic::Response::new(r.into()))
+        },
+        r => Err(Status::new(
+            Code::Internal,
+            format!(
+                "Unexpected result {:?} to method call UnreserveInputs",
                 r
             )
         )),

@@ -40,6 +40,16 @@ enum pong_expect_type {
 	PONG_EXPECTED_PROBING = 2,
 };
 
+/*~ We classify connections by loose priority */
+enum connection_prio {
+	/* We deliberately connected to them. */
+	PRIO_DELIBERATE,
+	/* They connected to us, unsolicited. */
+	PRIO_UNSOLICITED,
+	/* We connected, but transiently. */
+	PRIO_TRANSIENT,
+};
+
 /*~ We keep a hash table (ccan/htable) of peers, which tells us what peers are
  * already connected (by peer->id). */
 struct peer {
@@ -90,6 +100,9 @@ struct peer {
 	/* Last time we received traffic */
 	struct timeabs last_recv_time;
 
+	/* How important does this peer seem to be? */
+	enum connection_prio prio;
+
 	bool dev_read_enabled;
 	/* If non-NULL, this counts down; 0 means disable */
 	u32 *dev_writes_enabled;
@@ -119,6 +132,52 @@ HTABLE_DEFINE_TYPE(struct peer,
 		   peer_eq_node_id,
 		   peer_htable);
 
+/*~ Peers we're trying to reach: we iterate through addrs until we succeed
+ * or fail. */
+struct connecting {
+	struct daemon *daemon;
+
+	struct io_conn *conn;
+
+	/* The ID of the peer (not necessarily unique, in transit!) */
+	struct node_id id;
+
+	/* We iterate through the tal_count(addrs) */
+	size_t addrnum;
+	struct wireaddr_internal *addrs;
+
+	/* NULL if there wasn't a hint. */
+	struct wireaddr_internal *addrhint;
+
+	/* How far did we get? */
+	const char *connstate;
+
+	/* Accumulated errors */
+	char *errors;
+
+	/* Is this a transient connection? */
+	bool transient;
+};
+
+static const struct node_id *connecting_keyof(const struct connecting *connecting)
+{
+	return &connecting->id;
+}
+
+static bool connecting_eq_node_id(const struct connecting *connecting,
+				  const struct node_id *id)
+{
+	return node_id_eq(&connecting->id, id);
+}
+
+/*~ This defines 'struct connecting_htable' which contains 'struct connecting'
+ *  pointers. */
+HTABLE_DEFINE_TYPE(struct connecting,
+		   connecting_keyof,
+		   node_id_hash,
+		   connecting_eq_node_id,
+		   connecting_htable);
+
 /*~ This is the global state, like `struct lightningd *ld` in lightningd. */
 struct daemon {
 	/* Who am I? */
@@ -142,7 +201,7 @@ struct daemon {
 	struct peer_htable *peers;
 
 	/* Peers we are trying to reach */
-	struct list_head connecting;
+	struct connecting_htable *connecting;
 
 	/* Connection to main daemon. */
 	struct daemon_conn *master;
@@ -205,7 +264,11 @@ struct daemon {
 	bool dev_suppress_gossip;
 	/* dev_disconnect file */
 	int dev_disconnect_fd;
-};
+	/* Did we exhaust fds?  If so, skip dev_report_fds */
+	bool dev_exhausted_fds;
+	/* Allow connections in, but don't send anything */
+	bool dev_handshake_no_reply;
+ };
 
 /* Called by io_tor_connect once it has a connection out. */
 struct io_plan *connection_out(struct io_conn *conn, struct connecting *connect);
@@ -227,4 +290,6 @@ struct io_plan *peer_connected(struct io_conn *conn,
 /* Removes peer from hash table, tells gossipd and lightningd. */
 void destroy_peer(struct peer *peer);
 
+/* Remove a random connection, when under stress. */
+void close_random_connection(struct daemon *daemon);
 #endif /* LIGHTNING_CONNECTD_CONNECTD_H */

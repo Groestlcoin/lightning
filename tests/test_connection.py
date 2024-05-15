@@ -331,8 +331,8 @@ def test_balance(node_factory):
 @pytest.mark.openchannel('v2')
 def test_bad_opening(node_factory):
     # l1 asks for a too-long locktime
-    l1 = node_factory.get_node(options={'watchtime-blocks': 100})
-    l2 = node_factory.get_node(options={'max-locktime-blocks': 99})
+    l1 = node_factory.get_node(options={'watchtime-blocks': 2017})
+    l2 = node_factory.get_node()
     ret = l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
 
     assert ret['id'] == l2.info['id']
@@ -344,7 +344,7 @@ def test_bad_opening(node_factory):
     with pytest.raises(RpcError):
         l1.rpc.fundchannel(l2.info['id'], 10**6)
 
-    l2.daemon.wait_for_log('to_self_delay 100 larger than 99')
+    l2.daemon.wait_for_log('to_self_delay 2017 larger than 2016')
 
 
 @unittest.skipIf(TEST_NETWORK != 'regtest', "Fee computation and limits are network specific")
@@ -1117,9 +1117,8 @@ def test_funding_all_too_much(node_factory):
 @pytest.mark.openchannel('v2')
 def test_funding_fail(node_factory, bitcoind):
     """Add some funds, fund a channel without enough funds"""
-    # Previous runs with same groestlcoind can leave funds!
-    max_locktime = 5 * 60 * 24
-    l1 = node_factory.get_node(random_hsm=True, options={'max-locktime-blocks': max_locktime})
+    max_locktime = 2016
+    l1 = node_factory.get_node()
     l2 = node_factory.get_node(options={'watchtime-blocks': max_locktime + 1})
     l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
 
@@ -4598,3 +4597,56 @@ def test_wss_proxy(node_factory):
         msg = lconn.read_message()
         if int.from_bytes(msg[0:2], 'big') == 19:
             break
+
+
+def test_connect_transient(node_factory):
+    l1, l2, l3, l4 = node_factory.get_nodes(4, opts={'may_reconnect': True})
+
+    # This is not transient, because they have a channel
+    node_factory.join_nodes([l1, l2])
+
+    # Make sure it reconnects once it has a channel.
+    l1.rpc.disconnect(l2.info['id'], force=True)
+    l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
+
+    # This has no channel, and thus is a transient.
+    l1.rpc.connect(l3.info['id'], 'localhost', l3.port)
+
+    l1.rpc.dev_connectd_exhaust_fds()
+
+    # Connecting to l4 will discard connection to l3!
+    l1.rpc.connect(l4.info['id'], 'localhost', l4.port)
+    assert l1.rpc.listpeers(l3.info['id'])['peers'] == []
+    assert l1.daemon.is_in_log(fr"due to stress, randomly closing peer {l3.info['id']} \(score 0\)")
+
+
+def test_connect_transient_pending(node_factory, bitcoind, executor):
+    """Test that we kick out in-connection transient connections"""
+    l1, l2, l3, l4 = node_factory.get_nodes(4, opts=[{},
+                                                     {'dev-handshake-no-reply': None},
+                                                     {'dev-handshake-no-reply': None},
+                                                     {}])
+
+    # This will block...
+    fut1 = executor.submit(l1.rpc.connect, l2.info['id'], 'localhost', l2.port)
+    fut2 = executor.submit(l1.rpc.connect, l3.info['id'], 'localhost', l3.port)
+
+    assert not l1.daemon.is_in_log("due to stress, closing transient connect attempt")
+
+    # Wait until those connects in progress.
+    l2.daemon.wait_for_log("Connect IN")
+    l3.daemon.wait_for_log("Connect IN")
+
+    # Now force exhaustion.
+    l1.rpc.dev_connectd_exhaust_fds()
+
+    # This one will kick out one of the others.
+    l1.rpc.connect(l4.info['id'], 'localhost', l4.port)
+    line = l1.daemon.wait_for_log("due to stress, closing transient connect attempt")
+    peerid = re.search(r'due to stress, closing transient connect attempt to (.*)', line).groups()[0]
+
+    with pytest.raises(RpcError, match="Terminated due to too many connections"):
+        if peerid == l2.info['id']:
+            fut1.result(TIMEOUT)
+        else:
+            fut2.result(TIMEOUT)

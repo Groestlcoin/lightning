@@ -59,6 +59,7 @@ struct bitcoind {
 
 	/* Passthrough parameters for bitcoin-cli */
 	char *rpcuser, *rpcpass, *rpcconnect, *rpcport;
+	u64 rpcclienttimeout;
 
 	/* Whether we fake fees (regtest) */
 	bool fake_fees;
@@ -104,6 +105,16 @@ static const char **gather_argsv(const tal_t *ctx, const char *cmd, va_list ap)
 		add_arg(&args, chainparams->cli_args);
 	if (bitcoind->datadir)
 		add_arg(&args, tal_fmt(args, "-datadir=%s", bitcoind->datadir));
+	if (bitcoind->rpcclienttimeout) {
+		/* Use the maximum value of rpcclienttimeout and retry_timeout to avoid
+		   the bitcoind backend hanging for too long. */
+		if (bitcoind->retry_timeout &&
+		    bitcoind->retry_timeout > bitcoind->rpcclienttimeout)
+			bitcoind->rpcclienttimeout = bitcoind->retry_timeout;
+
+		add_arg(&args,
+			tal_fmt(args, "-rpcclienttimeout=%ld", bitcoind->rpcclienttimeout));
+	}
 	if (bitcoind->rpcconnect)
 		add_arg(&args,
 			tal_fmt(args, "-rpcconnect=%s", bitcoind->rpcconnect));
@@ -1225,6 +1236,9 @@ static struct bitcoind *new_bitcoind(const tal_t *ctx)
 	bitcoind->rpcpass = NULL;
 	bitcoind->rpcconnect = NULL;
 	bitcoind->rpcport = NULL;
+	/* Do not exceed retry_timeout value to avoid a bitcoind hang,
+	   although normal rpcclienttimeout default value is 900. */
+	bitcoind->rpcclienttimeout = 60;
 	bitcoind->dev_no_fake_fees = false;
 
 	return bitcoind;
@@ -1264,6 +1278,10 @@ int main(int argc, char *argv[])
 				  "int",
 				  "groestlcoind RPC host's port",
 				  charp_option, &bitcoind->rpcport),
+		    plugin_option("groestlcoin-rpcclienttimeout",
+				  "int",
+				  "groestlcoind RPC timeout in seconds during HTTP requests",
+				  u64_option, &bitcoind->rpcclienttimeout),
 		    plugin_option("groestlcoin-retry-timeout",
 				  "string",
 				  "how long to keep retrying to contact groestlcoind"

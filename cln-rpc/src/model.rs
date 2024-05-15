@@ -86,10 +86,19 @@ pub enum Request {
 	OpenChannel_Signed(requests::Openchannel_signedRequest),
 	OpenChannel_Update(requests::Openchannel_updateRequest),
 	Ping(requests::PingRequest),
+	Plugin(requests::PluginRequest),
+	RenePayStatus(requests::RenepaystatusRequest),
+	RenePay(requests::RenepayRequest),
+	ReserveInputs(requests::ReserveinputsRequest),
 	SendCustomMsg(requests::SendcustommsgRequest),
+	SendInvoice(requests::SendinvoiceRequest),
 	SetChannel(requests::SetchannelRequest),
 	SignInvoice(requests::SigninvoiceRequest),
 	SignMessage(requests::SignmessageRequest),
+	Splice_Init(requests::Splice_initRequest),
+	Splice_Signed(requests::Splice_signedRequest),
+	Splice_Update(requests::Splice_updateRequest),
+	UnreserveInputs(requests::UnreserveinputsRequest),
 	WaitBlockHeight(requests::WaitblockheightRequest),
 	Wait(requests::WaitRequest),
 	Stop(requests::StopRequest),
@@ -183,10 +192,19 @@ pub enum Response {
 	OpenChannel_Signed(responses::Openchannel_signedResponse),
 	OpenChannel_Update(responses::Openchannel_updateResponse),
 	Ping(responses::PingResponse),
+	Plugin(responses::PluginResponse),
+	RenePayStatus(responses::RenepaystatusResponse),
+	RenePay(responses::RenepayResponse),
+	ReserveInputs(responses::ReserveinputsResponse),
 	SendCustomMsg(responses::SendcustommsgResponse),
+	SendInvoice(responses::SendinvoiceResponse),
 	SetChannel(responses::SetchannelResponse),
 	SignInvoice(responses::SigninvoiceResponse),
 	SignMessage(responses::SignmessageResponse),
+	Splice_Init(responses::Splice_initResponse),
+	Splice_Signed(responses::Splice_signedResponse),
+	Splice_Update(responses::Splice_updateResponse),
+	UnreserveInputs(responses::UnreserveinputsResponse),
 	WaitBlockHeight(responses::WaitblockheightResponse),
 	Wait(responses::WaitResponse),
 	Stop(responses::StopResponse),
@@ -260,6 +278,8 @@ pub mod requests {
 	    INFO = 2,
 	    #[serde(rename = "unusual")]
 	    UNUSUAL = 3,
+	    #[serde(rename = "trace")]
+	    TRACE = 4,
 	}
 
 	impl TryFrom<i32> for ListpeersLevel {
@@ -270,6 +290,7 @@ pub mod requests {
 	    1 => Ok(ListpeersLevel::DEBUG),
 	    2 => Ok(ListpeersLevel::INFO),
 	    3 => Ok(ListpeersLevel::UNUSUAL),
+	    4 => Ok(ListpeersLevel::TRACE),
 	            o => Err(anyhow::anyhow!("Unknown variant {} for enum ListpeersLevel", o)),
 	        }
 	    }
@@ -279,6 +300,7 @@ pub mod requests {
 	    fn to_string(&self) -> String {
 	        match self {
 	            ListpeersLevel::IO => "IO",
+	            ListpeersLevel::TRACE => "TRACE",
 	            ListpeersLevel::DEBUG => "DEBUG",
 	            ListpeersLevel::INFO => "INFO",
 	            ListpeersLevel::UNUSUAL => "UNUSUAL",
@@ -2051,6 +2073,8 @@ pub mod requests {
 	    DEBUG = 3,
 	    #[serde(rename = "io")]
 	    IO = 4,
+	    #[serde(rename = "trace")]
+	    TRACE = 5,
 	}
 
 	impl TryFrom<i32> for GetlogLevel {
@@ -2062,6 +2086,7 @@ pub mod requests {
 	    2 => Ok(GetlogLevel::INFO),
 	    3 => Ok(GetlogLevel::DEBUG),
 	    4 => Ok(GetlogLevel::IO),
+	    5 => Ok(GetlogLevel::TRACE),
 	            o => Err(anyhow::anyhow!("Unknown variant {} for enum GetlogLevel", o)),
 	        }
 	    }
@@ -2074,6 +2099,7 @@ pub mod requests {
 	            GetlogLevel::UNUSUAL => "UNUSUAL",
 	            GetlogLevel::INFO => "INFO",
 	            GetlogLevel::DEBUG => "DEBUG",
+	            GetlogLevel::TRACE => "TRACE",
 	            GetlogLevel::IO => "IO",
 	        }.to_string()
 	    }
@@ -2595,6 +2621,120 @@ pub mod requests {
 	    }
 	}
 	#[derive(Clone, Debug, Deserialize, Serialize)]
+	pub struct PluginRequest {
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub directory: Option<String>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub plugin: Option<String>,
+	    #[serde(skip_serializing_if = "crate::is_none_or_empty")]
+	    pub options: Option<Vec<String>>,
+	    // Path `Plugin.subcommand`
+	    pub subcommand: PluginSubcommand,
+	}
+
+	impl From<PluginRequest> for Request {
+	    fn from(r: PluginRequest) -> Self {
+	        Request::Plugin(r)
+	    }
+	}
+
+	impl IntoRequest for PluginRequest {
+	    type Response = super::responses::PluginResponse;
+	}
+
+	impl TypedRequest for PluginRequest {
+	    type Response = super::responses::PluginResponse;
+
+	    fn method(&self) -> &str {
+	        "plugin"
+	    }
+	}
+	#[derive(Clone, Debug, Deserialize, Serialize)]
+	pub struct RenepaystatusRequest {
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub invstring: Option<String>,
+	}
+
+	impl From<RenepaystatusRequest> for Request {
+	    fn from(r: RenepaystatusRequest) -> Self {
+	        Request::RenePayStatus(r)
+	    }
+	}
+
+	impl IntoRequest for RenepaystatusRequest {
+	    type Response = super::responses::RenepaystatusResponse;
+	}
+
+	impl TypedRequest for RenepaystatusRequest {
+	    type Response = super::responses::RenepaystatusResponse;
+
+	    fn method(&self) -> &str {
+	        "renepaystatus"
+	    }
+	}
+	#[derive(Clone, Debug, Deserialize, Serialize)]
+	pub struct RenepayRequest {
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub amount_msat: Option<Amount>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub description: Option<String>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub dev_use_shadow: Option<bool>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub label: Option<String>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub maxdelay: Option<u32>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub maxfee: Option<Amount>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub retry_for: Option<u32>,
+	    pub invstring: String,
+	}
+
+	impl From<RenepayRequest> for Request {
+	    fn from(r: RenepayRequest) -> Self {
+	        Request::RenePay(r)
+	    }
+	}
+
+	impl IntoRequest for RenepayRequest {
+	    type Response = super::responses::RenepayResponse;
+	}
+
+	impl TypedRequest for RenepayRequest {
+	    type Response = super::responses::RenepayResponse;
+
+	    fn method(&self) -> &str {
+	        "renepay"
+	    }
+	}
+	#[derive(Clone, Debug, Deserialize, Serialize)]
+	pub struct ReserveinputsRequest {
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub exclusive: Option<bool>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub reserve: Option<u32>,
+	    pub psbt: String,
+	}
+
+	impl From<ReserveinputsRequest> for Request {
+	    fn from(r: ReserveinputsRequest) -> Self {
+	        Request::ReserveInputs(r)
+	    }
+	}
+
+	impl IntoRequest for ReserveinputsRequest {
+	    type Response = super::responses::ReserveinputsResponse;
+	}
+
+	impl TypedRequest for ReserveinputsRequest {
+	    type Response = super::responses::ReserveinputsResponse;
+
+	    fn method(&self) -> &str {
+	        "reserveinputs"
+	    }
+	}
+	#[derive(Clone, Debug, Deserialize, Serialize)]
 	pub struct SendcustommsgRequest {
 	    pub msg: String,
 	    pub node_id: PublicKey,
@@ -2615,6 +2755,35 @@ pub mod requests {
 
 	    fn method(&self) -> &str {
 	        "sendcustommsg"
+	    }
+	}
+	#[derive(Clone, Debug, Deserialize, Serialize)]
+	pub struct SendinvoiceRequest {
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub amount_msat: Option<Amount>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub quantity: Option<u64>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub timeout: Option<u32>,
+	    pub invreq: String,
+	    pub label: String,
+	}
+
+	impl From<SendinvoiceRequest> for Request {
+	    fn from(r: SendinvoiceRequest) -> Self {
+	        Request::SendInvoice(r)
+	    }
+	}
+
+	impl IntoRequest for SendinvoiceRequest {
+	    type Response = super::responses::SendinvoiceResponse;
+	}
+
+	impl TypedRequest for SendinvoiceRequest {
+	    type Response = super::responses::SendinvoiceResponse;
+
+	    fn method(&self) -> &str {
+	        "sendinvoice"
 	    }
 	}
 	#[derive(Clone, Debug, Deserialize, Serialize)]
@@ -2693,6 +2862,107 @@ pub mod requests {
 
 	    fn method(&self) -> &str {
 	        "signmessage"
+	    }
+	}
+	#[derive(Clone, Debug, Deserialize, Serialize)]
+	pub struct Splice_initRequest {
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub feerate_per_kw: Option<u32>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub force_feerate: Option<bool>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub initialpsbt: Option<String>,
+	    pub channel_id: Sha256,
+	    pub relative_amount: i64,
+	}
+
+	impl From<Splice_initRequest> for Request {
+	    fn from(r: Splice_initRequest) -> Self {
+	        Request::Splice_Init(r)
+	    }
+	}
+
+	impl IntoRequest for Splice_initRequest {
+	    type Response = super::responses::Splice_initResponse;
+	}
+
+	impl TypedRequest for Splice_initRequest {
+	    type Response = super::responses::Splice_initResponse;
+
+	    fn method(&self) -> &str {
+	        "splice_init"
+	    }
+	}
+	#[derive(Clone, Debug, Deserialize, Serialize)]
+	pub struct Splice_signedRequest {
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub sign_first: Option<bool>,
+	    pub channel_id: Sha256,
+	    pub psbt: String,
+	}
+
+	impl From<Splice_signedRequest> for Request {
+	    fn from(r: Splice_signedRequest) -> Self {
+	        Request::Splice_Signed(r)
+	    }
+	}
+
+	impl IntoRequest for Splice_signedRequest {
+	    type Response = super::responses::Splice_signedResponse;
+	}
+
+	impl TypedRequest for Splice_signedRequest {
+	    type Response = super::responses::Splice_signedResponse;
+
+	    fn method(&self) -> &str {
+	        "splice_signed"
+	    }
+	}
+	#[derive(Clone, Debug, Deserialize, Serialize)]
+	pub struct Splice_updateRequest {
+	    pub channel_id: Sha256,
+	    pub psbt: String,
+	}
+
+	impl From<Splice_updateRequest> for Request {
+	    fn from(r: Splice_updateRequest) -> Self {
+	        Request::Splice_Update(r)
+	    }
+	}
+
+	impl IntoRequest for Splice_updateRequest {
+	    type Response = super::responses::Splice_updateResponse;
+	}
+
+	impl TypedRequest for Splice_updateRequest {
+	    type Response = super::responses::Splice_updateResponse;
+
+	    fn method(&self) -> &str {
+	        "splice_update"
+	    }
+	}
+	#[derive(Clone, Debug, Deserialize, Serialize)]
+	pub struct UnreserveinputsRequest {
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub reserve: Option<u32>,
+	    pub psbt: String,
+	}
+
+	impl From<UnreserveinputsRequest> for Request {
+	    fn from(r: UnreserveinputsRequest) -> Self {
+	        Request::UnreserveInputs(r)
+	    }
+	}
+
+	impl IntoRequest for UnreserveinputsRequest {
+	    type Response = super::responses::UnreserveinputsResponse;
+	}
+
+	impl TypedRequest for UnreserveinputsRequest {
+	    type Response = super::responses::UnreserveinputsResponse;
+
+	    fn method(&self) -> &str {
+	        "unreserveinputs"
 	    }
 	}
 	#[derive(Clone, Debug, Deserialize, Serialize)]
@@ -3235,6 +3505,8 @@ pub mod responses {
 	    IO_IN = 5,
 	    #[serde(rename = "IO_OUT")]
 	    IO_OUT = 6,
+	    #[serde(rename = "TRACE")]
+	    TRACE = 7,
 	}
 
 	impl TryFrom<i32> for ListpeersPeersLogType {
@@ -3248,6 +3520,7 @@ pub mod responses {
 	    4 => Ok(ListpeersPeersLogType::DEBUG),
 	    5 => Ok(ListpeersPeersLogType::IO_IN),
 	    6 => Ok(ListpeersPeersLogType::IO_OUT),
+	    7 => Ok(ListpeersPeersLogType::TRACE),
 	            o => Err(anyhow::anyhow!("Unknown variant {} for enum ListpeersPeersLogType", o)),
 	        }
 	    }
@@ -3261,6 +3534,7 @@ pub mod responses {
 	            ListpeersPeersLogType::UNUSUAL => "UNUSUAL",
 	            ListpeersPeersLogType::INFO => "INFO",
 	            ListpeersPeersLogType::DEBUG => "DEBUG",
+	            ListpeersPeersLogType::TRACE => "TRACE",
 	            ListpeersPeersLogType::IO_IN => "IO_IN",
 	            ListpeersPeersLogType::IO_OUT => "IO_OUT",
 	        }.to_string()
@@ -5704,8 +5978,13 @@ pub mod responses {
 
 	#[derive(Clone, Debug, Deserialize, Serialize)]
 	pub struct DecodeOffer_paths {
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub first_node_id: Option<PublicKey>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub first_scid: Option<ShortChannelId>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub first_scid_dir: Option<u32>,
 	    pub blinding: PublicKey,
-	    pub first_node_id: PublicKey,
 	}
 
 	#[derive(Clone, Debug, Deserialize, Serialize)]
@@ -6321,6 +6600,8 @@ pub mod responses {
 	    IO_IN = 5,
 	    #[serde(rename = "IO_OUT")]
 	    IO_OUT = 6,
+	    #[serde(rename = "TRACE")]
+	    TRACE = 7,
 	}
 
 	impl TryFrom<i32> for GetlogLogType {
@@ -6334,6 +6615,7 @@ pub mod responses {
 	    4 => Ok(GetlogLogType::DEBUG),
 	    5 => Ok(GetlogLogType::IO_IN),
 	    6 => Ok(GetlogLogType::IO_OUT),
+	    7 => Ok(GetlogLogType::TRACE),
 	            o => Err(anyhow::anyhow!("Unknown variant {} for enum GetlogLogType", o)),
 	        }
 	    }
@@ -6347,6 +6629,7 @@ pub mod responses {
 	            GetlogLogType::UNUSUAL => "UNUSUAL",
 	            GetlogLogType::INFO => "INFO",
 	            GetlogLogType::DEBUG => "DEBUG",
+	            GetlogLogType::TRACE => "TRACE",
 	            GetlogLogType::IO_IN => "IO_IN",
 	            GetlogLogType::IO_OUT => "IO_OUT",
 	        }.to_string()
@@ -6981,6 +7264,186 @@ pub mod responses {
 	}
 
 	#[derive(Clone, Debug, Deserialize, Serialize)]
+	pub struct PluginPlugins {
+	    pub active: bool,
+	    pub dynamic: bool,
+	    pub name: String,
+	}
+
+	#[derive(Clone, Debug, Deserialize, Serialize)]
+	pub struct PluginResponse {
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub result: Option<String>,
+	    #[serde(skip_serializing_if = "crate::is_none_or_empty")]
+	    pub plugins: Option<Vec<PluginPlugins>>,
+	    // Path `Plugin.command`
+	    pub command: PluginSubcommand,
+	}
+
+	impl TryFrom<Response> for PluginResponse {
+	    type Error = super::TryFromResponseError;
+
+	    fn try_from(response: Response) -> Result<Self, Self::Error> {
+	        match response {
+	            Response::Plugin(response) => Ok(response),
+	            _ => Err(TryFromResponseError)
+	        }
+	    }
+	}
+
+	/// ['Status of payment.']
+	#[derive(Copy, Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+	pub enum RenepaystatusPaystatusStatus {
+	    #[serde(rename = "complete")]
+	    COMPLETE = 0,
+	    #[serde(rename = "pending")]
+	    PENDING = 1,
+	    #[serde(rename = "failed")]
+	    FAILED = 2,
+	}
+
+	impl TryFrom<i32> for RenepaystatusPaystatusStatus {
+	    type Error = anyhow::Error;
+	    fn try_from(c: i32) -> Result<RenepaystatusPaystatusStatus, anyhow::Error> {
+	        match c {
+	    0 => Ok(RenepaystatusPaystatusStatus::COMPLETE),
+	    1 => Ok(RenepaystatusPaystatusStatus::PENDING),
+	    2 => Ok(RenepaystatusPaystatusStatus::FAILED),
+	            o => Err(anyhow::anyhow!("Unknown variant {} for enum RenepaystatusPaystatusStatus", o)),
+	        }
+	    }
+	}
+
+	impl ToString for RenepaystatusPaystatusStatus {
+	    fn to_string(&self) -> String {
+	        match self {
+	            RenepaystatusPaystatusStatus::COMPLETE => "COMPLETE",
+	            RenepaystatusPaystatusStatus::PENDING => "PENDING",
+	            RenepaystatusPaystatusStatus::FAILED => "FAILED",
+	        }.to_string()
+	    }
+	}
+
+	#[derive(Clone, Debug, Deserialize, Serialize)]
+	pub struct RenepaystatusPaystatus {
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub amount_sent_msat: Option<Amount>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub destination: Option<PublicKey>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub parts: Option<u32>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub payment_preimage: Option<Secret>,
+	    // Path `RenePayStatus.paystatus[].status`
+	    pub status: RenepaystatusPaystatusStatus,
+	    pub amount_msat: Amount,
+	    pub bolt11: String,
+	    pub created_at: f64,
+	    pub groupid: u32,
+	    pub notes: Vec<String>,
+	    pub payment_hash: Sha256,
+	}
+
+	#[derive(Clone, Debug, Deserialize, Serialize)]
+	pub struct RenepaystatusResponse {
+	    pub paystatus: Vec<RenepaystatusPaystatus>,
+	}
+
+	impl TryFrom<Response> for RenepaystatusResponse {
+	    type Error = super::TryFromResponseError;
+
+	    fn try_from(response: Response) -> Result<Self, Self::Error> {
+	        match response {
+	            Response::RenePayStatus(response) => Ok(response),
+	            _ => Err(TryFromResponseError)
+	        }
+	    }
+	}
+
+	/// ['Status of payment.']
+	#[derive(Copy, Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+	pub enum RenepayStatus {
+	    #[serde(rename = "complete")]
+	    COMPLETE = 0,
+	    #[serde(rename = "pending")]
+	    PENDING = 1,
+	    #[serde(rename = "failed")]
+	    FAILED = 2,
+	}
+
+	impl TryFrom<i32> for RenepayStatus {
+	    type Error = anyhow::Error;
+	    fn try_from(c: i32) -> Result<RenepayStatus, anyhow::Error> {
+	        match c {
+	    0 => Ok(RenepayStatus::COMPLETE),
+	    1 => Ok(RenepayStatus::PENDING),
+	    2 => Ok(RenepayStatus::FAILED),
+	            o => Err(anyhow::anyhow!("Unknown variant {} for enum RenepayStatus", o)),
+	        }
+	    }
+	}
+
+	impl ToString for RenepayStatus {
+	    fn to_string(&self) -> String {
+	        match self {
+	            RenepayStatus::COMPLETE => "COMPLETE",
+	            RenepayStatus::PENDING => "PENDING",
+	            RenepayStatus::FAILED => "FAILED",
+	        }.to_string()
+	    }
+	}
+
+	#[derive(Clone, Debug, Deserialize, Serialize)]
+	pub struct RenepayResponse {
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub destination: Option<PublicKey>,
+	    // Path `RenePay.status`
+	    pub status: RenepayStatus,
+	    pub amount_msat: Amount,
+	    pub amount_sent_msat: Amount,
+	    pub created_at: f64,
+	    pub parts: u32,
+	    pub payment_hash: Sha256,
+	    pub payment_preimage: Secret,
+	}
+
+	impl TryFrom<Response> for RenepayResponse {
+	    type Error = super::TryFromResponseError;
+
+	    fn try_from(response: Response) -> Result<Self, Self::Error> {
+	        match response {
+	            Response::RenePay(response) => Ok(response),
+	            _ => Err(TryFromResponseError)
+	        }
+	    }
+	}
+
+	#[derive(Clone, Debug, Deserialize, Serialize)]
+	pub struct ReserveinputsReservations {
+	    pub reserved: bool,
+	    pub reserved_to_block: u32,
+	    pub txid: String,
+	    pub vout: u32,
+	    pub was_reserved: bool,
+	}
+
+	#[derive(Clone, Debug, Deserialize, Serialize)]
+	pub struct ReserveinputsResponse {
+	    pub reservations: Vec<ReserveinputsReservations>,
+	}
+
+	impl TryFrom<Response> for ReserveinputsResponse {
+	    type Error = super::TryFromResponseError;
+
+	    fn try_from(response: Response) -> Result<Self, Self::Error> {
+	        match response {
+	            Response::ReserveInputs(response) => Ok(response),
+	            _ => Err(TryFromResponseError)
+	        }
+	    }
+	}
+
+	#[derive(Clone, Debug, Deserialize, Serialize)]
 	pub struct SendcustommsgResponse {
 	    pub status: String,
 	}
@@ -6991,6 +7454,76 @@ pub mod responses {
 	    fn try_from(response: Response) -> Result<Self, Self::Error> {
 	        match response {
 	            Response::SendCustomMsg(response) => Ok(response),
+	            _ => Err(TryFromResponseError)
+	        }
+	    }
+	}
+
+	/// ["Whether it's paid, unpaid or unpayable."]
+	#[derive(Copy, Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+	pub enum SendinvoiceStatus {
+	    #[serde(rename = "unpaid")]
+	    UNPAID = 0,
+	    #[serde(rename = "paid")]
+	    PAID = 1,
+	    #[serde(rename = "expired")]
+	    EXPIRED = 2,
+	}
+
+	impl TryFrom<i32> for SendinvoiceStatus {
+	    type Error = anyhow::Error;
+	    fn try_from(c: i32) -> Result<SendinvoiceStatus, anyhow::Error> {
+	        match c {
+	    0 => Ok(SendinvoiceStatus::UNPAID),
+	    1 => Ok(SendinvoiceStatus::PAID),
+	    2 => Ok(SendinvoiceStatus::EXPIRED),
+	            o => Err(anyhow::anyhow!("Unknown variant {} for enum SendinvoiceStatus", o)),
+	        }
+	    }
+	}
+
+	impl ToString for SendinvoiceStatus {
+	    fn to_string(&self) -> String {
+	        match self {
+	            SendinvoiceStatus::UNPAID => "UNPAID",
+	            SendinvoiceStatus::PAID => "PAID",
+	            SendinvoiceStatus::EXPIRED => "EXPIRED",
+	        }.to_string()
+	    }
+	}
+
+	#[derive(Clone, Debug, Deserialize, Serialize)]
+	pub struct SendinvoiceResponse {
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub amount_msat: Option<Amount>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub amount_received_msat: Option<Amount>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub bolt12: Option<String>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub created_index: Option<u64>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub paid_at: Option<u64>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub pay_index: Option<u64>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub payment_preimage: Option<Secret>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub updated_index: Option<u64>,
+	    // Path `SendInvoice.status`
+	    pub status: SendinvoiceStatus,
+	    pub description: String,
+	    pub expires_at: u64,
+	    pub label: String,
+	    pub payment_hash: Sha256,
+	}
+
+	impl TryFrom<Response> for SendinvoiceResponse {
+	    type Error = super::TryFromResponseError;
+
+	    fn try_from(response: Response) -> Result<Self, Self::Error> {
+	        match response {
+	            Response::SendInvoice(response) => Ok(response),
 	            _ => Err(TryFromResponseError)
 	        }
 	    }
@@ -7059,6 +7592,82 @@ pub mod responses {
 	    fn try_from(response: Response) -> Result<Self, Self::Error> {
 	        match response {
 	            Response::SignMessage(response) => Ok(response),
+	            _ => Err(TryFromResponseError)
+	        }
+	    }
+	}
+
+	#[derive(Clone, Debug, Deserialize, Serialize)]
+	pub struct Splice_initResponse {
+	    pub psbt: String,
+	}
+
+	impl TryFrom<Response> for Splice_initResponse {
+	    type Error = super::TryFromResponseError;
+
+	    fn try_from(response: Response) -> Result<Self, Self::Error> {
+	        match response {
+	            Response::Splice_Init(response) => Ok(response),
+	            _ => Err(TryFromResponseError)
+	        }
+	    }
+	}
+
+	#[derive(Clone, Debug, Deserialize, Serialize)]
+	pub struct Splice_signedResponse {
+	    pub tx: String,
+	    pub txid: String,
+	}
+
+	impl TryFrom<Response> for Splice_signedResponse {
+	    type Error = super::TryFromResponseError;
+
+	    fn try_from(response: Response) -> Result<Self, Self::Error> {
+	        match response {
+	            Response::Splice_Signed(response) => Ok(response),
+	            _ => Err(TryFromResponseError)
+	        }
+	    }
+	}
+
+	#[derive(Clone, Debug, Deserialize, Serialize)]
+	pub struct Splice_updateResponse {
+	    pub commitments_secured: bool,
+	    pub psbt: String,
+	}
+
+	impl TryFrom<Response> for Splice_updateResponse {
+	    type Error = super::TryFromResponseError;
+
+	    fn try_from(response: Response) -> Result<Self, Self::Error> {
+	        match response {
+	            Response::Splice_Update(response) => Ok(response),
+	            _ => Err(TryFromResponseError)
+	        }
+	    }
+	}
+
+	#[derive(Clone, Debug, Deserialize, Serialize)]
+	pub struct UnreserveinputsReservations {
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub reserved_to_block: Option<u32>,
+	    pub reserved: bool,
+	    pub txid: String,
+	    pub vout: u32,
+	    pub was_reserved: bool,
+	}
+
+	#[derive(Clone, Debug, Deserialize, Serialize)]
+	pub struct UnreserveinputsResponse {
+	    pub reservations: Vec<UnreserveinputsReservations>,
+	}
+
+	impl TryFrom<Response> for UnreserveinputsResponse {
+	    type Error = super::TryFromResponseError;
+
+	    fn try_from(response: Response) -> Result<Self, Self::Error> {
+	        match response {
+	            Response::UnreserveInputs(response) => Ok(response),
 	            _ => Err(TryFromResponseError)
 	        }
 	    }

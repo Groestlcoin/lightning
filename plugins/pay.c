@@ -575,10 +575,19 @@ static const char *init(struct plugin *p,
 	rpc_scan(p, "getinfo", take(json_out_obj(NULL, NULL, NULL)),
 		 "{id:%}", JSON_SCAN(json_to_node_id, &my_id));
 
+	/* BOLT #4:
+	 * ## `max_htlc_cltv` Selection
+	 *
+	 * This ... value is defined as 2016 blocks, based on historical value
+	 * deployed by Lightning implementations.
+	 */
+	/* FIXME: Typo in spec for CLTV in descripton!  But it breaks our spelling check, so we omit it above */
+	maxdelay_default = 2016;
+	/* max-locktime-blocks deprecated in v24.05, but still grab it! */
 	rpc_scan(p, "listconfigs",
 		 take(json_out_obj(NULL, NULL, NULL)),
 		 "{configs:"
-		 "{max-locktime-blocks:{value_int:%},"
+		 "{max-locktime-blocks?:{value_int:%},"
 		 "experimental-offers:{set:%}}}",
 		 JSON_SCAN(json_to_number, &maxdelay_default),
 		 JSON_SCAN(json_to_bool, &exp_offers));
@@ -970,7 +979,6 @@ payment_listsendpays_previous(struct command *cmd, const char *buf,
 }
 
 struct payment_modifier *paymod_mods[] = {
-	&check_preapproveinvoice_pay_mod,
 	/* NOTE: The order in which these four paymods are executed is
 	 * significant!
 	 * local_channel_hints *must* execute first before route_exclusions
@@ -999,7 +1007,6 @@ struct payment_modifier *paymod_mods[] = {
 	 */
 	&routehints_pay_mod,
 	&payee_incoming_limit_pay_mod,
-	&waitblockheight_pay_mod,
 	&retry_pay_mod,
 	&adaptive_splitter_pay_mod,
 	NULL,
@@ -1008,6 +1015,32 @@ struct payment_modifier *paymod_mods[] = {
 static void destroy_payment(struct payment *p)
 {
 	list_del(&p->list);
+}
+
+static struct command_result *
+preapproveinvoice_succeed(struct command *cmd,
+			  const char *buf,
+			  const jsmntok_t *result,
+			  struct payment *p)
+{
+	struct out_req *req;
+
+	/* Now we can conclude `check` command */
+	if (command_check_only(cmd)) {
+		return command_check_done(cmd);
+	}
+
+	list_add_tail(&payments, &p->list);
+	tal_add_destructor(p, destroy_payment);
+	/* We're keeping this around now */
+	tal_steal(cmd->plugin, p);
+
+	req = jsonrpc_request_start(cmd->plugin, cmd, "listsendpays",
+				    payment_listsendpays_previous,
+				    payment_listsendpays_previous, p);
+
+	json_add_sha256(req->js, "payment_hash", p->payment_hash);
+	return send_outreq(cmd->plugin, req);
 }
 
 static struct command_result *json_pay(struct command *cmd,
@@ -1036,7 +1069,7 @@ static struct command_result *json_pay(struct command *cmd,
 	/* If any of the modifiers need to add params to the JSON-RPC call we
 	 * would add them to the `param()` call below, and have them be
 	 * initialized directly that way. */
-	if (!param(cmd, buf, params,
+	if (!param_check(cmd, buf, params,
 		   /* FIXME: parameter should be invstring now */
 		   p_req("bolt11", param_invstring, &b11str),
 		   p_opt("amount_msat", param_msat, &msat),
@@ -1158,10 +1191,15 @@ static struct command_result *json_pay(struct command *cmd,
 		/* FIXME: do MPP across these!  We choose first one. */
 		p->blindedpath = tal_steal(p, b12->invoice_paths[0]);
 		p->blindedpay = tal_steal(p, b12->invoice_blindedpay[0]);
+		/* FIXME: support this! */
+		if (!p->blindedpath->first_node_id.is_pubkey) {
+			return command_fail(cmd, JSONRPC2_INVALID_PARAMS,
+					    "First hop of blinding is an scid: not supported!");
+		}
 		p->min_final_cltv_expiry = p->blindedpay->cltv_expiry_delta;
 
 		/* Set destination to introduction point */
-		node_id_from_pubkey(p->destination, &p->blindedpath->first_node_id);
+		node_id_from_pubkey(p->destination, &p->blindedpath->first_node_id.pubkey);
 		p->payment_metadata = NULL;
 		p->routes = NULL;
 		/* BOLT-offers #12:
@@ -1217,11 +1255,9 @@ static struct command_result *json_pay(struct command *cmd,
 
 	/* We replace real final values if we're using a blinded path */
 	if (p->blindedpath) {
-		p->blindedfinalcltv = p->min_final_cltv_expiry;
 		p->blindedouramount = p->our_amount;
 		p->blindedfinalamount = p->final_amount;
 
-		p->min_final_cltv_expiry += p->blindedpay->cltv_expiry_delta;
 		if (!amount_msat_add_fee(&p->final_amount,
 					 p->blindedpay->fee_base_msat,
 					 p->blindedpay->fee_proportional_millionths)
@@ -1279,16 +1315,19 @@ static struct command_result *json_pay(struct command *cmd,
 	tal_free(dev_use_shadow);
 
 	p->label = tal_steal(p, label);
-	list_add_tail(&payments, &p->list);
-	tal_add_destructor(p, destroy_payment);
-	/* We're keeping this around now */
-	tal_steal(cmd->plugin, p);
 
-	req = jsonrpc_request_start(cmd->plugin, cmd, "listsendpays",
-				    payment_listsendpays_previous,
-				    payment_listsendpays_previous, p);
-
-	json_add_sha256(req->js, "payment_hash", p->payment_hash);
+	/* Now preapprove, then start payment. */
+	if (command_check_only(cmd)) {
+		req = jsonrpc_request_start(p->plugin, cmd, "check",
+					    &preapproveinvoice_succeed,
+					    &forward_error, p);
+		json_add_string(req->js, "command_to_check", "preapproveinvoice");
+	} else {
+		req = jsonrpc_request_start(p->plugin, cmd, "preapproveinvoice",
+					    &preapproveinvoice_succeed,
+					    &forward_error, p);
+	}
+	json_add_string(req->js, "bolt11", p->invstring);
 	return send_outreq(cmd->plugin, req);
 }
 

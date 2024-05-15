@@ -132,6 +132,12 @@ This is not valid within the per-network configuration file.
 
   The groestlcoind(1) RPC port to connect to.
 
+* **groestlcoin-rpcclienttimeout**=*SECONDS* [plugin `bcli`]
+
+  The groestlcoind(1) RPC client timeout in seconds. Default is set to 60
+instead of 900 to match groestlcoin-retry-timeout default. When set
+explicitly, the higher value of it and groestlcoin-retry-timeout is used.
+
 * **groestlcoin-retry-timeout**=*SECONDS* [plugin `bcli`]
 
   Number of seconds to keep trying a groestlcoin-cli(1) command. If the
@@ -170,7 +176,7 @@ binary.
 
 * **log-level**=*LEVEL*\[:*SUBSYSTEM*\]\[:*PATH*\]
 
-  What log level to print out: options are io, debug, info, unusual,
+  What log level to print out: options are io, trace, debug, info, unusual,
 broken.  If *SUBSYSTEM* is supplied, this sets the logging level
 for any subsystem (or *nodeid*) containing that string. If *PATH* is supplied, it means this log-level filter is only applied to that `log-file`, which is useful for creating logs to capture a specific subsystem.  This option may be specified multiple times.
 Subsystems include:
@@ -408,7 +414,7 @@ use the RPC call lightning-setchannel(7).
 we tell our peer that this is how long they'll have to wait if they
 perform a unilateral close.
 
-* **max-locktime-blocks**=*BLOCKS*
+* (deprecated in v23.05) **max-locktime-blocks**=*BLOCKS*
 
   The longest our funds can be delayed (ie. the longest
 **watchtime-blocks** our peer can ask for, and also the longest HTLC
@@ -747,8 +753,8 @@ corresponding functionality, which are in draft status ([bolt][bolt] #798) as [b
 
 * **fetchinvoice-noconnect**
 
-  Specifying this prevents `fetchinvoice` and `sendinvoice` from
-trying to connect directly to the offering node as a last resort.
+  Specifying this prevents `fetchinvoice`, `sendinvoice` and replying
+to invoice request from trying to connect directly to the offering node as a last resort.
 
 * **experimental-shutdown-wrong-funding**
 

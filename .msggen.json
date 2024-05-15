@@ -105,6 +105,7 @@
             "debug": 3,
             "info": 2,
             "io": 4,
+            "trace": 5,
             "unusual": 1
         },
         "GetlogLogType": {
@@ -114,6 +115,7 @@
             "IO_IN": 5,
             "IO_OUT": 6,
             "SKIPPED": 0,
+            "TRACE": 7,
             "UNUSUAL": 2
         },
         "GetrouteRouteStyle": {
@@ -287,6 +289,7 @@
             "debug": 1,
             "info": 2,
             "io": 0,
+            "trace": 4,
             "unusual": 3
         },
         "ListpeersPeersChannelsHtlcsDirection": {
@@ -327,6 +330,7 @@
             "IO_IN": 5,
             "IO_OUT": 6,
             "SKIPPED": 0,
+            "TRACE": 7,
             "UNUSUAL": 2
         },
         "ListsendpaysIndex": {
@@ -384,6 +388,35 @@
             "complete": 0,
             "failed": 2,
             "pending": 1
+        },
+        "PluginCommand": {
+            "list": 4,
+            "rescan": 2,
+            "start": 0,
+            "startdir": 3,
+            "stop": 1
+        },
+        "PluginSubcommand": {
+            "list": 4,
+            "rescan": 2,
+            "start": 0,
+            "startdir": 3,
+            "stop": 1
+        },
+        "RenepayStatus": {
+            "complete": 0,
+            "failed": 2,
+            "pending": 1
+        },
+        "RenepaystatusPaystatusStatus": {
+            "complete": 0,
+            "failed": 2,
+            "pending": 1
+        },
+        "SendinvoiceStatus": {
+            "expired": 2,
+            "paid": 1,
+            "unpaid": 0
         },
         "SendonionStatus": {
             "complete": 1,
@@ -781,6 +814,8 @@
         "DecodeOffer_paths": {
             "Decode.offer_paths[].blinding": 2,
             "Decode.offer_paths[].first_node_id": 1,
+            "Decode.offer_paths[].first_scid": 5,
+            "Decode.offer_paths[].first_scid_dir": 4,
             "Decode.offer_paths[].path[]": 3
         },
         "DecodeOffer_recurrencePaywindow": {
@@ -2087,6 +2122,23 @@
         "PingResponse": {
             "Ping.totlen": 1
         },
+        "PluginPlugins": {
+            "Plugin.plugins[].active": 2,
+            "Plugin.plugins[].dynamic": 3,
+            "Plugin.plugins[].name": 1
+        },
+        "PluginRequest": {
+            "Plugin.directory": 3,
+            "Plugin.options[]": 4,
+            "Plugin.plugin": 2,
+            "Plugin.subcommand": 1
+        },
+        "PluginResponse": {
+            "Plugin.command": 1,
+            "Plugin.plugins[]": 2,
+            "Plugin.result": 3,
+            "Plugin.subcommand": 4
+        },
         "PreapproveinvoiceRequest": {
             "PreApproveInvoice.bolt11": 1
         },
@@ -2095,12 +2147,88 @@
             "PreApproveKeysend.destination": 1,
             "PreApproveKeysend.payment_hash": 2
         },
+        "RenepayRequest": {
+            "RenePay.amount_msat": 2,
+            "RenePay.description": 6,
+            "RenePay.dev_use_shadow": 8,
+            "RenePay.invstring": 1,
+            "RenePay.label": 7,
+            "RenePay.maxdelay": 4,
+            "RenePay.maxfee": 3,
+            "RenePay.retry_for": 5
+        },
+        "RenepayResponse": {
+            "RenePay.amount_msat": 5,
+            "RenePay.amount_sent_msat": 6,
+            "RenePay.created_at": 3,
+            "RenePay.destination": 8,
+            "RenePay.parts": 4,
+            "RenePay.payment_hash": 2,
+            "RenePay.payment_preimage": 1,
+            "RenePay.status": 7
+        },
+        "RenepaystatusPaystatus": {
+            "RenePayStatus.paystatus[].amount_msat": 7,
+            "RenePayStatus.paystatus[].amount_sent_msat": 8,
+            "RenePayStatus.paystatus[].bolt11": 1,
+            "RenePayStatus.paystatus[].created_at": 4,
+            "RenePayStatus.paystatus[].destination": 10,
+            "RenePayStatus.paystatus[].groupid": 5,
+            "RenePayStatus.paystatus[].notes[]": 11,
+            "RenePayStatus.paystatus[].parts": 6,
+            "RenePayStatus.paystatus[].payment_hash": 3,
+            "RenePayStatus.paystatus[].payment_preimage": 2,
+            "RenePayStatus.paystatus[].status": 9
+        },
+        "RenepaystatusRequest": {
+            "RenePayStatus.invstring": 1
+        },
+        "RenepaystatusResponse": {
+            "RenePayStatus.paystatus[]": 1
+        },
+        "ReserveinputsRequest": {
+            "ReserveInputs.exclusive": 2,
+            "ReserveInputs.psbt": 1,
+            "ReserveInputs.reserve": 3
+        },
+        "ReserveinputsReservations": {
+            "ReserveInputs.reservations[].reserved": 4,
+            "ReserveInputs.reservations[].reserved_to_block": 5,
+            "ReserveInputs.reservations[].txid": 1,
+            "ReserveInputs.reservations[].vout": 2,
+            "ReserveInputs.reservations[].was_reserved": 3
+        },
+        "ReserveinputsResponse": {
+            "ReserveInputs.reservations[]": 1
+        },
         "SendcustommsgRequest": {
             "SendCustomMsg.msg": 2,
             "SendCustomMsg.node_id": 1
         },
         "SendcustommsgResponse": {
             "SendCustomMsg.status": 1
+        },
+        "SendinvoiceRequest": {
+            "SendInvoice.amount_msat": 3,
+            "SendInvoice.invreq": 1,
+            "SendInvoice.label": 2,
+            "SendInvoice.quantity": 5,
+            "SendInvoice.timeout": 4
+        },
+        "SendinvoiceResponse": {
+            "SendInvoice.amount_msat": 6,
+            "SendInvoice.amount_received_msat": 11,
+            "SendInvoice.bolt12": 7,
+            "SendInvoice.created_index": 8,
+            "SendInvoice.description": 2,
+            "SendInvoice.expires_at": 5,
+            "SendInvoice.label": 1,
+            "SendInvoice.paid_at": 12,
+            "SendInvoice.pay_index": 10,
+            "SendInvoice.payment_hash": 3,
+            "SendInvoice.payment_preimage": 13,
+            "SendInvoice.status": 4,
+            "SendInvoice.updated_index": 9
         },
         "SendonionFirst_hop": {
             "SendOnion.first_hop.amount_msat": 2,
@@ -2234,6 +2362,33 @@
         "SignpsbtResponse": {
             "SignPsbt.signed_psbt": 1
         },
+        "Splice_initRequest": {
+            "Splice_Init.channel_id": 1,
+            "Splice_Init.feerate_per_kw": 4,
+            "Splice_Init.force_feerate": 5,
+            "Splice_Init.initialpsbt": 3,
+            "Splice_Init.relative_amount": 2
+        },
+        "Splice_initResponse": {
+            "Splice_Init.psbt": 1
+        },
+        "Splice_signedRequest": {
+            "Splice_Signed.channel_id": 1,
+            "Splice_Signed.psbt": 2,
+            "Splice_Signed.sign_first": 3
+        },
+        "Splice_signedResponse": {
+            "Splice_Signed.tx": 1,
+            "Splice_Signed.txid": 2
+        },
+        "Splice_updateRequest": {
+            "Splice_Update.channel_id": 1,
+            "Splice_Update.psbt": 2
+        },
+        "Splice_updateResponse": {
+            "Splice_Update.commitments_secured": 2,
+            "Splice_Update.psbt": 1
+        },
         "StaticbackupResponse": {
             "StaticBackup.scb[]": 1
         },
@@ -2266,6 +2421,20 @@
             "TxSend.psbt": 1,
             "TxSend.tx": 2,
             "TxSend.txid": 3
+        },
+        "UnreserveinputsRequest": {
+            "UnreserveInputs.psbt": 1,
+            "UnreserveInputs.reserve": 2
+        },
+        "UnreserveinputsReservations": {
+            "UnreserveInputs.reservations[].reserved": 4,
+            "UnreserveInputs.reservations[].reserved_to_block": 5,
+            "UnreserveInputs.reservations[].txid": 1,
+            "UnreserveInputs.reservations[].vout": 2,
+            "UnreserveInputs.reservations[].was_reserved": 3
+        },
+        "UnreserveinputsResponse": {
+            "UnreserveInputs.reservations[]": 1
         },
         "UtxopsbtRequest": {
             "UtxoPsbt.excess_as_change": 9,
@@ -3406,6 +3575,14 @@
             "added": "pre-v0.10.1",
             "deprecated": false
         },
+        "Decode.invoice_paths[].first_scid": {
+            "added": "v23.05",
+            "deprecated": false
+        },
+        "Decode.invoice_paths[].first_scid_dir": {
+            "added": "v23.05",
+            "deprecated": false
+        },
         "Decode.invoice_paths[].path[]": {
             "added": "pre-v0.10.1",
             "deprecated": false
@@ -3544,6 +3721,14 @@
         },
         "Decode.offer_paths[].first_node_id": {
             "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "Decode.offer_paths[].first_scid": {
+            "added": "v23.05",
+            "deprecated": false
+        },
+        "Decode.offer_paths[].first_scid_dir": {
+            "added": "v23.05",
             "deprecated": false
         },
         "Decode.offer_paths[].path[]": {
@@ -7402,6 +7587,50 @@
             "added": "pre-v0.10.1",
             "deprecated": false
         },
+        "Plugin": {
+            "added": "pre-v0.10.1",
+            "deprecated": null
+        },
+        "Plugin.command": {
+            "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "Plugin.directory": {
+            "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "Plugin.options[]": {
+            "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "Plugin.plugin": {
+            "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "Plugin.plugins[]": {
+            "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "Plugin.plugins[].active": {
+            "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "Plugin.plugins[].dynamic": {
+            "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "Plugin.plugins[].name": {
+            "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "Plugin.result": {
+            "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "Plugin.subcommand": {
+            "added": "pre-v0.10.1",
+            "deprecated": false
+        },
         "PreApproveInvoice": {
             "added": "v23.02",
             "deprecated": null
@@ -7426,6 +7655,166 @@
             "added": "v23.02",
             "deprecated": false
         },
+        "RenePay": {
+            "added": "pre-v0.10.1",
+            "deprecated": null
+        },
+        "RenePay.amount_msat": {
+            "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "RenePay.amount_sent_msat": {
+            "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "RenePay.created_at": {
+            "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "RenePay.description": {
+            "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "RenePay.destination": {
+            "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "RenePay.dev_use_shadow": {
+            "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "RenePay.invstring": {
+            "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "RenePay.label": {
+            "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "RenePay.maxdelay": {
+            "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "RenePay.maxfee": {
+            "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "RenePay.parts": {
+            "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "RenePay.payment_hash": {
+            "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "RenePay.payment_preimage": {
+            "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "RenePay.retry_for": {
+            "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "RenePay.status": {
+            "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "RenePayStatus": {
+            "added": "pre-v0.10.1",
+            "deprecated": null
+        },
+        "RenePayStatus.invstring": {
+            "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "RenePayStatus.paystatus[]": {
+            "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "RenePayStatus.paystatus[].amount_msat": {
+            "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "RenePayStatus.paystatus[].amount_sent_msat": {
+            "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "RenePayStatus.paystatus[].bolt11": {
+            "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "RenePayStatus.paystatus[].created_at": {
+            "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "RenePayStatus.paystatus[].destination": {
+            "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "RenePayStatus.paystatus[].groupid": {
+            "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "RenePayStatus.paystatus[].notes[]": {
+            "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "RenePayStatus.paystatus[].parts": {
+            "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "RenePayStatus.paystatus[].payment_hash": {
+            "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "RenePayStatus.paystatus[].payment_preimage": {
+            "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "RenePayStatus.paystatus[].status": {
+            "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "ReserveInputs": {
+            "added": "pre-v0.10.1",
+            "deprecated": null
+        },
+        "ReserveInputs.exclusive": {
+            "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "ReserveInputs.psbt": {
+            "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "ReserveInputs.reservations[]": {
+            "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "ReserveInputs.reservations[].reserved": {
+            "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "ReserveInputs.reservations[].reserved_to_block": {
+            "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "ReserveInputs.reservations[].txid": {
+            "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "ReserveInputs.reservations[].vout": {
+            "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "ReserveInputs.reservations[].was_reserved": {
+            "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "ReserveInputs.reserve": {
+            "added": "pre-v0.10.1",
+            "deprecated": false
+        },
         "SendCustomMsg": {
             "added": "v0.10.1",
             "deprecated": null
@@ -7440,6 +7829,74 @@
         },
         "SendCustomMsg.status": {
             "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "SendInvoice": {
+            "added": "pre-v0.10.1",
+            "deprecated": null
+        },
+        "SendInvoice.amount_msat": {
+            "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "SendInvoice.amount_received_msat": {
+            "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "SendInvoice.bolt12": {
+            "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "SendInvoice.created_index": {
+            "added": "v23.08",
+            "deprecated": false
+        },
+        "SendInvoice.description": {
+            "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "SendInvoice.expires_at": {
+            "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "SendInvoice.invreq": {
+            "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "SendInvoice.label": {
+            "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "SendInvoice.paid_at": {
+            "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "SendInvoice.pay_index": {
+            "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "SendInvoice.payment_hash": {
+            "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "SendInvoice.payment_preimage": {
+            "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "SendInvoice.quantity": {
+            "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "SendInvoice.status": {
+            "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "SendInvoice.timeout": {
+            "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "SendInvoice.updated_index": {
+            "added": "v23.08",
             "deprecated": false
         },
         "SendOnion": {
@@ -7794,6 +8251,74 @@
             "added": "pre-v0.10.1",
             "deprecated": false
         },
+        "Splice_Init": {
+            "added": "pre-v0.10.1",
+            "deprecated": null
+        },
+        "Splice_Init.channel_id": {
+            "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "Splice_Init.feerate_per_kw": {
+            "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "Splice_Init.force_feerate": {
+            "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "Splice_Init.initialpsbt": {
+            "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "Splice_Init.psbt": {
+            "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "Splice_Init.relative_amount": {
+            "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "Splice_Signed": {
+            "added": "pre-v0.10.1",
+            "deprecated": null
+        },
+        "Splice_Signed.channel_id": {
+            "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "Splice_Signed.psbt": {
+            "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "Splice_Signed.sign_first": {
+            "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "Splice_Signed.tx": {
+            "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "Splice_Signed.txid": {
+            "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "Splice_Update": {
+            "added": "pre-v0.10.1",
+            "deprecated": null
+        },
+        "Splice_Update.channel_id": {
+            "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "Splice_Update.commitments_secured": {
+            "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "Splice_Update.psbt": {
+            "added": "pre-v0.10.1",
+            "deprecated": false
+        },
         "StaticBackup": {
             "added": "pre-v0.10.1",
             "deprecated": null
@@ -7867,6 +8392,42 @@
             "deprecated": false
         },
         "TxSend.txid": {
+            "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "UnreserveInputs": {
+            "added": "pre-v0.10.1",
+            "deprecated": null
+        },
+        "UnreserveInputs.psbt": {
+            "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "UnreserveInputs.reservations[]": {
+            "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "UnreserveInputs.reservations[].reserved": {
+            "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "UnreserveInputs.reservations[].reserved_to_block": {
+            "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "UnreserveInputs.reservations[].txid": {
+            "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "UnreserveInputs.reservations[].vout": {
+            "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "UnreserveInputs.reservations[].was_reserved": {
+            "added": "pre-v0.10.1",
+            "deprecated": false
+        },
+        "UnreserveInputs.reserve": {
             "added": "pre-v0.10.1",
             "deprecated": false
         },

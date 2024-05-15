@@ -154,7 +154,8 @@ void jsonrpc_stop_all(struct lightningd *ld UNNEEDED)
 void jsonrpc_stop_listening(struct jsonrpc *jsonrpc UNNEEDED)
 { fprintf(stderr, "jsonrpc_stop_listening called!\n"); abort(); }
 /* Generated stub for load_channels_from_wallet */
-struct htlc_in_map *load_channels_from_wallet(struct lightningd *ld UNNEEDED)
+struct htlc_in_map *load_channels_from_wallet(struct lightningd *ld UNNEEDED,
+					      size_t *num_channels UNNEEDED)
 { fprintf(stderr, "load_channels_from_wallet called!\n"); abort(); }
 /* Generated stub for log_ */
 void log_(struct logger *logger UNNEEDED, enum log_level level UNNEEDED,
@@ -217,6 +218,9 @@ struct plugins *plugins_new(const tal_t *ctx UNNEEDED, struct log_book *log_book
 void plugins_set_builtin_plugins_dir(struct plugins *plugins UNNEEDED,
 				     const char *dir UNNEEDED)
 { fprintf(stderr, "plugins_set_builtin_plugins_dir called!\n"); abort(); }
+/* Generated stub for pubkey_from_node_id */
+bool pubkey_from_node_id(struct pubkey *key UNNEEDED, const struct node_id *id UNNEEDED)
+{ fprintf(stderr, "pubkey_from_node_id called!\n"); abort(); }
 /* Generated stub for resend_closing_transactions */
 void resend_closing_transactions(struct lightningd *ld UNNEEDED)
 { fprintf(stderr, "resend_closing_transactions called!\n"); abort(); }

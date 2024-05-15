@@ -5664,7 +5664,6 @@
                 "items": {
                   "type": "object",
                   "required": [
-                    "first_node_id",
                     "blinding",
                     "path"
                   ],
@@ -5675,6 +5674,16 @@
                       "description": [
                         "The (presumably well-known) public key of the start of the path."
                       ]
+                    },
+                    "first_scid": {
+                      "added": "v23.05",
+                      "type": "short_channel_id",
+                      "description": "the short channel id of the start of the path (alternative to first_n  ode_id)"
+                    },
+                    "first_scid_dir": {
+                      "added": "v23.05",
+                      "type": "u32",
+                      "description": "which end of the first_scid is the start of the path"
                     },
                     "blinding": {
                       "type": "pubkey",
@@ -6042,7 +6051,6 @@
                 "items": {
                   "type": "object",
                   "required": [
-                    "first_node_id",
                     "blinding",
                     "path"
                   ],
@@ -6053,6 +6061,16 @@
                       "description": [
                         "The (presumably well-known) public key of the start of the path."
                       ]
+                    },
+                    "first_scid": {
+                      "added": "v23.05",
+                      "type": "short_channel_id",
+                      "description": "the short channel id of the start of the path (alternative to first_n  ode_id)"
+                    },
+                    "first_scid_dir": {
+                      "added": "v23.05",
+                      "type": "u32",
+                      "description": "which end of the first_scid is the start of the path"
                     },
                     "blinding": {
                       "type": "pubkey",
@@ -6517,7 +6535,6 @@
                 "items": {
                   "type": "object",
                   "required": [
-                    "first_node_id",
                     "blinding",
                     "path"
                   ],
@@ -6528,6 +6545,16 @@
                       "description": [
                         "The (presumably well-known) public key of the start of the path."
                       ]
+                    },
+                    "first_scid": {
+                      "added": "v23.05",
+                      "type": "short_channel_id",
+                      "description": "the short channel id of the start of the path (alternative to first_n  ode_id)"
+                    },
+                    "first_scid_dir": {
+                      "added": "v23.05",
+                      "type": "u32",
+                      "description": "which end of the first_scid is the start of the path"
                     },
                     "blinding": {
                       "type": "pubkey",
@@ -6720,7 +6747,6 @@
                 "items": {
                   "type": "object",
                   "required": [
-                    "first_node_id",
                     "blinding",
                     "payinfo",
                     "path"
@@ -6732,6 +6758,16 @@
                       "description": [
                         "The (presumably well-known) public key of the start of the path."
                       ]
+                    },
+                    "first_scid": {
+                      "added": "v23.05",
+                      "type": "short_channel_id",
+                      "description": "the short channel id of the start of the path (alternative to first_n  ode_id)"
+                    },
+                    "first_scid_dir": {
+                      "added": "v23.05",
+                      "type": "u32",
+                      "description": "which end of the first_scid is the start of the path"
                     },
                     "blinding": {
                       "type": "pubkey",
@@ -11825,6 +11861,7 @@
             "unusual",
             "info",
             "debug",
+            "trace",
             "io"
           ],
           "description": [
@@ -11877,6 +11914,7 @@
                   "UNUSUAL",
                   "INFO",
                   "DEBUG",
+                  "TRACE",
                   "IO_IN",
                   "IO_OUT"
                 ]
@@ -11919,7 +11957,8 @@
                         "BROKEN",
                         "UNUSUAL",
                         "INFO",
-                        "DEBUG"
+                        "DEBUG",
+                        "TRACE"
                       ]
                     }
                   }
@@ -14692,6 +14731,10 @@
             },
             "max-locktime-blocks": {
               "type": "object",
+              "deprecated": [
+                "v24.05",
+                "v24.11"
+              ],
               "additionalProperties": false,
               "required": [
                 "value_int",
@@ -16401,7 +16444,6 @@
           "pid-file": "/media/vincent/Maxtor/sanboxTestWrapperRPC/lightning_dir_dev/lightningd-testne...",
           "ignore-fee-limits": true,
           "watchtime-blocks": 6,
-          "max-locktime-blocks": 2016,
           "funding-confirms": 1,
           "commit-fee-min": 0,
           "commit-fee-max": 0,
@@ -20883,6 +20925,7 @@
           ],
           "enum": [
             "io",
+            "trace",
             "debug",
             "info",
             "unusual"
@@ -20945,6 +20988,7 @@
                         "UNUSUAL",
                         "INFO",
                         "DEBUG",
+                        "TRACE",
                         "IO_IN",
                         "IO_OUT"
                       ]
@@ -20986,7 +21030,8 @@
                               "BROKEN",
                               "UNUSUAL",
                               "INFO",
-                              "DEBUG"
+                              "DEBUG",
+                              "TRACE"
                             ]
                           }
                         }
@@ -25812,14 +25857,7 @@
           ]
         },
         "label": {
-          "oneOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "integer"
-            }
-          ],
+          "type": "string",
           "description": [
             "The unique label to use for this invoice."
           ]
