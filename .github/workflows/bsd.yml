@@ -20,6 +20,7 @@ jobs:
             wget \
             py39-pip \
             py39-sqlite3 \
+            jq \
             gmake \
             git \
             python \

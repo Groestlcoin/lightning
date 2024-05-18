@@ -16,7 +16,7 @@ jobs:
         run: |
           export PATH="/usr/local/opt:/Users/runner/.local/bin:/Users/runner/Library/Python/3.10/bin:$PATH"
 
-          export GROESTLCOIN_VERSION=26.0
+          export GROESTLCOIN_VERSION=27.0
           brew install wget autoconf automake libtool python@3.10 gnu-sed gettext libsodium protobuf
 
           (
@@ -31,6 +31,8 @@ jobs:
           python3.10 -m pip install -U --user mako
 
           brew link --force gettext
+          libtool --finish
+          brew link --force libsodium
 
       - name: Build
         run: |

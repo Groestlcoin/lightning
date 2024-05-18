@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 export DEBIAN_FRONTEND=noninteractive
-export GROESTLCOIN_VERSION=26.0
+export GROESTLCOIN_VERSION=27.0
 export RUST_VERSION=stable
 sudo useradd -ms /bin/bash tester
 sudo apt-get update -qq
