@@ -30,7 +30,6 @@ jobs:
           python3.10 -m poetry install
           python3.10 -m pip install -U --user mako
 
-          libtool --finish
           brew link --force libsodium
 
       - name: Build
