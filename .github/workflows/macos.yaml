@@ -30,7 +30,7 @@ jobs:
           python3.10 -m poetry install
           python3.10 -m pip install -U --user mako
 
-          ln -s /usr/local/Cellar/gettext/0.20.1/bin/xgettext /usr/local/opt
+          brew link --force gettext
 
       - name: Build
         run: |

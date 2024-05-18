@@ -4,7 +4,7 @@ on: [push, pull_request]
 
 jobs:
   testfreebsd:
-    runs-on: macos-12
+    runs-on: ubuntu-latest
     name: Build on FreeBSD
     timeout-minutes: 120
     steps:

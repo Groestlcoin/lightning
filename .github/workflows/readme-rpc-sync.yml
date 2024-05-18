@@ -20,7 +20,7 @@ jobs:
         python-version: '3.8'
 
     - name: Install requests module
-      run: python -m pip install requests
+      run: python -m pip install requests mako
 
     - name: Install dependencies
       run: bash -x .github/scripts/setup.sh
