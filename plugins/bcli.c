@@ -113,7 +113,7 @@ static const char **gather_argsv(const tal_t *ctx, const char *cmd, va_list ap)
 			bitcoind->rpcclienttimeout = bitcoind->retry_timeout;
 
 		add_arg(&args,
-			tal_fmt(args, "-rpcclienttimeout=%ld", bitcoind->rpcclienttimeout));
+			tal_fmt(args, "-rpcclienttimeout=%"PRIu64, bitcoind->rpcclienttimeout));
 	}
 	if (bitcoind->rpcconnect)
 		add_arg(&args,
@@ -1257,39 +1257,39 @@ int main(int argc, char *argv[])
 		    plugin_option("groestlcoin-datadir",
 				  "string",
 				  "-datadir arg for groestlcoin-cli",
-				  charp_option, &bitcoind->datadir),
+				  charp_option, NULL, &bitcoind->datadir),
 		    plugin_option("groestlcoin-cli",
 				  "string",
 				  "groestlcoin-cli pathname",
-				  charp_option, &bitcoind->cli),
+				  charp_option, NULL, &bitcoind->cli),
 		    plugin_option("groestlcoin-rpcuser",
 				  "string",
 				  "groestlcoind RPC username",
-				  charp_option, &bitcoind->rpcuser),
+				  charp_option, NULL, &bitcoind->rpcuser),
 		    plugin_option("groestlcoin-rpcpassword",
 				  "string",
 				  "groestlcoind RPC password",
-				  charp_option, &bitcoind->rpcpass),
+				  charp_option, NULL, &bitcoind->rpcpass),
 		    plugin_option("groestlcoin-rpcconnect",
 				  "string",
 				  "groestlcoind RPC host to connect to",
-				  charp_option, &bitcoind->rpcconnect),
+				  charp_option, NULL, &bitcoind->rpcconnect),
 		    plugin_option("groestlcoin-rpcport",
 				  "int",
 				  "groestlcoind RPC host's port",
-				  charp_option, &bitcoind->rpcport),
+				  charp_option, NULL, &bitcoind->rpcport),
 		    plugin_option("groestlcoin-rpcclienttimeout",
 				  "int",
 				  "groestlcoind RPC timeout in seconds during HTTP requests",
-				  u64_option, &bitcoind->rpcclienttimeout),
+				  u64_option, u64_jsonfmt, &bitcoind->rpcclienttimeout),
 		    plugin_option("groestlcoin-retry-timeout",
-				  "string",
+				  "int",
 				  "how long to keep retrying to contact groestlcoind"
 				  " before fatally exiting",
-				  u64_option, &bitcoind->retry_timeout),
+				  u64_option, u64_jsonfmt, &bitcoind->retry_timeout),
 		    plugin_option_dev("dev-no-fake-fees",
 				      "bool",
 				      "Suppress fee faking for regtest",
-				      bool_option, &bitcoind->dev_no_fake_fees),
+				      bool_option, NULL, &bitcoind->dev_no_fake_fees),
 		    NULL);
 }
