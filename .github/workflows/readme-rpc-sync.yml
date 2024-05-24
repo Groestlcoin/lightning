@@ -5,7 +5,13 @@ on:
     branches:
       - 'master'
     paths:
-      - 'doc/**.md'
+      - 'doc/schemas/lightning-*.json'
+      - 'doc/*.1.md'
+      - 'doc/*.5.md'
+      - 'doc/*.8.md'
+      - 'doc/lightningd-*.7.md'
+      - 'doc/reckless.7.md'
+  workflow_dispatch:
 
 jobs:
   rdme-rpc-sync:
@@ -17,24 +23,19 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
-        python-version: '3.8'
+        python-version: 3.8
 
-    - name: Install requests module
-      run: python -m pip install requests mako
+    - name: Install python modules
+      run: |
+        python -m pip install requests mako grpcio-tools
 
     - name: Install dependencies
       run: bash -x .github/scripts/setup.sh
 
-    - name: Build
+    - name: Build (including rpc .md files)
       run: |
         ./configure --enable-debugbuild
         make -j $(nproc)
-        make -j $(nproc) check-gen-updated
-
-    - name: Make docs
-      run: |
-        make doc-all
-        make check-doc
 
     - name: Set environment variable and run
       env:
