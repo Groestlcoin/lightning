@@ -26,8 +26,13 @@ RUN apt-get update \
 	sudo \
 	unzip \
 	wget \
-    jq \
+	jq \
 	zip
+
+# Ensure correct ownership
+RUN chown root:root /etc/sudoers
+RUN chown root:root /etc/sudo.conf
+RUN chown root:root /usr/libexec/sudo/sudoers.so
 
 # Install Python3.10 (more reproducible than relying on python3-setuptools)
 RUN git clone https://github.com/pyenv/pyenv.git /root/.pyenv && \

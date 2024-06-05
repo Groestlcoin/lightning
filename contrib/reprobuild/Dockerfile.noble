@@ -1,4 +1,4 @@
-FROM ubuntu:20.04
+FROM ubuntu:noble
 
 ENV TZ=UTC
 RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
@@ -6,18 +6,19 @@ ENV RUST_PROFILE=release
 ENV PATH=/root/.pyenv/shims:/root/.pyenv/bin:/root/.cargo/bin:$PATH
 ENV PROTOC_VERSION=22.0
 
-#RUN sed -i '/updates/d' /etc/apt/sources.list && \
-#    sed -i '/security/d' /etc/apt/sources.list
+RUN sed -i '/updates/d' /etc/apt/sources.list && \
+    sed -i '/security/d' /etc/apt/sources.list
 
 RUN apt-get update \
 	&& apt-get install -y --no-install-recommends \
 	autoconf \
-	automake \
 	build-essential \
 	ca-certificates \
 	file \
 	gettext \
 	git \
+    curl \
+    libsqlite3-dev \
 	libpq-dev \
 	libsodium23 \
 	libtool \
@@ -25,28 +26,22 @@ RUN apt-get update \
 	sudo \
 	unzip \
 	wget \
-	git \
+    jq \
 	zip
 
-# Ensure correct ownership
-RUN chown root:root /etc/sudoers
-RUN chown root:root /usr/lib/sudo/sudoers.so
+# Configure /repo/.git as 'safe.directory'
+RUN git config --global --add safe.directory /repo/.git
 
-# Download and install jq from official repository
-RUN wget -O /usr/local/bin/jq https://github.com/jqlang/jq/releases/download/jq-1.6/jq-linux64 \
-    && chmod +x /usr/local/bin/jq
-
-# install Python3.8 (more reproducible than relying on python3-setuptools)
+# Install Python3.10 (more reproducible than relying on python3-setuptools)
 RUN git clone https://github.com/pyenv/pyenv.git /root/.pyenv && \
     apt-get install -y --no-install-recommends \
     libbz2-dev \
     libffi-dev \
     libreadline-dev \
-    libsqlite3-dev \
     libssl-dev \
     zlib1g-dev && \
-    pyenv install 3.8.0 && \
-    pyenv global 3.8.0
+    pyenv install 3.10.0 && \
+    pyenv global 3.10.0
 
 RUN wget https://bootstrap.pypa.io/get-pip.py -O /tmp/get-pip.py && python3 /tmp/get-pip.py \
     && rm /tmp/get-pip.py \
@@ -64,8 +59,6 @@ RUN cd /tmp/ && \
     unzip protoc-${PROTOC_VERSION}-linux-x86_64.zip && \
     mv bin/protoc /usr/local/bin && \
     rm -rf include bin protoc-${PROTOC_VERSION}-linux-x86_64.zip
-
-RUN git config --global --add safe.directory '*'
 
 RUN mkdir /build
 WORKDIR /build
