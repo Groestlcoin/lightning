@@ -6,19 +6,20 @@ ENV RUST_PROFILE=release
 ENV PATH=/root/.pyenv/shims:/root/.pyenv/bin:/root/.cargo/bin:$PATH
 ENV PROTOC_VERSION=22.0
 
-RUN sed -i '/updates/d' /etc/apt/sources.list && \
-    sed -i '/security/d' /etc/apt/sources.list
+#RUN sed -i '/updates/d' /etc/apt/sources.list && \
+#    sed -i '/security/d' /etc/apt/sources.list
 
 RUN apt-get update \
 	&& apt-get install -y --no-install-recommends \
 	autoconf \
+	automake \
 	build-essential \
 	ca-certificates \
 	file \
 	gettext \
 	git \
-    curl \
-    libsqlite3-dev \
+	curl \
+	libsqlite3-dev \
 	libpq-dev \
 	libsodium23 \
 	libtool \
@@ -26,7 +27,7 @@ RUN apt-get update \
 	sudo \
 	unzip \
 	wget \
-    jq \
+	jq \
 	zip
 
 # Configure /repo/.git as 'safe.directory'
