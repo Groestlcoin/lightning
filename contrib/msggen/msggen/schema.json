@@ -3273,7 +3273,7 @@
       "added": "v23.05",
       "deprecated": [
         "v23.08",
-        "v24.08"
+        "v25.02"
       ],
       "rpc": "commando-blacklist",
       "title": "Command to prevent a rune from working",
@@ -3415,7 +3415,7 @@
       "added": "v23.05",
       "deprecated": [
         "v23.08",
-        "v24.05"
+        "v25.02"
       ],
       "rpc": "commando-listrunes",
       "title": "Command to list previously generated runes",
@@ -3712,7 +3712,7 @@
       "additionalProperties": false,
       "deprecated": [
         "v23.08",
-        "v23.05"
+        "v25.02"
       ],
       "rpc": "commando-rune",
       "title": "Command to Authorize Remote Peer Access",
@@ -5679,12 +5679,16 @@
                       "first_scid": {
                         "added": "v23.05",
                         "type": "short_channel_id",
-                        "description": "the short channel id of the start of the path (alternative to first_n  ode_id)"
+                        "description": [
+                          "the short channel id of the start of the path (alternative to first_node_id)"
+                        ]
                       },
                       "first_scid_dir": {
                         "added": "v23.05",
                         "type": "u32",
-                        "description": "which end of the first_scid is the start of the path"
+                        "description": [
+                          "which end of the first_scid is the start of the path"
+                        ]
                       },
                       "blinding": {
                         "type": "pubkey",
@@ -6066,12 +6070,16 @@
                       "first_scid": {
                         "added": "v23.05",
                         "type": "short_channel_id",
-                        "description": "the short channel id of the start of the path (alternative to first_n  ode_id)"
+                        "description": [
+                          "the short channel id of the start of the path (alternative to first_node_id)"
+                        ]
                       },
                       "first_scid_dir": {
                         "added": "v23.05",
                         "type": "u32",
-                        "description": "which end of the first_scid is the start of the path"
+                        "description": [
+                          "which end of the first_scid is the start of the path"
+                        ]
                       },
                       "blinding": {
                         "type": "pubkey",
@@ -6550,12 +6558,16 @@
                       "first_scid": {
                         "added": "v23.05",
                         "type": "short_channel_id",
-                        "description": "the short channel id of the start of the path (alternative to first_n  ode_id)"
+                        "description": [
+                          "the short channel id of the start of the path (alternative to first_node_id)"
+                        ]
                       },
                       "first_scid_dir": {
                         "added": "v23.05",
                         "type": "u32",
-                        "description": "which end of the first_scid is the start of the path"
+                        "description": [
+                          "which end of the first_scid is the start of the path"
+                        ]
                       },
                       "blinding": {
                         "type": "pubkey",
@@ -6763,12 +6775,16 @@
                       "first_scid": {
                         "added": "v23.05",
                         "type": "short_channel_id",
-                        "description": "the short channel id of the start of the path (alternative to first_n  ode_id)"
+                        "description": [
+                          "the short channel id of the start of the path (alternative to first_node_id)"
+                        ]
                       },
                       "first_scid_dir": {
                         "added": "v23.05",
                         "type": "u32",
-                        "description": "which end of the first_scid is the start of the path"
+                        "description": [
+                          "which end of the first_scid is the start of the path"
+                        ]
                       },
                       "blinding": {
                         "type": "pubkey",
@@ -23108,16 +23124,9 @@
             ]
           },
           "recurrence_base": {
-            "oneOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "integer"
-              }
-            ],
+            "type": "integer",
             "description": [
-              "Time in seconds since the first day of 1970 UTC, optionally with a `@` prefix. This indicates when the first period begins; without this, the recurrence periods start from the first invoice. The `@` prefix means that the invoice must start by paying the first period; otherwise it is permitted to start at any period. This is encoded in the offer. e.g. `@1609459200` indicates you must start paying on the 1st January 2021."
+              "Time in seconds since the first day of 1970 UTC. This indicates when the first period begins; without this, the recurrence periods start from the first invoice."
             ]
           },
           "recurrence_paywindow": {
@@ -23139,6 +23148,14 @@
               "Indicates that the offer is only valid once; we may issue multiple invoices, but as soon as one is paid all other invoices will be expired (i.e. only one person can pay this offer)."
             ],
             "default": "False"
+          },
+          "recurrence_start_any_period": {
+            "added": "v24.02",
+            "type": "boolean",
+            "description": [
+              "This means that the invoice may start by paying during any period; otherwise it must start by paying at the first period.  Setting this to false only makes sense if *recurrence_base* was provided. This is encoded in the offer."
+            ],
+            "default": "True"
           }
         }
       },
