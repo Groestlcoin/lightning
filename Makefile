@@ -26,7 +26,7 @@ CCANDIR := ccan
 
 # Where we keep the BOLT RFCs
 BOLTDIR := ../bolts/
-DEFAULT_BOLTVERSION := 0bdaa8b9f65fc82a178d0d8722d352f2320b02f4
+DEFAULT_BOLTVERSION := 57ce4b1e05c996fa649f00dc13521f6d496a288f
 # Can be overridden on cmdline.
 BOLTVERSION := $(DEFAULT_BOLTVERSION)
 
@@ -370,8 +370,12 @@ ifneq ($(RUST),0)
 endif
 include cln-grpc/Makefile
 
+ifneq ($V,1)
+MSGGEN_ARGS := -s
+endif
+
 $(MSGGEN_GENALL)&: contrib/msggen/msggen/schema.json
-	PYTHONPATH=contrib/msggen $(PYTHON) contrib/msggen/msggen/__main__.py generate
+	@$(call VERBOSE, "msggen $@", PYTHONPATH=contrib/msggen $(PYTHON) contrib/msggen/msggen/__main__.py $(MSGGEN_ARGS) generate)
 
 # The compiler assumes that the proto files are in the same
 # directory structure as the generated files will be. Since we

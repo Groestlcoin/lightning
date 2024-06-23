@@ -1156,7 +1156,7 @@ static void peer_got_shutdown(struct channel *channel, const u8 *msg)
 					    OPT_SHUTDOWN_ANYSEGWIT);
 	bool anchors = feature_negotiated(ld->our_features,
 					  channel->peer->their_features,
-					  OPT_ANCHOR_OUTPUTS)
+					  OPT_ANCHOR_OUTPUTS_DEPRECATED)
 		|| feature_negotiated(ld->our_features,
 				      channel->peer->their_features,
 				      OPT_ANCHORS_ZERO_FEE_HTLC_TX);
@@ -1219,32 +1219,23 @@ static void peer_got_shutdown(struct channel *channel, const u8 *msg)
 	wallet_channel_save(ld->wallet, channel);
 }
 
-void channel_fallen_behind(struct channel *channel, const u8 *msg)
+void channel_fallen_behind(struct channel *channel)
 {
-
-	/* per_commitment_point is NULL if option_static_remotekey, but we
-	 * use its presence as a flag so set it any valid key in that case. */
-	if (!channel->future_per_commitment_point) {
-		struct pubkey *any = tal(channel, struct pubkey);
-		if (!pubkey_from_node_id(any, &channel->peer->ld->id))
-			fatal("Our own id invalid?");
-		channel->future_per_commitment_point = any;
-	}
+	channel->has_future_per_commitment_point = true;
+	wallet_channel_save(channel->peer->ld->wallet, channel);
 }
 
 static void
 channel_fail_fallen_behind(struct channel *channel, const u8 *msg)
 {
-	if (!fromwire_channeld_fail_fallen_behind(channel, msg,
-						 cast_const2(struct pubkey **,
-							    &channel->future_per_commitment_point))) {
+	if (!fromwire_channeld_fail_fallen_behind(msg)) {
 		channel_internal_error(channel,
 				       "bad channel_fail_fallen_behind %s",
 				       tal_hex(tmpctx, msg));
 		return;
 	}
 
-        channel_fallen_behind(channel, msg);
+        channel_fallen_behind(channel);
 }
 
 static void peer_start_closingd_after_shutdown(struct channel *channel,

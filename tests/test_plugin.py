@@ -668,7 +668,7 @@ def test_openchannel_hook(node_factory, bitcoind):
         'to_self_delay': '5',
     }
 
-    if 'anchors_zero_fee_htlc_tx/even' in only_one(l1.rpc.listpeerchannels()['channels'])['channel_type']['names']:
+    if 'anchors/even' in only_one(l1.rpc.listpeerchannels()['channels'])['channel_type']['names']:
         feerate = 3750
     else:
         feerate = 7500
@@ -4314,8 +4314,20 @@ def test_dynamic_option_python_plugin(node_factory):
 
     assert result["configs"]["test-dynamic-config"]["value_str"] == "initial"
 
+    assert ln.rpc.dynamic_option_report() == {'test-dynamic-config': 'initial'}
     result = ln.rpc.setconfig("test-dynamic-config", "changed")
     assert result["config"]["value_str"] == "changed"
+    assert ln.rpc.dynamic_option_report() == {'test-dynamic-config': 'changed'}
+
+    ln.daemon.wait_for_log(
+        'dynamic_option.py:.*Setting config test-dynamic-config to changed'
+    )
+
+    with pytest.raises(RpcError, match="I don't like bad values!"):
+        ln.rpc.setconfig("test-dynamic-config", "bad value")
+
+    # Does not alter value!
+    assert ln.rpc.dynamic_option_report() == {'test-dynamic-config': 'changed'}
 
 
 def test_renepay_not_important(node_factory):
@@ -4352,3 +4364,35 @@ def test_plugin_startdir_lol(node_factory):
     """Though we fail to start many of them, we don't crash!"""
     l1 = node_factory.get_node(broken_log='.*')
     l1.rpc.plugin_startdir(os.path.join(os.getcwd(), 'tests/plugins'))
+
+
+def test_autoclean_batch(node_factory):
+    l1 = node_factory.get_node(1)
+
+    # Many expired invoices
+    for i in range(100):
+        l1.rpc.invoice(amount_msat=12300, label=f'inv1{i}', description='description', expiry=1)
+
+    time.sleep(3)
+    l1.rpc.setconfig('dev-autoclean-max-batch', 2)
+
+    # Test manual clean
+    ret = l1.rpc.autoclean_once('expiredinvoices', 1)
+    assert ret == {'autoclean': {'expiredinvoices': {'cleaned': 100, 'uncleaned': 0}}}
+
+    for i in range(100):
+        l1.rpc.invoice(amount_msat=12300, label=f'inv2{i}', description='description', expiry=1)
+
+    time.sleep(3)
+
+    # Test cycle clean
+    assert (l1.rpc.autoclean_status('expiredinvoices')
+            == {'autoclean': {'expiredinvoices': {'enabled': False, 'cleaned': 100}}})
+
+    l1.rpc.setconfig('autoclean-expiredinvoices-age', 2)
+    assert (l1.rpc.autoclean_status('expiredinvoices')
+            == {'autoclean': {'expiredinvoices': {'enabled': True, 'cleaned': 100, 'age': 2}}})
+
+    l1.rpc.setconfig('autoclean-cycle', 5)
+    wait_for(lambda: l1.rpc.autoclean_status('expiredinvoices')
+             == {'autoclean': {'expiredinvoices': {'enabled': True, 'cleaned': 200, 'age': 2}}})

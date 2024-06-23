@@ -209,20 +209,28 @@
     "*failcode*: The failure code, as per BOLT #4.",
     "*channel_update*: The hex string of the *channel_update* message received from the remote node. Only present if error is from the remote node and the *failcode* has the `UPDATE` bit set, as per BOLT #4."
   ],
-  "json_example": [
+  "author": [
+    "Christian Decker <<decker@blockstream.com>> is mainly responsible."
+  ],
+  "see_also": [
+    "lightning-listpays(7)",
+    "lightning-decodepay(7)",
+    "lightning-listinvoices(7)",
+    "lightning-delinvoice(7)",
+    "lightning-getroute(7)",
+    "lightning-invoice(7)"
+  ],
+  "resources": [
+    "Main web site: <https://github.com/ElementsProject/lightning>"
+  ],
+  "examples": [
     {
       "request": {
         "id": "example:keysend#1",
         "method": "keysend",
         "params": {
           "destination": "035d2b1192dfba134e10e540875d366ebc8bc353d5aa766b80c090b39c3a5d885d",
-          "amount_msat": 10000,
-          "label": null,
-          "maxfeepercent": null,
-          "retry_for": null,
-          "maxdelay": null,
-          "exemptfee": null,
-          "extratlvs": null
+          "amount_msat": 10000
         }
       },
       "response": {
@@ -243,11 +251,6 @@
         "params": {
           "destination": "0266e4598d1d3c415f572a8488830b60f7e744ed9235eb0b1ba93283b315c03518",
           "amount_msat": 10000000,
-          "label": null,
-          "maxfeepercent": null,
-          "retry_for": null,
-          "maxdelay": null,
-          "exemptfee": null,
           "extratlvs": {
             "133773310": "68656c6c6f776f726c64",
             "133773312": "66696c7465726d65"
@@ -305,19 +308,5 @@
         "status": "complete"
       }
     }
-  ],
-  "author": [
-    "Christian Decker <<decker@blockstream.com>> is mainly responsible."
-  ],
-  "see_also": [
-    "lightning-listpays(7)",
-    "lightning-decodepay(7)",
-    "lightning-listinvoices(7)",
-    "lightning-delinvoice(7)",
-    "lightning-getroute(7)",
-    "lightning-invoice(7)"
-  ],
-  "resources": [
-    "Main web site: <https://github.com/ElementsProject/lightning>"
   ]
 }

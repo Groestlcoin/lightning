@@ -262,42 +262,13 @@ void setup_peer_gossip_store(struct peer *peer,
 	/* BOLT #7:
 	 *
 	 * A node:
-	 *   - if the `gossip_queries` feature is negotiated:
 	 * 	- MUST NOT relay any gossip messages it did not generate itself,
 	 *        unless explicitly requested.
 	 */
-	if (feature_negotiated(our_features, their_features, OPT_GOSSIP_QUERIES)) {
-		peer->gs.gossip_timer = NULL;
-		peer->gs.active = false;
-		peer->gs.off = 1;
-		return;
-	}
-
-	peer->gs.gossip_timer = gossip_stream_timer(peer);
-	peer->gs.active = !peer->daemon->dev_suppress_gossip;
-	peer->gs.timestamp_min = 0;
-	peer->gs.timestamp_max = UINT32_MAX;
-
-	/* BOLT #7:
-	 *
-	 * - upon receiving an `init` message with the
-	 *   `initial_routing_sync` flag set to 1:
-	 *   - SHOULD send gossip messages for all known channels and
-	 *    nodes, as if they were just received.
-	 * - if the `initial_routing_sync` flag is set to 0, OR if the
-	 *   initial sync was completed:
-	 *   - SHOULD resume normal operation, as specified in the
-	 *     following [Rebroadcasting](#rebroadcasting) section.
-	 */
-	if (feature_offered(their_features, OPT_INITIAL_ROUTING_SYNC))
-		peer->gs.off = 1;
-	else {
-		/* During tests, particularly, we find that the gossip_store
-		 * moves fast, so make sure it really does start at the end. */
-		peer->gs.off
-			= find_gossip_store_end(peer->daemon->gossip_store_fd,
-						peer->daemon->gossip_store_end);
-	}
+	peer->gs.gossip_timer = NULL;
+	peer->gs.active = false;
+	peer->gs.off = 1;
+	return;
 }
 
 /* We're happy for the kernel to batch update and gossip messages, but a

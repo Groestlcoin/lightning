@@ -1435,7 +1435,7 @@ static void fulfill_our_htlc_out(struct channel *channel, struct htlc_out *hout,
 		/* Did we abandon the incoming?  Oops! */
 		if (hout->in->failonion) {
 			/* FIXME: Accounting? */
-			log_unusual(channel->log, "FUNDS LOSS of %s: peer took funds onchain before we could time out the HTLC, but we abandoned incoming HTLC to save the incoming channel",
+			log_broken(channel->log, "FUNDS LOSS of %s: peer took funds onchain before we could time out the HTLC, but we abandoned incoming HTLC to save the incoming channel",
 				    fmt_amount_msat(tmpctx, hout->msat));
 		} else {
 			struct short_channel_id scid = channel_scid_or_local_alias(hout->key.channel);
@@ -1752,8 +1752,9 @@ void onchain_failed_our_htlc(const struct channel *channel,
 					 ? fromwire_peektype(hout->failmsg)
 					 : 0);
 	} else {
-		log_broken(channel->log, "HTLC id %"PRIu64" is from nowhere?",
-			   htlc->id);
+		/* This happens if we abandoned the incoming HTLC to avoid closure */
+		log_unusual(channel->log, "HTLC id %"PRIu64" is from nowhere: did we abandon it?",
+			    htlc->id);
 
 		/* Immediate corruption sanity check if this happens */
 		htable_check(&ld->htlcs_out->raw, "onchain_failed_our_htlc out");
@@ -2697,6 +2698,10 @@ static void consider_failing_incoming(struct lightningd *ld,
 	/* OK, if we're within 3 blocks of upstream getting upset, force it
 	 * to fail without waiting for onchaind. */
 	if (height + 3 < hout->in->cltv_expiry)
+		return;
+
+	/* Unless incoming is already onchain, then it can't get worse! */
+	if (!channel_state_can_remove_htlc(hout->in->key.channel->state))
 		return;
 
 	log_unusual(hout->key.channel->log,

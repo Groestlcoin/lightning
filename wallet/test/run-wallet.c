@@ -128,6 +128,12 @@ struct command_result *command_check_done(struct command *cmd)
 /* Generated stub for command_check_only */
 bool command_check_only(const struct command *cmd UNNEEDED)
 { fprintf(stderr, "command_check_only called!\n"); abort(); }
+/* Generated stub for command_deprecated_out_ok */
+bool command_deprecated_out_ok(struct command *cmd UNNEEDED,
+			       const char *fieldname UNNEEDED,
+			       const char *depr_start UNNEEDED,
+			       const char *depr_end UNNEEDED)
+{ fprintf(stderr, "command_deprecated_out_ok called!\n"); abort(); }
 /* Generated stub for command_fail */
 struct command_result *command_fail(struct command *cmd UNNEEDED, enum jsonrpc_errcode code UNNEEDED,
 				    const char *fmt UNNEEDED, ...)
@@ -510,12 +516,14 @@ void json_add_u64(struct json_stream *result UNNEEDED, const char *fieldname UNN
 		  uint64_t value UNNEEDED)
 { fprintf(stderr, "json_add_u64 called!\n"); abort(); }
 /* Generated stub for json_add_uncommitted_channel */
-void  json_add_uncommitted_channel(struct json_stream *response UNNEEDED,
+void  json_add_uncommitted_channel(struct command *cmd UNNEEDED,
+						      struct json_stream *response UNNEEDED,
 						      const struct uncommitted_channel *uc UNNEEDED,
 						      const struct peer *peer UNNEEDED)
 { fprintf(stderr, "json_add_uncommitted_channel called!\n"); abort(); }
 /* Generated stub for json_add_unsaved_channel */
-void  json_add_unsaved_channel(struct json_stream *response UNNEEDED,
+void  json_add_unsaved_channel(struct command *cmd UNNEEDED,
+					   struct json_stream *response UNNEEDED,
 					   const struct channel *channel UNNEEDED,
 					   const struct peer *peer UNNEEDED)
 { fprintf(stderr, "json_add_unsaved_channel called!\n"); abort(); }
@@ -1423,7 +1431,7 @@ static bool test_wallet_outputs(struct lightningd *ld, const tal_t *ctx)
 	assert(parse_wireaddr_internal(tmpctx, "localhost:1234", 0, false, &addr) == NULL);
 	channel.peer = new_peer(ld, 0, &id, &addr, NULL, false);
 	channel.dbid = 1;
-	channel.type = channel_type_anchor_outputs(tmpctx);
+	channel.type = channel_type_anchors_zero_fee_htlc(tmpctx);
 	memset(&u.outpoint, 3, sizeof(u.outpoint));
 	CHECK_MSG(wallet_add_onchaind_utxo(w, &u.outpoint,
 					   u.scriptPubkey,
@@ -2109,6 +2117,7 @@ static bool test_htlc_crud(struct lightningd *ld, const tal_t *ctx)
 	db_commit_transaction(w->db);
 
 	chan->dbid = 1;
+	chan->state = CHANNELD_NORMAL;
 	chan->peer = peer;
 	chan->next_index[LOCAL] = chan->next_index[REMOTE] = 1;
 

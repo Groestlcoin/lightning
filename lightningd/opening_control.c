@@ -31,7 +31,8 @@
 #include <sodium/randombytes.h>
 #include <wally_psbt.h>
 
-void json_add_uncommitted_channel(struct json_stream *response,
+void json_add_uncommitted_channel(struct command *cmd,
+				  struct json_stream *response,
 				  const struct uncommitted_channel *uc,
 				  const struct peer *peer)
 {
@@ -73,13 +74,11 @@ void json_add_uncommitted_channel(struct json_stream *response,
 
 	if (feature_negotiated(uc->peer->ld->our_features,
 			       uc->peer->their_features,
-			       OPT_ANCHOR_OUTPUTS))
-		json_add_string(response, NULL, "option_anchor_outputs");
-
-	if (feature_negotiated(uc->peer->ld->our_features,
-			       uc->peer->their_features,
-			       OPT_ANCHORS_ZERO_FEE_HTLC_TX))
-		json_add_string(response, NULL, "option_anchors_zero_fee_htlc_tx");
+			       OPT_ANCHORS_ZERO_FEE_HTLC_TX)) {
+		if (command_deprecated_out_ok(cmd, "features", "v24.08", "v25.08"))
+			json_add_string(response, NULL, "option_anchors_zero_fee_htlc_tx");
+		json_add_string(response, NULL, "option_anchors");
+	}
 
 	json_array_end(response);
 	json_object_end(response);
@@ -151,16 +150,6 @@ wallet_commit_channel(struct lightningd *ld,
 	 *
 	 * Both peers:
 	 * ...
-	 *   - if `option_anchors_zero_fee_htlc_tx` was negotiated:
-	 *     - the `channel_type` is `option_anchors_zero_fee_htlc_tx` and
-	 *       `option_static_remotekey` (bits 22 and 12)
-	 *   - otherwise, if `option_anchor_outputs` was negotiated:
-	 *     - the `channel_type` is `option_anchor_outputs` and
-	 *       `option_static_remotekey` (bits 20 and 12)
-	 *   - otherwise, if `option_static_remotekey` was negotiated:
-	 *     - the `channel_type` is `option_static_remotekey` (bit 12)
-	 *   - otherwise:
-	 *     - the `channel_type` is empty
 	 * - MUST use that `channel_type` for all commitment transactions.
 	 */
 	/* i.e. We set it now for the channel permanently. */
@@ -215,7 +204,7 @@ wallet_commit_channel(struct lightningd *ld,
 			      feerate, feerate,
 			      &uc->local_basepoints,
 			      &uc->local_funding_pubkey,
-			      NULL,
+			      false, /* !has_future_per_commitment_point */
 			      ld->config.fee_base,
 			      ld->config.fee_per_satoshi,
 			      remote_upfront_shutdown_script,
@@ -1586,7 +1575,7 @@ static struct channel *stub_chan(struct command *cmd,
                               funding_sats.satoshis / MINIMUM_TX_WEIGHT * 1000 /* Raw: convert to feerate */,
 			      &basepoints,
 			      &localFundingPubkey,
-			      NULL,
+			      false,
 			      ld->config.fee_base,
 			      ld->config.fee_per_satoshi,
 			      NULL,

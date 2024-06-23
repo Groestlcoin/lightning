@@ -304,14 +304,26 @@
     "",
     "- -32602: If the given parameters are wrong."
   ],
-  "json_example": [
+  "author": [
+    "Michael Hawkins <<michael.hawkins@protonmail.com>>."
+  ],
+  "see_also": [
+    "lightning-connect(7)",
+    "lightning-fundchannel_start(7)",
+    "lightning-setchannel(7)"
+  ],
+  "resources": [
+    "Main web site: <https://github.com/ElementsProject/lightning>",
+    "Lightning RFC site (BOLT #9):",
+    "<https://github.com/lightning/bolts/blob/master/09-features.md>"
+  ],
+  "examples": [
     {
       "request": {
         "id": "example:listpeers#1",
         "method": "listpeers",
         "params": {
-          "id": "022d223620a359a47ff7f7ac447c85c46c923da53389221a0054c11c1e3ca31d59",
-          "level": null
+          "id": "022d223620a359a47ff7f7ac447c85c46c923da53389221a0054c11c1e3ca31d59"
         }
       },
       "response": {
@@ -332,10 +344,7 @@
       "request": {
         "id": "example:listpeers#2",
         "method": "listpeers",
-        "params": {
-          "id": null,
-          "level": null
-        }
+        "params": {}
       },
       "response": {
         "peers": [
@@ -351,18 +360,5 @@
         ]
       }
     }
-  ],
-  "author": [
-    "Michael Hawkins <<michael.hawkins@protonmail.com>>."
-  ],
-  "see_also": [
-    "lightning-connect(7)",
-    "lightning-fundchannel_start(7)",
-    "lightning-setchannel(7)"
-  ],
-  "resources": [
-    "Main web site: <https://github.com/ElementsProject/lightning>",
-    "Lightning RFC site (BOLT #9):",
-    "<https://github.com/lightning/bolts/blob/master/09-features.md>"
   ]
 }

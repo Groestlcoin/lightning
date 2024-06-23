@@ -352,7 +352,17 @@
     "",
     "The default for lightning-pay(7) is 10, which starts to become a major factor for larger amounts, and is basically ignored for tiny ones."
   ],
-  "json_example": [
+  "author": [
+    "Rusty Russell <<rusty@rustcorp.com.au>> is mainly responsible."
+  ],
+  "see_also": [
+    "lightning-pay(7)",
+    "lightning-sendpay(7)"
+  ],
+  "resources": [
+    "Main web site: <https://github.com/ElementsProject/lightning>"
+  ],
+  "examples": [
     {
       "request": {
         "id": "example:getroute#1",
@@ -361,11 +371,7 @@
           "id": "0266e4598d1d3c415f572a8488830b60f7e744ed9235eb0b1ba93283b315c03518",
           "amount_msat": 50000000,
           "riskfactor": 1,
-          "cltv": 9,
-          "fromid": null,
-          "fuzzpercent": null,
-          "exclude": null,
-          "maxhops": null
+          "cltv": 9
         }
       },
       "response": {
@@ -428,15 +434,5 @@
         ]
       }
     }
-  ],
-  "author": [
-    "Rusty Russell <<rusty@rustcorp.com.au>> is mainly responsible."
-  ],
-  "see_also": [
-    "lightning-pay(7)",
-    "lightning-sendpay(7)"
-  ],
-  "resources": [
-    "Main web site: <https://github.com/ElementsProject/lightning>"
   ]
 }

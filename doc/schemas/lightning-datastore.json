@@ -114,7 +114,18 @@
     "- 1206: One of the parents already exists with a value.",
     "- -32602: invalid parameters"
   ],
-  "json_example": [
+  "author": [
+    "Rusty Russell <<rusty@rustcorp.com.au>> is mainly responsible."
+  ],
+  "see_also": [
+    "lightning-listdatastore(7)",
+    "lightning-deldatastore(7)",
+    "lightning-datastoreusage(7)"
+  ],
+  "resources": [
+    "Main web site: <https://github.com/ElementsProject/lightning>"
+  ],
+  "examples": [
     {
       "request": {
         "id": "example:datastore#1",
@@ -125,9 +136,7 @@
             "name"
           ],
           "string": "foobar",
-          "hex": null,
-          "mode": "must-replace",
-          "generation": null
+          "mode": "must-replace"
         }
       },
       "response": {
@@ -146,10 +155,8 @@
         "method": "datastore",
         "params": {
           "key": "somekey",
-          "string": null,
           "hex": "61",
-          "mode": "create-or-append",
-          "generation": null
+          "mode": "create-or-append"
         }
       },
       "response": {
@@ -173,10 +180,7 @@
             "f",
             "g"
           ],
-          "string": "somedatatostoreinthedatastore",
-          "hex": null,
-          "mode": null,
-          "generation": null
+          "string": "somedatatostoreinthedatastore"
         }
       },
       "response": {
@@ -192,16 +196,5 @@
         "string": "somedatatostoreinthedatastore"
       }
     }
-  ],
-  "author": [
-    "Rusty Russell <<rusty@rustcorp.com.au>> is mainly responsible."
-  ],
-  "see_also": [
-    "lightning-listdatastore(7)",
-    "lightning-deldatastore(7)",
-    "lightning-datastoreusage(7)"
-  ],
-  "resources": [
-    "Main web site: <https://github.com/ElementsProject/lightning>"
   ]
 }

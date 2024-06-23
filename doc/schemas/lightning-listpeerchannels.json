@@ -113,13 +113,14 @@
                 "names": {
                   "type": "array",
                   "description": [
-                    "Feature name for each bit set in this channel_type."
+                    "Feature name for each bit set in this channel_type. Note that *anchors_zero_fee_htlc_tx* is a deprecated synonym for *anchors*."
                   ],
                   "items": {
                     "type": "string",
                     "enum": [
                       "static_remotekey/even",
                       "anchor_outputs/even",
+                      "anchors/even",
                       "anchors_zero_fee_htlc_tx/even",
                       "scid_alias/even",
                       "zeroconf/even"
@@ -443,12 +444,13 @@
                 "enum": [
                   "option_static_remotekey",
                   "option_anchor_outputs",
+                  "option_anchors",
                   "option_anchors_zero_fee_htlc_tx",
                   "option_scid_alias",
                   "option_zeroconf"
                 ],
                 "description": [
-                  "BOLT #9 features which apply to this channel."
+                  "BOLT #9 features which apply to this channel. Note that *anchors_zero_fee_htlc_tx* is a deprecated synonym for *anchors*."
                 ]
               }
             },
@@ -1386,7 +1388,19 @@
     "",
     "- -32602: If the given parameters are wrong."
   ],
-  "json_example": [
+  "author": [
+    "Michael Hawkins <<michael.hawkins@protonmail.com>>."
+  ],
+  "see_also": [
+    "lightning-connect(7)",
+    "lightning-fundchannel_start(7)"
+  ],
+  "resources": [
+    "Main web site: <https://github.com/ElementsProject/lightning>",
+    "Lightning RFC site (BOLT #9): ",
+    "<https://github.com/lightningnetwork/lightning-rfc/blob/master/09-features.md>"
+  ],
+  "examples": [
     {
       "request": {
         "id": "example:listpeerchannels#1",
@@ -1481,9 +1495,7 @@
       "request": {
         "id": "example:listpeerchannels#2",
         "method": "listpeerchannels",
-        "params": {
-          "id": null
-        }
+        "params": {}
       },
       "response": {
         "channels": [
@@ -1498,7 +1510,7 @@
               ],
               "names": [
                 "static_remotekey/even",
-                "anchors_zero_fee_htlc_tx/even"
+                "anchors/even"
               ]
             },
             "updates": {
@@ -1541,7 +1553,7 @@
             },
             "features": [
               "option_static_remotekey",
-              "option_anchors_zero_fee_htlc_tx"
+              "option_anchors"
             ],
             "funding": {
               "local_funds_msat": 1000000000,
@@ -1591,17 +1603,5 @@
         ]
       }
     }
-  ],
-  "author": [
-    "Michael Hawkins <<michael.hawkins@protonmail.com>>."
-  ],
-  "see_also": [
-    "lightning-connect(7)",
-    "lightning-fundchannel_start(7)"
-  ],
-  "resources": [
-    "Main web site: <https://github.com/ElementsProject/lightning>",
-    "Lightning RFC site (BOLT #9): ",
-    "<https://github.com/lightningnetwork/lightning-rfc/blob/master/09-features.md>"
   ]
 }

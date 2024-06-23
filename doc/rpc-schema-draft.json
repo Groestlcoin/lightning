@@ -384,13 +384,7 @@
                 "type": "string"
             }
         },
-        "example_usage": {
-            "type": "array",
-            "items": {
-                "type": "string"
-            }
-        },
-        "json_example": {
+        "examples": {
             "type": "array",
             "items": {
                 "type": "object",
@@ -499,7 +493,7 @@
                 "type": "string"
             }
         },
-        "example_json_notifications": {
+        "example_notifications": {
             "type": "array",
             "items": {
                 "method": {

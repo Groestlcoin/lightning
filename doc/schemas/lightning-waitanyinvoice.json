@@ -213,15 +213,24 @@
     "",
     "- 904: The *timeout* was reached without an invoice being paid."
   ],
-  "json_example": [
+  "author": [
+    "Rusty Russell <<rusty@rustcorp.com.au>> is mainly responsible."
+  ],
+  "see_also": [
+    "lightning-waitinvoice(7)",
+    "lightning-listinvoices(7)",
+    "lightning-delinvoice(7)",
+    "lightning-invoice(7)"
+  ],
+  "resources": [
+    "Main web site: <https://github.com/ElementsProject/lightning>"
+  ],
+  "examples": [
     {
       "request": {
         "id": "example:waitanyinvoice#1",
         "method": "waitanyinvoice",
-        "params": {
-          "lastpay_index": null,
-          "timeout": null
-        }
+        "params": {}
       },
       "response": {
         "label": "inv1",
@@ -266,17 +275,5 @@
         "updated_index": 4
       }
     }
-  ],
-  "author": [
-    "Rusty Russell <<rusty@rustcorp.com.au>> is mainly responsible."
-  ],
-  "see_also": [
-    "lightning-waitinvoice(7)",
-    "lightning-listinvoices(7)",
-    "lightning-delinvoice(7)",
-    "lightning-invoice(7)"
-  ],
-  "resources": [
-    "Main web site: <https://github.com/ElementsProject/lightning>"
   ]
 }

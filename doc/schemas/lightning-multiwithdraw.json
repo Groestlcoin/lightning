@@ -66,7 +66,27 @@
       }
     }
   },
-  "json_example": [
+  "errors": [
+    "On failure, an error is reported and the withdrawal transaction is not created.",
+    "",
+    "- -1: Catchall nonspecific error.",
+    "- 301: There are not enough funds in the internal wallet (including fees) to create the transaction.",
+    "- 302: The dust limit is not met."
+  ],
+  "author": [
+    "ZmnSCPxj <<ZmnSCPxj@protonmail.com>> is mainly responsible."
+  ],
+  "see_also": [
+    "lightning-listfunds(7)",
+    "lightning-fundchannel(7)",
+    "lightning-newaddr(7)",
+    "lightning-txprepare(7)",
+    "lightning-withdraw(7)"
+  ],
+  "resources": [
+    "Main web site: <https://github.com/ElementsProject/lightning>"
+  ],
+  "examples": [
     {
       "request": {
         "id": "example:multiwithdraw#1",
@@ -79,10 +99,7 @@
             {
               "bcrt1q6r4vvt7uack33qf9n05umfxy8h5s2rdcmq7ra3": "3333000msat"
             }
-          ],
-          "feerate": null,
-          "minconf": null,
-          "utxos": null
+          ]
         }
       },
       "response": {
@@ -120,10 +137,7 @@
             {
               "bcrt1p0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vqc8gma6": 1000
             }
-          ],
-          "feerate": null,
-          "minconf": null,
-          "utxos": null
+          ]
         }
       },
       "response": {
@@ -131,25 +145,5 @@
         "txid": "062383a7c9a19a2768939087a5c89826a4ea3531080f20cc06aa1cbf431be505"
       }
     }
-  ],
-  "errors": [
-    "On failure, an error is reported and the withdrawal transaction is not created.",
-    "",
-    "- -1: Catchall nonspecific error.",
-    "- 301: There are not enough funds in the internal wallet (including fees) to create the transaction.",
-    "- 302: The dust limit is not met."
-  ],
-  "author": [
-    "ZmnSCPxj <<ZmnSCPxj@protonmail.com>> is mainly responsible."
-  ],
-  "see_also": [
-    "lightning-listfunds(7)",
-    "lightning-fundchannel(7)",
-    "lightning-newaddr(7)",
-    "lightning-txprepare(7)",
-    "lightning-withdraw(7)"
-  ],
-  "resources": [
-    "Main web site: <https://github.com/ElementsProject/lightning>"
   ]
 }

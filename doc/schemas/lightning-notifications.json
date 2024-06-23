@@ -42,7 +42,13 @@
     "",
     "- -32602: Error in given parameters."
   ],
-  "example_json_notifications": [
+  "author": [
+    "Rusty Russell <<rusty@blockstream.com>> wrote the initial version of this man page."
+  ],
+  "resources": [
+    "Main web site: <https://github.com/ElementsProject/lightning>"
+  ],
+  "example_notifications": [
     {
       "method": "message",
       "params": {
@@ -64,7 +70,7 @@
       }
     }
   ],
-  "json_example": [
+  "examples": [
     {
       "request": {
         "id": "example:notifications#1",
@@ -85,11 +91,5 @@
       },
       "response": {}
     }
-  ],
-  "author": [
-    "Rusty Russell <<rusty@blockstream.com>> wrote the initial version of this man page."
-  ],
-  "resources": [
-    "Main web site: <https://github.com/ElementsProject/lightning>"
   ]
 }

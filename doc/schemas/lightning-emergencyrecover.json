@@ -29,12 +29,21 @@
       }
     }
   },
-  "json_example": [
+  "author": [
+    "Aditya <<aditya.sharma20111@gmail.com>> is mainly responsible."
+  ],
+  "see_also": [
+    "lightning-getsharedsecret(7)"
+  ],
+  "resources": [
+    "Main web site: <https://github.com/ElementsProject/lightning>"
+  ],
+  "examples": [
     {
       "request": {
         "id": "example:emergencyrecover#1",
         "method": "emergencyrecover",
-        "params": "{}"
+        "params": {}
       },
       "response": {
         "stubs": []
@@ -44,7 +53,7 @@
       "request": {
         "id": "example:emergencyrecover#2",
         "method": "emergencyrecover",
-        "params": "{}"
+        "params": {}
       },
       "response": {
         "stubs": [
@@ -52,14 +61,5 @@
         ]
       }
     }
-  ],
-  "author": [
-    "Aditya <<aditya.sharma20111@gmail.com>> is mainly responsible."
-  ],
-  "see_also": [
-    "lightning-getsharedsecret(7)"
-  ],
-  "resources": [
-    "Main web site: <https://github.com/ElementsProject/lightning>"
   ]
 }

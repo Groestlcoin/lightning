@@ -192,7 +192,16 @@
     "- -1: Catchall nonspecific error.",
     "- 301: Insufficient UTXOs to meet *satoshi* value."
   ],
-  "json_example": [
+  "author": [
+    "Rusty Russell <<rusty@rustcorp.com.au>> is mainly responsible."
+  ],
+  "see_also": [
+    "lightning-fundpsbt(7)"
+  ],
+  "resources": [
+    "Main web site: <https://github.com/ElementsProject/lightning>"
+  ],
+  "examples": [
     {
       "request": {
         "id": "example:utxopsbt#1",
@@ -206,8 +215,6 @@
           ],
           "reserve": 0,
           "reservedok": true,
-          "locktime": null,
-          "min_witness_weight": null,
           "excess_as_change": false
         }
       },
@@ -230,10 +237,7 @@
             "2fc3b9f8d4aed120f6d9a6f206f07c35ef4d518ec0305d1d974873d256e38ca7:1",
             "2f669f6a605ee5c7ddd2abb753bc64b1a90bd1b7448264f5d78a7ca823c00a1b:1"
           ],
-          "reserve": null,
           "reservedok": true,
-          "locktime": null,
-          "min_witness_weight": null,
           "excess_as_change": false
         }
       },
@@ -260,14 +264,5 @@
         ]
       }
     }
-  ],
-  "author": [
-    "Rusty Russell <<rusty@rustcorp.com.au>> is mainly responsible."
-  ],
-  "see_also": [
-    "lightning-fundpsbt(7)"
-  ],
-  "resources": [
-    "Main web site: <https://github.com/ElementsProject/lightning>"
   ]
 }

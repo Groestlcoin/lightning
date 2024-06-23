@@ -104,7 +104,8 @@ static void channel_err_broken(struct channel *channel,
 		channel_disconnect(channel, LOG_BROKEN, false, errmsg);
 }
 
-void json_add_unsaved_channel(struct json_stream *response,
+void json_add_unsaved_channel(struct command *cmd,
+			      struct json_stream *response,
 			      const struct channel *channel,
 			      const struct peer *peer)
 {
@@ -130,7 +131,7 @@ void json_add_unsaved_channel(struct json_stream *response,
 	json_add_string(response, "owner", channel->owner->name);
 	json_add_string(response, "opener", channel->opener == LOCAL ?
 					    "local" : "remote");
-	json_add_bool(response, "lost_state", channel->future_per_commitment_point ? true : false);
+	json_add_bool(response, "lost_state", channel->has_future_per_commitment_point);
 	json_array_start(response, "status");
 	for (size_t i = 0; i < ARRAY_SIZE(channel->billboard.permanent); i++) {
 		if (!channel->billboard.permanent[i])
@@ -157,13 +158,16 @@ void json_add_unsaved_channel(struct json_stream *response,
 
 	if (feature_negotiated(channel->peer->ld->our_features,
 			       channel->peer->their_features,
-			       OPT_ANCHOR_OUTPUTS))
+			       OPT_ANCHOR_OUTPUTS_DEPRECATED))
 		json_add_string(response, NULL, "option_anchor_outputs");
 
 	if (feature_negotiated(channel->peer->ld->our_features,
 			       channel->peer->their_features,
-			       OPT_ANCHORS_ZERO_FEE_HTLC_TX))
-		json_add_string(response, NULL, "option_anchors_zero_fee_htlc_tx");
+			       OPT_ANCHORS_ZERO_FEE_HTLC_TX)) {
+		if (command_deprecated_out_ok(cmd, "features", "v24.08", "v25.08"))
+			json_add_string(response, NULL, "option_anchors_zero_fee_htlc_tx");
+		json_add_string(response, NULL, "option_anchors");
+	}
 
 	json_array_end(response);
 	json_object_end(response);
@@ -1527,7 +1531,7 @@ static void handle_peer_wants_to_close(struct subd *dualopend,
 					    OPT_SHUTDOWN_ANYSEGWIT);
 	bool anchors = feature_negotiated(ld->our_features,
 					  channel->peer->their_features,
-					  OPT_ANCHOR_OUTPUTS)
+					  OPT_ANCHOR_OUTPUTS_DEPRECATED)
 		|| feature_negotiated(ld->our_features,
 				      channel->peer->their_features,
 				      OPT_ANCHORS_ZERO_FEE_HTLC_TX);
@@ -3371,7 +3375,7 @@ channel_fail_fallen_behind(struct subd* dualopend, const u8 *msg)
 		return;
 	}
 
-        channel_fallen_behind(channel, msg);
+        channel_fallen_behind(channel);
 }
 
 static void handle_psbt_changed(struct subd *dualopend,

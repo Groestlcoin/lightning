@@ -109,7 +109,18 @@
     "",
     "- -32602: Invalid parameter, i.e. an unparseable PSBT."
   ],
-  "json_example": [
+  "author": [
+    "Lisa Neigut <<niftynei@gmail.com>> is mainly responsible."
+  ],
+  "see_also": [
+    "lightning-unreserveinputs(7)",
+    "lightning-signpsbt(7)",
+    "lightning-sendpsbt(7)"
+  ],
+  "resources": [
+    "Main web site: <https://github.com/ElementsProject/lightning>"
+  ],
+  "examples": [
     {
       "request": {
         "id": "example:unreserveinputs#1",
@@ -135,24 +146,12 @@
         "id": "example:unreserveinputs#2",
         "method": "unreserveinputs",
         "params": {
-          "psbt": "cHNidP8BAF4CAAAAAVa79WPJoiYrzo/RgzIAn5HanoBFZo0vZvEjxPAVwLv4AAAAAAD9////AXzpHAAAAAAAIlEgBRjpLNlOD2LAbxJt/5i5q+ebfthFoVbVJFZ44mVUR11mAAAAAAEA3gIAAAAAAQENwcSElLyC0jcwUHiODBhtapHyzIdiwytOGiu/Raf4BwAAAAAA/f///wKAhB4AAAAAABYAFAH62Qq81maX4lkhZHIt5KlevuFl82znKQEAAAAWABQyIWyAI6LDf6dJ58BDPdkh+PWUZwJHMEQCIGiJFhVi/d/Hz19Cz48uHTjhgBJ6WAlgl/bLVS7A6VtxAiAwlb7xYzIM4uopFvMnpOmGIOp3+upOPPF2F8VaB8U/HQEhA6BAjey7RADP4ifoh2VXhX7QXkh+sZqozv1EPuU5TxZmZQAAAAEBH4CEHgAAAAAAFgAUAfrZCrzWZpfiWSFkci3kqV6+4WUAAA==",
-          "reserve": null
+          "psbt": "cHNidP8BAF4CAAAAAVa79WPJoiYrzo/RgzIAn5HanoBFZo0vZvEjxPAVwLv4AAAAAAD9////AXzpHAAAAAAAIlEgBRjpLNlOD2LAbxJt/5i5q+ebfthFoVbVJFZ44mVUR11mAAAAAAEA3gIAAAAAAQENwcSElLyC0jcwUHiODBhtapHyzIdiwytOGiu/Raf4BwAAAAAA/f///wKAhB4AAAAAABYAFAH62Qq81maX4lkhZHIt5KlevuFl82znKQEAAAAWABQyIWyAI6LDf6dJ58BDPdkh+PWUZwJHMEQCIGiJFhVi/d/Hz19Cz48uHTjhgBJ6WAlgl/bLVS7A6VtxAiAwlb7xYzIM4uopFvMnpOmGIOp3+upOPPF2F8VaB8U/HQEhA6BAjey7RADP4ifoh2VXhX7QXkh+sZqozv1EPuU5TxZmZQAAAAEBH4CEHgAAAAAAFgAUAfrZCrzWZpfiWSFkci3kqV6+4WUAAA=="
         }
       },
       "response": {
         "reservations": []
       }
     }
-  ],
-  "author": [
-    "Lisa Neigut <<niftynei@gmail.com>> is mainly responsible."
-  ],
-  "see_also": [
-    "lightning-unreserveinputs(7)",
-    "lightning-signpsbt(7)",
-    "lightning-sendpsbt(7)"
-  ],
-  "resources": [
-    "Main web site: <https://github.com/ElementsProject/lightning>"
   ]
 }

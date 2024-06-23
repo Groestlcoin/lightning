@@ -157,18 +157,25 @@
     "- -1: Channel is in incorrect state, i.e. Catchall nonspecific error.",
     "- -32602: JSONRPC2_INVALID_PARAMS, i.e. Given id is not a channel ID or short channel ID."
   ],
-  "json_example": [
+  "author": [
+    "Michael Schmoock <<michael@schmoock.net>> is the author of this feature."
+  ],
+  "see_also": [
+    "lightningd-config(5)",
+    "lightning-fundchannel(7)",
+    "lightning-listchannels(7)",
+    "lightning-listpeers(7)"
+  ],
+  "resources": [
+    "Main web site: <https://github.com/ElementsProject/lightning>"
+  ],
+  "examples": [
     {
       "request": {
         "id": "example:setchannel#1",
         "method": "setchannel",
         "params": {
           "id": "103x1x0",
-          "feebase": null,
-          "feeppm": null,
-          "htlcmin": null,
-          "htlcmax": null,
-          "enforcedelay": null,
           "ignorefeelimits": true
         }
       },
@@ -195,10 +202,7 @@
           "id": "0382ce59ebf18be7d84677c2e35f23294b9992ceca95491fcf8a56c6cb2d9de199",
           "feebase": 4000,
           "feeppm": 300,
-          "htlcmin": null,
-          "htlcmax": null,
-          "enforcedelay": 0,
-          "ignorefeelimits": null
+          "enforcedelay": 0
         }
       },
       "response": {
@@ -216,17 +220,5 @@
         ]
       }
     }
-  ],
-  "author": [
-    "Michael Schmoock <<michael@schmoock.net>> is the author of this feature."
-  ],
-  "see_also": [
-    "lightningd-config(5)",
-    "lightning-fundchannel(7)",
-    "lightning-listchannels(7)",
-    "lightning-listpeers(7)"
-  ],
-  "resources": [
-    "Main web site: <https://github.com/ElementsProject/lightning>"
   ]
 }
