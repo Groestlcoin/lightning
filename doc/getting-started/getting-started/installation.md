@@ -34,10 +34,10 @@ To install the Docker image for the latest stable release:
 docker pull Groestlcoin/lightningd:latest
 ```
 
-To install for a specific version, for example, 23.11.2:
+To install for a specific version, for example, 24.05:
 
 ```shell
-docker pull Groestlcoin/lightningd:v23.11
+docker pull Groestlcoin/lightningd:v24.05
 ```
 
 See all of the docker images for Core Lightning on [Docker Hub](https://hub.docker.com/r/groestlcoin/lightningd/tags).
@@ -60,27 +60,6 @@ For actually doing development and running the tests, you will also need:
 
 You will also need a version of groestlcoind with segregated witness and `estimatesmartfee` with `ECONOMICAL` mode support, such as the 0.16 or above.
 
-## Python plugins
-
-You will need some Python packages if you want to use python plugins. Unfortunately there are some Python packages which are not packaged in Ubuntu, and so you will need to force installation of these (I recommend --user which will install them in your own .local directory, so at least you won't run the risk of breaking Python globally!).
-
-### clnrest
-
-Installation steps for clnrest are:
-
-```
-sudo apt-get install python3-json5 python3-flask python3-gunicorn
-pip3 install --user flask-cors flask_restx pyln-client flask-socketio gevent gevent-websocket
-```
-
-### wss-proxy
-
-For wss-proxy, you need to install below libraries:
-
-```
-pip3 install --user pyln-client websockets
-```
-
 ## To Build on Ubuntu
 
 OS version: Ubuntu 15.10 or above
@@ -90,7 +69,7 @@ Get dependencies:
 ```shell
 sudo apt-get update
 sudo apt-get install -y \
-  jq autoconf automake build-essential git libtool libsqlite3-dev \
+  jq autoconf automake build-essential git libtool libsqlite3-dev libffi-dev \
   python3 python3-pip net-tools zlib1g-dev libsodium-dev gettext
 pip3 install --upgrade pip
 pip3 install --user poetry
@@ -116,7 +95,7 @@ cd lightning
 Checkout a release tag:
 
 ```shell
-git checkout v23.11.2
+git checkout v24.05
 ```
 
 For development or running tests, get additional dependencies:
@@ -124,6 +103,7 @@ For development or running tests, get additional dependencies:
 ```shell
 sudo apt-get install -y valgrind libpq-dev shellcheck cppcheck \
   libsecp256k1-dev lowdown
+pip3 install pytest
 ```
 
 If you can't install `lowdown`, a version will be built in-tree.
@@ -220,7 +200,7 @@ cd lightning
 Checkout a release tag:
 
 ```shell
-git checkout v23.11.2
+git checkout v24.05
 ```
 
 Build and install lightning:
@@ -395,7 +375,7 @@ cd lightning
 Checkout a release tag:
 
 ```shell
-git checkout v23.11.2
+git checkout v24.05
 ```
 
 Build lightning:
@@ -600,4 +580,25 @@ Install runtime dependencies:
 
 ```shell
 apk add libgcc libsodium sqlite-libs zlib
+```
+
+## Python plugins
+
+You will need some Python packages if you want to use python plugins. Unfortunately there are some Python packages which are not packaged in Ubuntu, and so you will need to force installation of these (I recommend --user which will install them in your own .local directory, so at least you won't run the risk of breaking Python globally!).
+
+### clnrest
+
+Installation steps for clnrest are:
+
+```
+sudo apt-get install python3-json5 python3-flask python3-gunicorn
+pip3 install --user flask-cors flask-restx pyln-client flask-socketio gevent gevent-websocket
+```
+
+### wss-proxy
+
+For wss-proxy, you need to install below libraries:
+
+```
+pip3 install --user pyln-client websockets
 ```

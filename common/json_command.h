@@ -6,6 +6,7 @@
 #include <ccan/compiler/compiler.h>
 #include <common/json_parse.h>
 #include <common/jsonrpc_errors.h>
+#include <common/status_levels.h>
 
 struct command;
 struct command_result;
@@ -18,20 +19,10 @@ struct command_result *command_fail(struct command *cmd, enum jsonrpc_errcode co
 /* Caller supplies this too: must provide this to reach into cmd */
 struct json_filter **command_filter_ptr(struct command *cmd);
 
-/* Convenient wrapper for "paramname: msg: invalid token '.*%s'" */
-static inline struct command_result *
-command_fail_badparam(struct command *cmd,
-		      const char *paramname,
-		      const char *buffer,
-		      const jsmntok_t *tok,
-		      const char *msg)
-{
-	return command_fail(cmd, JSONRPC2_INVALID_PARAMS,
-			    "%s: %s: invalid token '%.*s'",
-			    paramname, msg,
-			    json_tok_full_len(tok),
-			    json_tok_full(buffer, tok));
-}
+/* Do some logging (complaining!) about this command misuse */
+void command_log(struct command *cmd, enum log_level level,
+		 const char *fmt, ...)
+	PRINTF_FMT(3, 4);
 
 /* Also caller supplied: is this invoked simply to get usage? */
 bool command_usage_only(const struct command *cmd);
@@ -61,5 +52,12 @@ bool command_check_only(const struct command *cmd);
  * command_check_only(cmd). */
 struct command_result *command_check_done(struct command *cmd)
 	 WARN_UNUSED_RESULT;
+
+/* Convenient wrapper for "paramname: msg: invalid token '.*%s'" */
+struct command_result *command_fail_badparam(struct command *cmd,
+					     const char *paramname,
+					     const char *buffer,
+					     const jsmntok_t *tok,
+					     const char *msg);
 
 #endif /* LIGHTNING_COMMON_JSON_COMMAND_H */

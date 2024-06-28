@@ -2,6 +2,8 @@
 
 set -e
 
+export GROESTLCOIN_VERSION=27.0
+
 DIRNAME="groestlcoin-${GROESTLCOIN_VERSION}"
 FILENAME="${DIRNAME}-x86_64-linux-gnu.tar.gz"
 

@@ -172,7 +172,7 @@ static void destroy_jcon(struct json_connection *jcon)
 	tal_free(jcon->log);
 }
 
-struct logger *command_log(struct command *cmd)
+struct logger *command_logger(struct command *cmd)
 {
 	if (cmd->jcon)
 		return cmd->jcon->log;
@@ -673,7 +673,7 @@ bool command_deprecated_in_ok(struct command *cmd,
 				 const char *depr_end)
 {
 	return lightningd_deprecated_in_ok(cmd->ld,
-					   command_log(cmd),
+					   command_logger(cmd),
 					   command_deprecated_ok_flag(cmd),
 					   cmd->json_cmd->name, param,
 					   depr_start, depr_end,
@@ -1481,6 +1481,20 @@ bool command_usage_only(const struct command *cmd)
 bool command_dev_apis(const struct command *cmd)
 {
 	return cmd->ld->developer;
+}
+
+void command_log(struct command *cmd, enum log_level level,
+		 const char *fmt, ...)
+{
+	const char *msg;
+	va_list ap;
+
+	va_start(ap, fmt);
+	msg = tal_vfmt(cmd, fmt, ap);
+	log_(cmd->ld->log, level, NULL, level >= LOG_UNUSUAL,
+	     "JSON COMMAND %s: %s",
+	     cmd->json_cmd->name, msg);
+	va_end(ap);
 }
 
 void command_set_usage(struct command *cmd, const char *usage TAKES)

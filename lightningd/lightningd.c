@@ -1153,7 +1153,6 @@ static void setup_fd_limit(struct lightningd *ld, size_t num_channels)
 int main(int argc, char *argv[])
 {
 	struct lightningd *ld;
-	u32 min_blockheight, max_blockheight;
 	int connectd_gossipd_fd;
 	int stop_fd;
 	struct timers *timers;
@@ -1333,22 +1332,6 @@ int main(int argc, char *argv[])
 	init_txfilter(ld->wallet, ld->bip32_base, ld->owned_txfilter);
 	trace_span_end(ld->wallet);
 
-	/*~ Get the blockheight we are currently at, UINT32_MAX is used to signal
-	 * an uninitialized wallet and that we should start off of groestlcoind's
-	 * current height */
-	wallet_blocks_heights(ld->wallet, UINT32_MAX,
-			      &min_blockheight, &max_blockheight);
-
-	/*~ If we were asked to rescan from an absolute height (--rescan < 0)
-	 * then just go there. Otherwise compute the diff to our current height,
-	 * lowerbounded by 0. */
-	if (ld->config.rescan < 0)
-		max_blockheight = -ld->config.rescan;
-	else if (max_blockheight < (u32)ld->config.rescan)
-		max_blockheight = 0;
-	else if (max_blockheight != UINT32_MAX)
-		max_blockheight -= ld->config.rescan;
-
 	/*~ Finish our runes initialization (includes reading from db) */
 	runes_finish_init(ld->runes);
 
@@ -1361,7 +1344,7 @@ int main(int argc, char *argv[])
 	/*~ Initialize block topology.  This does its own io_loop to
 	 * talk to groestlcoind, so does its own db transactions. */
 	trace_span_start("setup_topology", ld->topology);
-	setup_topology(ld->topology, min_blockheight, max_blockheight);
+	setup_topology(ld->topology);
 	trace_span_end(ld->topology);
 
 	db_begin_transaction(ld->wallet->db);

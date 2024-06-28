@@ -12,6 +12,7 @@ from utils import (
     account_balance, scriptpubkey_addr, check_coin_moves, first_scid
 )
 
+import copy
 import json
 import os
 import pytest
@@ -2876,7 +2877,7 @@ def test_emergencyrecover(node_factory, bitcoind):
                                              {'may_reconnect': True}])
 
     l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
-    c12, _ = l1.fundchannel(l2, 10**5)
+    c12, _ = l1.fundchannel(l2)
     stubs = l1.rpc.emergencyrecover()["stubs"]
     assert l1.daemon.is_in_log('channel {} already exists!'.format(_['channel_id']))
 
@@ -2901,10 +2902,14 @@ def test_emergencyrecover(node_factory, bitcoind):
     sync_blockheight(bitcoind, [l1, l2])
 
     l1.daemon.wait_for_log(r'All outputs resolved.*')
+    # Make sure l1 can spend its recovered funds.
     wait_for(lambda: l1.rpc.listfunds()["channels"][0]["state"] == "ONCHAIN")
-    # Check if funds are recovered.
-    assert l1.rpc.listfunds()["channels"][0]["state"] == "ONCHAIN"
-    assert l2.rpc.listfunds()["channels"][0]["state"] == "ONCHAIN"
+    wait_for(lambda: l2.rpc.listfunds()["channels"][0]["state"] == "ONCHAIN")
+
+    withdraw = l1.rpc.withdraw(l2.rpc.newaddr('bech32')['bech32'], 'all')
+    # Should have two inputs
+    assert len(bitcoind.rpc.decoderawtransaction(withdraw['tx'])['vin']) == 2
+    bitcoind.generate_block(1, wait_for_mempool=withdraw['txid'])
 
 
 @unittest.skipIf(os.getenv('TEST_DB_PROVIDER', 'sqlite3') != 'sqlite3', "sqlite3-specific DB rollback")
@@ -4211,3 +4216,37 @@ def test_preapprove_use(node_factory, bitcoind):
         l2.rpc.keysend(l1.info['id'], 1000)
     with pytest.raises(RpcError, match='keysend was declined'):
         l2.rpc.check('keysend', destination=l1.info['id'], amount_msat=1000)
+
+
+def test_badparam_discretion(node_factory):
+    """When in non-developer mode, don't return the contents of invalid parameters, but refer to logs"""
+    l1 = node_factory.get_node()
+
+    with pytest.raises(RpcError, match='rune: should be base64 string: invalid token') as err:
+        l1.rpc.checkrune(rune='THIS IS NOT ACTUALLY A RUNE')
+
+    assert err.value.error['message'] == "rune: should be base64 string: invalid token '\"THIS IS NOT ACTUALLY A RUNE\"'"
+
+    # We don't bother logging since we returned all the details
+    assert not l1.daemon.is_in_log('Invalid parameter')
+
+    # Now try non-developer mode (needs some other option removal, too)
+    l1.stop()
+    assert l1.daemon.early_opts == ['--developer']
+    l1.daemon.early_opts = []
+    opts = copy.copy(l1.daemon.opts)
+    for k in opts.keys():
+        if k.startswith('dev'):
+            del l1.daemon.opts[k]
+    l1.start()
+
+    with pytest.raises(RpcError, match=r'rune: should be base64 string: invalid token \(see logs for details\)'):
+        l1.rpc.checkrune(rune='THIS IS NOT ACTUALLY A RUNE')
+
+    l1.daemon.wait_for_log(r"checkrune: Invalid parameter rune \(should be base64 string\): token '\"THIS IS NOT ACTUALLY A RUNE\"'")
+
+    # But: check command *SHOULD* give as much info as we can.
+    with pytest.raises(RpcError, match='rune: should be base64 string: invalid token') as err:
+        l1.rpc.check('checkrune', rune='THIS IS NOT ACTUALLY A RUNE')
+
+    assert err.value.error['message'] == "rune: should be base64 string: invalid token '\"THIS IS NOT ACTUALLY A RUNE\"'"

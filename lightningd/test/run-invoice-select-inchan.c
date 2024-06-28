@@ -17,7 +17,8 @@ struct channel *any_channel_by_scid(struct lightningd *ld UNNEEDED,
 void bip32_pubkey(struct lightningd *ld UNNEEDED, struct pubkey *pubkey UNNEEDED, u32 index UNNEEDED)
 { fprintf(stderr, "bip32_pubkey called!\n"); abort(); }
 /* Generated stub for bitcoind_getutxout_ */
-void bitcoind_getutxout_(struct bitcoind *bitcoind UNNEEDED,
+void bitcoind_getutxout_(const tal_t *ctx UNNEEDED,
+			 struct bitcoind *bitcoind UNNEEDED,
 			 const struct bitcoin_outpoint *outpoint UNNEEDED,
 			 void (*cb)(struct bitcoind * UNNEEDED,
 				    const struct bitcoin_tx_output * UNNEEDED,
@@ -160,6 +161,13 @@ struct command_result *command_fail(struct command *cmd UNNEEDED, enum jsonrpc_e
 				    const char *fmt UNNEEDED, ...)
 
 { fprintf(stderr, "command_fail called!\n"); abort(); }
+/* Generated stub for command_fail_badparam */
+struct command_result *command_fail_badparam(struct command *cmd UNNEEDED,
+					     const char *paramname UNNEEDED,
+					     const char *buffer UNNEEDED,
+					     const jsmntok_t *tok UNNEEDED,
+					     const char *msg UNNEEDED)
+{ fprintf(stderr, "command_fail_badparam called!\n"); abort(); }
 /* Generated stub for command_failed */
 struct command_result *command_failed(struct command *cmd UNNEEDED,
 				      struct json_stream *result)
@@ -168,9 +176,9 @@ struct command_result *command_failed(struct command *cmd UNNEEDED,
 /* Generated stub for command_its_complicated */
 struct command_result *command_its_complicated(const char *why UNNEEDED)
 { fprintf(stderr, "command_its_complicated called!\n"); abort(); }
-/* Generated stub for command_log */
-struct logger *command_log(struct command *cmd UNNEEDED)
-{ fprintf(stderr, "command_log called!\n"); abort(); }
+/* Generated stub for command_logger */
+struct logger *command_logger(struct command *cmd UNNEEDED)
+{ fprintf(stderr, "command_logger called!\n"); abort(); }
 /* Generated stub for command_param_failed */
 struct command_result *command_param_failed(void)
 

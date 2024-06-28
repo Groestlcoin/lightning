@@ -62,8 +62,10 @@ static void got_filteredblock(struct bitcoind *bitcoind,
 	if (fb == NULL)
 		return got_txout(bitcoind, NULL, scid);
 
-	/* Only fill in blocks that we are not going to scan later. */
-	if (bitcoind->ld->topology->max_blockheight > fb->height)
+	/* This routine is mainly for past blocks.  As a corner case,
+	 * we will grab (but not save) future blocks if we're
+	 * syncing */
+	if (fb->height < bitcoind->ld->topology->root->height)
 		wallet_filteredblock_add(bitcoind->ld->wallet, fb);
 
 	u32 outnum = short_channel_id_outnum(scid);
@@ -112,7 +114,7 @@ static void get_txout(struct subd *gossip, const u8 *msg)
 						   NULL, scid, AMOUNT_SAT(0), NULL)));
 	} else {
 		/* Make a pointer of a copy of scid here, for got_filteredblock */
-		bitcoind_getfilteredblock(topo->bitcoind,
+		bitcoind_getfilteredblock(topo->bitcoind, topo->bitcoind,
 					  short_channel_id_blocknum(scid),
 					  got_filteredblock,
 					  tal_dup(gossip, struct short_channel_id, &scid));

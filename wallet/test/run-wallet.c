@@ -49,7 +49,8 @@ void add_node_announcement_sig(u8 *nannounce UNNEEDED,
 size_t bigsize_put(u8 buf[BIGSIZE_MAX_LEN] UNNEEDED, bigsize_t v UNNEEDED)
 { fprintf(stderr, "bigsize_put called!\n"); abort(); }
 /* Generated stub for bitcoind_getutxout_ */
-void bitcoind_getutxout_(struct bitcoind *bitcoind UNNEEDED,
+void bitcoind_getutxout_(const tal_t *ctx UNNEEDED,
+			 struct bitcoind *bitcoind UNNEEDED,
 			 const struct bitcoin_outpoint *outpoint UNNEEDED,
 			 void (*cb)(struct bitcoind * UNNEEDED,
 				    const struct bitcoin_tx_output * UNNEEDED,
@@ -139,6 +140,13 @@ struct command_result *command_fail(struct command *cmd UNNEEDED, enum jsonrpc_e
 				    const char *fmt UNNEEDED, ...)
 
 { fprintf(stderr, "command_fail called!\n"); abort(); }
+/* Generated stub for command_fail_badparam */
+struct command_result *command_fail_badparam(struct command *cmd UNNEEDED,
+					     const char *paramname UNNEEDED,
+					     const char *buffer UNNEEDED,
+					     const jsmntok_t *tok UNNEEDED,
+					     const char *msg UNNEEDED)
+{ fprintf(stderr, "command_fail_badparam called!\n"); abort(); }
 /* Generated stub for command_failed */
 struct command_result *command_failed(struct command *cmd UNNEEDED,
 				      struct json_stream *result)
@@ -590,9 +598,6 @@ bool json_tok_channel_id(const char *buffer UNNEEDED, const jsmntok_t *tok UNNEE
 /* Generated stub for json_tok_full */
 const char *json_tok_full(const char *buffer UNNEEDED, const jsmntok_t *t UNNEEDED)
 { fprintf(stderr, "json_tok_full called!\n"); abort(); }
-/* Generated stub for json_tok_full_len */
-int json_tok_full_len(const jsmntok_t *t UNNEEDED)
-{ fprintf(stderr, "json_tok_full_len called!\n"); abort(); }
 /* Generated stub for json_tok_streq */
 bool json_tok_streq(const char *buffer UNNEEDED, const jsmntok_t *tok UNNEEDED, const char *str UNNEEDED)
 { fprintf(stderr, "json_tok_streq called!\n"); abort(); }
