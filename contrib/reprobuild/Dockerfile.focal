@@ -18,6 +18,7 @@ RUN apt-get update \
 	file \
 	gettext \
 	git \
+	libsqlite3-dev \
 	libpq-dev \
 	libsodium23 \
 	libtool \
@@ -25,7 +26,6 @@ RUN apt-get update \
 	sudo \
 	unzip \
 	wget \
-	git \
 	zip
 
 # Ensure correct ownership

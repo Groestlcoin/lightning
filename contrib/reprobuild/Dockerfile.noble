@@ -30,15 +30,13 @@ RUN apt-get update \
 	jq \
 	zip
 
-# Configure /repo/.git as 'safe.directory'
-RUN git config --global --add safe.directory /repo/.git
-
 # Install Python3.10 (more reproducible than relying on python3-setuptools)
 RUN git clone https://github.com/pyenv/pyenv.git /root/.pyenv && \
     apt-get install -y --no-install-recommends \
     libbz2-dev \
     libffi-dev \
     libreadline-dev \
+		libsqlite3-dev \
     libssl-dev \
     zlib1g-dev && \
     pyenv install 3.10.0 && \
@@ -60,6 +58,8 @@ RUN cd /tmp/ && \
     unzip protoc-${PROTOC_VERSION}-linux-x86_64.zip && \
     mv bin/protoc /usr/local/bin && \
     rm -rf include bin protoc-${PROTOC_VERSION}-linux-x86_64.zip
+
+RUN git config --global --add safe.directory '*'
 
 RUN mkdir /build
 WORKDIR /build

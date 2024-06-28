@@ -46,3 +46,25 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: clightning-${{ github.sha }}-Ubuntu-22.04
+
+  noble:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Builder image setup
+        run: sudo docker build -t cl-repro-jammy - < contrib/reprobuild/Dockerfile.noble
+      - name: create release folder
+        run: mkdir release
+      - name: Building using the builder image
+        run: sudo docker run --rm -v $(pwd):/repo -t cl-repro-noble
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: clightning-${{ github.sha }}-Ubuntu-24.04
+          path: release/*.tar.xz
+          if-no-files-found: error
+          retention-days: 7
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: clightning-${{ github.sha }}-Ubuntu-24.04          
