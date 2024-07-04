@@ -2,7 +2,7 @@ FROM ubuntu:22.04
 LABEL mantainer="Christian Decker <decker.christian@gmail.com>"
 
 ENV DEBIAN_FRONTEND noninteractive
-ENV GROESTLCOIN_VERSION 24.0.1
+ENV GROESTLCOIN_VERSION 27.0
 
 RUN useradd -ms /bin/bash tester
 RUN mkdir /build /bolts && chown tester -R /build /bolts

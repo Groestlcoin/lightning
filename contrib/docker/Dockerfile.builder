@@ -2,7 +2,7 @@ FROM ubuntu:16.04
 MAINTAINER Christian Decker <decker.christian@gmail.com>
 
 ENV DEBIAN_FRONTEND noninteractive
-ENV GROESTLCOIN_VERSION 2.18.2
+ENV GROESTLCOIN_VERSION 27.0
 
 WORKDIR /build
 
