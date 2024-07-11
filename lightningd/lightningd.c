@@ -132,6 +132,7 @@ static struct lightningd *new_lightningd(const tal_t *ctx)
 	ld->dev_gossip_time = 0;
 	ld->dev_fast_gossip = false;
 	ld->dev_fast_gossip_prune = false;
+	ld->dev_throttle_gossip = false;
 	ld->dev_fast_reconnect = false;
 	ld->dev_force_privkey = NULL;
 	ld->dev_force_bip32_seed = NULL;
@@ -912,6 +913,7 @@ static struct feature_set *default_features(const tal_t *ctx)
 		OPTIONAL_FEATURE(OPT_PAYMENT_METADATA),
 		OPTIONAL_FEATURE(OPT_SCID_ALIAS),
 		OPTIONAL_FEATURE(OPT_ZEROCONF),
+		OPTIONAL_FEATURE(OPT_ONION_MESSAGES),
 		OPTIONAL_FEATURE(OPT_CHANNEL_TYPE),
 		OPTIONAL_FEATURE(OPT_ROUTE_BLINDING),
 		/* Removed later for elements */

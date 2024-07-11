@@ -2920,6 +2920,7 @@ impl From<responses::ListconfigsConfigsFeepersatoshi> for pb::ListconfigsConfigs
 impl From<responses::ListconfigsConfigsFetchinvoicenoconnect> for pb::ListconfigsConfigsFetchinvoicenoconnect {
     fn from(c: responses::ListconfigsConfigsFetchinvoicenoconnect) -> Self {
         Self {
+            plugin: c.plugin, // Rule #2 for type string?
             set: c.set, // Rule #2 for type boolean
             source: c.source, // Rule #2 for type string
         }
@@ -4859,7 +4860,7 @@ impl From<requests::OfferRequest> for pb::OfferRequest {
         Self {
             absolute_expiry: c.absolute_expiry, // Rule #2 for type u64?
             amount: c.amount, // Rule #2 for type string
-            description: c.description, // Rule #2 for type string
+            description: c.description, // Rule #2 for type string?
             issuer: c.issuer, // Rule #2 for type string?
             label: c.label, // Rule #2 for type string?
             quantity_max: c.quantity_max, // Rule #2 for type u64?
@@ -6250,7 +6251,7 @@ impl From<pb::OfferRequest> for requests::OfferRequest {
         Self {
             absolute_expiry: c.absolute_expiry, // Rule #1 for type u64?
             amount: c.amount, // Rule #1 for type string
-            description: c.description, // Rule #1 for type string
+            description: c.description, // Rule #1 for type string?
             issuer: c.issuer, // Rule #1 for type string?
             label: c.label, // Rule #1 for type string?
             quantity_max: c.quantity_max, // Rule #1 for type u64?

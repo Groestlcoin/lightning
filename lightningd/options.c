@@ -956,6 +956,10 @@ static void dev_register_opts(struct lightningd *ld)
 		     opt_set_bool,
 		     &ld->dev_handshake_no_reply,
 		     "Don't send or read init message after connection");
+	clnopt_noarg("--dev-throttle-gossip", OPT_DEV,
+		     opt_set_bool,
+		     &ld->dev_throttle_gossip,
+		     "Throttle gossip right down, for testing");
 	/* This is handled directly in daemon_developer_mode(), so we ignore it here */
 	clnopt_noarg("--dev-debug-self", OPT_DEV,
 		     opt_ignore,
@@ -1272,9 +1276,9 @@ static char *opt_set_splicing(struct lightningd *ld)
 
 static char *opt_set_onion_messages(struct lightningd *ld)
 {
-	feature_set_or(ld->our_features,
-		       take(feature_set_for_feature(NULL,
-						    OPTIONAL_FEATURE(OPT_ONION_MESSAGES))));
+	if (!opt_deprecated_ok(ld, "experimental-onion-messages", NULL,
+			       "v24.08", "v25.02"))
+		return "--experimental-onion-message is now enabled by default";
 	return NULL;
 }
 
@@ -1307,14 +1311,16 @@ static char *opt_set_quiesce(struct lightningd *ld)
 
 static char *opt_set_anchor_zero_fee_htlc_tx(struct lightningd *ld)
 {
-	/* FIXME: deprecated_apis! */
+	if (!opt_deprecated_ok(ld, "experimental-anchors", NULL,
+			       "v24.02", "v25.02"))
+		return "--experimental-anchors is now enabled by default";
 	return NULL;
 }
 
 static char *opt_set_offers(struct lightningd *ld)
 {
 	ld->config.exp_offers = true;
-	return opt_set_onion_messages(ld);
+	return NULL;
 }
 
 static char *opt_set_db_upgrade(const char *arg, struct lightningd *ld)
@@ -1497,12 +1503,10 @@ static void register_opts(struct lightningd *ld)
 	/* This affects our features, so set early. */
 	opt_register_early_noarg("--experimental-onion-messages",
 				 opt_set_onion_messages, ld,
-				 "EXPERIMENTAL: enable send, receive and relay"
-				 " of onion messages and blinded payments");
+				 opt_hidden);
 	opt_register_early_noarg("--experimental-offers",
 				 opt_set_offers, ld,
-				 "EXPERIMENTAL: enable send and receive of offers"
-				 " (also sets experimental-onion-messages)");
+				 "EXPERIMENTAL: enable send and receive of offers");
 	opt_register_early_noarg("--experimental-shutdown-wrong-funding",
 				 opt_set_shutdown_wrong_funding, ld,
 				 "EXPERIMENTAL: allow shutdown with alternate txids");

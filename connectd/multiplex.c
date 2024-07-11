@@ -10,6 +10,7 @@
 #include <common/dev_disconnect.h>
 #include <common/features.h>
 #include <common/gossip_constants.h>
+#include <common/gossmap.h>
 #include <common/memleak.h>
 #include <common/per_peer_state.h>
 #include <common/ping.h>
@@ -24,6 +25,7 @@
 #include <connectd/gossip_store.h>
 #include <connectd/multiplex.h>
 #include <connectd/onion_message.h>
+#include <connectd/queries.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <netinet/in.h>
@@ -208,56 +210,16 @@ static struct oneshot *gossip_stream_timer(struct peer *peer)
 			    wake_gossip, peer);
 }
 
-/* It's so common to ask for "recent" gossip (we ask for 10 minutes
- * ago, LND and Eclair ask for now, LDK asks for 1 hour ago) that it's
- * worth keeping track of where that starts, so we can skip most of
- * the store. */
-static void update_recent_timestamp(struct daemon *daemon)
-{
-	/* 2 hours allows for some clock drift, not too much gossip */
-	u32 recent = time_now().ts.tv_sec - 7200;
-
-	/* Only update every minute */
-	if (daemon->gossip_recent_time + 60 > recent)
-		return;
-
-	daemon->gossip_recent_time = recent;
-	daemon->gossip_store_recent_off
-		= find_gossip_store_by_timestamp(daemon->gossip_store_fd,
-						 daemon->gossip_store_recent_off,
-						 daemon->gossip_recent_time);
-}
-
-/* This is called once we need it: otherwise, the gossip_store may not exist,
- * since we start at the same time as gossipd itself. */
-static void setup_gossip_store(struct daemon *daemon)
-{
-	daemon->gossip_store_fd = open(GOSSIP_STORE_FILENAME, O_RDONLY);
-	if (daemon->gossip_store_fd < 0)
-		status_failed(STATUS_FAIL_INTERNAL_ERROR,
-			      "Opening gossip_store %s: %s",
-			      GOSSIP_STORE_FILENAME, strerror(errno));
-
-	daemon->gossip_recent_time = 0;
-	daemon->gossip_store_recent_off = 1;
-	update_recent_timestamp(daemon);
-
-	/* gossipd will be writing to this, and it's not atomic!  Safest
-	 * way to find the "end" is to walk through. */
-	daemon->gossip_store_end
-		= find_gossip_store_end(daemon->gossip_store_fd,
-					daemon->gossip_store_recent_off);
-}
-
 void setup_peer_gossip_store(struct peer *peer,
 			     const struct feature_set *our_features,
 			     const u8 *their_features)
 {
-	/* Lazy setup */
-	if (peer->daemon->gossip_store_fd == -1)
-		setup_gossip_store(peer->daemon);
+	struct gossmap *gossmap = get_gossmap(peer->daemon);
 
 	peer->gs.grf = new_gossip_rcvd_filter(peer);
+	peer->gs.iter = gossmap_iter_new(peer, gossmap);
+	peer->gs.bytes_this_second = 0;
+	peer->gs.bytes_start_time = time_mono();
 
 	/* BOLT #7:
 	 *
@@ -267,7 +229,6 @@ void setup_peer_gossip_store(struct peer *peer,
 	 */
 	peer->gs.gossip_timer = NULL;
 	peer->gs.active = false;
-	peer->gs.off = 1;
 	return;
 }
 
@@ -459,10 +420,51 @@ static void wake_gossip(struct peer *peer)
 	peer->gs.gossip_timer = gossip_stream_timer(peer);
 }
 
-/* If we are streaming gossip, get something from gossip store */
-static u8 *maybe_from_gossip_store(const tal_t *ctx, struct peer *peer)
+/* Gossip response or something from gossip store */
+static const u8 *maybe_gossip_msg(const tal_t *ctx, struct peer *peer)
 {
-	u8 *msg;
+	const u8 *msg;
+	struct timemono now;
+	struct gossmap *gossmap;
+	u32 timestamp;
+	const u8 **msgs;
+
+	/* If it's been over a second, make a fresh start. */
+	now = time_mono();
+	if (time_to_sec(timemono_between(now, peer->gs.bytes_start_time)) > 0) {
+		peer->gs.bytes_start_time = now;
+		peer->gs.bytes_this_second = 0;
+	}
+
+	/* Sent too much this second? */
+	if (peer->gs.bytes_this_second > peer->daemon->gossip_stream_limit) {
+		/* Replace normal timer with a timer after throttle. */
+		peer->gs.active = false;
+		tal_free(peer->gs.gossip_timer);
+		peer->gs.gossip_timer
+			= new_abstimer(&peer->daemon->timers,
+				       peer,
+				       timemono_add(peer->gs.bytes_start_time,
+						    time_from_sec(1)),
+				       wake_gossip, peer);
+		return NULL;
+	}
+
+	gossmap = get_gossmap(peer->daemon);
+
+	/* This can return more than one. */
+	msgs = maybe_create_query_responses(tmpctx, peer, gossmap);
+	if (tal_count(msgs) > 0) {
+		/* We return the first one for immediate sending, and queue
+		 * others for future.  We add all the lengths now though! */
+		for (size_t i = 0; i < tal_count(msgs); i++) {
+			peer->gs.bytes_this_second += tal_bytelen(msgs[i]);
+			status_peer_io(LOG_IO_OUT, &peer->id, msgs[i]);
+			if (i > 0)
+				msg_enqueue(peer->peer_outq, take(msgs[i]));
+		}
+		return msgs[0];
+	}
 
 	/* dev-mode can suppress all gossip */
 	if (peer->daemon->dev_suppress_gossip)
@@ -476,21 +478,26 @@ static u8 *maybe_from_gossip_store(const tal_t *ctx, struct peer *peer)
 	assert(peer->gs.gossip_timer);
 
 again:
-	msg = gossip_store_next(ctx, &peer->daemon->gossip_store_fd,
-				peer->gs.timestamp_min,
-				peer->gs.timestamp_max,
-				&peer->gs.off,
-				&peer->daemon->gossip_store_end);
-	/* Don't send back gossip they sent to us! */
+	msg = gossmap_stream_next(ctx, gossmap, peer->gs.iter, &timestamp);
 	if (msg) {
+		/* Don't send back gossip they sent to us! */
 		if (gossip_rcvd_filter_del(peer->gs.grf, msg)) {
 			msg = tal_free(msg);
 			goto again;
 		}
+		/* Check timestamp (zero for channel_announcement with
+		 * no update yet!):  FIXME: we could ignore this! */
+		if (timestamp
+		    && (timestamp < peer->gs.timestamp_min || timestamp > peer->gs.timestamp_max)) {
+			msg = tal_free(msg);
+			goto again;
+		}
+		peer->gs.bytes_this_second += tal_bytelen(msg);
 		status_peer_io(LOG_IO_OUT, &peer->id, msg);
 		return msg;
 	}
 
+	/* No gossip left to send */
 	peer->gs.active = false;
 	return NULL;
 }
@@ -559,9 +566,6 @@ static void handle_ping_in(struct peer *peer, const u8 *msg)
 {
 	u8 *pong;
 
-	/* gossipd doesn't log IO, so we log it here. */
-	status_peer_io(LOG_IO_IN, &peer->id, msg);
-
 	if (!check_ping_make_pong(NULL, msg, &pong)) {
 		send_warning(peer, "Invalid ping %s", tal_hex(msg, msg));
 		return;
@@ -596,9 +600,6 @@ static void handle_ping_reply(struct peer *peer, const u8 *msg)
 
 static void handle_pong_in(struct peer *peer, const u8 *msg)
 {
-	/* gossipd doesn't log IO, so we log it here. */
-	status_peer_io(LOG_IO_IN, &peer->id, msg);
-
 	switch (peer->expecting_pong) {
 	case PONG_EXPECTED_COMMAND:
 		handle_ping_reply(peer, msg);
@@ -627,6 +628,7 @@ static void handle_gossip_timestamp_filter_in(struct peer *peer, const u8 *msg)
 {
 	struct bitcoin_blkid chain_hash;
 	u32 first_timestamp, timestamp_range;
+	struct gossmap *gossmap = get_gossmap(peer->daemon);
 
 	if (!fromwire_gossip_timestamp_filter(msg, &chain_hash,
 					      &first_timestamp,
@@ -635,9 +637,6 @@ static void handle_gossip_timestamp_filter_in(struct peer *peer, const u8 *msg)
 			     tal_hex(tmpctx, msg));
 		return;
 	}
-
-	/* gossipd doesn't log IO, so we log it here. */
-	status_peer_io(LOG_IO_IN, &peer->id, msg);
 
 	if (!bitcoin_blkid_eq(&chainparams->genesis_blockhash, &chain_hash)) {
 		send_warning(peer, "gossip_timestamp_filter for bad chain: %s",
@@ -663,15 +662,18 @@ static void handle_gossip_timestamp_filter_in(struct peer *peer, const u8 *msg)
 	 */
 	/* For us, this means we only sweep the gossip store for messages
 	 * if the first_timestamp is 0 */
-	if (first_timestamp == 0)
-		peer->gs.off = 1;
-	else if (first_timestamp == 0xFFFFFFFF)
-		peer->gs.off = peer->daemon->gossip_store_end;
-	else {
+	tal_free(peer->gs.iter);
+	if (first_timestamp == 0) {
+		peer->gs.iter = gossmap_iter_new(peer, gossmap);
+	} else if (first_timestamp == 0xFFFFFFFF) {
+		peer->gs.iter = gossmap_iter_new(peer, gossmap);
+		gossmap_iter_end(gossmap, peer->gs.iter);
+	} else {
 		/* We are actually a bit nicer than the spec, and we include
 		 * "recent" gossip here. */
-		update_recent_timestamp(peer->daemon);
-		peer->gs.off = peer->daemon->gossip_store_recent_off;
+		update_recent_timestamp(peer->daemon, gossmap);
+		peer->gs.iter = gossmap_iter_dup(peer,
+						 peer->daemon->gossmap_iter_recent);
 	}
 
 	/* BOLT #7:
@@ -731,16 +733,26 @@ static bool handle_message_locally(struct peer *peer, const u8 *msg)
 	gossip_rcvd_filter_add(peer->gs.grf, msg);
 
 	if (type == WIRE_GOSSIP_TIMESTAMP_FILTER) {
+		status_peer_io(LOG_IO_IN, &peer->id, msg);
 		handle_gossip_timestamp_filter_in(peer, msg);
 		return true;
 	} else if (type == WIRE_PING) {
+		status_peer_io(LOG_IO_IN, &peer->id, msg);
 		handle_ping_in(peer, msg);
 		return true;
 	} else if (type == WIRE_PONG) {
+		status_peer_io(LOG_IO_IN, &peer->id, msg);
 		handle_pong_in(peer, msg);
 		return true;
 	} else if (type == WIRE_ONION_MESSAGE) {
+		status_peer_io(LOG_IO_IN, &peer->id, msg);
 		handle_onion_message(peer->daemon, peer, msg);
+		return true;
+ 	} else if (type == WIRE_QUERY_CHANNEL_RANGE) {
+		handle_query_channel_range(peer, msg);
+		return true;
+ 	} else if (type == WIRE_QUERY_SHORT_CHANNEL_IDS) {
+		handle_query_short_channel_ids(peer, msg);
 		return true;
 	} else if (handle_custommsg(peer->daemon, peer, msg)) {
 		return true;
@@ -945,7 +957,8 @@ static struct io_plan *write_to_peer(struct io_conn *peer_conn,
 
 		/* If they want us to send gossip, do so now. */
 		if (!peer->draining)
-			msg = maybe_from_gossip_store(NULL, peer);
+			msg = maybe_gossip_msg(NULL, peer);
+
 		if (!msg) {
 			/* Tell them to read again, */
 			io_wake(&peer->subds);
@@ -1031,6 +1044,11 @@ static void destroy_subd(struct subd *subd)
 	/* Make sure we try to keep reading from peer (might
 	 * have been waiting for write_to_subd) */
 	io_wake(&peer->peer_in);
+
+	/* If this is the last subd, and we're draining, wake outgoing
+	 * now (it will start shutdown). */
+ 	if (tal_count(peer->subds) == 0 && peer->to_peer && peer->draining)
+		msg_wake(peer->peer_outq);
 
 	/* Maybe we were last subd out? */
 	maybe_free_peer(peer);

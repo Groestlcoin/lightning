@@ -45,8 +45,6 @@
 #include <common/wire_error.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <gossipd/gossip_store_wiregen.h>
-#include <gossipd/gossipd_peerd_wiregen.h>
 #include <hsmd/hsmd_wiregen.h>
 #include <stdio.h>
 #include <wally_bip32.h>
@@ -618,10 +616,7 @@ static void handle_peer_add_htlc(struct peer *peer, const u8 *msg)
 
 	if (!fromwire_update_add_htlc(msg, msg, &channel_id, &id, &amount,
 				      &payment_hash, &cltv_expiry,
-				      onion_routing_packet, &tlvs)
-	    /* This is an *even* field: don't send if we didn't understand */
-	    || (tlvs->blinding_point && !feature_offered(peer->our_features->bits[INIT_FEATURE],
-							 OPT_ROUTE_BLINDING))) {
+				      onion_routing_packet, &tlvs)) {
 		peer_failed_warn(peer->pps, &peer->channel_id,
 				 "Bad peer_add_htlc %s", tal_hex(msg, msg));
 	}

@@ -271,9 +271,9 @@ ifeq ($(STATIC),1)
 # For MacOS, Jacob Rapoport <jacob@rumblemonkey.com> changed this to:
 #  -L/usr/local/lib -lsqlite3 -lz -Wl,-lm -lpthread -ldl $(COVFLAGS)
 # But that doesn't static link.
-LDLIBS = -L$(CPATH) -Wl,-dn $(SQLITE3_LDLIBS) -lz -Wl,-dy -lm -lpthread -ldl $(COVFLAGS)
+LDLIBS = -L$(CPATH) -Wl,-dn $(SQLITE3_LDLIBS) -Wl,-dy -lm -lpthread -ldl $(COVFLAGS)
 else
-LDLIBS = -L$(CPATH) -lm $(SQLITE3_LDLIBS) -lz $(COVFLAGS)
+LDLIBS = -L$(CPATH) -lm $(SQLITE3_LDLIBS) $(COVFLAGS)
 endif
 
 # If we have the postgres client library we need to link against it as well
@@ -545,11 +545,11 @@ check-includes: check-src-includes check-hdr-includes
 	@tools/check-includes.sh
 
 # cppcheck gets confused by list_for_each(head, i, list): thinks i is uninit.
-.cppcheck-suppress:
-	@git ls-files -z -- "*.c" "*.h" | grep -vzE '^(ccan|contrib)/' | xargs -0 grep -n '_for_each' | sed 's/\([^:]*:.*\):.*/uninitvar:\1/' > $@
+.cppcheck-suppress: $(ALL_NONGEN_SRCFILES)
+	@ls $(ALL_NONGEN_SRCFILES) | grep -vzE '^(ccan|contrib)/' | xargs grep -n '_for_each' | sed 's/\([^:]*:.*\):.*/uninitvar:\1/' > $@
 
 check-cppcheck: .cppcheck-suppress
-	@trap 'rm -f .cppcheck-suppress' 0; git ls-files -z -- "*.c" "*.h" | grep -vzE '^ccan/' | xargs -0 cppcheck  ${CPPCHECK_OPTS}
+	@trap 'rm -f .cppcheck-suppress' 0; ls $(ALL_NONGEN_SRCFILES) | grep -vzE '^(ccan|contrib)/' | xargs cppcheck  ${CPPCHECK_OPTS}
 
 check-shellcheck:
 	@git ls-files -z -- "*.sh" | xargs -0 shellcheck -f gcc

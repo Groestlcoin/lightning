@@ -15426,6 +15426,13 @@
                     "description": [
                       "Source of configuration setting."
                     ]
+                  },
+                  "plugin": {
+                    "added": "v23.08",
+                    "type": "string",
+                    "description": [
+                      "Plugin which registered this configuration setting."
+                    ]
                   }
                 }
               },
@@ -22989,8 +22996,7 @@
       ],
       "request": {
         "required": [
-          "amount",
-          "description"
+          "amount"
         ],
         "properties": {
           "amount": {
