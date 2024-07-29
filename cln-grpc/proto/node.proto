@@ -91,7 +91,6 @@ service Node {
 	rpc ReserveInputs(ReserveinputsRequest) returns (ReserveinputsResponse) {}
 	rpc SendCustomMsg(SendcustommsgRequest) returns (SendcustommsgResponse) {}
 	rpc SendInvoice(SendinvoiceRequest) returns (SendinvoiceResponse) {}
-	rpc SendOnionMessage(SendonionmessageRequest) returns (SendonionmessageResponse) {}
 	rpc SetChannel(SetchannelRequest) returns (SetchannelResponse) {}
 	rpc SetConfig(SetconfigRequest) returns (SetconfigResponse) {}
 	rpc SetPsbtVersion(SetpsbtversionRequest) returns (SetpsbtversionResponse) {}
@@ -2545,20 +2544,6 @@ message SendinvoiceResponse {
 	optional bytes payment_preimage = 13;
 }
 
-message SendonionmessageRequest {
-	bytes first_id = 1;
-	bytes blinding = 2;
-	repeated SendonionmessageHops hops = 3;
-}
-
-message SendonionmessageResponse {
-}
-
-message SendonionmessageHops {
-	bytes node = 1;
-	uint32 tlv = 2;
-}
-
 message SetchannelRequest {
 	string id = 1;
 	optional Amount feebase = 2;
@@ -2655,6 +2640,7 @@ message Splice_signedRequest {
 message Splice_signedResponse {
 	bytes tx = 1;
 	bytes txid = 2;
+	optional uint32 outnum = 3;
 }
 
 message Splice_updateRequest {

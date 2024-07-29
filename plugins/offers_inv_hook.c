@@ -47,12 +47,13 @@ fail_inv_level(struct command *cmd,
 	if (l == LOG_BROKEN)
 		msg = "Internal error";
 
+	/* Get path (maybe connect) to send reply */
 	err = tlv_invoice_error_new(cmd);
 	/* Remove NUL terminator */
 	err->error = tal_dup_arr(err, char, msg, strlen(msg), 0);
 	/* FIXME: Add suggested_value / erroneous_field! */
 
-	payload = tlv_onionmsg_tlv_new(tmpctx);
+	payload = tlv_onionmsg_tlv_new(NULL);
 	payload->invoice_error = tal_arr(payload, u8, 0);
 	towire_tlv_invoice_error(&payload->invoice_error, err);
 	return send_onion_reply(cmd, inv->reply_path, payload);
@@ -132,7 +133,7 @@ static struct command_result *listinvreqs_done(struct command *cmd,
 	 * A reader of an invoice:
 	 *...
 	 *   - if the invoice is a response to an `invoice_request`:
-	 *     - MUST reject the invoice if all fields less than type 160 do not exactly match the `invoice_request`.
+	 *     - MUST reject the invoice if all fields in ranges 0 to 159 and 1000000000 to 2999999999 (inclusive) do not exactly match the `invoice_request`.
 	 *     - if `offer_node_id` is present (invoice_request for an offer):
 	 *       - MUST reject the invoice if `invoice_node_id` is not equal to `offer_node_id`.
 	 *     - otherwise (invoice_request without an offer):
@@ -141,7 +142,7 @@ static struct command_result *listinvreqs_done(struct command *cmd,
 	 *   - otherwise: (a invoice presented without being requested, eg. scanned by user):
 	 */
 
-	/* Since the invreq_id hashes all fields < 160, we know it matches */
+	/* Since the invreq_id hashes all fields in those ranges, we know it matches */
 	if (arr->size == 0)
 		return fail_inv(cmd, inv, "Unknown invoice_request %s",
 				fmt_sha256(tmpctx, &inv->invreq_id));
@@ -208,7 +209,8 @@ static struct command_result *listinvreqs_error(struct command *cmd,
 
 struct command_result *handle_invoice(struct command *cmd,
 				      const u8 *invbin,
-				      struct blinded_path *reply_path STEALS)
+				      struct blinded_path *reply_path STEALS,
+				      const struct secret *secret)
 {
 	size_t len = tal_count(invbin);
 	struct inv *inv = tal(cmd, struct inv);
@@ -225,6 +227,16 @@ struct command_result *handle_invoice(struct command *cmd,
 				tal_hex(tmpctx, invbin));
 	}
 	invoice_invreq_id(inv->inv, &inv->invreq_id);
+
+	/* We never publish invoice_requests with a reply path, so replies via
+	 * a path are invalid */
+	if (secret) {
+		if (command_dev_apis(cmd))
+			return fail_inv(cmd, inv, "Unexpected blinded path");
+		/* Normally, "I don't know what you're talking about!" */
+		return fail_inv(cmd, inv, "Unknown invoice_request %s",
+				fmt_sha256(tmpctx, &inv->invreq_id));
+	}
 
 	/* BOLT-offers #12:
 	 * A reader of an invoice:

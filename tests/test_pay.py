@@ -4242,6 +4242,7 @@ def test_mpp_overload_payee(node_factory, bitcoind):
     l1.rpc.pay(inv)
 
 
+@unittest.skipIf(TEST_NETWORK != 'regtest', "Canned offer is network specific")
 def test_offer_needs_option(node_factory):
     """Make sure we don't make offers without offer command"""
     l1 = node_factory.get_node()
@@ -4250,8 +4251,8 @@ def test_offer_needs_option(node_factory):
     with pytest.raises(RpcError, match='experimental-offers not enabled'):
         l1.rpc.call('invoicerequest', {'amount': '2msat',
                                        'description': 'simple test'})
-    with pytest.raises(RpcError, match='Unknown command'):
-        l1.rpc.call('fetchinvoice', {'offer': 'aaaa'})
+    with pytest.raises(RpcError, match='experimental-offers not enabled'):
+        l1.rpc.call('fetchinvoice', {'offer': 'lno1qgsqvgnwgcg35z6ee2h3yczraddm72xrfua9uve2rlrm9deu7xyfzrcgqyqs5pr5v4ehg93pqfnwgkvdr57yzh6h92zg3qctvrm7w38djg67kzcm4yeg8vc4cq63s'})
 
     # Decode still works though
     assert l1.rpc.decode('lno1qgsqvgnwgcg35z6ee2h3yczraddm72xrfua9uve2rlrm9deu7xyfzrcgqyqs5pr5v4ehg93pqfnwgkvdr57yzh6h92zg3qctvrm7w38djg67kzcm4yeg8vc4cq63s')['valid']
@@ -4506,13 +4507,13 @@ def test_fetchinvoice(node_factory, bitcoind):
     assert l1.rpc.call('decode', [inv1['invoice']])['invoice_amount_msat'] == 3
     l1.rpc.pay(inv1['invoice'])
 
+    # We've done 4 onion calls: sleep now to avoid hitting ratelimit!
+    time.sleep(1)
+
     # More than ~5x expected is rejected as absurd (it's actually a divide test,
     # which means we need 15 here, not 11).
     with pytest.raises(RpcError, match="Remote node sent failure message.*Amount vastly exceeds 2msat"):
         l1.rpc.call('fetchinvoice', {'offer': offer1['bolt12'], 'amount_msat': 15})
-
-    # We've done 4 onion calls: sleep now to avoid hitting ratelimit!
-    time.sleep(1)
 
     # Underpay is rejected.
     with pytest.raises(RpcError, match="Remote node sent failure message.*Amount must be at least 2msat"):
@@ -4532,14 +4533,14 @@ def test_fetchinvoice(node_factory, bitcoind):
                                    'description': 'single-use test',
                                    'single_use': True})['bolt12']
 
+    # We've done 3 onion calls: sleep now to avoid hitting ratelimit!
+    time.sleep(1)
+
     inv1 = l1.rpc.call('fetchinvoice', {'offer': offer2})
     inv2 = l1.rpc.call('fetchinvoice', {'offer': offer2})
     assert inv1 != inv2
     assert 'next_period' not in inv1
     assert 'next_period' not in inv2
-
-    # We've done 4 onion calls: sleep now to avoid hitting ratelimit!
-    time.sleep(1)
 
     l1.rpc.pay(inv1['invoice'])
 
@@ -4559,6 +4560,9 @@ def test_fetchinvoice(node_factory, bitcoind):
     offerusd = l3.rpc.call('offer', {'amount': '10.05USD',
                                      'description': 'USD test'})['bolt12']
 
+    # We've done 3 onion calls: sleep now to avoid hitting ratelimit!
+    time.sleep(1)
+
     inv = l1.rpc.call('fetchinvoice', {'offer': offerusd})
     assert inv['changes']['amount_msat'] == Millisatoshi(int(10.05 * 5000))
 
@@ -4574,7 +4578,7 @@ def test_fetchinvoice(node_factory, bitcoind):
     l4.rpc.connect(l3.info['id'], 'localhost', l3.port)
     l4.rpc.call('fetchinvoice', {'offer': offer1['bolt12']})
 
-    # We've done 4 onion calls: sleep now to avoid hitting ratelimit!
+    # We've done 3 onion calls: sleep now to avoid hitting ratelimit!
     time.sleep(1)
 
     # If we remove plugin, it can no longer give us an invoice.
@@ -4749,15 +4753,15 @@ def test_fetchinvoice_disconnected_reply(node_factory, bitcoind):
 
     # Make l1, l2 public (so l3 can auto connect).
     node_factory.join_nodes([l1, l2], wait_for_announce=True)
-    wait_for(lambda: l3.rpc.listnodes(l1.info['id'])['nodes'] != [])
+    # Make sure l3 knows about l1's public address
+    wait_for(lambda: all(['addresses' in n for n in l3.rpc.listnodes()['nodes']]))
 
     offer = l3.rpc.offer(amount='5msat', description='test_fetchinvoice_disconnected_reply')
 
-    # l2 sets reply_path to be l1->l2, l3 will connect to l1 to send reply.
-    # FIXME: if code were smarter, it would simply send via l2, and this test
-    # would have to get more sophisticated!
+    # l2 is already connected to l3, so it can fetch.  It specifies a reply
+    # path of l1->l2.  l3 knows it can simply route reply to l1 via l2.
     l2.rpc.fetchinvoice(offer=offer['bolt12'], dev_reply_path=[l1.info['id'], l2.info['id']])
-    assert only_one(l1.rpc.listpeers(l3.info['id'])['peers'])
+    assert l3.rpc.listpeers(l1.info['id']) == {'peers': []}
 
 
 def test_pay_blockheight_mismatch(node_factory, bitcoind):
@@ -5616,9 +5620,11 @@ def test_pay_partial_msat(node_factory, executor):
 
 def test_blindedpath_privchan(node_factory, bitcoind):
     l1, l2 = node_factory.line_graph(2, wait_for_announce=True,
-                                     opts={'experimental-offers': None})
+                                     opts={'experimental-offers': None,
+                                           'may_reconnect': True})
     l3 = node_factory.get_node(options={'experimental-offers': None,
-                                        'cltv-final': 120})
+                                        'cltv-final': 120},
+                               may_reconnect=True)
 
     # Private channel.
     node_factory.join_nodes([l2, l3], announce_channels=False)
@@ -5636,6 +5642,23 @@ def test_blindedpath_privchan(node_factory, bitcoind):
     # Carla points out that the path's cltv_expiry_delta *includes*
     # the final node's final value.
     assert decode['invoice_paths'][0]['payinfo']['cltv_expiry_delta'] == l3.config('cltv-final') + l2.config('cltv-delta')
+
+    l1.rpc.pay(inv['invoice'])
+
+    # Now try when l3 uses scid for entry point of blinded path.
+    l3.stop()
+    l3.daemon.opts['dev-invoice-bpath-scid'] = None
+    l3.start()
+    l3.rpc.connect(l2.info['id'], 'localhost', l2.port)
+
+    chan = only_one(l1.rpc.listchannels(source=l2.info['id'])['channels'])
+
+    inv = l2.rpc.fetchinvoice(offer['bolt12'])
+    decode = l1.rpc.decode(inv['invoice'])
+    assert len(decode['invoice_paths']) == 1
+    assert 'first_node_id' not in decode['invoice_paths'][0]
+    assert decode['invoice_paths'][0]['first_scid'] == chan['short_channel_id']
+    assert decode['invoice_paths'][0]['first_scid_dir'] == chan['direction']
 
     l1.rpc.pay(inv['invoice'])
 
@@ -5667,6 +5690,61 @@ def test_pay_while_opening_channel(node_factory, bitcoind, executor):
     assert only_one(l1.rpc.listpeerchannels(l3.info['id'])['channels'])['state'] == 'OPENINGD'
     inv = l2.rpc.invoice(10000, "inv", "inv")
     l1.rpc.pay(inv['bolt11'])
+
+
+def test_offer_paths(node_factory, bitcoind):
+    opts = {'experimental-offers': None,
+            'dev-allow-localhost': None}
+
+    # Need to announce channels to use their scid in offers anyway!
+    l1, l2, l3, l4 = node_factory.line_graph(4,
+                                             opts=opts,
+                                             wait_for_announce=True)
+
+    chan = only_one(l1.rpc.listpeerchannels()['channels'])
+    scidd = "{}/{}".format(chan['short_channel_id'], chan['direction'])
+    offer = l2.rpc.offer(amount='100sat', description='test_offer_paths',
+                         dev_paths=[[scidd, l2.info['id']],
+                                    [l3.info['id'], l2.info['id']]])
+
+    paths = l1.rpc.decode(offer['bolt12'])['offer_paths']
+    assert len(paths) == 2
+    assert paths[0]['first_scid'] == chan['short_channel_id']
+    assert paths[0]['first_scid_dir'] == chan['direction']
+    assert paths[1]['first_node_id'] == l3.info['id']
+
+    l5 = node_factory.get_node(options=opts)
+
+    # Get all the gossip, so we have addresses
+    l5.rpc.connect(l1.info['id'], 'localhost', l1.port)
+    wait_for(lambda: len(l5.rpc.listnodes()['nodes']) == 4 and all(['addresses' in n for n in l5.rpc.listnodes()['nodes']]))
+
+    # We have a path ->l1 (head of blinded path), so we can use that without connecting.
+    l5.rpc.fetchinvoice(offer=offer['bolt12'])
+    assert not l5.daemon.is_in_log('connecting directly to')
+
+    # Make scid path invalid by closing it
+    close = l1.rpc.close(paths[0]['first_scid'])
+    bitcoind.generate_block(13, wait_for_mempool=close['txid'])
+    wait_for(lambda: l5.rpc.listchannels(paths[0]['first_scid']) == {'channels': []})
+
+    # Now connect l5->l4, and it will be able to reach l3 via that, and join blinded path.
+    l5.rpc.connect(l4.info['id'], 'localhost', l4.port)
+    l5.rpc.fetchinvoice(offer=offer['bolt12'])
+    assert not l5.daemon.is_in_log('connecting')
+
+    # This will make us connect straight to l3 to use blinded path from there.
+    l5.rpc.disconnect(l4.info['id'])
+    l5.rpc.fetchinvoice(offer=offer['bolt12'])
+    assert l5.daemon.is_in_log('connecting')
+
+    # Restart l5 with fetchinvoice-noconnect and it will fail.
+    l5.stop()
+    l5.daemon.opts['fetchinvoice-noconnect'] = None
+    l5.start()
+
+    with pytest.raises(RpcError, match=f"Failed: could not route or connect directly to blinded path at {l3.info['id']}: fetchinvoice-noconnect set: not initiating a new connection"):
+        l5.rpc.fetchinvoice(offer=offer['bolt12'])
 
 
 def test_pay_legacy_forward(node_factory, bitcoind, executor):
@@ -5717,6 +5795,109 @@ def test_onionmessage_ratelimit(node_factory):
     # It will recover though!
     time.sleep(0.250)
     l1.rpc.fetchinvoice(offer['bolt12'])
+
+
+def test_offer_path_self(node_factory):
+    """We can fetch an offer, and pay an invoice which uses a blinded path starting at us"""
+    l1, l2, l3 = node_factory.line_graph(3, fundchannel=False,
+                                         opts={'experimental-offers': None,
+                                               'may_reconnect': True})
+
+    # Private channel from l2->l3, makes l3 add a hint.
+    node_factory.join_nodes([l1, l2], wait_for_announce=True)
+    node_factory.join_nodes([l2, l3], announce_channels=False)
+    wait_for(lambda: ['alias' in n for n in l3.rpc.listnodes()['nodes']] == [True, True])
+
+    # l3 uses l2 as entry point for offer.
+    offer = l3.rpc.offer(amount='2msat', description='test_offer_path_self')
+    paths = l1.rpc.decode(offer['bolt12'])['offer_paths']
+    assert len(paths) == 1
+    assert paths[0]['first_node_id'] == l2.info['id']
+
+    # l1 can fetch invoice.
+    l1.rpc.fetchinvoice(offer['bolt12'])['invoice']
+
+    # l2 can fetch invoice
+    inv = l2.rpc.fetchinvoice(offer['bolt12'])['invoice']
+
+    # And can pay it!
+    l2.rpc.pay(inv)
+
+    # We can also handle it if invoice has next hop specified by real scid, or alias.
+    scid = only_one(l2.rpc.listpeerchannels(l3.info['id'])['channels'])['alias']['local']
+
+    l3.stop()
+    l3.daemon.opts['dev-invoice-internal-scid'] = scid
+    l3.start()
+    l2.rpc.connect(l3.info['id'], 'localhost', l3.port)
+
+    inv = l2.rpc.fetchinvoice(offer['bolt12'])['invoice']
+
+    # And can pay it!
+    l2.rpc.pay(inv)
+
+    # It should have mapped the hop.
+    l2.daemon.wait_for_log(f"Mapped decrypted next hop from {scid} -> {l3.info['id']}")
+
+
+def test_offer_selfpay(node_factory):
+    """We can fetch an pay our own offer"""
+    l1 = node_factory.get_node(options={'experimental-offers': None})
+
+    offer = l1.rpc.offer(amount='2msat', description='test_offer_path_self')['bolt12']
+    inv = l1.rpc.fetchinvoice(offer)['invoice']
+    l1.rpc.pay(inv)
+
+
+def test_decryptencrypteddata(node_factory):
+    l1, l2, l3 = node_factory.line_graph(3, fundchannel=False,
+                                         opts={'experimental-offers': None})
+
+    # Private channel from l2->l3, makes l3 add a blinded path to invoice
+    # (l1's existence makes sure l3 doesn't see l2 as a dead end!)
+    node_factory.join_nodes([l1, l2], wait_for_announce=True)
+    node_factory.join_nodes([l2, l3], announce_channels=False)
+    wait_for(lambda: ['alias' in n for n in l3.rpc.listnodes()['nodes']] == [True, True])
+
+    offer = l3.rpc.offer(amount='2msat', description='test_offer_path_self')
+    inv = l2.rpc.fetchinvoice(offer['bolt12'])['invoice']
+
+    decode = l2.rpc.decode(inv)
+    path = decode['invoice_paths'][0]
+    assert path['first_node_id'] == l2.info['id']
+    blinding = path['blinding']
+
+    encdata1 = path['path'][0]['encrypted_recipient_data']
+    # BOLT #4:
+    # 1. `tlv_stream`: `encrypted_data_tlv`
+    # 2. types:
+    # ...
+    #     1. type: 4 (`next_node_id`)
+    #     2. data:
+    #         * [`point`:`node_id`]
+    dec = l2.rpc.decryptencrypteddata(encrypted_data=encdata1, blinding=blinding)['decryptencrypteddata']
+    assert dec['decrypted'].startswith('0421' + l3.info['id'])
+
+
+def test_offer_experimental_fields(node_factory):
+    l1, l2 = node_factory.line_graph(2, opts={'experimental-offers': None})
+
+    # Append experimental type 1000000001, length 1
+    offer = l1.rpc.offer(amount='2msat', description='test_offer_path_self')['bolt12']
+    bolt12tool = os.path.join(os.path.dirname(__file__), "..", "devtools", "bolt12-cli")
+    # Returns HRP and hex
+    as_hex = subprocess.check_output([bolt12tool, 'decodehex', offer]).decode('UTF-8').split()
+    mangled = subprocess.check_output([bolt12tool, 'encodehex', as_hex[0], as_hex[1] + 'FE3B9ACA01' '01' '00']).decode('UTF-8').strip()
+
+    assert l1.rpc.decode(mangled)['unknown_offer_tlvs'] == [{'type': 1000000001, 'length': 1, 'value': '00'}]
+
+    # This will fail (offer has added field!)
+    with pytest.raises(RpcError, match="Unknown offer"):
+        l2.rpc.fetchinvoice(mangled)
+
+    # invice request contains the unknown field
+    m = re.search(r'invoice_request: \\"([a-z0-9]*)\\"', l2.daemon.is_in_log('invoice_request:'))
+    assert l1.rpc.decode(m.group(1))['unknown_invoice_request_tlvs'] == [{'type': 1000000001, 'length': 1, 'value': '00'}]
 
 
 def test_fetch_no_description_offer(node_factory):

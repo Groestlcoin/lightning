@@ -98,7 +98,6 @@ GENERATE_MARKDOWN := doc/lightning-addgossip.7 \
 	doc/lightning-sendcustommsg.7 \
 	doc/lightning-sendinvoice.7 \
 	doc/lightning-sendonion.7 \
-	doc/lightning-sendonionmessage.7 \
 	doc/lightning-sendpay.7 \
 	doc/lightning-sendpsbt.7 \
 	doc/lightning-setchannel.7 \
@@ -149,7 +148,7 @@ doc/schemas/lightning-sql.json: doc/schemas/lightning-sql-template.json plugins/
 
 doc-all: $(MANPAGES) doc/index.rst
 
-SCHEMAS := $(wildcard doc/schemas/lightning-*.json)
+SCHEMAS := $(wildcard doc/schemas/lightning-*.json) $(wildcard doc/schemas/notification/*.json)
 
 # Don't try to build lightning-sql.json tables with plugins/sql if we don't have sqlite3
 ifeq ($(HAVE_SQLITE3),0)

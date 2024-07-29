@@ -450,9 +450,7 @@ static struct command_result *json_createinvoicerequest(struct command *cmd,
 
 	invreq->invreq_payer_id = tal(invreq, struct pubkey);
 	if (*exposeid) {
-		if (!pubkey_from_node_id(invreq->invreq_payer_id,
-					 &cmd->ld->id))
-			fatal("Our ID is invalid?");
+		*invreq->invreq_payer_id = cmd->ld->our_pubkey;
 	} else if (!payer_key(cmd->ld,
 			      invreq->invreq_metadata,
 			      tal_bytelen(invreq->invreq_metadata),
@@ -469,7 +467,7 @@ static struct command_result *json_createinvoicerequest(struct command *cmd,
 	 *  [Signature Calculation](#signature-calculation) using the `invreq_payer_id`.
 	 */
 	/* This populates the ->fields from our entries */
-	invreq->fields = tlv_make_fields(invreq, tlv_invoice_request);
+	tlv_update_fields(invreq, tlv_invoice_request, &invreq->fields);
 	merkle_tlv(invreq->fields, &merkle);
 	invreq->signature = tal(invreq, struct bip340sig);
 	hsm_sign_b12(cmd->ld, "invoice_request", "signature",

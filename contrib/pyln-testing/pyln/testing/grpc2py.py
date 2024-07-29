@@ -1874,11 +1874,6 @@ def sendinvoice2py(m):
     })
 
 
-def sendonionmessage2py(m):
-    return remove_default({
-    })
-
-
 def setchannel_channels2py(m):
     return remove_default({
         "channel_id": hexlify(m.channel_id),  # PrimitiveField in generate_composite
@@ -1947,6 +1942,7 @@ def splice_init2py(m):
 
 def splice_signed2py(m):
     return remove_default({
+        "outnum": m.outnum,  # PrimitiveField in generate_composite
         "tx": hexlify(m.tx),  # PrimitiveField in generate_composite
         "txid": hexlify(m.txid),  # PrimitiveField in generate_composite
     })

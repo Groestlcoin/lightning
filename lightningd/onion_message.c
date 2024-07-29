@@ -1,7 +1,9 @@
 #include "config.h"
 #include <ccan/mem/mem.h>
 #include <common/blindedpath.h>
+#include <common/blinding.h>
 #include <common/configdir.h>
+#include <common/ecdh.h>
 #include <common/json_command.h>
 #include <common/json_param.h>
 #include <connectd/connectd_wiregen.h>
@@ -182,74 +184,6 @@ static struct command_result *param_onion_hops(struct command *cmd,
 	return NULL;
 }
 
-static struct command_result *json_sendonionmessage(struct command *cmd,
-						    const char *buffer,
-						    const jsmntok_t *obj UNNEEDED,
-						    const jsmntok_t *params)
-{
-	struct onion_hop *hops;
-	struct node_id *first_id;
-	struct pubkey *blinding;
-	struct sphinx_path *sphinx_path;
-	struct onionpacket *op;
-	struct secret *path_secrets;
-	size_t onion_size;
-
-	/* FIXME: Support using scid for first hop! */
-	if (!param_check(cmd, buffer, params,
-			 p_req("first_id", param_node_id, &first_id),
-			 p_req("blinding", param_pubkey, &blinding),
-			 p_req("hops", param_onion_hops, &hops),
-			 NULL))
-		return command_param_failed();
-
-	if (!feature_offered(cmd->ld->our_features->bits[NODE_ANNOUNCE_FEATURE],
-			     OPT_ONION_MESSAGES))
-		return command_fail(cmd, LIGHTNINGD,
-				    "experimental-onion-messages not enabled");
-
-	/* Sanity check first; connectd doesn't bother telling us if peer
-	 * can't be reached. */
-	if (!peer_by_id(cmd->ld, first_id))
-		return command_fail(cmd, LIGHTNINGD, "Unknown first peer");
-
-	/* Create an onion which encodes this. */
-	sphinx_path = sphinx_path_new(cmd, NULL);
-	for (size_t i = 0; i < tal_count(hops); i++)
-		sphinx_add_hop(sphinx_path, &hops[i].node, hops[i].tlv);
-
-	/* BOLT-onion-message #4:
-	 * - SHOULD set `onion_message_packet` `len` to 1366 or 32834.
-	 */
-	if (sphinx_path_payloads_size(sphinx_path) <= ROUTING_INFO_SIZE)
-		onion_size = ROUTING_INFO_SIZE;
-	else
-		onion_size = 32768;
-
-	op = create_onionpacket(tmpctx, sphinx_path, onion_size, &path_secrets);
-	if (!op)
-		return command_fail(cmd, JSONRPC2_INVALID_PARAMS,
-				    "Creating onion failed (tlvs too long?)");
-
-	if (command_check_only(cmd))
-		return command_check_done(cmd);
-
-	subd_send_msg(cmd->ld->connectd,
-		      take(towire_connectd_send_onionmsg(NULL, first_id,
-					serialize_onionpacket(tmpctx, op),
-					blinding)));
-
-	return command_success(cmd, json_stream_success(cmd));
-}
-
-static const struct json_command sendonionmessage_command = {
-	"sendonionmessage",
-	"utility",
-	json_sendonionmessage,
-	"Send message to {first_id}, using {blinding}, encoded over {hops} (id, tlv)"
-};
-AUTODATA(json_command, &sendonionmessage_command);
-
 static void inject_onionmsg_reply(struct subd *connectd,
 				  const u8 *reply,
 				  const int *fds UNUSED,
@@ -328,3 +262,60 @@ static const struct json_command injectonionmessage_command = {
 	"Unwrap using {blinding}, encoded over {hops} (id, tlv)"
 };
 AUTODATA(json_command, &injectonionmessage_command);
+
+static struct command_result *json_decryptencrypteddata(struct command *cmd,
+							const char *buffer,
+							const jsmntok_t *obj UNNEEDED,
+							const jsmntok_t *params)
+{
+	u8 *encdata, *decrypted;
+	struct pubkey *blinding, next_blinding;
+	struct secret ss;
+	struct sha256 h;
+	struct json_stream *response;
+
+	if (!param_check(cmd, buffer, params,
+			 p_req("encrypted_data", param_bin_from_hex, &encdata),
+			 p_req("blinding", param_pubkey, &blinding),
+			 NULL))
+		return command_param_failed();
+
+	/* BOLT #4:
+	 *
+	 * - MUST compute:
+	 *   - $`ss_i = SHA256(k_i * E_i)`$ (standard ECDH)
+	 *...
+	 * - MUST decrypt the `encrypted_data` field using $`rho_i`$
+	 */
+	ecdh(blinding, &ss);
+
+	decrypted = decrypt_encmsg_raw(cmd, blinding, &ss, encdata);
+	if (!decrypted)
+		return command_fail(cmd, JSONRPC2_INVALID_PARAMS,
+				    "Decryption failed!");
+
+	if (command_check_only(cmd))
+		return command_check_done(cmd);
+
+	/* BOLT #4:
+	 *
+	 *   - $`E_{i+1} = SHA256(E_i || ss_i) * E_i`$
+	 */
+	blinding_hash_e_and_ss(blinding, &ss, &h);
+	blinding_next_pubkey(blinding, &h, &next_blinding);
+
+	response = json_stream_success(cmd);
+	json_object_start(response, "decryptencrypteddata");
+	json_add_hex_talarr(response, "decrypted", decrypted);
+	json_add_pubkey(response, "next_blinding", &next_blinding);
+	json_object_end(response);
+	return command_success(cmd, response);
+}
+
+static const struct json_command decryptencrypteddata_command = {
+	"decryptencrypteddata",
+	"utility",
+	json_decryptencrypteddata,
+	"Decrypt {encrypted_data} using {blinding}, return decryption and next blinding"
+};
+AUTODATA(json_command, &decryptencrypteddata_command);

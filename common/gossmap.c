@@ -9,6 +9,7 @@
 #include <common/gossip_store.h>
 #include <common/gossmap.h>
 #include <common/pseudorand.h>
+#include <common/sciddir_or_pubkey.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <gossipd/gossip_store_wiregen.h>
@@ -1457,6 +1458,26 @@ u8 *gossmap_node_get_features(const tal_t *ctx,
 	return ret;
 }
 
+bool gossmap_scidd_pubkey(struct gossmap *gossmap,
+			  struct sciddir_or_pubkey *sciddpk)
+{
+	struct gossmap_chan *chan;
+	struct gossmap_node *node;
+	struct node_id id;
+
+	if (sciddpk->is_pubkey)
+		return true;
+
+	chan = gossmap_find_chan(gossmap, &sciddpk->scidd.scid);
+	if (!chan)
+		return false;
+
+	node = gossmap_nth_node(gossmap, chan, sciddpk->scidd.dir);
+	gossmap_node_get_id(gossmap, node, &id);
+	/* Shouldn't fail! */
+	return sciddir_or_pubkey_from_node_id(sciddpk, &id);
+}
+
 size_t gossmap_lengths(const struct gossmap *map, size_t *total)
 {
 	*total = map->map_size;
@@ -1613,6 +1634,8 @@ void gossmap_iter_fast_forward(const struct gossmap *map,
 
 		if (be32_to_cpu(ghdr.timestamp) >= timestamp)
 			break;
+
+		iter->offset += be16_to_cpu(ghdr.len) + sizeof(ghdr);
 	}
 }
 

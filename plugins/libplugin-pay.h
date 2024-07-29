@@ -180,8 +180,11 @@ struct payment {
 	/* The current phase we are in. */
 	enum payment_step step;
 
-	/* Real destination we want to route to */
-	struct node_id *destination;
+	/* Destination we want to route to */
+	struct node_id *route_destination;
+
+	/* Destination we want to pay to (can be different for blinded paths!) */
+	struct node_id *pay_destination;
 
 	/* Payment hash extracted from the invoice if any. */
 	struct sha256 *payment_hash;
@@ -490,6 +493,9 @@ void payment_abort(struct payment *p, const char *fmt, ...) PRINTF_FMT(2,3);
 
 struct payment *payment_root(struct payment *p);
 struct payment_tree_result payment_collect_result(struct payment *p);
+
+/* If you need an unmodified gossmap */
+struct gossmap *get_raw_gossmap(struct payment *payment);
 
 /* Add fields for successful payment: result can be NULL for selfpay */
 void json_add_payment_success(struct json_stream *js,
