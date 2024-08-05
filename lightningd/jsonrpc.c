@@ -186,15 +186,7 @@ static struct command_result *json_help(struct command *cmd,
 
 static const struct json_command help_command = {
 	"help",
-	"utility",
 	json_help,
-	"List available commands, or give verbose help on one {command}.",
-	.verbose = "help [command]\n"
-	"Without [command]:\n"
-	"  Outputs an array of objects with 'command' and 'description'\n"
-	"With [command]:\n"
-	"  Give a single object containing 'verbose', which completely describes\n"
-	"  the command inputs and outputs."
 };
 AUTODATA(json_command, &help_command);
 
@@ -254,9 +246,7 @@ static struct command_result *json_stop(struct command *cmd,
 
 static const struct json_command stop_command = {
 	"stop",
-	"utility",
 	json_stop,
-	"Shut down the lightningd process"
 };
 AUTODATA(json_command, &stop_command);
 
@@ -361,9 +351,7 @@ static struct command_result *json_recover(struct command *cmd,
 
 static const struct json_command recover_command = {
 	"recover",
-	"utility",
 	json_recover,
-	"Restart an unused lightning node with --recover"
 };
 AUTODATA(json_command, &recover_command);
 
@@ -438,15 +426,7 @@ static struct command_result *json_dev(struct command *cmd UNUSED,
 
 static const struct json_command dev_command = {
 	"dev",
-	"developer",
 	json_dev,
-	"Developer command test multiplexer",
-	.verbose = "dev rhash {secret}\n"
-	"	Show SHA256 of {secret}\n"
-	"dev crash\n"
-	"	Crash lightningd by calling fatal()\n"
-	"dev slowcmd {msec}\n"
-	"	Torture test for slow commands, optional {msec}\n",
 	.dev_only = true,
 };
 AUTODATA(json_command, &dev_command);
@@ -481,25 +461,8 @@ static void json_add_help_command(struct command *cmd,
 			strmap_get(&cmd->ld->jsonrpc->usagemap,
 				   json_command->name));
 	json_object_start(response, NULL);
-
 	json_add_string(response, "command", usage);
-	json_add_string(response, "category", json_command->category);
-	json_add_string(response, "description", json_command->description);
-
-	if (!json_command->verbose) {
-		json_add_string(response, "verbose",
-				"HELP! Please contribute"
-				" a description for this"
-				" json_command!");
-	} else {
-		struct json_escape *esc;
-
-		esc = json_escape(NULL, json_command->verbose);
-		json_add_escaped_string(response, "verbose", take(esc));
-	}
-
 	json_object_end(response);
-
 }
 
 static const struct json_command *find_command(struct json_command **commands,
@@ -1724,10 +1687,7 @@ static struct command_result *json_check(struct command *cmd,
 
 static const struct json_command check_command = {
 	"check",
-	"utility",
 	json_check,
-	"Don't run {command_to_check}, just verify parameters.",
-	.verbose = "check command_to_check [parameters...]\n"
 };
 AUTODATA(json_command, &check_command);
 
@@ -1751,9 +1711,7 @@ static struct command_result *json_notifications(struct command *cmd,
 
 static const struct json_command notifications_command = {
 	"notifications",
-	"utility",
 	json_notifications,
-	"{enable} notifications",
 };
 AUTODATA(json_command, &notifications_command);
 
@@ -1777,9 +1735,7 @@ static struct command_result *json_batching(struct command *cmd,
 
 static const struct json_command batching_command = {
 	"batching",
-	"utility",
 	json_batching,
-	"Database transaction batching {enable}",
 };
 AUTODATA(json_command, &batching_command);
 
@@ -1803,8 +1759,6 @@ static struct command_result *json_deprecations(struct command *cmd,
 
 static const struct json_command deprecations_command = {
 	"deprecations",
-	"utility",
 	json_deprecations,
-	"Set/unset deprecated APIs on this JSON connection (for developer testing)",
 };
 AUTODATA(json_command, &deprecations_command);

@@ -1119,39 +1119,22 @@ static const char *init(struct plugin *p, const char *buffer UNUSED,
 static const struct plugin_command commands[] = {
 	{
 		"getrawblockbyheight",
-		"groestlcoin",
-		"Get the groestlcoin block at a given height",
-		"",
 		getrawblockbyheight
 	},
 	{
 		"getchaininfo",
-		"groestlcoin",
-		"Get the chain id, the header count, the block count,"
-		" and whether this is IBD.",
-		"",
 		getchaininfo
 	},
 	{
 		"estimatefees",
-		"groestlcoin",
-		"Get the urgent, normal and slow Groestlcoin feerates as"
-		" gro/kVB.",
-		"",
 		estimatefees
 	},
 	{
 		"sendrawtransaction",
-		"groestlcoin",
-		"Send a raw transaction to the Groestlcoin network.",
-		"",
 		sendrawtransaction
 	},
 	{
 		"getutxout",
-		"groestlcoin",
-		"Get information about an output, identified by a {txid} an a {vout}",
-		"",
 		getutxout
 	},
 };

@@ -303,7 +303,7 @@ static void peer_closing_complete(struct channel *channel, const u8 *msg)
 		return;
 
 	/* Channel gets dropped to chain cooperatively. */
-	drop_to_chain(channel->peer->ld, channel, true);
+	drop_to_chain(channel->peer->ld, channel, true, true /* rebroadcast */);
 	channel_set_state(channel,
 			  CLOSINGD_SIGEXCHANGE,
 			  CLOSINGD_COMPLETE,
@@ -896,11 +896,6 @@ discard_unopened: {
 
 static const struct json_command close_command = {
 	"close",
-	"channels",
 	json_close,
-	"Close the channel with {id} "
-	"(either peer ID, channel ID, or short channel ID). "
-	"Force a unilateral close after {unilateraltimeout} seconds (default 48h). "
-	"If {destination} address is provided, will be used as output address."
 };
 AUTODATA(json_command, &close_command);

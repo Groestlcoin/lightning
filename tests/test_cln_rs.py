@@ -48,10 +48,7 @@ def test_plugin_start(node_factory):
     assert l1.rpc.help("testmethod") == {
         'help': [
             {
-                'command': 'testmethod ',
-                'category': 'plugin',
-                'description': 'This is a test',
-                'verbose': 'This is a test'
+                'command': 'testmethod '
             }
         ],
         'format-hint': 'simple'

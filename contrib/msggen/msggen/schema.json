@@ -5562,8 +5562,7 @@
             },
             "then": {
               "required": [
-                "offer_id",
-                "offer_node_id"
+                "offer_id"
               ],
               "additionalProperties": false,
               "properties": {
@@ -5727,10 +5726,28 @@
                     }
                   }
                 },
+                "warning_empty_blinded_path": {
+                  "added": "v24.08",
+                  "type": "string",
+                  "description": [
+                    "The blinded path has 0 hops."
+                  ]
+                },
                 "offer_node_id": {
                   "type": "pubkey",
+                  "deprecated": [
+                    "v24.08",
+                    "v24.11"
+                  ],
                   "description": [
-                    "Public key of the offering node."
+                    "Obsolete name for offer_issuer_id."
+                  ]
+                },
+                "offer_issuer_id": {
+                  "type": "pubkey",
+                  "added": "v24.08",
+                  "description": [
+                    "The pubkey associated with the offer (can be a node id)."
                   ]
                 },
                 "offer_recurrence": {
@@ -5898,8 +5915,19 @@
                 "recurrence": {},
                 "warning_missing_offer_node_id": {
                   "type": "string",
+                  "deprecated": [
+                    "v24.08",
+                    "v24.11"
+                  ],
                   "description": [
                     "`offer_node_id` is not present."
+                  ]
+                },
+                "warning_missing_offer_issuer_id": {
+                  "type": "string",
+                  "added": "v24.08",
+                  "description": [
+                    "`offer_issuer_id` is not present and there are no offer_paths"
                   ]
                 },
                 "warning_invalid_offer_description": {
@@ -5948,7 +5976,6 @@
             },
             "then": {
               "required": [
-                "offer_node_id",
                 "invreq_metadata",
                 "invreq_payer_id",
                 "signature"
@@ -6119,8 +6146,19 @@
                 },
                 "offer_node_id": {
                   "type": "pubkey",
+                  "deprecated": [
+                    "v24.08",
+                    "v24.11"
+                  ],
                   "description": [
                     "Public key of the offering node."
+                  ]
+                },
+                "offer_issuer_id": {
+                  "type": "pubkey",
+                  "added": "v24.08",
+                  "description": [
+                    "Public key of the offering node (can be a node id)."
                   ]
                 },
                 "offer_recurrence": {
@@ -6251,6 +6289,82 @@
                     "A note attached by the payer."
                   ]
                 },
+                "invreq_paths": {
+                  "type": "array",
+                  "added": "v24.08",
+                  "description": [
+                    "Paths to the destination."
+                  ],
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "blinding",
+                      "path"
+                    ],
+                    "additionalProperties": false,
+                    "properties": {
+                      "first_node_id": {
+                        "added": "v24.08",
+                        "type": "pubkey",
+                        "description": [
+                          "The (presumably well-known) public key of the start of the path."
+                        ]
+                      },
+                      "first_scid": {
+                        "added": "v24.08",
+                        "type": "short_channel_id",
+                        "description": [
+                          "the short channel id of the start of the path (alternative to first_node_id)"
+                        ]
+                      },
+                      "first_scid_dir": {
+                        "added": "v24.08",
+                        "type": "u32",
+                        "description": [
+                          "which end of the first_scid is the start of the path"
+                        ]
+                      },
+                      "blinding": {
+                        "added": "v24.08",
+                        "type": "pubkey",
+                        "description": [
+                          "Blinding factor for this path."
+                        ]
+                      },
+                      "path": {
+                        "type": "array",
+                        "added": "v24.08",
+                        "description": [
+                          "An individual path."
+                        ],
+                        "items": {
+                          "type": "object",
+                          "required": [
+                            "blinded_node_id",
+                            "encrypted_recipient_data"
+                          ],
+                          "additionalProperties": false,
+                          "properties": {
+                            "blinded_node_id": {
+                              "added": "v24.08",
+                              "type": "pubkey",
+                              "description": [
+                                "Node_id of the hop."
+                              ]
+                            },
+                            "encrypted_recipient_data": {
+                              "added": "v24.08",
+                              "type": "hex",
+                              "description": [
+                                "Encrypted TLV entry for this hop."
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
                 "invreq_recurrence_counter": {
                   "type": "u32",
                   "description": [
@@ -6345,6 +6459,7 @@
                 "offer_quantity_max": {},
                 "offer_paths": {},
                 "offer_node_id": {},
+                "offer_issuer_id": {},
                 "offer_recurrence": {},
                 "invreq_metadata": {},
                 "invreq_payer_id": {},
@@ -6353,6 +6468,7 @@
                 "invreq_features": {},
                 "invreq_quantity": {},
                 "invreq_payer_note": {},
+                "invreq_paths": {},
                 "invreq_recurrence_counter": {},
                 "invreq_recurrence_start": {},
                 "warning_invalid_offer_description": {
@@ -6431,7 +6547,6 @@
             },
             "then": {
               "required": [
-                "offer_node_id",
                 "invreq_metadata",
                 "invreq_payer_id",
                 "invoice_paths",
@@ -6606,8 +6721,19 @@
                 },
                 "offer_node_id": {
                   "type": "pubkey",
+                  "deprecated": [
+                    "v24.08",
+                    "v24.11"
+                  ],
                   "description": [
                     "Public key of the offering node."
+                  ]
+                },
+                "offer_issuer_id": {
+                  "type": "pubkey",
+                  "added": "v24.08",
+                  "description": [
+                    "Public key of the offering node (can be a node id)."
                   ]
                 },
                 "offer_recurrence": {
@@ -6737,6 +6863,82 @@
                   "description": [
                     "A note attached by the payer."
                   ]
+                },
+                "invreq_paths": {
+                  "type": "array",
+                  "added": "v24.08",
+                  "description": [
+                    "Paths to the destination."
+                  ],
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "blinding",
+                      "path"
+                    ],
+                    "additionalProperties": false,
+                    "properties": {
+                      "first_node_id": {
+                        "added": "v24.08",
+                        "type": "pubkey",
+                        "description": [
+                          "The (presumably well-known) public key of the start of the path."
+                        ]
+                      },
+                      "first_scid": {
+                        "added": "v24.08",
+                        "type": "short_channel_id",
+                        "description": [
+                          "the short channel id of the start of the path (alternative to first_node_id)"
+                        ]
+                      },
+                      "first_scid_dir": {
+                        "added": "v24.08",
+                        "type": "u32",
+                        "description": [
+                          "which end of the first_scid is the start of the path"
+                        ]
+                      },
+                      "blinding": {
+                        "added": "v24.08",
+                        "type": "pubkey",
+                        "description": [
+                          "Blinding factor for this path."
+                        ]
+                      },
+                      "path": {
+                        "type": "array",
+                        "added": "v24.08",
+                        "description": [
+                          "An individual path."
+                        ],
+                        "items": {
+                          "type": "object",
+                          "required": [
+                            "blinded_node_id",
+                            "encrypted_recipient_data"
+                          ],
+                          "additionalProperties": false,
+                          "properties": {
+                            "blinded_node_id": {
+                              "added": "v24.08",
+                              "type": "pubkey",
+                              "description": [
+                                "Node_id of the hop."
+                              ]
+                            },
+                            "encrypted_recipient_data": {
+                              "added": "v24.08",
+                              "type": "hex",
+                              "description": [
+                                "Encrypted TLV entry for this hop."
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
                 },
                 "invreq_recurrence_counter": {
                   "type": "u32",
@@ -6926,7 +7128,7 @@
                 "invoice_node_id": {
                   "type": "pubkey",
                   "description": [
-                    "The id to pay (usually the same as offer_node_id)."
+                    "The id to pay (usually the same as offer_issuer_id)."
                   ]
                 },
                 "invoice_recurrence_basetime": {
@@ -6938,7 +7140,7 @@
                 "signature": {
                   "type": "bip340sig",
                   "description": [
-                    "BIP-340 signature of the `offer_node_id` on this invoice."
+                    "BIP-340 signature of the `offer_issuer_id` on this invoice."
                   ]
                 },
                 "unknown_invoice_tlvs": {
@@ -7017,6 +7219,7 @@
                 "offer_quantity_max": {},
                 "offer_paths": {},
                 "offer_node_id": {},
+                "offer_issuer_id": {},
                 "offer_recurrence": {},
                 "invreq_metadata": {},
                 "invreq_payer_id": {},
@@ -7025,6 +7228,7 @@
                 "invreq_features": {},
                 "invreq_quantity": {},
                 "invreq_payer_note": {},
+                "invreq_paths": {},
                 "invreq_node_id": {},
                 "invreq_recurrence_counter": {},
                 "invreq_recurrence_start": {},
@@ -11407,6 +11611,9 @@
       "description": [
         "The **getinfo** gives a summary of the current running node."
       ],
+      "categories": [
+        "readonly"
+      ],
       "request": {
         "required": [],
         "properties": {}
@@ -11838,6 +12045,9 @@
       "description": [
         "The **getlog** the RPC command to show logs, with optional log *level*."
       ],
+      "categories": [
+        "readonly"
+      ],
       "request": {
         "required": [],
         "properties": {
@@ -12097,6 +12307,9 @@
         "The **getroute** RPC command attempts to find the best route for the payment of *amount_msat* to lightning node *id*, such that the payment will arrive at *id* with *cltv*.",
         "",
         "There are two considerations for how good a route is: how low the fees are, and how long your payment will get stuck in a delayed output if a node goes down during the process. ."
+      ],
+      "categories": [
+        "readonly"
       ],
       "request": {
         "required": [
@@ -12558,34 +12771,13 @@
               "type": "object",
               "additionalProperties": true,
               "required": [
-                "command",
-                "category",
-                "description",
-                "verbose"
+                "command"
               ],
               "properties": {
                 "command": {
                   "type": "string",
                   "description": [
                     "The command."
-                  ]
-                },
-                "category": {
-                  "type": "string",
-                  "description": [
-                    "The category for this command (useful for grouping)."
-                  ]
-                },
-                "description": {
-                  "type": "string",
-                  "description": [
-                    "A one-line description of the purpose of this command."
-                  ]
-                },
-                "verbose": {
-                  "type": "string",
-                  "description": [
-                    "A full description of this command (including whether it's deprecated)."
                   ]
                 }
               }
@@ -12626,10 +12818,7 @@
           "response": {
             "help": [
               {
-                "command": "pay bolt11 [amount_msat] [label] [riskfactor] [maxfeepercent] [retry_for] [maxdelay] [exemptfee] [localinvreqid] [exclude] [maxfee] [description] [dev_use_shadow]",
-                "category": "plugin",
-                "description": "Send payment specified by {bolt11}",
-                "verbose": "Attempt to pay the {bolt11} invoice."
+                "command": "pay bolt11 [amount_msat] [label] [riskfactor] [maxfeepercent] [retry_for] [maxdelay] [exemptfee] [localinvreqid] [exclude] [maxfee] [description] [dev_use_shadow]"
               }
             ],
             "format-hint": "simple"
@@ -12646,10 +12835,7 @@
           "response": {
             "help": [
               {
-                "command": "dev subcommand=crash|rhash|slowcmd",
-                "category": "developer",
-                "description": "Developer command test multiplexer",
-                "verbose": "dev rhash {secret}\n\tShow SHA256 of {secret}\ndev crash\n\tCrash lightningd by calling fatal()\ndev slowcmd {msec}\n\tTorture test for slow commands, optional {msec}\n"
+                "command": "dev subcommand=crash|rhash|slowcmd"
               }
             ],
             "format-hint": "simple"
@@ -13369,6 +13555,9 @@
         "",
         "Only one of *short_channel_id*, *source* or *destination* can be supplied. If nothing is supplied, data on all lightning channels known to this node, are returned. These can be local channels or public channels broadcast on the gossip network."
       ],
+      "categories": [
+        "readonly"
+      ],
       "request": {
         "required": [],
         "properties": {
@@ -13612,6 +13801,9 @@
       "title": "Get data on our closed historical channels",
       "description": [
         "The **listclosedchannels** RPC command returns data on channels which are otherwise forgotten (more than 100 blocks after they're completely resolved onchain)."
+      ],
+      "categories": [
+        "readonly"
       ],
       "request": {
         "required": [],
@@ -13897,6 +14089,9 @@
       "title": "Command to list all configuration options.",
       "description": [
         "The **listconfigs** RPC command to list all configuration options, or with *config* only one."
+      ],
+      "categories": [
+        "readonly"
       ],
       "request": {
         "required": [],
@@ -16948,6 +17143,9 @@
       "description": [
         "The **listforwards** RPC command displays all htlcs that have been attempted to be forwarded by the Core Lightning node."
       ],
+      "categories": [
+        "readonly"
+      ],
       "request": {
         "required": [],
         "properties": {
@@ -17396,6 +17594,9 @@
       "description": [
         "The **listfunds** RPC command displays all funds available, either in unspent outputs (UTXOs) in the internal wallet or funds locked in currently open channels."
       ],
+      "categories": [
+        "readonly"
+      ],
       "request": {
         "required": [],
         "properties": {
@@ -17774,6 +17975,9 @@
       "description": [
         "The **listhtlcs** RPC command gets all HTLCs (which, generally, we remember for as long as a channel is open, even if they've completed long ago)."
       ],
+      "categories": [
+        "readonly"
+      ],
       "request": {
         "required": [],
         "properties": {
@@ -18036,6 +18240,9 @@
       "description": [
         "The **listinvoicerequests** RPC command gets the status of a specific `invoice_request`, if it exists, or the status of all `invoice_requests` if given no argument."
       ],
+      "categories": [
+        "readonly"
+      ],
       "request": {
         "required": [],
         "properties": {
@@ -18156,6 +18363,9 @@
         "The **listinvoices** RPC command gets the status of a specific invoice, if it exists, or the status of all invoices if given no argument.",
         "",
         "Only one of the query parameters can be used from *label*, *invstring*, *payment_hash*, or *offer_id*."
+      ],
+      "categories": [
+        "readonly"
       ],
       "request": {
         "required": [],
@@ -18482,6 +18692,9 @@
       "title": "Command to get the list of nodes in the known network.",
       "description": [
         "The **listnodes** command returns nodes the node has learned about via gossip messages, or a single one if the node *id* was specified."
+      ],
+      "categories": [
+        "readonly"
       ],
       "request": {
         "required": [],
@@ -18818,6 +19031,9 @@
       "description": [
         "The **listoffers** RPC command list all offers, or with `offer_id`, only the offer with that offer_id (if it exists)."
       ],
+      "categories": [
+        "readonly"
+      ],
       "request": {
         "required": [],
         "properties": {
@@ -18962,6 +19178,9 @@
       "title": "Command for querying payment status",
       "description": [
         "The **listpay** RPC command gets the status of all *pay* commands, or a single one if either *bolt11* or *payment_hash* was specified."
+      ],
+      "categories": [
+        "readonly"
       ],
       "request": {
         "required": [],
@@ -19235,6 +19454,9 @@
         "The **listpeerchannels** RPC command returns list of this node's channels, with the possibility to filter them by peer's node id.",
         "",
         "If no *id* is supplied, then channel data on all lightning nodes that are connected, or not connected but have open channels with this node, are returned."
+      ],
+      "categories": [
+        "readonly"
       ],
       "request": {
         "required": [],
@@ -20848,6 +21070,9 @@
         "",
         "The channel will remain open for a set blocktime, after which if the connection has not been re-established, the channel will close and the node will no longer appear in the command output."
       ],
+      "categories": [
+        "readonly"
+      ],
       "request": {
         "required": [],
         "properties": {
@@ -21205,6 +21430,9 @@
         "The **listsendpays** RPC command gets the status of all *sendpay* commands (which is also used by the *pay* command), or with *bolt11* or *payment_hash* limits results to that specific payment. You cannot specify both. It is possible to filter the payments also by *status*.",
         "",
         "Note that there may be more than one concurrent *sendpay* command per *pay*, so this command should be used with caution."
+      ],
+      "categories": [
+        "readonly"
       ],
       "request": {
         "required": [],
@@ -21608,6 +21836,9 @@
         "",
         "If *table* is given, only that table is in the resulting list, otherwise all tables are listed."
       ],
+      "categories": [
+        "readonly"
+      ],
       "request": {
         "required": [],
         "properties": {
@@ -21883,6 +22114,9 @@
       "title": "Command to get the list of transactions that was stored in the wallet.",
       "description": [
         "The **listtransactions** command returns transactions tracked in the wallet. This includes deposits, withdrawals and transactions related to channels. A transaction may have multiple types, e.g., a transaction may both be a close and a deposit if it closes the channel and returns funds to the wallet."
+      ],
+      "categories": [
+        "readonly"
       ],
       "request": {
         "required": [],

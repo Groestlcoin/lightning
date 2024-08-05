@@ -24,10 +24,6 @@ json_multiwithdraw(struct command *cmd,
 const struct plugin_command multiwithdraw_commands[] = {
 	{
 		"multiwithdraw",
-		"groestlcoin",
-		"Send to multiple {outputs} via a single Groestlcoin transaction.",
-		"Send to multiple {outputs} at optiona {feerate}, spending "
-		"coins at least {minconf} depth, or the specified {utxos}.",
 		&json_multiwithdraw,
 		false
 	}
