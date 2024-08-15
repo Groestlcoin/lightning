@@ -256,7 +256,7 @@ static struct command_result *clean_finished(struct clean_info *cinfo)
 		if (!num_cleaned)
 			continue;
 
-		plugin_log(plugin, LOG_DBG, "cleaned %"PRIu64" from %s",
+		plugin_log(plugin, LOG_DBG, "cleaned %zu from %s",
 			   num_cleaned, subsystem_to_str(&sv));
 		*total_cleaned(&sv) += num_cleaned;
 		jsonrpc_set_datastore_string(plugin, cinfo->cmd,
@@ -805,7 +805,8 @@ int main(int argc, char *argv[])
 	setup_locale();
 
 	timer_cinfo = new_clean_info(NULL, NULL);
-	plugin_main(argv, init, PLUGIN_STATIC, true, NULL, commands, ARRAY_SIZE(commands),
+	plugin_main(argv, init, NULL, PLUGIN_STATIC, true, NULL,
+		    commands, ARRAY_SIZE(commands),
 	            NULL, 0, NULL, 0, NULL, 0,
 		    plugin_option_dynamic("autoclean-cycle",
 					  "int",

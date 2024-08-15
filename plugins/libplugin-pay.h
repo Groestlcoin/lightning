@@ -68,6 +68,13 @@ struct local_hint {
  * get remove on failure. Success keeps the capacities, since the capacities
  * changed due to the successful HTLCs. */
 struct channel_hint {
+	/* The timestamp this observation was made. Used to let the
+	 * constraint expressed by this hint decay over time, until it
+	 * is fully relaxed, at which point we can forget about it
+	 * (the structural information is the best we can do in that
+	 * case).
+	 */
+	u32 timestamp;
 	/* The short_channel_id we're going to use when referring to
 	 * this channel. This can either be the real scid, or the
 	 * local alias. The `pay` algorithm doesn't really care which
@@ -327,6 +334,10 @@ struct payment {
 	/* A human readable error message that is used as a top-level
 	 * explanation if a payment is aborted. */
 	char *aborterror;
+	/* A numeric error code to return to JSON-RPC callers. Allows
+	 * programmatically differentiate various errors, without
+	 * having to parse the `p->aborterror` string. */
+	u32 errorcode;
 
 	/* How many blocks are we lagging behind the rest of the
 	network? This needs to be taken into consideration when
@@ -489,7 +500,7 @@ void payment_fail(struct payment *p, const char *fmt, ...) PRINTF_FMT(2,3);
  * they can, and sets the root failreason so we have a sensible error
  * message. The failreason is overwritten if it is already set, since
  * we probably know better what happened in the modifier.. */
-void payment_abort(struct payment *p, const char *fmt, ...) PRINTF_FMT(2,3);
+void payment_abort(struct payment *p, enum jsonrpc_errcode code, const char *fmt, ...) PRINTF_FMT(3,4);
 
 struct payment *payment_root(struct payment *p);
 struct payment_tree_result payment_collect_result(struct payment *p);
@@ -505,5 +516,8 @@ void json_add_payment_success(struct json_stream *js,
 
 /* Overriding io_poll for extra checks. */
 int libplugin_pay_poll(struct pollfd *fds, nfds_t nfds, int timeout);
+
+void
+paymod_log(struct payment *p, enum log_level l, const char *fmt, ...);
 
 #endif /* LIGHTNING_PLUGINS_LIBPLUGIN_PAY_H */

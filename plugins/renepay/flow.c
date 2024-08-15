@@ -93,7 +93,7 @@ flow_maximum_deliverable(struct amount_msat *max_deliverable,
 		if(bad_channel)*bad_channel = flow->path[0];
 		return err;
 	}
-	x = amount_msat_min(x, channel_htlc_max(flow->path[0], flow->dirs[0]));
+	x = amount_msat_min(x, gossmap_chan_htlc_max(flow->path[0], flow->dirs[0]));
 
 	if(amount_msat_zero(x))
 	{
@@ -127,7 +127,7 @@ flow_maximum_deliverable(struct amount_msat *max_deliverable,
 		struct amount_msat x_new =
 		    amount_msat_min(forward_cap, liquidity_cap);
 		x_new = amount_msat_min(
-		    x_new, channel_htlc_max(flow->path[i], flow->dirs[i]));
+		    x_new, gossmap_chan_htlc_max(flow->path[i], flow->dirs[i]));
 
 		/* safety check: amounts decrease along the route */
 		assert(amount_msat_less_eq(x_new, x));
@@ -177,6 +177,15 @@ bool flowset_delivers(struct amount_msat *delivers, struct flow **flows)
 	}
 	*delivers = final;
 	return true;
+}
+
+/* FIXME: pass a pointer to const here */
+size_t flowset_size(struct flow **flows)
+{
+	size_t size = 0;
+	for (size_t i = 0; i < tal_count(flows); i++)
+		size += tal_count(flows[i]->path);
+	return size;
 }
 
 /* Checks if the flows satisfy the liquidity bounds imposed by the known maximum

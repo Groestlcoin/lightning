@@ -97,6 +97,7 @@ struct payment *payment_new(tal_t *ctx, struct command *cmd,
 	p->aborterror = NULL;
 	p->on_payment_success = NULL;
 	p->on_payment_failure = NULL;
+	p->errorcode = 0;
 
 	/* Copy over the relevant pieces of information. */
 	if (parent != NULL) {
@@ -187,7 +188,7 @@ paymod_log_header(struct payment *p, const char **type, u64 *id)
 	}
 }
 
-static void
+void
 paymod_log(struct payment *p, enum log_level l, const char *fmt, ...)
 {
 	const char *type;
@@ -386,6 +387,58 @@ void payment_start(struct payment *p)
 	payment_start_at_blockheight(p, INVALID_BLOCKHEIGHT);
 }
 
+static void channel_hint_to_json(const char *name, const struct channel_hint *hint, struct json_stream *dest)
+{
+	json_object_start(dest, name);
+	json_add_u32(dest, "timestamp", hint->timestamp);
+	json_add_short_channel_id_dir(dest, "scid", hint->scid);
+	json_add_amount_msat(dest, "capacity_msat", hint->estimated_capacity);
+	json_add_bool(dest, "enabled", hint->enabled);
+	json_object_end(dest);
+}
+
+/**
+ * Load a channel_hint from its JSON representation.
+ *
+ * @return The initialized `channel_hint` or `NULL` if we encountered a parsing
+ *         error.
+ */
+/*
+static struct channel_hint *channel_hint_from_json(const tal_t *ctx,
+						   const char *buffer,
+						   const jsmntok_t *toks)
+{
+	const char *ret;
+	struct channel_hint *hint = tal(ctx, struct channel_hint);
+	ret = json_scan(ctx, buffer, toks,
+			"{timestamp:%,scid:%,capacity_msat:%,enabled:%}",
+			JSON_SCAN(json_to_u32, &hint->timestamp),
+			JSON_SCAN(json_to_short_channel_id_dir, &hint->scid),
+			JSON_SCAN(json_to_msat, &hint->estimated_capacity),
+			JSON_SCAN(json_to_bool, &hint->enabled));
+
+	if (ret != NULL)
+		hint = tal_free(hint);
+	return hint;
+}
+*/
+    /**
+     * Notify subscribers of the `channel_hint` topic about a changed hint
+     *
+     * We share the channel_hints across payments, and across plugins, in order
+     * to maximize the context they have when performing payments.
+     */
+static void channel_hint_notify(struct plugin *plugin,
+				const struct channel_hint *hint)
+{
+	struct json_stream *js =
+	    plugin_notification_start(plugin, "channel_hint_update");
+
+	/* The timestamp used to decay the observation over time. */
+	channel_hint_to_json("channel_hint", hint, js);
+	plugin_notification_end(plugin, js);
+}
+
 static void channel_hints_update(struct payment *p,
 				 const struct short_channel_id scid,
 				 int direction, bool enabled, bool local,
@@ -394,6 +447,7 @@ static void channel_hints_update(struct payment *p,
 {
 	struct payment *root = payment_root(p);
 	struct channel_hint newhint;
+	u32 timestamp = time_now().ts.tv_sec;
 
 	/* If the channel is marked as enabled it must have an estimate. */
 	assert(!enabled || estimated_capacity != NULL);
@@ -423,7 +477,8 @@ static void channel_hints_update(struct payment *p,
 				modified = true;
 			}
 
-			if (modified)
+			if (modified) {
+				hint->timestamp = timestamp;
 				paymod_log(p, LOG_DBG,
 					   "Updated a channel hint for %s: "
 					   "enabled %s, "
@@ -433,12 +488,15 @@ static void channel_hints_update(struct payment *p,
 					   hint->enabled ? "true" : "false",
 					   fmt_amount_msat(tmpctx,
 						hint->estimated_capacity));
+				channel_hint_notify(p->plugin, hint);
+			}
 			return;
 		}
 	}
 
 	/* No hint found, create one. */
 	newhint.enabled = enabled;
+	newhint.timestamp = timestamp;
 	newhint.scid.scid = scid;
 	newhint.scid.dir = direction;
 	if (local) {
@@ -458,6 +516,7 @@ static void channel_hints_update(struct payment *p,
 	    fmt_short_channel_id_dir(tmpctx, &newhint.scid),
 	    newhint.enabled ? "true" : "false",
 	    fmt_amount_msat(tmpctx, newhint.estimated_capacity));
+	channel_hint_notify(p->plugin, &newhint);
 }
 
 static void payment_exclude_most_expensive(struct payment *p)
@@ -1001,16 +1060,105 @@ static struct command_result *payment_getroute(struct payment *p)
 	return command_still_pending(p->cmd);
 }
 
-static struct command_result *
-payment_listpeerchannels_success(struct command *cmd,
-				 const char *buffer,
-				 const jsmntok_t *toks,
-				 struct payment *p)
+/**
+ * Compute the total sum of balances. Limits the maximum size we can
+ * pay as a preflight test.  Returns `false` on errors, otherwise
+ * `sum` contains the sum of all channel balances.*/
+static bool payment_listpeerchannels_balance_sum(struct payment *p,
+						 const char *buf,
+						 const jsmntok_t *toks,
+						 struct amount_msat *sum)
 {
-	p->mods = gossmods_from_listpeerchannels(p, p->local_id,
-						 buffer, toks, true,
-						 gossmod_add_localchan,
-						 NULL);
+	*sum = AMOUNT_MSAT(0);
+	const jsmntok_t *channels, *channel;
+	struct amount_msat spendable;
+	bool connected;
+	size_t i;
+	const char *err;
+
+	channels = json_get_member(buf, toks, "channels");
+
+	json_for_each_arr(i, channel, channels)
+	{
+		err = json_scan(tmpctx, buf, channel,
+				"{spendable_msat?:%,peer_connected:%}",
+				JSON_SCAN(json_to_msat, &spendable),
+				JSON_SCAN(json_to_bool, &connected));
+		if (err) {
+			paymod_log(p, LOG_UNUSUAL,
+				   "Bad listpeerchannels.channels %zu: %s", i,
+				   err);
+			return false;
+		}
+
+		if (!amount_msat_add(sum, *sum, spendable)) {
+			paymod_log(
+			    p, LOG_BROKEN,
+			    "Integer sum overflow summing spendable amounts.");
+			return false;
+		}
+	}
+	return true;
+}
+
+static struct command_result *
+payment_listpeerchannels_success(struct command *cmd, const char *buffer,
+				 const jsmntok_t *toks, struct payment *p)
+{
+	/* The maximum amount we may end up trying to send. This
+	 * includes the value and the full fee budget. If the
+	 * available funds are below this, we emit a warning. */
+	struct amount_msat maxrequired, spendable;
+
+	if (!amount_msat_add(&maxrequired, p->getroute->amount,
+			     p->constraints.fee_budget)) {
+		paymod_log(p, LOG_BROKEN,
+			   "amount_msat overflow computing the fee budget");
+		return payment_getroute(p);
+	}
+
+	p->mods = gossmods_from_listpeerchannels(
+	    p, p->local_id, buffer, toks, true, gossmod_add_localchan, NULL);
+	if (!payment_listpeerchannels_balance_sum(p, buffer, toks,
+						  &spendable)) {
+		paymod_log(p, LOG_UNUSUAL,
+			   "Unable to get total spendable amount from "
+			   "listpeerchannels. Skipping affordability check.");
+
+		/* Keep your fingers crossed, we may still succeed. */
+		return payment_getroute(p);
+	}
+
+	/* Pre-flight check: can we even afford the full amount of the
+	 * payment? And if yes, can we afford the full amount with the
+	 * full fee budget? If the former fails, we fail immediately,
+	 * for the latter we log a warning, so we can root-cause this
+	 * a bit better if we then run into routing issues. */
+	if (amount_msat_greater(p->getroute->amount, spendable)) {
+		paymod_log(p, LOG_UNUSUAL,
+			   "Insufficient funds to perform the payment: "
+			   "spendable=%s < payment=%s",
+			   fmt_amount_msat(tmpctx, spendable),
+			   fmt_amount_msat(tmpctx, p->getroute->amount));
+		payment_abort(p, PAY_INSUFFICIENT_FUNDS,
+			      "Insufficient funds to perform the payment: "
+			      "spendable=%s < payment=%s",
+			      fmt_amount_msat(tmpctx, spendable),
+			      fmt_amount_msat(tmpctx, p->getroute->amount));
+		return command_still_pending(p->cmd);
+	} else if (amount_msat_greater(maxrequired, spendable)) {
+		char *msg = tal_fmt(
+		    tmpctx,
+		    "We do not have sufficient funds to pay for the specified "
+		    "fee budget: spendable=%s < payment=%s + budget=%s. This "
+		    "may cause a failed payment, but we'll try anyway.",
+		    fmt_amount_msat(tmpctx, spendable),
+		    fmt_amount_msat(tmpctx, p->getroute->amount),
+		    fmt_amount_msat(tmpctx, p->constraints.fee_budget));
+
+		plugin_notify_message(p->cmd, LOG_INFORM, "%s", msg);
+	}
+
 	return payment_getroute(p);
 }
 
@@ -2158,7 +2306,7 @@ static void payment_finished(struct payment *p)
 		} else if (p->aborterror != NULL) {
 			/* We set an explicit toplevel error message,
 			 * so let's report that. */
-			ret = jsonrpc_stream_fail(cmd, PAY_STOPPED_RETRYING,
+			ret = jsonrpc_stream_fail(cmd, p->errorcode,
 						  p->aborterror);
 			payment_json_add_attempts(ret, "attempts", p);
 
@@ -2198,8 +2346,9 @@ static void payment_finished(struct payment *p)
 			json_add_u64(ret, "id", failure->id);
 
 			json_add_u32(ret, "failcode", failure->failcode);
-			json_add_string(ret, "failcodename",
-					failure->failcodename);
+			if (failure->failcodename)
+				json_add_string(ret, "failcodename",
+						failure->failcodename);
 
 			if (p->invstring)
 				json_add_invstring(ret, p->invstring);
@@ -2318,7 +2467,7 @@ void payment_continue(struct payment *p)
 	abort();
 }
 
-void payment_abort(struct payment *p, const char *fmt, ...) {
+void payment_abort(struct payment *p, enum jsonrpc_errcode code, const char *fmt, ...) {
 	va_list ap;
 	struct payment *root = payment_root(p);
 	payment_set_step(p, PAYMENT_STEP_FAILED);
@@ -2608,6 +2757,8 @@ static struct route_info **filter_routehints(struct gossmap *map,
 	char *mods = tal_strdup(tmpctx, "");
 	struct gossmap_node *src = gossmap_find_node(map, p->local_id);
 
+	paymod_log(p, LOG_INFORM, "Filtering out %zu routehints", tal_count(hints));
+
 	if (src == NULL) {
 		tal_append_fmt(&mods,
 			       "Could not locate ourselves in the gossip map, "
@@ -2654,12 +2805,10 @@ static struct route_info **filter_routehints(struct gossmap *map,
 				       i,
 				       fmt_node_id(tmpctx,
 						   &hints[i][0].pubkey));
-			plugin_log(p->plugin, LOG_DBG,
+			paymod_log(p, LOG_DBG,
 				   "Removed routehint %zu because "
 				   "entrypoint %s is unknown. ",
-				   i,
-				   fmt_node_id(tmpctx,
-					       &hints[i][0].pubkey));
+				   i, fmt_node_id(tmpctx, &hints[i][0].pubkey));
 			tal_arr_remove(&hints, i);
 			i--;
 			continue;
@@ -2678,12 +2827,10 @@ static struct route_info **filter_routehints(struct gossmap *map,
 				       i,
 				       fmt_node_id(tmpctx,
 						   &hints[i][0].pubkey));
-			plugin_log(p->plugin, LOG_DBG,
-				       "Removed routehint %zu because "
-				       "entrypoint %s is unreachable. ",
-				       i,
-				       fmt_node_id(tmpctx,
-						   &hints[i][0].pubkey));
+			paymod_log(p, LOG_DBG,
+				   "Removed routehint %zu because "
+				   "entrypoint %s is unreachable. ",
+				   i, fmt_node_id(tmpctx, &hints[i][0].pubkey));
 			tal_arr_remove(&hints, i);
 			i--;
 		}
@@ -2945,6 +3092,7 @@ static void routehint_check_reachable(struct payment *p)
 
 		payment_abort(
 		    p,
+		    PAY_UNREACHABLE,
 		    "Destination %s is not reachable directly and "
 		    "all routehints were unusable.",
 		    fmt_node_id(tmpctx, p->route_destination));
@@ -3812,10 +3960,10 @@ static void route_exclusions_step_cb(struct route_exclusions_data *d,
 				false, false, NULL, NULL);
 		} else {
 			if (node_id_eq(&e->u.node_id, p->route_destination)) {
-				payment_abort(p, "Payee is manually excluded");
+				payment_abort(p, PAY_USER_ERROR, "Payee is manually excluded");
 				return;
 			} else if (node_id_eq(&e->u.node_id, p->local_id)) {
-				payment_abort(p, "Payer is manually excluded");
+				payment_abort(p, PAY_USER_ERROR, "Payer is manually excluded");
 				return;
 			}
 

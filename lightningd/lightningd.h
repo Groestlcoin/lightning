@@ -108,7 +108,7 @@ enum lightningd_state {
 
 struct lightningd {
 	/* The directory to find all the subdaemons. */
-	const char *daemon_dir;
+	const char *subdaemon_dir;
 
 	/* Are deprecated APIs enabled? */
 	bool deprecated_ok;
@@ -313,6 +313,7 @@ struct lightningd {
 	bool dev_fast_gossip;
 	bool dev_fast_gossip_prune;
 	bool dev_throttle_gossip;
+	bool dev_suppress_gossip;
 
 	/* Speedup reconnect delay, for testing. */
 	bool dev_fast_reconnect;

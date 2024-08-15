@@ -78,6 +78,7 @@ static void keysend_cb(struct keysend_data *d, struct payment *p) {
 		    p->result->failcode == WIRE_INVALID_ONION_PAYLOAD) {
 			return payment_abort(
 			    p,
+			    PAY_DESTINATION_PERM_FAIL,
 			    "Recipient %s reported an invalid payload, this "
 			    "usually means they don't support keysend.",
 			    fmt_node_id(tmpctx, p->route_destination));
@@ -594,7 +595,7 @@ int main(int argc, char *argv[])
 		features->bits[i] = tal_arr(features, u8, 0);
 	set_feature_bit(&features->bits[NODE_ANNOUNCE_FEATURE], KEYSEND_FEATUREBIT);
 
-	plugin_main(argv, init, PLUGIN_STATIC, true, features, commands,
+	plugin_main(argv, init, NULL, PLUGIN_STATIC, true, features, commands,
 		    ARRAY_SIZE(commands), NULL, 0, hooks, ARRAY_SIZE(hooks),
 		    notification_topics, ARRAY_SIZE(notification_topics), NULL);
 }

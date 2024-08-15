@@ -1261,6 +1261,8 @@ static struct command_result *json_pay(struct command *cmd,
 	p->blindedpath = NULL;
 	p->blindedpay = NULL;
 
+	paymod_log(p, LOG_INFORM, "Paying invoice bolt11=%s", b11str);
+
 	if (!bolt12_has_prefix(b11str)) {
 		b11 =
 		    bolt11_decode(tmpctx, b11str, plugin_feature_set(cmd->plugin),
@@ -1522,12 +1524,13 @@ static const struct plugin_command commands[] = {
 static const char *notification_topics[] = {
 	"pay_success",
 	"pay_failure",
+	"channel_hint_update",
 };
 
 int main(int argc, char *argv[])
 {
 	setup_locale();
-	plugin_main(argv, init, PLUGIN_RESTARTABLE, true, NULL, commands,
+	plugin_main(argv, init, NULL, PLUGIN_RESTARTABLE, true, NULL, commands,
 		    ARRAY_SIZE(commands), NULL, 0, NULL, 0,
 		    notification_topics, ARRAY_SIZE(notification_topics),
 		    plugin_option("disable-mpp", "flag",

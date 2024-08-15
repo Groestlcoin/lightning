@@ -2313,7 +2313,7 @@ impl From<responses::RenepaystatusPaystatus> for pb::RenepaystatusPaystatus {
             destination: c.destination.map(|v| v.serialize().to_vec()), // Rule #2 for type pubkey?
             groupid: c.groupid, // Rule #2 for type u32
             // Field: RenePayStatus.paystatus[].notes[]
-            notes: c.notes.into_iter().map(|i| i.into()).collect(), // Rule #3 for type string
+            notes: c.notes.map(|arr| arr.into_iter().map(|i| i.into()).collect()).unwrap_or(vec![]), // Rule #3
             parts: c.parts, // Rule #2 for type u32?
             payment_hash: <Sha256 as AsRef<[u8]>>::as_ref(&c.payment_hash).to_vec(), // Rule #2 for type hash
             payment_preimage: c.payment_preimage.map(|v| v.to_vec()), // Rule #2 for type secret?
@@ -4995,6 +4995,8 @@ impl From<requests::RenepayRequest> for pb::RenepayRequest {
             amount_msat: c.amount_msat.map(|f| f.into()), // Rule #2 for type msat?
             description: c.description, // Rule #2 for type string?
             dev_use_shadow: c.dev_use_shadow, // Rule #2 for type boolean?
+            // Field: RenePay.exclude
+            exclude: c.exclude.map(|arr| arr.into_iter().map(|i| i.into()).collect()).unwrap_or(vec![]), // Rule #3
             invstring: c.invstring, // Rule #2 for type string
             label: c.label, // Rule #2 for type string?
             maxdelay: c.maxdelay, // Rule #2 for type u32?
@@ -5257,6 +5259,7 @@ impl From<requests::BkprlistaccounteventsRequest> for pb::BkprlistaccounteventsR
     fn from(c: requests::BkprlistaccounteventsRequest) -> Self {
         Self {
             account: c.account, // Rule #2 for type string?
+            payment_id: c.payment_id, // Rule #2 for type string?
         }
     }
 }
@@ -6362,6 +6365,7 @@ impl From<pb::RenepayRequest> for requests::RenepayRequest {
             amount_msat: c.amount_msat.map(|a| a.into()), // Rule #1 for type msat?
             description: c.description, // Rule #1 for type string?
             dev_use_shadow: c.dev_use_shadow, // Rule #1 for type boolean?
+            exclude: Some(c.exclude.into_iter().map(|s| s.into()).collect()), // Rule #4
             invstring: c.invstring, // Rule #1 for type string
             label: c.label, // Rule #1 for type string?
             maxdelay: c.maxdelay, // Rule #1 for type u32?
@@ -6624,6 +6628,7 @@ impl From<pb::BkprlistaccounteventsRequest> for requests::BkprlistaccounteventsR
     fn from(c: pb::BkprlistaccounteventsRequest) -> Self {
         Self {
             account: c.account, // Rule #1 for type string?
+            payment_id: c.payment_id, // Rule #1 for type string?
         }
     }
 }

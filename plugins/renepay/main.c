@@ -32,13 +32,13 @@ static void memleak_mark(struct plugin *p, struct htable *memtable)
 	memleak_scan_htable(memtable,
 			    &pay_plugin->uncertainty->chan_extra_map->raw);
 	memleak_scan_htable(memtable, &pay_plugin->payment_map->raw);
-	memleak_scan_htable(memtable, &pay_plugin->route_map->raw);
+	memleak_scan_htable(memtable, &pay_plugin->pending_routes->raw);
 }
 
 static const char *init(struct plugin *p,
 			const char *buf UNUSED, const jsmntok_t *config UNUSED)
 {
-	size_t num_channel_updates_rejected;
+	size_t num_channel_updates_rejected = 0;
 
 	tal_steal(p, pay_plugin);
 	pay_plugin->plugin = p;
@@ -65,13 +65,11 @@ static const char *init(struct plugin *p,
 		 JSON_SCAN(json_to_bool, &pay_plugin->exp_offers)
 		 );
 
-	list_head_init(&pay_plugin->payments);
-
 	pay_plugin->payment_map = tal(pay_plugin, struct payment_map);
 	payment_map_init(pay_plugin->payment_map);
 
-	pay_plugin->route_map = tal(pay_plugin,struct route_map);
-	route_map_init(pay_plugin->route_map);
+	pay_plugin->pending_routes = tal(pay_plugin, struct route_map);
+	route_map_init(pay_plugin->pending_routes);
 
 	pay_plugin->gossmap = gossmap_load(pay_plugin,
 					   GOSSIP_STORE_FILENAME,
@@ -91,7 +89,7 @@ static const char *init(struct plugin *p,
 		plugin_log(pay_plugin->plugin, LOG_UNUSUAL,
 			   "%s: uncertainty was updated but %d channels have "
 			   "been ignored.",
-			   __PRETTY_FUNCTION__, skipped_count);
+			   __func__, skipped_count);
 
 	plugin_set_memleak_handler(p, memleak_mark);
 	return NULL;
@@ -103,7 +101,6 @@ static struct command_result *json_paystatus(struct command *cmd,
 {
 	const char *invstring;
 	struct json_stream *ret;
-	struct payment *p;
 
 	if (!param(cmd, buf, params,
 		   p_opt("invstring", param_invstring, &invstring),
@@ -140,10 +137,10 @@ static struct command_result *json_paystatus(struct command *cmd,
 	}else
 	{
 		/* show all payments */
-		// TODO: loop over the payment_map, remove pay_plugin->payments
-		// list
-		// seeconst char *fmt_chan_extra_map(const tal_t *ctx, struct chan_extra_map *chan_extra_map)
-		list_for_each(&pay_plugin->payments, p, list) {
+		struct payment_map_iter it;
+		for (struct payment *p =
+			 payment_map_first(pay_plugin->payment_map, &it);
+		     p; p = payment_map_next(pay_plugin->payment_map, &it)) {
 			json_object_start(ret, NULL);
 			json_add_payment(ret, p);
 			json_object_end(ret);
@@ -176,6 +173,7 @@ static struct command_result *json_pay(struct command *cmd, const char *buf,
 	u32 *retryfor;
 	const char *description;
 	const char *label;
+	struct route_exclusion **exclusions;
 
 	// dev options
 	bool *use_shadow;
@@ -185,6 +183,11 @@ static struct command_result *json_pay(struct command *cmd, const char *buf,
 	u64 *prob_cost_factor_millionths; // prob. cost to proportional fee
 	u64 *riskfactor_millionths; // delay to proportional proportional fee
 	u64 *min_prob_success_millionths; // target probability
+
+	/* base probability of success, probability for a randomly picked
+	 * channel to be able to forward a payment request of amount greater
+	 * than zero. */
+	u64 *base_prob_success_millionths;
 
 	if (!param(cmd, buf, params,
 		   p_req("invstring", param_invstring, &invstr),
@@ -201,6 +204,7 @@ static struct command_result *json_pay(struct command *cmd, const char *buf,
 			     60), // 60 seconds
 		   p_opt("description", param_string, &description),
 		   p_opt("label", param_string, &label),
+		   p_opt("exclude", param_route_exclusion_array, &exclusions),
 
 		   // FIXME add support for offers
 		   // p_opt("localofferid", param_sha256, &local_offer_id),
@@ -218,9 +222,18 @@ static struct command_result *json_pay(struct command *cmd, const char *buf,
 			     &riskfactor_millionths, 1), // default is 1e-6
 		   p_opt_dev("dev_min_prob_success", param_millionths,
 			     &min_prob_success_millionths,
-			     900000), // default is 0.9
+			     800000), // default is 0.8
+		   p_opt_dev("dev_base_prob_success", param_millionths,
+			     &base_prob_success_millionths,
+			     980000), // default is 0.98
 		   NULL))
 		return command_param_failed();
+
+	if (*base_prob_success_millionths == 0 ||
+	    *base_prob_success_millionths > 1000000)
+		return command_fail(cmd, JSONRPC2_INVALID_PARAMS,
+				    "Base probability should be a number "
+				    "greater than zero and no greater than 1.");
 
 	/* === Parse invoice === */
 
@@ -316,7 +329,9 @@ static struct command_result *json_pay(struct command *cmd, const char *buf,
 			*prob_cost_factor_millionths,
 			*riskfactor_millionths,
 			*min_prob_success_millionths,
-			use_shadow);
+			*base_prob_success_millionths,
+			use_shadow,
+			cast_const2(const struct route_exclusion**, exclusions));
 
 		if (!payment)
 			return command_fail(cmd, PLUGIN_ERROR,
@@ -327,11 +342,7 @@ static struct command_result *json_pay(struct command *cmd, const char *buf,
 
 		// good to go
 		payment = tal_steal(pay_plugin, payment);
-
-		// FIXME do we really need a list here?
-		list_add_tail(&pay_plugin->payments, &payment->list);
 		payment_map_add(pay_plugin->payment_map, payment);
-
 		return payment_start(payment);
 	}
 
@@ -356,7 +367,9 @@ static struct command_result *json_pay(struct command *cmd, const char *buf,
 				    *prob_cost_factor_millionths,
 				    *riskfactor_millionths,
 				    *min_prob_success_millionths,
-				    use_shadow))
+				    *base_prob_success_millionths,
+				    use_shadow,
+				    cast_const2(const struct route_exclusion**, exclusions)))
 			return command_fail(
 			    cmd, PLUGIN_ERROR,
 			    "failed to update the payment parameters");
@@ -411,7 +424,7 @@ int main(int argc, char *argv[])
 
 	plugin_main(
 		argv,
-		init,
+		init, NULL,
 		PLUGIN_RESTARTABLE,
 		/* init_rpc */ true,
 		/* features */ NULL,

@@ -331,6 +331,7 @@ struct pay_parameters {
 
 	struct amount_msat max_fee;
 	double min_probability;
+	double base_probability;
 	double delay_feefactor;
 	double base_fee_penalty;
 	u32 prob_cost_factor;
@@ -449,8 +450,8 @@ static bool channel_is_available(const struct gossmap_chan *c, int dir,
 	if (!gossmap_chan_set(c, dir))
 		return false;
 
-	const u32 chan_id = gossmap_chan_idx(gossmap, c);
-	return !bitmap_test_bit(disabled, chan_id);
+	const u32 chan_idx = gossmap_chan_idx(gossmap, c);
+	return !bitmap_test_bit(disabled, chan_idx * 2 + dir);
 }
 
 // TODO(eduardo): unit test this
@@ -497,19 +498,23 @@ static bool linearize_channel(const struct pay_parameters *params,
 	/* An extra bound on capacity, here we use it to reduce the flow such
 	 * that it does not exceed htlcmax. */
 	s64 cap_on_capacity =
-	 channel_htlc_max(c, dir).millisatoshis/1000; /* Raw: linearize_channel */
+	 gossmap_chan_htlc_max(c, dir).millisatoshis/1000; /* Raw: linearize_channel */
 
 	capacity[0]=a;
 	cost[0]=0;
+	assert(params->base_probability > 5e-7);
+	assert(params->base_probability <= 1.0);
+	const double base_prob_factor = -log(params->base_probability);
+
 	for(size_t i=1;i<CHANNEL_PARTS;++i)
 	{
 		capacity[i] = MIN(params->cap_fraction[i]*(b-a), cap_on_capacity);
 		cap_on_capacity -= capacity[i];
 		assert(cap_on_capacity>=0);
 
-		cost[i] = params->cost_fraction[i]
+		cost[i] = (params->cost_fraction[i]*1.0/(b-a) + base_prob_factor)
 		          *params->amount.millisatoshis /* Raw: linearize_channel */
-		          *params->prob_cost_factor*1.0/(b-a);
+		          *params->prob_cost_factor;
 	}
 	return true;
 }
@@ -1193,7 +1198,7 @@ static u32 find_positive_balance(
 	 * algorithm does not come up with spurious flow cycles. */
 	while(balance[final_idx]<=0)
 	{
-		// printf("%s: node = %d\n",__PRETTY_FUNCTION__,final_idx);
+		// printf("%s: node = %d\n",__func__,final_idx);
 		u32 updated_idx=INVALID_INDEX;
 		struct gossmap_node *cur
 			= gossmap_node_byidx(gossmap,final_idx);
@@ -1264,6 +1269,7 @@ get_flow_paths(const tal_t *ctx, const struct gossmap *gossmap,
 	       // how many msats in excess we paid for not having msat accuracy
 	       // in the MCF solver
 	       struct amount_msat excess,
+	       const double base_probability,
 
 	       // error message
 	       char **fail)
@@ -1363,12 +1369,12 @@ get_flow_paths(const tal_t *ctx, const struct gossmap *gossmap,
 				/* obtain the supremum htlc_min along the route
 				 */
 				sup_htlc_min = amount_msat_max(
-				    sup_htlc_min, channel_htlc_min(c, dir));
+				    sup_htlc_min, gossmap_chan_htlc_min(c, dir));
 
 				/* obtain the infimum htlc_max along the route
 				 */
 				inf_htlc_max = amount_msat_min(
-				    inf_htlc_max, channel_htlc_max(c, dir));
+				    inf_htlc_max, gossmap_chan_htlc_max(c, dir));
 			}
 
 			s64 htlc_max=inf_htlc_max.millisatoshis/1000;/* Raw: need htlc_max in sats to do arithmetic operations.*/
@@ -1437,8 +1443,10 @@ get_flow_paths(const tal_t *ctx, const struct gossmap *gossmap,
 			excess = amount_msat(0);
 			fp->amount = delivered;
 
+
 			fp->success_prob =
-			    flow_probability(fp, gossmap, chan_extra_map);
+			    flow_probability(fp, gossmap, chan_extra_map)
+			    * pow(base_probability, tal_count(fp->path));
 			if (fp->success_prob < 0) {
 				if (fail)
 					*fail =
@@ -1563,13 +1571,17 @@ static bool check_disabled(const bitmap *disabled,
 	assert(gossmap);
 	assert(chan_extra_map);
 
-	if(tal_bytelen(disabled) != bitmap_sizeof(gossmap_max_chan_idx(gossmap)))
+	if (tal_bytelen(disabled) !=
+	    2 * bitmap_sizeof(gossmap_max_chan_idx(gossmap)))
 		return false;
 
 	for (struct gossmap_chan *chan = gossmap_first_chan(gossmap); chan;
 	     chan = gossmap_next_chan(gossmap, chan)) {
-		const u32 chan_id = gossmap_chan_idx(gossmap, chan);
-		if (bitmap_test_bit(disabled, chan_id))
+		const u32 chan_idx = gossmap_chan_idx(gossmap, chan);
+		/* If both directions are disabled anyways, there is no need to
+		 * fetch their information in chan_extra. */
+		if (bitmap_test_bit(disabled, chan_idx * 2 + 0) &&
+		    bitmap_test_bit(disabled, chan_idx * 2 + 1))
 			continue;
 
 		struct short_channel_id scid = gossmap_chan_scid(gossmap, chan);
@@ -1599,6 +1611,7 @@ struct flow **minflow(const tal_t *ctx, struct gossmap *gossmap,
 		      struct chan_extra_map *chan_extra_map,
 		      const bitmap *disabled, struct amount_msat amount,
 		      struct amount_msat max_fee, double min_probability,
+		      double base_probability,
 		      double delay_feefactor, double base_fee_penalty,
 		      u32 prob_cost_factor, char **fail)
 {
@@ -1643,6 +1656,7 @@ struct flow **minflow(const tal_t *ctx, struct gossmap *gossmap,
 	params->delay_feefactor = delay_feefactor;
 	params->base_fee_penalty = base_fee_penalty;
 	params->prob_cost_factor = prob_cost_factor;
+	params->base_probability = base_probability;
 
 	// build the uncertainty network with linearization and residual arcs
 	struct linear_network *linear_network= init_linear_network(this_ctx, params, &errmsg);
@@ -1705,7 +1719,8 @@ struct flow **minflow(const tal_t *ctx, struct gossmap *gossmap,
 	// first flow found
 	best_flow_paths = get_flow_paths(
 	    this_ctx, params->gossmap, params->disabled, params->chan_extra_map,
-	    linear_network, residual_network, excess, &errmsg);
+	    linear_network, residual_network, excess, params->base_probability,
+	    &errmsg);
 	if (!best_flow_paths) {
 		if (fail)
 		*fail =
@@ -1716,7 +1731,8 @@ struct flow **minflow(const tal_t *ctx, struct gossmap *gossmap,
 
 	best_prob_success =
 	    flowset_probability(this_ctx, best_flow_paths, params->gossmap,
-				params->chan_extra_map, &errmsg);
+				params->chan_extra_map, &errmsg)
+	    * pow(params->base_probability, flowset_size(best_flow_paths));
 	if (best_prob_success < 0) {
 		if (fail)
 		*fail =
@@ -1760,7 +1776,8 @@ struct flow **minflow(const tal_t *ctx, struct gossmap *gossmap,
 		flow_paths =
 		    get_flow_paths(this_ctx, params->gossmap, params->disabled,
 				   params->chan_extra_map, linear_network,
-				   residual_network, excess, &errmsg);
+				   residual_network, excess, params->base_probability,
+				   &errmsg);
 		if(!flow_paths)
 		{
 			// get_flow_paths doesn't fail unless there is a bug.
@@ -1772,7 +1789,8 @@ struct flow **minflow(const tal_t *ctx, struct gossmap *gossmap,
 
 		double prob_success =
 		    flowset_probability(this_ctx, flow_paths, params->gossmap,
-					params->chan_extra_map, &errmsg);
+					params->chan_extra_map, &errmsg)
+		    * pow(params->base_probability, flowset_size(flow_paths));
 		if (prob_success < 0) {
 			// flowset_probability doesn't fail unless there is a bug.
 			if (fail)

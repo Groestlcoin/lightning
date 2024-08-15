@@ -252,7 +252,7 @@ CPATH := /usr/local/include
 LIBRARY_PATH := /usr/local/lib
 endif
 
-CPPFLAGS += -DCLN_NEXT_VERSION="\"$(CLN_NEXT_VERSION)\"" -DBINTOPKGLIBEXECDIR="\"$(shell sh tools/rel.sh $(bindir) $(pkglibexecdir))\"" -DCCAN_TAL_NEVER_RETURN_NULL=1
+CPPFLAGS += -DCLN_NEXT_VERSION="\"$(CLN_NEXT_VERSION)\"" -DPKGLIBEXECDIR="\"$(pkglibexecdir)\"" -DPLUGINDIR="\"$(plugindir)\"" -DCCAN_TAL_NEVER_RETURN_NULL=1
 CFLAGS = $(CPPFLAGS) $(CWARNFLAGS) $(CDEBUGFLAGS) $(COPTFLAGS) -I $(CCANDIR) $(EXTERNAL_INCLUDE_FLAGS) -I . -I$(CPATH) $(SQLITE3_CFLAGS) $(POSTGRES_INCLUDE) $(FEATURES) $(COVFLAGS) $(DEV_CFLAGS) -DSHACHAIN_BITS=48 -DJSMN_PARENT_LINKS $(PIE_CFLAGS) $(COMPAT_CFLAGS) $(CSANFLAGS)
 
 # If CFLAGS is already set in the environment of make (to whatever value, it
@@ -658,7 +658,7 @@ $(ALL_TEST_PROGRAMS) $(ALL_FUZZ_TARGETS): %: %.o
 # uses some ccan modules internally).  We want to rely on -lwallycore etc.
 # (as per EXTERNAL_LDLIBS) so we filter them out here.
 $(ALL_PROGRAMS) $(ALL_TEST_PROGRAMS):
-	@$(call VERBOSE, "ld $@", $(LINK.o) $(filter-out %.a,$^) $(LOADLIBES) $(EXTERNAL_LDLIBS) $(LDLIBS) libccan.a -o $@)
+	@$(call VERBOSE, "ld $@", $(LINK.o) $(filter-out %.a,$^) $(LOADLIBES) $(EXTERNAL_LDLIBS) $(LDLIBS) libccan.a $($(@)_LDLIBS) -o $@)
 
 # We special case the fuzzing target binaries, as they need to link against libfuzzer,
 # which brings its own main().
@@ -743,7 +743,11 @@ update-wss-proxy-version:
 	cd plugins/wss-proxy && $(MAKE) upgrade-version
 
 update-poetry-lock:
-	poetry update clnrest wss-proxy pyln-client pyln-proto pyln-testing
+	poetry update clnrest wss-proxy pyln-client pyln-proto pyln-testing update-reckless-version
+
+update-reckless-version:
+	@if [ -z "$(NEW_VERSION)" ]; then echo "Set NEW_VERSION!" >&2; exit 1; fi
+	@sed -i "s/__VERSION__ = '\([.-z]*\)'/__VERSION__ = '$(NEW_VERSION)'/" tools/reckless
 
 update-mocks: $(ALL_TEST_PROGRAMS:%=update-mocks/%.c)
 
@@ -882,7 +886,7 @@ uninstall:
 installcheck: all-programs
 	@rm -rf testinstall || true
 	$(MAKE) DESTDIR=$$(pwd)/testinstall install
-	testinstall$(bindir)/lightningd --test-daemons-only --lightning-dir=testinstall
+	DEV_LIGHTNINGD_DESTDIR_PREFIX=$$(pwd)/testinstall/ testinstall$(bindir)/lightningd --test-daemons-only --lightning-dir=testinstall
 	$(MAKE) DESTDIR=$$(pwd)/testinstall uninstall
 	@if test `find testinstall '!' -type d | wc -l` -ne 0; then \
 		echo 'make uninstall left some files in testinstall directory!'; \

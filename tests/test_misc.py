@@ -1921,7 +1921,8 @@ def test_logging(node_factory):
 @unittest.skipIf(VALGRIND,
                  "Valgrind sometimes fails assert on injected SEGV")
 def test_crashlog(node_factory):
-    l1 = node_factory.get_node(may_fail=True)
+    l1 = node_factory.get_node(may_fail=True,
+                               broken_log=' lightningd: ')
 
     def has_crash_log(n):
         files = os.listdir(os.path.join(n.daemon.lightning_dir, TEST_NETWORK))
@@ -2305,7 +2306,8 @@ def test_dev_force_bip32_seed(node_factory):
 
 
 def test_dev_demux(node_factory):
-    l1 = node_factory.get_node(may_fail=True)
+    l1 = node_factory.get_node(may_fail=True,
+                               broken_log=' lightningd: ')
 
     # Check should work.
     l1.rpc.check(command_to_check='dev', subcommand='crash')
@@ -3865,6 +3867,43 @@ def test_fast_shutdown(node_factory):
         except ConnectionRefusedError:
             continue
         break
+
+
+def test_config_whitespace(node_factory):
+    """ Test the configuration parsing with extra
+        whitespace in the configuration file. """
+    l1 = node_factory.get_node()
+
+    configfile = os.path.join(l1.daemon.opts.get("lightning-dir"), TEST_NETWORK, 'config')
+
+    # Stop the node to modify the configuration file safely
+    l1.stop()
+
+    # Ensure the log-prefix option is not set in the command line arguments
+    if 'log-prefix' in l1.daemon.opts:
+        del l1.daemon.opts['log-prefix']
+
+    # Write configuration parameters with extra whitespace
+    with open(configfile, "a") as f:
+        f.write("\n\n# Test whitespace\n")
+        f.write("funder-policy-mod=100             \n")
+        f.write("funder-min-their-funding=10000\n")
+        f.write("allow-deprecated-apis=false       \n")
+        f.write("alias=MyLightningNode   \n")
+        f.write("log-prefix=MyNode   \n")
+
+    l1.start()
+
+    configs = l1.rpc.listconfigs()
+
+    # Verify that the trimmed configuration values are correctly set
+    assert configs['configs']['funder-policy-mod']['value_str'] == '100', "funder-policy-mod should be '100'"
+    assert configs['configs']['funder-min-their-funding']['value_str'] == '10000', "funder-min-their-funding should be '10000'"
+    assert configs['configs']['allow-deprecated-apis']['value_bool'] is False, "allow-deprecated-apis should be False"
+
+    # We want to keep the whitespaces at the parameter 'alias' & 'log-prefix'
+    assert configs['configs']['alias']['value_str'] == 'MyLightningNode   ', "alias should be 'MyLightningNode   '"
+    assert configs['configs']['log-prefix']['value_str'] == 'MyNode   ', "log-prefix should be 'MyNode   '"
 
 
 def test_setconfig(node_factory, bitcoind):

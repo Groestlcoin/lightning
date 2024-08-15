@@ -1693,6 +1693,7 @@ static struct channel *wallet_stmt2channel(struct wallet *w, struct db_stmt *stm
 		db_col_signature(stmt, "last_sig", &last_sig->s);
 		last_sig->sighash_type = SIGHASH_ALL;
 	} else {
+		db_col_ignore(stmt, "last_sig");
 		last_tx = NULL;
 		last_sig = NULL;
 	}
@@ -5563,6 +5564,20 @@ enum offer_status wallet_offer_disable(struct wallet *w,
 	assert(offer_status_active(s));
 
 	newstatus = offer_status_in_db(s & ~OFFER_STATUS_ACTIVE_F);
+	offer_status_update(w->db, offer_id, s, newstatus);
+
+	return newstatus;
+}
+
+enum offer_status wallet_offer_enable(struct wallet *w,
+				       const struct sha256 *offer_id,
+				       enum offer_status s)
+{
+	enum offer_status newstatus;
+
+	assert(!offer_status_active(s));
+
+	newstatus = offer_status_in_db(s | OFFER_STATUS_ACTIVE_F);
 	offer_status_update(w->db, offer_id, s, newstatus);
 
 	return newstatus;
