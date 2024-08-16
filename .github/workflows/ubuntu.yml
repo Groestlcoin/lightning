@@ -52,7 +52,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Builder image setup
-        run: sudo docker build -t cl-repro-jammy - < contrib/reprobuild/Dockerfile.noble
+        run: sudo docker build -t cl-repro-noble - < contrib/reprobuild/Dockerfile.noble
       - name: create release folder
         run: mkdir release
       - name: Building using the builder image
@@ -67,4 +67,4 @@ jobs:
       - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
-          name: clightning-${{ github.sha }}-Ubuntu-24.04          
+          name: clightning-${{ github.sha }}-Ubuntu-24.04
