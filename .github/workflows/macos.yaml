@@ -19,7 +19,7 @@ jobs:
           export GROESTLCOIND_VERSION=${{ matrix.groestlcoind-version }}
           export TARGET_ARCH="arm64-apple-darwin"
 
-          wget https://github.com/Groestlcoin/groestlcoin/releases/download/v${GROESTLDCOIN_VERSION}/groestlcoin-${GROESTLCOIND_VERSION}-${TARGET_ARCH}.tar.gz
+          wget https://github.com/Groestlcoin/groestlcoin/releases/download/v${GROESTLCOIND_VERSION}/groestlcoin-${GROESTLCOIND_VERSION}-${TARGET_ARCH}.tar.gz
           tar -xzf groestlcoin-${GROESTLCOIND_VERSION}-${TARGET_ARCH}.tar.gz
           sudo mv groestlcoin-${GROESTLCOIND_VERSION}/bin/* /usr/local/bin
           rm -rf groestlcoin-${GROESTLCOIND_VERSION}-${TARGET_ARCH}.tar.gz groestlcoin-${GROESTLCOIND_VERSION}
