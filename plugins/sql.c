@@ -534,7 +534,11 @@ static struct command_result *process_json_obj(struct command *cmd,
 			if (!col->sub->is_subobject)
 				continue;
 
-			coltok = json_get_member(buf, t, col->jsonname);
+			/* This can happen if the field is missing */
+			if (!t)
+				coltok = NULL;
+			else
+				coltok = json_get_member(buf, t, col->jsonname);
 			ret = process_json_obj(cmd, buf, coltok, col->sub, row, this_rowid,
 					       NULL, sqloff, stmt);
 			if (ret)
@@ -1577,6 +1581,14 @@ static const char *fmt_indexes(const tal_t *ctx, const char *table)
 	return tal_fmt(ctx, " indexed by `%s`", ret);
 }
 
+static const char *json_prefix(const tal_t *ctx,
+			       const struct table_desc *td)
+{
+	if (td->is_subobject)
+		return tal_fmt(ctx, "%s%s.", json_prefix(tmpctx, td->parent), td->cmdname);
+	return "";
+}
+
 static void print_columns(const struct table_desc *td, const char *indent,
 			  const char *objsrc)
 {
@@ -1599,7 +1611,8 @@ static void print_columns(const struct table_desc *td, const char *indent,
 				const char *subobjsrc;
 
 				subobjsrc = tal_fmt(tmpctx,
-						    ", from JSON object `%s`",
+						    ", from JSON object `%s%s`",
+						    json_prefix(tmpctx, td),
 						    td->columns[i]->jsonname);
 				print_columns(subtd, indent, subobjsrc);
 			}
@@ -1609,7 +1622,8 @@ static void print_columns(const struct table_desc *td, const char *indent,
 		if (streq(objsrc, "")
 		    && td->columns[i]->jsonname
 		    && !streq(td->columns[i]->dbname, td->columns[i]->jsonname)) {
-			origin = tal_fmt(tmpctx, ", from JSON field `%s`",
+			origin = tal_fmt(tmpctx, ", from JSON field `%s%s`",
+					 json_prefix(tmpctx, td),
 					 td->columns[i]->jsonname);
 		} else
 			origin = "";
