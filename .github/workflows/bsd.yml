@@ -7,6 +7,10 @@ jobs:
     runs-on: ubuntu-latest
     name: Build on FreeBSD
     timeout-minutes: 120
+    strategy:
+      fail-fast: true
+      matrix:
+        bitcoind-version: ["27.1"]
     steps:
     - uses: actions/checkout@v4
     - name: Build
@@ -17,6 +21,7 @@ jobs:
         mem: 4096
         prepare: |
           pkg install -y \
+            bash \
             wget \
             py311-pip \
             py311-sqlite3 \

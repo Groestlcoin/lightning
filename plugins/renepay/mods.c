@@ -336,7 +336,7 @@ uncertainty_update_from_listpeerchannels(struct uncertainty *uncertainty,
 	if (!enabled)
 		return;
 
-	struct amount_msat capacity;
+	struct amount_msat capacity, min, gap;
 	const char *errmsg = json_scan(tmpctx, buf, chantok, "{total_msat:%}",
 				       JSON_SCAN(json_to_msat, &capacity));
 	if (errmsg)
@@ -350,8 +350,19 @@ uncertainty_update_from_listpeerchannels(struct uncertainty *uncertainty,
 		    fmt_short_channel_id(tmpctx, scidd->scid));
 		goto error;
 	}
+
+	if (!amount_msat_scale(&gap, capacity, 0.1) ||
+	    !amount_msat_sub(&min, max, gap))
+		min = AMOUNT_MSAT(0);
+
 	// FIXME this does not include pending HTLC of ongoing payments!
-	if (!uncertainty_set_liquidity(pay_plugin->uncertainty, scidd, max)) {
+	/* Allow a gap between min and max so that we don't use up all of our
+	 * channels' spendable sats and avoid our local error:
+	 * WIRE_TEMPORARY_CHANNEL_FAILURE: Capacity exceeded - HTLC fee: Xsat
+	 *
+	 * */
+	if (!uncertainty_set_liquidity(pay_plugin->uncertainty, scidd, min,
+				       max)) {
 		errmsg = tal_fmt(
 		    tmpctx,
 		    "Unable to set liquidity to channel scidd=%s in the "
@@ -654,7 +665,8 @@ static struct command_result *compute_routes_cb(struct payment *payment)
 
 	/* How much are we still trying to send? */
 	if (!amount_msat_sub(&remaining, payment->payment_info.amount,
-			     payment->total_delivering)) {
+			     payment->total_delivering) ||
+	    amount_msat_zero(remaining)) {
 		plugin_log(pay_plugin->plugin, LOG_UNUSUAL,
 			   "%s: Payment is pending with full amount already "
 			   "committed. We skip the computation of new routes.",
@@ -1115,6 +1127,7 @@ static struct command_result *channelfilter_cb(struct payment *payment)
 	 * HTLC_MAX_FRACTION. */
 	htlc_max_threshold = MIN(htlc_max_threshold, HTLC_MAX_STOP_MSAT);
 
+	gossmap_apply_localmods(pay_plugin->gossmap, payment->local_gossmods);
 	for (const struct gossmap_node *node =
 		 gossmap_first_node(pay_plugin->gossmap);
 	     node; node = gossmap_next_node(pay_plugin->gossmap, node)) {
@@ -1135,6 +1148,7 @@ static struct command_result *channelfilter_cb(struct payment *payment)
 			}
 		}
 	}
+	gossmap_remove_localmods(pay_plugin->gossmap, payment->local_gossmods);
 	// FIXME: prune the network over other parameters, eg. capacity,
 	// fees, ...
 	plugin_log(pay_plugin->plugin, LOG_DBG,
@@ -1199,21 +1213,22 @@ void *payment_virtual_program[] = {
     /*2*/ OP_CALL, &selfpay_pay_mod,
     /*4*/ OP_CALL, &knowledgerelax_pay_mod,
     /*6*/ OP_CALL, &getmychannels_pay_mod,
-    /*8*/ OP_CALL, &routehints_pay_mod,
-    /*10*/OP_CALL, &channelfilter_pay_mod,
+    /*8*/ OP_CALL, &refreshgossmap_pay_mod,
+    /*10*/ OP_CALL, &routehints_pay_mod,
+    /*12*/OP_CALL, &channelfilter_pay_mod,
     // TODO shadow_additions
     /* do */
-	    /*12*/ OP_CALL, &pendingsendpays_pay_mod,
-	    /*14*/ OP_CALL, &checktimeout_pay_mod,
-	    /*16*/ OP_CALL, &refreshgossmap_pay_mod,
-	    /*18*/ OP_CALL, &compute_routes_pay_mod,
-	    /*20*/ OP_CALL, &send_routes_pay_mod,
+	    /*14*/ OP_CALL, &pendingsendpays_pay_mod,
+	    /*16*/ OP_CALL, &checktimeout_pay_mod,
+	    /*18*/ OP_CALL, &refreshgossmap_pay_mod,
+	    /*20*/ OP_CALL, &compute_routes_pay_mod,
+	    /*22*/ OP_CALL, &send_routes_pay_mod,
 	    /*do*/
-		    /*22*/ OP_CALL, &sleep_pay_mod,
-		    /*24*/ OP_CALL, &collect_results_pay_mod,
+		    /*24*/ OP_CALL, &sleep_pay_mod,
+		    /*26*/ OP_CALL, &collect_results_pay_mod,
 	    /*while*/
-	    /*26*/ OP_IF, &nothaveresults_pay_cond, (void *)22,
+	    /*28*/ OP_IF, &nothaveresults_pay_cond, (void *)24,
     /* while */
-    /*29*/ OP_IF, &retry_pay_cond, (void *)12,
-    /*32*/ OP_CALL, &end_pay_mod, /* safety net, default failure if reached */
-    /*34*/ NULL};
+    /*31*/ OP_IF, &retry_pay_cond, (void *)14,
+    /*34*/ OP_CALL, &end_pay_mod, /* safety net, default failure if reached */
+    /*36*/ NULL};

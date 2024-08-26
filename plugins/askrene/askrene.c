@@ -169,8 +169,9 @@ static fp16_t *get_capacities(const tal_t *ctx,
 				   "get_capacity failed for channel?");
 			cap = AMOUNT_SAT(0);
 		}
+		/* Pessimistic: round down! */
 		caps[gossmap_chan_idx(gossmap, c)]
-			= u64_to_fp16(cap.satoshis, true); /* Raw: fp16 */
+			= u64_to_fp16(cap.satoshis, false); /* Raw: fp16 */
 	}
 	return caps;
 }
@@ -500,6 +501,7 @@ static struct command_result *do_getroutes(struct command *cmd,
 		json_object_start(response, NULL);
 		json_add_u64(response, "probability_ppm", (u64)(routes[i]->success_prob * 1000000));
 		json_add_amount_msat(response, "amount_msat", amounts[i]);
+		json_add_u32(response, "final_cltv", *info->finalcltv);
 		json_array_start(response, "path");
 		for (size_t j = 0; j < tal_count(routes[i]->hops); j++) {
 			const struct route_hop *r = &routes[i]->hops[j];
@@ -579,7 +581,7 @@ static struct command_result *json_getroutes(struct command *cmd,
 		   p_req("amount_msat", param_msat, &info->amount),
 		   p_req("layers", param_string_array, &info->layers),
 		   p_req("maxfee_msat", param_msat, &info->maxfee),
-		   p_req("finalcltv", param_u32, &info->finalcltv),
+		   p_req("final_cltv", param_u32, &info->finalcltv),
 		   NULL))
 		return command_param_failed();
 
