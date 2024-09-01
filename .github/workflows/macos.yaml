@@ -28,23 +28,27 @@ jobs:
         run: |
           export PATH="/usr/local/opt:/Users/runner/.local/bin:/Users/runner/Library/Python/3.10/bin:$PATH"
 
-          brew install autoconf automake libtool python@3.10 gnu-sed protobuf
+          brew install wget autoconf automake libtool python@3.10 gnu-sed gettext libsodium protobuf
 
           python3.10 -m pip install -U --user poetry==1.8.3 wheel pip
           python3.10 -m poetry install
           python3.10 -m pip install -U --user mako
 
-          xcode-select --install
+          sudo ln -s /usr/local/Cellar/gettext/0.20.1/bin/xgettext /usr/local/opt
 
       - name: Build
         run: |
-          export PATH="/opt/homebrew/Cellar/libsodium/1.0.20:/usr/local/opt:/Users/runner/.local/bin:/Users/runner/Library/Python/3.10/bin:/usr/local/opt:$PATH"
+          export CPATH=/opt/homebrew/include
+          export LIBRARY_PATH=/opt/homebrew/lib
           export CFLAGS="-Wno-error -Wno-nullability-completeness -Wno-expansion-to-defined -Wno-builtin-requires-header"
           export CXXFLAGS="-Wno-error -Wno-nullability-completeness -Wno-expansion-to-defined -Wno-builtin-requires-header"
 
           python3.10 -m poetry run ./configure --disable-valgrind --disable-compat
           python3.10 -m poetry run make
+          
           sudo python3.10 -m poetry run make install
+
+          # sudo PATH="/usr/local/opt:$PATH" LIBRARY_PATH=/opt/homebrew/lib CPATH=/opt/homebrew/include make install
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
