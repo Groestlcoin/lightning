@@ -30,7 +30,7 @@ jobs:
 
           brew install wget autoconf automake libtool python@3.10 gnu-sed gettext libsodium protobuf
 
-          python3.10 -m pip install -U --user poetry==1.3.2 wheel pip
+          python3.10 -m pip install -U --user poetry==1.8.3 wheel pip
           python3.10 -m poetry install
           python3.10 -m pip install -U --user mako
 
