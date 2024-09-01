@@ -45,10 +45,10 @@ jobs:
 
           python3.10 -m poetry run ./configure --disable-valgrind --disable-compat
           python3.10 -m poetry run make
-          
-          sudo python3.10 -m poetry run make install
 
-          # sudo PATH="/usr/local/opt:$PATH" LIBRARY_PATH=/opt/homebrew/lib CPATH=/opt/homebrew/include make install
+          #sudo python3.10 -m poetry run make install
+
+          sudo PATH="/usr/local/opt:$PATH" LIBRARY_PATH=/opt/homebrew/lib CPATH=/opt/homebrew/include make install
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
