@@ -300,6 +300,18 @@ def test_plugin_command(node_factory):
     n.rpc.stop()
 
 
+def test_plugin_fail_on_startup(node_factory):
+    for crash in ('during_init', 'before_start', 'during_getmanifest'):
+        os.environ['BROKEN_CRASH'] = crash
+        n = node_factory.get_node(options={'plugin': os.path.join(os.getcwd(), "tests/plugins/broken.py")})
+        # This can happen before 'Server started with public key' msg
+        n.daemon.logsearch_start = 0
+        n.daemon.wait_for_log('plugin-broken.py: Traceback')
+
+    # Make sure they don't die *after* the message!
+    time.sleep(30)
+
+
 def test_plugin_disable(node_factory):
     """--disable-plugin works"""
     plugin_dir = os.path.join(os.getcwd(), 'contrib/plugins')
@@ -4331,10 +4343,10 @@ def test_dynamic_option_python_plugin(node_factory):
 
 def test_renepay_not_important(node_factory):
     # I mean, it's *important*, it's just not "mission-critical" just yet!
-    l1 = node_factory.get_node(options={'allow-deprecated-apis': True})
+    l1 = node_factory.get_node()
 
-    assert not any([p['name'] == 'cln-renepay' for p in l1.rpc.listconfigs()['important-plugins']])
-    assert [p['name'] for p in l1.rpc.listconfigs()['plugins'] if p['name'] == 'cln-renepay'] == ['cln-renepay']
+    assert 'cln-renepay' not in l1.rpc.listconfigs()['configs']['important-plugin']['values_str']
+    assert [p['active'] for p in l1.rpc.plugin_list()['plugins'] if p['name'].endswith('cln-renepay')] == [True]
 
     # We can kill it without cln dying.
     line = l1.daemon.is_in_log(r'.*started\([0-9]*\).*plugins/cln-renepay')
@@ -4343,7 +4355,7 @@ def test_renepay_not_important(node_factory):
     l1.daemon.wait_for_log('plugin-cln-renepay: Killing plugin: exited during normal operation')
 
     # But we don't shut down, and we can restrart.
-    assert [p['name'] for p in l1.rpc.listconfigs()['plugins'] if p['name'] == 'cln-renepay'] == []
+    assert [p for p in l1.rpc.plugin_list()['plugins'] if p['name'].endswith('cln-renepay')] == []
     l1.rpc.plugin_start(os.path.join(os.getcwd(), 'plugins/cln-renepay'))
 
 
@@ -4415,3 +4427,10 @@ def test_sql_crash(node_factory, bitcoind):
 
     assert 'updates' not in only_one(l1.rpc.listpeerchannels()['channels'])
     l1.rpc.sql(f"SELECT * FROM peerchannels;")
+
+
+def test_listchannels_broken_message(node_factory):
+    """This gave a bogus BROKEN message with deprecated-apis enabled"""
+    l1 = node_factory.get_node(options={'allow-deprecated-apis': True})
+
+    l1.rpc.listchannels()
