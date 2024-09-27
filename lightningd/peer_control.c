@@ -818,10 +818,8 @@ static void NON_NULL_ARGS(1, 2, 4, 5) json_add_channel(struct command *cmd,
 						       const struct peer *peer)
 {
 	struct lightningd *ld = cmd->ld;
-	struct channel_stats channel_stats;
 	struct amount_msat funding_msat;
 	struct amount_sat peer_funded_sats;
-	struct state_change_entry *state_changes;
 	const struct peer_update *peer_update;
 	u32 feerate;
 
@@ -1162,19 +1160,19 @@ static void NON_NULL_ARGS(1, 2, 4, 5) json_add_channel(struct command *cmd,
 	json_add_num(response, "max_accepted_htlcs",
 		     channel->our_config.max_accepted_htlcs);
 
-	state_changes = wallet_state_change_get(tmpctx, ld->wallet, channel->dbid);
 	json_array_start(response, "state_changes");
-	for (size_t i = 0; i < tal_count(state_changes); i++) {
+	for (size_t i = 0; i < tal_count(channel->state_changes); i++) {
+		const struct channel_state_change *change
+			= channel->state_changes[i];
 		json_object_start(response, NULL);
-		json_add_timeiso(response, "timestamp",
-				 state_changes[i].timestamp);
+		json_add_timeiso(response, "timestamp", change->timestamp);
 		json_add_string(response, "old_state",
-				channel_state_str(state_changes[i].old_state));
+				channel_state_str(change->old_state));
 		json_add_string(response, "new_state",
-				channel_state_str(state_changes[i].new_state));
+				channel_state_str(change->new_state));
 		json_add_string(response, "cause",
-				channel_change_state_reason_str(state_changes[i].cause));
-		json_add_string(response, "message", state_changes[i].message);
+				channel_change_state_reason_str(change->cause));
+		json_add_string(response, "message", change->message);
 		json_object_end(response);
 	}
 	json_array_end(response);
@@ -1191,27 +1189,26 @@ static void NON_NULL_ARGS(1, 2, 4, 5) json_add_channel(struct command *cmd,
 	json_array_end(response);
 
 	/* Provide channel statistics */
-	wallet_channel_stats_load(ld->wallet, channel->dbid, &channel_stats);
 	json_add_u64(response, "in_payments_offered",
-		     channel_stats.in_payments_offered);
+		     channel->stats.in_payments_offered);
 	json_add_amount_msat(response,
 			     "in_offered_msat",
-			     channel_stats.in_msatoshi_offered);
+			     channel->stats.in_msatoshi_offered);
 	json_add_u64(response, "in_payments_fulfilled",
-		     channel_stats.in_payments_fulfilled);
+		     channel->stats.in_payments_fulfilled);
 	json_add_amount_msat(response,
 			     "in_fulfilled_msat",
-			     channel_stats.in_msatoshi_fulfilled);
+			     channel->stats.in_msatoshi_fulfilled);
 	json_add_u64(response, "out_payments_offered",
-		     channel_stats.out_payments_offered);
+		     channel->stats.out_payments_offered);
 	json_add_amount_msat(response,
 			     "out_offered_msat",
-			     channel_stats.out_msatoshi_offered);
+			     channel->stats.out_msatoshi_offered);
 	json_add_u64(response, "out_payments_fulfilled",
-		     channel_stats.out_payments_fulfilled);
+		     channel->stats.out_payments_fulfilled);
 	json_add_amount_msat(response,
 			     "out_fulfilled_msat",
-			     channel_stats.out_msatoshi_fulfilled);
+			     channel->stats.out_msatoshi_fulfilled);
 
 	json_add_htlcs(ld, response, channel);
 	json_object_end(response);

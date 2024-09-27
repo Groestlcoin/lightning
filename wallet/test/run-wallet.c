@@ -1002,7 +1002,7 @@ void topology_add_sync_waiter_(const tal_t *ctx UNNEEDED,
 u8 *towire_announcement_signatures(const tal_t *ctx UNNEEDED, const struct channel_id *channel_id UNNEEDED, struct short_channel_id short_channel_id UNNEEDED, const secp256k1_ecdsa_signature *node_signature UNNEEDED, const secp256k1_ecdsa_signature *bitcoin_signature UNNEEDED)
 { fprintf(stderr, "towire_announcement_signatures called!\n"); abort(); }
 /* Generated stub for towire_channel_reestablish */
-u8 *towire_channel_reestablish(const tal_t *ctx UNNEEDED, const struct channel_id *channel_id UNNEEDED, u64 next_commitment_number UNNEEDED, u64 next_revocation_number UNNEEDED, const struct secret *your_last_per_commitment_secret UNNEEDED, const struct pubkey *my_current_per_commitment_point UNNEEDED, const struct tlv_channel_reestablish_tlvs *tlvs UNNEEDED)
+u8 *towire_channel_reestablish(const tal_t *ctx UNNEEDED, const struct channel_id *channel_id UNNEEDED, u64 next_commitment_number UNNEEDED, u64 next_revocation_number UNNEEDED, const struct secret *your_last_per_commitment_secret UNNEEDED, const struct pubkey *my_current_per_commitment_point UNNEEDED, const struct tlv_channel_reestablish_tlvs *channel_reestablish UNNEEDED)
 { fprintf(stderr, "towire_channel_reestablish called!\n"); abort(); }
 /* Generated stub for towire_channeld_dev_memleak */
 u8 *towire_channeld_dev_memleak(const tal_t *ctx UNNEEDED)
@@ -1918,6 +1918,7 @@ static bool test_channel_inflight_crud(struct lightningd *ld, const tal_t *ctx)
 	secp256k1_ecdsa_signature *lease_commit_sig;
 	u32 feerate, lease_blockheight_start;
 	u64 dbid;
+	struct channel_stats *stats = talz(w, struct channel_stats);
 
 	pubkey_from_der(tal_hexdata(w, "02a1633cafcc01ebfb6d78e39f687a1f0995c62fc95f51ead10a02ee0be551b5dc", 66), 33, &pk);
 	node_id_from_pubkey(&id, &pk);
@@ -1995,7 +1996,9 @@ static bool test_channel_inflight_crud(struct lightningd *ld, const tal_t *ctx)
 			   AMOUNT_MSAT(-1ULL),
 			   false,
 			   NULL,
-			   0);
+			   0,
+			   stats,
+			   tal_arr(NULL, struct channel_state_change *, 0));
 	db_begin_transaction(w->db);
 	CHECK(!wallet_err);
 	wallet_channel_insert(w, chan);

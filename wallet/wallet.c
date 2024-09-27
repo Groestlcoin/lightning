@@ -37,21 +37,6 @@
 /* 12 hours is usually enough reservation time */
 #define RESERVATION_INC (6 * 12)
 
-/* Possible channel state */
-enum channel_state_bucket {
-	IN_OFFERED = 0,
-	IN_FULLFILLED = 1,
-	OUT_OFFERED = 2,
-	OUT_FULLFILLED = 3,
-};
-
-/* channel state identifier */
-struct channel_state_param {
-	const char *dir_key;
-	const char *type_key;
-	const enum channel_state_bucket state;
-};
-
 /* These go in db, so values cannot change (we can't put this into
  * lightningd/channel_state.h since it confuses cdump!) */
 static enum state_change state_change_in_db(enum state_change s)
@@ -482,6 +467,10 @@ struct utxo **wallet_utxo_boost(const tal_t *ctx,
 
 		/* Don't add reserved ones */
 		if (utxo_is_reserved(utxo, blockheight))
+			continue;
+
+		/* Don't add csv-locked ones */
+		if (utxo_is_csv_locked(utxo, blockheight))
 			continue;
 
 		/* UTXOs must be sane amounts */
@@ -1501,6 +1490,41 @@ static struct short_channel_id *db_col_optional_scid(const tal_t *ctx,
 	return scid;
 }
 
+static struct channel_state_change **wallet_state_change_get(const tal_t *ctx,
+							     struct wallet *w,
+							     u64 channel_id)
+{
+	struct db_stmt *stmt;
+	struct channel_state_change **res = tal_arr(ctx,
+						    struct channel_state_change *, 0);
+	stmt = db_prepare_v2(
+	    w->db, SQL("SELECT"
+		       " timestamp,"
+		       " old_state,"
+		       " new_state,"
+		       " cause,"
+		       " message "
+		       "FROM channel_state_changes "
+		       "WHERE channel_id = ? "
+		       "ORDER BY timestamp ASC;"));
+	db_bind_int(stmt, channel_id);
+	db_query_prepared(stmt);
+
+	while (db_step(stmt)) {
+		struct channel_state_change *c;
+
+		c = new_channel_state_change(res,
+					     db_col_timeabs(stmt, "timestamp"),
+					     db_col_int(stmt, "old_state"),
+					     db_col_int(stmt, "new_state"),
+					     state_change_in_db(db_col_int(stmt, "cause")),
+					     take(db_col_strdup(NULL, stmt, "message")));
+		tal_arr_expand(&res, c);
+	}
+	tal_free(stmt);
+	return res;
+}
+
 /**
  * wallet_stmt2channel - Helper to populate a wallet_channel from a `db_stmt`
  */
@@ -1536,6 +1560,8 @@ static struct channel *wallet_stmt2channel(struct wallet *w, struct db_stmt *stm
 	u16 lease_chan_max_ppt;
 	bool ignore_fee_limits;
 	struct peer_update *remote_update;
+	struct channel_stats stats;
+	struct channel_state_change **state_changes;
 
 	peer_dbid = db_col_u64(stmt, "peer_id");
 	peer = find_peer_by_dbid(w->ld, peer_dbid);
@@ -1718,6 +1744,29 @@ static struct channel *wallet_stmt2channel(struct wallet *w, struct db_stmt *stm
 		db_col_ignore(stmt, "remote_htlc_maximum_msat");
 	}
 
+	stats.in_payments_offered
+		= db_col_int_or_default(stmt, "in_payments_offered", 0);
+	stats.in_payments_fulfilled
+		= db_col_int_or_default(stmt, "in_payments_fulfilled", 0);
+	db_col_amount_msat_or_default(stmt, "in_msatoshi_offered",
+				      &stats.in_msatoshi_offered,
+				      AMOUNT_MSAT(0));
+	db_col_amount_msat_or_default(stmt, "in_msatoshi_fulfilled",
+				      &stats.in_msatoshi_fulfilled,
+				      AMOUNT_MSAT(0));
+	stats.out_payments_offered
+		= db_col_int_or_default(stmt, "out_payments_offered", 0);
+	stats.out_payments_fulfilled
+		= db_col_int_or_default(stmt, "out_payments_fulfilled", 0);
+	db_col_amount_msat_or_default(stmt, "out_msatoshi_offered",
+				      &stats.out_msatoshi_offered,
+				      AMOUNT_MSAT(0));
+	db_col_amount_msat_or_default(stmt, "out_msatoshi_fulfilled",
+				      &stats.out_msatoshi_fulfilled,
+				      AMOUNT_MSAT(0));
+
+	/* Stolen by new_channel */
+	state_changes = wallet_state_change_get(NULL, w, db_col_u64(stmt, "id"));
 	chan = new_channel(peer, db_col_u64(stmt, "id"),
 			   &wshachain,
 			   channel_state_in_db(db_col_int(stmt, "state")),
@@ -1779,7 +1828,9 @@ static struct channel *wallet_stmt2channel(struct wallet *w, struct db_stmt *stm
 			   htlc_maximum_msat,
 			   ignore_fee_limits,
 			   remote_update,
-			   db_col_u64(stmt, "last_stable_connection"));
+			   db_col_u64(stmt, "last_stable_connection"),
+			   &stats,
+			   state_changes);
 
 	if (!wallet_channel_load_inflights(w, chan)) {
 		tal_free(chan);
@@ -1973,6 +2024,14 @@ static bool wallet_channels_load_active(struct wallet *w)
 					", remote_htlc_minimum_msat"
 					", remote_htlc_maximum_msat"
 					", last_stable_connection"
+					", in_payments_offered"
+					", in_payments_fulfilled"
+					", in_msatoshi_offered"
+					", in_msatoshi_fulfilled"
+					", out_payments_offered"
+					", out_payments_fulfilled"
+					", out_msatoshi_offered"
+					", out_msatoshi_fulfilled"
 					" FROM channels"
                                         " WHERE state != ?;")); //? 0
 	db_bind_int(stmt, CLOSED);
@@ -1998,56 +2057,12 @@ bool wallet_init_channels(struct wallet *w)
 	return wallet_channels_load_active(w);
 }
 
-static enum channel_state_bucket get_state_channel_db(const char *dir, const char *typ)
-{
-	enum channel_state_bucket channel_state = IN_OFFERED;
-	if (streq(dir, "out"))
-		channel_state += 2;
-	if (streq(typ, "fulfilled"))
-		channel_state += 1;
-	return channel_state;
-}
-
-static
-void wallet_channel_stats_incr_x(struct wallet *w,
-				 char const *dir,
-				 char const *typ,
-				 u64 cdbid,
-				 struct amount_msat msat)
+static void wallet_channel_stats_incr_x(struct wallet *w,
+					u64 cdbid,
+					struct amount_msat msat,
+					const char *query)
 {
 	struct db_stmt *stmt;
-	const char *query = NULL;
-
-	switch (get_state_channel_db(dir, typ)) {
-	case IN_OFFERED:
-		query = SQL("UPDATE channels"
-			    "   SET in_payments_offered = COALESCE(in_payments_offered, 0) + 1"
-			    "     , in_msatoshi_offered = COALESCE(in_msatoshi_offered, 0) + ?"
-			    " WHERE id = ?;");
-		break;
-	case IN_FULLFILLED:
-		query = SQL("UPDATE channels"
-			    "   SET in_payments_fulfilled = COALESCE(in_payments_fulfilled, 0) + 1"
-			    "     , in_msatoshi_fulfilled = COALESCE(in_msatoshi_fulfilled, 0) + ?"
-			    " WHERE id = ?;");
-		break;
-	case OUT_OFFERED:
-		query = SQL("UPDATE channels"
-			    "   SET out_payments_offered = COALESCE(out_payments_offered, 0) + 1"
-			    "     , out_msatoshi_offered = COALESCE(out_msatoshi_offered, 0) + ?"
-			    " WHERE id = ?;");
-		break;
-	case OUT_FULLFILLED:
-		query = SQL("UPDATE channels"
-			    "   SET out_payments_fulfilled = COALESCE(out_payments_fulfilled, 0) + 1"
-			    "     , out_msatoshi_fulfilled = COALESCE(out_msatoshi_fulfilled, 0) + ?"
-			    " WHERE id = ?;");
-		break;
-	}
-
-	// Sanity check!
-	if (!query)
-		fatal("Unknown channel state key (direction %s, type %s)", dir, typ);
 
 	stmt = db_prepare_v2(w->db, query);
 	db_bind_amount_msat(stmt, &msat);
@@ -2055,70 +2070,43 @@ void wallet_channel_stats_incr_x(struct wallet *w,
 
 	db_exec_prepared_v2(take(stmt));
 }
+
+/* I would use macros for these, but gettext needs string literals :( */
 void wallet_channel_stats_incr_in_offered(struct wallet *w, u64 id,
 					  struct amount_msat m)
 {
-	wallet_channel_stats_incr_x(w, "in", "offered", id, m);
+	const char query[] = SQL("UPDATE channels"
+				 "   SET in_payments_offered = COALESCE(in_payments_offered, 0) + 1"
+				 "     , in_msatoshi_offered = COALESCE(in_msatoshi_offered, 0) + ?"
+				 " WHERE id = ?;");
+	wallet_channel_stats_incr_x(w, id, m, query);
 }
 void wallet_channel_stats_incr_in_fulfilled(struct wallet *w, u64 id,
 					    struct amount_msat m)
 {
-	wallet_channel_stats_incr_x(w, "in", "fulfilled", id, m);
+	const char query[] = SQL("UPDATE channels"
+				 "   SET in_payments_fulfilled = COALESCE(in_payments_fulfilled, 0) + 1"
+				 "     , in_msatoshi_fulfilled = COALESCE(in_msatoshi_fulfilled, 0) + ?"
+				 " WHERE id = ?;");
+	wallet_channel_stats_incr_x(w, id, m, query);
 }
 void wallet_channel_stats_incr_out_offered(struct wallet *w, u64 id,
 					    struct amount_msat m)
 {
-	wallet_channel_stats_incr_x(w, "out", "offered", id, m);
+	const char query[] = SQL("UPDATE channels"
+				 "   SET out_payments_offered = COALESCE(out_payments_offered, 0) + 1"
+				 "     , out_msatoshi_offered = COALESCE(out_msatoshi_offered, 0) + ?"
+				 " WHERE id = ?;");
+	wallet_channel_stats_incr_x(w, id, m, query);
 }
 void wallet_channel_stats_incr_out_fulfilled(struct wallet *w, u64 id,
 					    struct amount_msat m)
 {
-	wallet_channel_stats_incr_x(w, "out", "fulfilled", id, m);
-}
-
-void wallet_channel_stats_load(struct wallet *w,
-			       u64 id,
-			       struct channel_stats *stats)
-{
-	struct db_stmt *stmt;
-	int res;
-	stmt = db_prepare_v2(w->db, SQL(
-				     "SELECT"
-				     "   in_payments_offered,  in_payments_fulfilled"
-				     ",  in_msatoshi_offered,  in_msatoshi_fulfilled"
-				     ", out_payments_offered, out_payments_fulfilled"
-				     ", out_msatoshi_offered, out_msatoshi_fulfilled"
-				     "  FROM channels"
-				     " WHERE id = ?"));
-	db_bind_u64(stmt, id);
-	db_query_prepared(stmt);
-
-	res = db_step(stmt);
-
-	/* This must succeed, since we know the channel exists */
-	assert(res);
-
-	stats->in_payments_offered
-		= db_col_int_or_default(stmt, "in_payments_offered", 0);
-	stats->in_payments_fulfilled
-		= db_col_int_or_default(stmt, "in_payments_fulfilled", 0);
-	db_col_amount_msat_or_default(stmt, "in_msatoshi_offered",
-				      &stats->in_msatoshi_offered,
-				      AMOUNT_MSAT(0));
-	db_col_amount_msat_or_default(stmt, "in_msatoshi_fulfilled",
-				      &stats->in_msatoshi_fulfilled,
-				      AMOUNT_MSAT(0));
-	stats->out_payments_offered
-		= db_col_int_or_default(stmt, "out_payments_offered", 0);
-	stats->out_payments_fulfilled
-		= db_col_int_or_default(stmt, "out_payments_fulfilled", 0);
-	db_col_amount_msat_or_default(stmt, "out_msatoshi_offered",
-				      &stats->out_msatoshi_offered,
-				      AMOUNT_MSAT(0));
-	db_col_amount_msat_or_default(stmt, "out_msatoshi_fulfilled",
-				      &stats->out_msatoshi_fulfilled,
-				      AMOUNT_MSAT(0));
-	tal_free(stmt);
+	const char query[] = SQL("UPDATE channels"
+				 "   SET out_payments_fulfilled = COALESCE(out_payments_fulfilled, 0) + 1"
+				 "     , out_msatoshi_fulfilled = COALESCE(out_msatoshi_fulfilled, 0) + ?"
+				 " WHERE id = ?;");
+	wallet_channel_stats_incr_x(w, id, m, query);
 }
 
 u32 wallet_blocks_maxheight(struct wallet *w)
@@ -2513,39 +2501,6 @@ void wallet_state_change_add(struct wallet *w,
 	db_bind_text(stmt, message);
 
 	db_exec_prepared_v2(take(stmt));
-}
-
-struct state_change_entry *wallet_state_change_get(const tal_t *ctx,
-						   struct wallet *w,
-						   u64 channel_id)
-{
-	struct db_stmt *stmt;
-	struct state_change_entry tmp;
-	struct state_change_entry *res = tal_arr(ctx,
-						 struct state_change_entry, 0);
-	stmt = db_prepare_v2(
-	    w->db, SQL("SELECT"
-		       " timestamp,"
-		       " old_state,"
-		       " new_state,"
-		       " cause,"
-		       " message "
-		       "FROM channel_state_changes "
-		       "WHERE channel_id = ? "
-		       "ORDER BY timestamp ASC;"));
-	db_bind_int(stmt, channel_id);
-	db_query_prepared(stmt);
-
-	while (db_step(stmt)) {
-		tmp.timestamp = db_col_timeabs(stmt, "timestamp");
-		tmp.old_state = db_col_int(stmt, "old_state");
-		tmp.new_state = db_col_int(stmt, "new_state");
-		tmp.cause = state_change_in_db(db_col_int(stmt, "cause"));
-		tmp.message = db_col_strdup(res, stmt, "message");
-		tal_arr_expand(&res, tmp);
-	}
-	tal_free(stmt);
-	return res;
 }
 
 static void wallet_peer_save(struct wallet *w, struct peer *peer)
@@ -3330,25 +3285,6 @@ struct htlc_stub *wallet_htlc_stubs(const tal_t *ctx, struct wallet *wallet,
 	}
 	tal_free(stmt);
 	return stubs;
-}
-
-void wallet_local_htlc_out_delete(struct wallet *wallet,
-				  struct channel *chan,
-				  const struct sha256 *payment_hash,
-				  u64 partid)
-{
-	struct db_stmt *stmt;
-
-	stmt = db_prepare_v2(wallet->db, SQL("DELETE FROM channel_htlcs"
-					     " WHERE direction = ?"
-					     " AND origin_htlc = ?"
-					     " AND payment_hash = ?"
-					     " AND partid = ?;"));
-	db_bind_int(stmt, DIRECTION_OUTGOING);
-	db_bind_int(stmt, 0);
-	db_bind_sha256(stmt, payment_hash);
-	db_bind_u64(stmt, partid);
-	db_exec_prepared_v2(take(stmt));
 }
 
 /* FIXME: reorder! */
@@ -4998,7 +4934,7 @@ struct amount_msat wallet_total_forward_fees(struct wallet *w)
 	tal_free(stmt);
 
 	deleted = amount_msat(db_get_intvar(w->db, "deleted_forward_fees", 0));
-	if (!amount_msat_add(&total, total, deleted))
+	if (!amount_msat_accumulate(&total, deleted))
 		db_fatal(w->db, "Adding forward fees %s + %s overflowed",
 			 fmt_amount_msat(tmpctx, total),
 			 fmt_amount_msat(tmpctx, deleted));

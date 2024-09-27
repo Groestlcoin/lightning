@@ -93,7 +93,7 @@ flow_maximum_deliverable(struct amount_msat *max_deliverable,
 	}
 	x = amount_msat_min(x, gossmap_chan_htlc_max(flow->path[0], flow->dirs[0]));
 
-	if(amount_msat_zero(x))
+	if(amount_msat_is_zero(x))
 	{
 		if(bad_channel)*bad_channel = flow->path[0];
 		return RENEPAY_BAD_CHANNEL;
@@ -130,7 +130,7 @@ flow_maximum_deliverable(struct amount_msat *max_deliverable,
 		/* safety check: amounts decrease along the route */
 		assert(amount_msat_less_eq(x_new, x));
 
-		if(amount_msat_zero(x_new))
+		if(amount_msat_is_zero(x_new))
 		{
 			if(bad_channel)*bad_channel = flow->path[i];
 			return RENEPAY_BAD_CHANNEL;
@@ -147,7 +147,7 @@ flow_maximum_deliverable(struct amount_msat *max_deliverable,
 
 		x = x_new;
 	}
-	assert(!amount_msat_zero(x));
+	assert(!amount_msat_is_zero(x));
 	*max_deliverable = x;
 	return RENEPAY_NOERROR;
 }
@@ -170,7 +170,7 @@ bool flowset_delivers(struct amount_msat *delivers, struct flow **flows)
 {
 	struct amount_msat final = AMOUNT_MSAT(0);
 	for (size_t i = 0; i < tal_count(flows); i++) {
-		if (!amount_msat_add(&final, flows[i]->amount, final))
+		if (!amount_msat_accumulate(&final, flows[i]->amount))
 			return false;
 	}
 	*delivers = final;
@@ -423,7 +423,7 @@ bool flow_assign_delivery(struct flow *flow, const struct gossmap *gossmap,
 	if (flow_maximum_deliverable(&max_deliverable, flow, gossmap,
 				      chan_extra_map, NULL))
 		return false;
-	assert(!amount_msat_zero(max_deliverable));
+	assert(!amount_msat_is_zero(max_deliverable));
 	flow->amount = amount_msat_min(requested_amount, max_deliverable);
 	return true;
 }

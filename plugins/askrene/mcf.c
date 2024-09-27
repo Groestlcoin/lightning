@@ -5,7 +5,6 @@
 #include <ccan/lqueue/lqueue.h>
 #include <ccan/tal/str/str.h>
 #include <ccan/tal/tal.h>
-#include <common/pseudorand.h>
 #include <common/utils.h>
 #include <math.h>
 #include <plugins/askrene/askrene.h>
@@ -194,7 +193,6 @@
 static const double CHANNEL_PIVOTS[]={0,0.5,0.8,0.95};
 
 static const s64 INFINITE = INT64_MAX;
-static const u64 INFINITE_MSAT = UINT64_MAX;
 static const u32 INVALID_INDEX = 0xffffffff;
 static const s64 MU_MAX = 101;
 
@@ -453,13 +451,6 @@ static void linearize_channel(const struct pay_parameters *params,
 
 	/* This takes into account any payments in progress. */
 	get_constraints(params->rq, c, dir, &mincap, &maxcap);
-
-	/* We seem to have some rounding error (perhaps due to our use
-	 * of sats and fee interactions?).  Since it's unusual to see
-	 * a large unmber of flows, even if each overflows by 1 sat,
-	 * 5 sats should be plenty. */
-	if (!amount_msat_sub(&maxcap, maxcap, AMOUNT_MSAT(5000)))
-		maxcap = AMOUNT_MSAT(0);
 
 	/* Assume if min > max, min is wrong */
 	if (amount_msat_greater(mincap, maxcap))
@@ -1095,29 +1086,15 @@ struct list_data
 	struct flow *flow_path;
 };
 
-static inline uint64_t pseudorand_interval(uint64_t a, uint64_t b)
-{
-	if (a == b)
-		return b;
-	assert(b > a);
-	return a + pseudorand(b - a);
-}
-
 /* Given a flow in the residual network, build a set of payment flows in the
  * gossmap that corresponds to this flow. */
 static struct flow **
 get_flow_paths(const tal_t *ctx,
 	       const struct route_query *rq,
 	       const struct linear_network *linear_network,
-	       const struct residual_network *residual_network,
-
-	       // how many msats in excess we paid for not having msat accuracy
-	       // in the MCF solver
-	       struct amount_msat excess)
+	       const struct residual_network *residual_network)
 {
 	struct flow **flows = tal_arr(ctx,struct flow*,0);
-
-	assert(amount_msat_less(excess, AMOUNT_MSAT(1000)));
 
 	const size_t max_num_chans = gossmap_max_chan_idx(rq->gossmap);
 	struct chan_flow *chan_flow = tal_arrz(tmpctx,struct chan_flow,max_num_chans);
@@ -1174,13 +1151,6 @@ get_flow_paths(const tal_t *ctx,
 			    rq->gossmap, chan_flow, node_idx, balance,
 			    prev_chan, prev_dir, prev_idx);
 
-			/* For each route we will compute the highest htlc_min
-			 * and the smallest htlc_max and use those to constraint
-			 * the flow we will allocate. */
-			struct amount_msat sup_htlc_min = AMOUNT_MSAT_INIT(0),
-					   inf_htlc_max =
-					       AMOUNT_MSAT_INIT(INFINITE_MSAT);
-
 			s64 delta=-balance[node_idx];
 			int length = 0;
 			delta = MIN(delta,balance[final_idx]);
@@ -1199,44 +1169,9 @@ get_flow_paths(const tal_t *ctx,
 
 				delta=MIN(delta,chan_flow[c_idx].half[dir]);
 				length++;
-
-				/* obtain the supremum htlc_min along the route
-				 */
-				sup_htlc_min = amount_msat_max(
-				    sup_htlc_min, gossmap_chan_htlc_min(c, dir));
-
-				/* obtain the infimum htlc_max along the route
-				 */
-				inf_htlc_max = amount_msat_min(
-				    inf_htlc_max, gossmap_chan_htlc_max(c, dir));
 			}
 
-			s64 htlc_max=inf_htlc_max.millisatoshis/1000;/* Raw: need htlc_max in sats to do arithmetic operations.*/
-			s64 htlc_min=(sup_htlc_min.millisatoshis+999)/1000;/* Raw: need htlc_min in sats to do arithmetic operations.*/
-
-			if (htlc_min > htlc_max) {
-				/* htlc_min is too big or htlc_max is too small,
-				 * we cannot send `delta` along this route.
-				 *
-				 * FIXME: We try anyways because failing
-				 * channels will be blacklisted downstream. */
-				htlc_min = 0;
-			}
-
-			/* If we divide this route into different flows make it
-			 * random to avoid routing nodes making correlations. */
-			if (delta > htlc_max) {
-				// FIXME: choosing a number in the range
-				// [htlc_min, htlc_max] or
-				// [0.5 htlc_max, htlc_max]
-				// The choice of the fraction was completely
-				// arbitrary.
-				delta = pseudorand_interval(
-				    MAX(htlc_min, (htlc_max * 50) / 100),
-				    htlc_max);
-			}
-
-			struct flow *fp = tal(tmpctx,struct flow);
+			struct flow *fp = tal(flows,struct flow);
 			fp->path = tal_arr(fp,const struct gossmap_chan *,length);
 			fp->dirs = tal_arr(fp,int,length);
 
@@ -1264,30 +1199,11 @@ get_flow_paths(const tal_t *ctx,
 			}
 
 			assert(delta>0);
-
-			// substract the excess of msats for not having msat
-			// accuracy
-			struct amount_msat delivered = amount_msat(delta*1000);
-			if (!amount_msat_sub(&delivered, delivered, excess)) {
-				plugin_err(rq->plugin, "Unable to subtract excess %s from %s",
-					   fmt_amount_msat(tmpctx, excess),
-					   fmt_amount_msat(tmpctx, delivered));
-			}
-			excess = amount_msat(0);
-			fp->amount = delivered;
-
-			fp->success_prob = flow_probability(fp, rq);
+			fp->delivers = amount_msat(delta*1000);
 
 			// add fp to flows
 			tal_arr_expand(&flows, fp);
 		}
-	}
-
-	/* Establish ownership. */
-	for(size_t i=0;i<tal_count(flows);++i)
-	{
-		flows[i] = tal_steal(flows,flows[i]);
-		assert(flows[i]);
 	}
 	return flows;
 }
@@ -1367,11 +1283,7 @@ struct flow **minflow(const tal_t *ctx,
 	 * For example if we are trying to pay 1M sats our precision could be
 	 * set to 1000sat, then channels that had capacity for 3M sats become 3k
 	 * flow units. */
-	const u64 pay_amount_msats = params->amount.millisatoshis % 1000; /* Raw: minflow */
-	const u64 pay_amount_sats = params->amount.millisatoshis/1000 /* Raw: minflow */
-			+ (pay_amount_msats ? 1 : 0);
-	const struct amount_msat excess
-		= amount_msat(pay_amount_msats ? 1000 - pay_amount_msats : 0);
+	const u64 pay_amount_sats = (params->amount.millisatoshis + 999)/1000; /* Raw: minflow */
 
 	if (!find_feasible_flow(linear_network, residual_network,
 				source_idx, target_idx, pay_amount_sats)) {
@@ -1390,7 +1302,6 @@ struct flow **minflow(const tal_t *ctx,
 	 * Actual amounts considering fees are computed for every
 	 * channel in the routes. */
 	flow_paths = get_flow_paths(tmpctx, rq,
-				    linear_network, residual_network, excess);
+				    linear_network, residual_network);
 	return flow_paths;
 }
-

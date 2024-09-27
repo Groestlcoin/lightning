@@ -2,12 +2,10 @@ from fixtures import *  # noqa: F401,F403
 from pyln.client import RpcError
 from utils import (
     only_one, first_scid, GenChannel, generate_gossip_store,
-    TEST_NETWORK, sync_blockheight, wait_for
+    sync_blockheight, wait_for
 )
-import os
 import pytest
 import time
-import shutil
 
 
 def test_layers(node_factory):
@@ -109,6 +107,29 @@ def test_layers(node_factory):
     assert listlayers == {'layers': [expect]}
 
 
+def check_route_as_expected(routes, paths):
+    """Make sure all fields in paths are match those in routes"""
+    def dict_subset_eq(a, b):
+        """Is every key in B is the same in A?"""
+        return all(a.get(key) == b[key] for key in b)
+
+    for path in paths:
+        found = False
+        for i in range(len(routes)):
+            route = routes[i]
+            if len(route['path']) != len(path):
+                continue
+            if all(dict_subset_eq(route['path'][i], path[i]) for i in range(len(path))):
+                del routes[i]
+                found = True
+                break
+        if not found:
+            raise ValueError("Could not find path {} in paths {}".format(path, routes))
+
+    if routes != []:
+        raise ValueError("Did not expect paths {}".format(routes))
+
+
 def check_getroute_paths(node,
                          source,
                          destination,
@@ -129,30 +150,11 @@ def check_getroute_paths(node,
     # Total delivered should be amount we told it to send.
     assert amount_msat == sum([r['amount_msat'] for r in getroutes['routes']])
 
-    def dict_subset_eq(a, b):
-        """Is every key in B is the same in A?"""
-        return all(a.get(key) == b[key] for key in b)
-
-    for expected_path in paths:
-        found = False
-        for i in range(len(getroutes['routes'])):
-            route = getroutes['routes'][i]
-            if len(route['path']) != len(expected_path):
-                continue
-            if all(dict_subset_eq(route['path'][i], expected_path[i]) for i in range(len(expected_path))):
-                del getroutes['routes'][i]
-                found = True
-                break
-        if not found:
-            raise ValueError("Could not find expected_path {} in paths {}".format(expected_path, getroutes['routes']))
-
-    if getroutes['routes'] != []:
-        raise ValueError("Did not expect paths {}".format(getroutes['routes']))
+    check_route_as_expected(getroutes['routes'], paths)
 
 
 def test_getroutes(node_factory):
     """Test getroutes call"""
-    l1 = node_factory.get_node(start=False)
     gsfile, nodemap = generate_gossip_store([GenChannel(0, 1, forward=GenChannel.Half(propfee=10000)),
                                              GenChannel(0, 2, capacity_sats=9000),
                                              GenChannel(1, 3, forward=GenChannel.Half(propfee=20000)),
@@ -160,8 +162,7 @@ def test_getroutes(node_factory):
                                              GenChannel(2, 4, forward=GenChannel.Half(delay=2000))])
 
     # Set up l1 with this as the gossip_store
-    shutil.copy(gsfile.name, os.path.join(l1.daemon.lightning_dir, TEST_NETWORK, 'gossip_store'))
-    l1.start()
+    l1 = node_factory.get_node(gossip_store_file=gsfile.name)
 
     # Start easy
     assert l1.rpc.getroutes(source=nodemap[0],
@@ -169,8 +170,8 @@ def test_getroutes(node_factory):
                             amount_msat=1000,
                             layers=[],
                             maxfee_msat=1000,
-                            final_cltv=99) == {'probability_ppm': 999998,
-                                               'routes': [{'probability_ppm': 999998,
+                            final_cltv=99) == {'probability_ppm': 999999,
+                                               'routes': [{'probability_ppm': 999999,
                                                            'final_cltv': 99,
                                                            'amount_msat': 1000,
                                                            'path': [{'short_channel_id': '0x1x0',
@@ -184,8 +185,8 @@ def test_getroutes(node_factory):
                             amount_msat=100000,
                             layers=[],
                             maxfee_msat=5000,
-                            final_cltv=99) == {'probability_ppm': 999797,
-                                               'routes': [{'probability_ppm': 999797,
+                            final_cltv=99) == {'probability_ppm': 999798,
+                                               'routes': [{'probability_ppm': 999798,
                                                            'final_cltv': 99,
                                                            'amount_msat': 100000,
                                                            'path': [{'short_channel_id': '0x1x0',
@@ -247,18 +248,17 @@ def test_getroutes(node_factory):
                          10000000,
                          [[{'short_channel_id': '0x2x1',
                             'next_node_id': nodemap[2],
-                            'amount_msat': 505000,
+                            'amount_msat': 500000,
                             'delay': 99 + 6}],
                           [{'short_channel_id': '0x2x3',
                             'next_node_id': nodemap[2],
-                            'amount_msat': 9495009,
+                            'amount_msat': 9500009,
                             'delay': 99 + 6}]])
 
 
 def test_getroutes_fee_fallback(node_factory):
     """Test getroutes call takes into account fees, if excessive"""
 
-    l1 = node_factory.get_node(start=False)
     # 0 -> 1 -> 3: high capacity, high fee (1%)
     # 0 -> 2 -> 3: low capacity, low fee.
     gsfile, nodemap = generate_gossip_store([GenChannel(0, 1,
@@ -272,8 +272,7 @@ def test_getroutes_fee_fallback(node_factory):
                                              GenChannel(2, 3,
                                                         capacity_sats=10000)])
     # Set up l1 with this as the gossip_store
-    shutil.copy(gsfile.name, os.path.join(l1.daemon.lightning_dir, TEST_NETWORK, 'gossip_store'))
-    l1.start()
+    l1 = node_factory.get_node(gossip_store_file=gsfile.name)
 
     # Don't hit maxfee?  Go easy path.
     check_getroute_paths(l1,
@@ -296,7 +295,6 @@ def test_getroutes_fee_fallback(node_factory):
 
 def test_getroutes_auto_sourcefree(node_factory):
     """Test getroutes call with auto.sourcefree layer"""
-    l1 = node_factory.get_node(start=False)
     gsfile, nodemap = generate_gossip_store([GenChannel(0, 1, forward=GenChannel.Half(propfee=10000)),
                                              GenChannel(0, 2, capacity_sats=9000),
                                              GenChannel(1, 3, forward=GenChannel.Half(propfee=20000)),
@@ -304,8 +302,7 @@ def test_getroutes_auto_sourcefree(node_factory):
                                              GenChannel(2, 4, forward=GenChannel.Half(delay=2000))])
 
     # Set up l1 with this as the gossip_store
-    shutil.copy(gsfile.name, os.path.join(l1.daemon.lightning_dir, TEST_NETWORK, 'gossip_store'))
-    l1.start()
+    l1 = node_factory.get_node(gossip_store_file=gsfile.name)
 
     # Start easy
     assert l1.rpc.getroutes(source=nodemap[0],
@@ -313,8 +310,8 @@ def test_getroutes_auto_sourcefree(node_factory):
                             amount_msat=1000,
                             layers=['auto.sourcefree'],
                             maxfee_msat=1000,
-                            final_cltv=99) == {'probability_ppm': 999998,
-                                               'routes': [{'probability_ppm': 999998,
+                            final_cltv=99) == {'probability_ppm': 999999,
+                                               'routes': [{'probability_ppm': 999999,
                                                            'final_cltv': 99,
                                                            'amount_msat': 1000,
                                                            'path': [{'short_channel_id': '0x1x0',
@@ -328,8 +325,8 @@ def test_getroutes_auto_sourcefree(node_factory):
                             amount_msat=100000,
                             layers=['auto.sourcefree'],
                             maxfee_msat=5000,
-                            final_cltv=99) == {'probability_ppm': 999797,
-                                               'routes': [{'probability_ppm': 999797,
+                            final_cltv=99) == {'probability_ppm': 999798,
+                                               'routes': [{'probability_ppm': 999798,
                                                            'final_cltv': 99,
                                                            'amount_msat': 100000,
                                                            'path': [{'short_channel_id': '0x1x0',
@@ -371,23 +368,20 @@ def test_getroutes_auto_sourcefree(node_factory):
 
 def test_getroutes_auto_localchans(node_factory):
     """Test getroutes call with auto.localchans layer"""
-    # We get bad signature warnings, since our gossip is made up!
-    l1, l2 = node_factory.get_nodes(2, opts={'allow_warning': True})
+    l1 = node_factory.get_node()
     gsfile, nodemap = generate_gossip_store([GenChannel(0, 1, forward=GenChannel.Half(propfee=10000)),
                                              GenChannel(1, 2, forward=GenChannel.Half(propfee=10000))],
-                                            nodeids=[l2.info['id']])
+                                            nodemap={0: l1.info['id']})
 
-    # Set up l1 with this as the gossip_store
-    l1.stop()
-    shutil.copy(gsfile.name, os.path.join(l1.daemon.lightning_dir, TEST_NETWORK, 'gossip_store'))
-    l1.start()
+    # We get bad signature warnings, since our gossip is made up!
+    l2 = node_factory.get_node(allow_warning=True, gossip_store_file=gsfile.name)
 
-    # Now l1 beleives l2 has an entire network behind it.
-    scid12, _ = l1.fundchannel(l2, 10**6, announce_channel=False)
+    # Now l2 believes l1 has an entire network behind it.
+    scid12, _ = l2.fundchannel(l1, 10**6, announce_channel=False)
 
     # Cannot find a route unless we use local hints.
-    with pytest.raises(RpcError, match="Unknown source node {}".format(l1.info['id'])):
-        l1.rpc.getroutes(source=l1.info['id'],
+    with pytest.raises(RpcError, match="Unknown source node {}".format(l2.info['id'])):
+        l2.rpc.getroutes(source=l2.info['id'],
                          destination=nodemap[2],
                          amount_msat=100000,
                          layers=[],
@@ -395,8 +389,8 @@ def test_getroutes_auto_localchans(node_factory):
                          final_cltv=99)
 
     # This should work
-    check_getroute_paths(l1,
-                         l1.info['id'],
+    check_getroute_paths(l2,
+                         l2.info['id'],
                          nodemap[2],
                          100000,
                          maxfee_msat=100000,
@@ -406,8 +400,8 @@ def test_getroutes_auto_localchans(node_factory):
                                  {'short_channel_id': '1x2x1', 'amount_msat': 101000, 'delay': 99 + 6}]])
 
     # This should get self-discount correct
-    check_getroute_paths(l1,
-                         l1.info['id'],
+    check_getroute_paths(l2,
+                         l2.info['id'],
                          nodemap[2],
                          100000,
                          maxfee_msat=100000,
@@ -418,8 +412,6 @@ def test_getroutes_auto_localchans(node_factory):
 
 
 def test_fees_dont_exceed_constraints(node_factory):
-    l1 = node_factory.get_node(start=False)
-
     msat = 100000000
     max_msat = int(msat * 0.45)
     # 0 has to use two paths (1 and 2) to reach 3.  But we tell it 0->1 has limited capacity.
@@ -429,8 +421,7 @@ def test_fees_dont_exceed_constraints(node_factory):
                                              GenChannel(2, 3, capacity_sats=msat // 1000, forward=GenChannel.Half(propfee=10000))])
 
     # Set up l1 with this as the gossip_store
-    shutil.copy(gsfile.name, os.path.join(l1.daemon.lightning_dir, TEST_NETWORK, 'gossip_store'))
-    l1.start()
+    l1 = node_factory.get_node(gossip_store_file=gsfile.name)
 
     chan = only_one([c for c in l1.rpc.listchannels(source=nodemap[0])['channels'] if c['destination'] == nodemap[1]])
     l1.rpc.askrene_inform_channel(layer='test_layers',
@@ -449,6 +440,43 @@ def test_fees_dont_exceed_constraints(node_factory):
         if hop['short_channel_id'] == chan['short_channel_id']:
             amount = hop['amount_msat']
     assert amount <= max_msat
+
+
+def test_sourcefree_on_mods(node_factory, bitcoind):
+    """auto.sourcefree should also apply to layer-created channels"""
+    gsfile, nodemap = generate_gossip_store([GenChannel(0, 1, forward=GenChannel.Half(propfee=10000)),
+                                             GenChannel(0, 2, forward=GenChannel.Half(propfee=10000))])
+
+    l1 = node_factory.get_node(gossip_store_file=gsfile.name)
+
+    # Add a local channel from 0->l1 (we just needed a nodeid).
+    l1.rpc.askrene_create_channel('test_layers',
+                                  nodemap[0],
+                                  l1.info['id'],
+                                  '0x3x3',
+                                  '1000000sat',
+                                  100, '900000sat',
+                                  1000, 2000, 18)
+    routes = l1.rpc.getroutes(source=nodemap[0],
+                              destination=l1.info['id'],
+                              amount_msat=1000000,
+                              layers=['test_layers', 'auto.sourcefree'],
+                              maxfee_msat=100000,
+                              final_cltv=99)['routes']
+    # Expect no fee.
+    check_route_as_expected(routes, [[{'short_channel_id': '0x3x3',
+                                       'amount_msat': 1000000, 'delay': 99}]])
+
+    # Same if we specify layers in the other order!
+    routes = l1.rpc.getroutes(source=nodemap[0],
+                              destination=l1.info['id'],
+                              amount_msat=1000000,
+                              layers=['auto.sourcefree', 'test_layers'],
+                              maxfee_msat=100000,
+                              final_cltv=99)['routes']
+    # Expect no fee.
+    check_route_as_expected(routes, [[{'short_channel_id': '0x3x3',
+                                       'amount_msat': 1000000, 'delay': 99}]])
 
 
 def test_live_spendable(node_factory, bitcoind):
@@ -473,7 +501,7 @@ def test_live_spendable(node_factory, bitcoind):
     routes = l1.rpc.getroutes(
         source=l1.info["id"],
         destination=l3.info["id"],
-        amount_msat=800_000_000,
+        amount_msat=800_000_001,
         layers=["auto.localchans", "auto.sourcefree"],
         maxfee_msat=50_000_000,
         final_cltv=10,
@@ -487,11 +515,18 @@ def test_live_spendable(node_factory, bitcoind):
         ]
 
     path_total = {}
+    num_htlcs = {}
     for r in routes["routes"]:
         key = "{}/{}".format(
             r["path"][0]["short_channel_id"], r["path"][0]["direction"]
         )
         path_total[key] = path_total.get(key, 0) + r["path"][0]["amount_msat"]
+        num_htlcs[key] = num_htlcs.get(key, 0) + 1
+
+    # Take into account 645000msat (3750 feerate x 172 weight) per-HTLC reduction in capacity.
+    for k in path_total.keys():
+        if k in maxes:
+            maxes[k] -= (3750 * 172) * (num_htlcs[k] - 1)
 
     exceeded = {}
     for scidd in maxes.keys():
@@ -500,3 +535,145 @@ def test_live_spendable(node_factory, bitcoind):
                 exceeded[scidd] = f"Path total {path_total[scidd]} > spendable {maxes[scidd]}"
 
     assert exceeded == {}
+
+    # No duplicate paths!
+    for i in range(0, len(routes["routes"])):
+        path_i = [(p['short_channel_id'], p['direction']) for p in routes["routes"][i]['path']]
+        for j in range(i + 1, len(routes["routes"])):
+            path_j = [(p['short_channel_id'], p['direction']) for p in routes["routes"][j]['path']]
+            assert path_i != path_j
+
+    # Must deliver exact amount.
+    assert sum(r['amount_msat'] for r in routes["routes"]) == 800_000_001
+
+
+def test_limits_fake_gossmap(node_factory, bitcoind):
+    """Like test_live_spendable, but using a generated gossmap not real nodes"""
+    gsfile, nodemap = generate_gossip_store([GenChannel(0, 1, capacity_sats=100_000),
+                                             GenChannel(0, 1, capacity_sats=100_000),
+                                             GenChannel(0, 1, capacity_sats=200_000),
+                                             GenChannel(0, 1, capacity_sats=300_000),
+                                             GenChannel(0, 1, capacity_sats=400_000),
+                                             GenChannel(1, 2, capacity_sats=100_000),
+                                             GenChannel(1, 2, capacity_sats=100_000),
+                                             GenChannel(1, 2, capacity_sats=200_000),
+                                             GenChannel(1, 2, capacity_sats=300_000),
+                                             GenChannel(1, 2, capacity_sats=400_000)])
+    l1 = node_factory.get_node(gossip_store_file=gsfile.name)
+
+    # Create a layer like auto.localchans would from "spendable"
+    spendable = {'0x1x0/1': 87718000,
+                 '0x1x1/1': 87718000,
+                 '0x1x2/1': 186718000,
+                 '0x1x3/1': 285718000,
+                 '0x1x4/1': 384718000}
+
+    # Sanity check that these exist!
+    for scidd in spendable:
+        assert scidd in [f"{c['short_channel_id']}/{c['direction']}" for c in l1.rpc.listchannels(source=nodemap[0])['channels']]
+
+    for scidd, amount in spendable.items():
+        chan, direction = scidd.split('/')
+        l1.rpc.askrene_inform_channel(layer='localchans',
+                                      short_channel_id=chan, direction=int(direction),
+                                      minimum_msat=amount)
+        l1.rpc.askrene_inform_channel(layer='localchans',
+                                      short_channel_id=chan, direction=int(direction),
+                                      maximum_msat=amount)
+
+    routes = l1.rpc.getroutes(
+        source=nodemap[0],
+        destination=nodemap[2],
+        amount_msat=800_000_001,
+        layers=["localchans", "auto.sourcefree"],
+        maxfee_msat=50_000_000,
+        final_cltv=10,
+    )
+
+    path_total = {}
+    for r in routes["routes"]:
+        key = "{}/{}".format(
+            r["path"][0]["short_channel_id"], r["path"][0]["direction"]
+        )
+        path_total[key] = path_total.get(key, 0) + r["path"][0]["amount_msat"]
+
+    exceeded = {}
+    for scidd in spendable.keys():
+        if scidd in path_total:
+            if path_total[scidd] > spendable[scidd]:
+                exceeded[scidd] = f"Path total {path_total[scidd]} > spendable {spendable[scidd]}"
+
+    assert exceeded == {}
+
+    # No duplicate paths!
+    for i in range(0, len(routes["routes"])):
+        path_i = [(p['short_channel_id'], p['direction']) for p in routes["routes"][i]['path']]
+        for j in range(i + 1, len(routes["routes"])):
+            path_j = [(p['short_channel_id'], p['direction']) for p in routes["routes"][j]['path']]
+            assert path_i != path_j
+
+    # Must deliver exact amount.
+    assert sum(r['amount_msat'] for r in routes["routes"]) == 800_000_001
+
+
+def test_max_htlc(node_factory, bitcoind):
+    """A route which looks good isn't actually, because of max htlc limits"""
+    gsfile, nodemap = generate_gossip_store([GenChannel(0, 1, capacity_sats=500_000,
+                                                        forward=GenChannel.Half(htlc_max=1_000_000)),
+                                             GenChannel(0, 1, capacity_sats=20_000)])
+    l1 = node_factory.get_node(gossip_store_file=gsfile.name)
+
+    routes = l1.rpc.getroutes(source=nodemap[0],
+                              destination=nodemap[1],
+                              amount_msat=20_000_000,
+                              layers=[],
+                              maxfee_msat=20_000_000,
+                              final_cltv=10)
+
+    check_route_as_expected(routes['routes'],
+                            [[{'short_channel_id': '0x1x0', 'amount_msat': 1_000_001, 'delay': 10 + 6}],
+                             [{'short_channel_id': '0x1x1', 'amount_msat': 19_000_019, 'delay': 10 + 6}]])
+
+    # If we can't use channel 2, we fail.
+    l1.rpc.askrene_inform_channel(layer='removechan2',
+                                  short_channel_id='0x1x1', direction=1,
+                                  maximum_msat=0)
+
+    # FIXME: Better diag!
+    with pytest.raises(RpcError, match="Could not find route"):
+        l1.rpc.getroutes(source=nodemap[0],
+                         destination=nodemap[1],
+                         amount_msat=20_000_000,
+                         layers=['removechan2'],
+                         maxfee_msat=20_000_000,
+                         final_cltv=10)
+
+
+def test_min_htlc(node_factory, bitcoind):
+    """A route which looks good isn't actually, because of min htlc limits"""
+    gsfile, nodemap = generate_gossip_store([GenChannel(0, 1, capacity_sats=500_000,
+                                                        forward=GenChannel.Half(htlc_min=2_000)),
+                                             GenChannel(0, 1, capacity_sats=20_000)])
+    l1 = node_factory.get_node(gossip_store_file=gsfile.name)
+
+    with pytest.raises(RpcError, match="Amount 1000msat below minimum across 0x1x0/1"):
+        l1.rpc.getroutes(source=nodemap[0],
+                         destination=nodemap[1],
+                         amount_msat=1000,
+                         layers=[],
+                         maxfee_msat=20_000_000,
+                         final_cltv=10)
+
+
+def test_min_htlc_after_excess(node_factory, bitcoind):
+    gsfile, nodemap = generate_gossip_store([GenChannel(0, 1, capacity_sats=500_000,
+                                                        forward=GenChannel.Half(htlc_min=2_000))])
+    l1 = node_factory.get_node(gossip_store_file=gsfile.name)
+
+    with pytest.raises(RpcError, match=r"ending 1999msat across 0x1x0/1 would violate htlc_min \(~2000msat\)"):
+        l1.rpc.getroutes(source=nodemap[0],
+                         destination=nodemap[1],
+                         amount_msat=1999,
+                         layers=[],
+                         maxfee_msat=20_000_000,
+                         final_cltv=10)

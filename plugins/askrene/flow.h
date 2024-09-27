@@ -13,14 +13,9 @@ struct flow {
 	const struct gossmap_chan **path;
 	/* The directions to traverse. */
 	int *dirs;
-	/* Amounts for this flow (fees mean this shrinks across path). */
-	double success_prob;
-	struct amount_msat amount;
+	/* Amount delivered */
+	struct amount_msat delivers;
 };
-
-const char *fmt_flows(const tal_t *ctx,
-		      const struct route_query *rq,
-		      struct flow **flows);
 
 /* Helper to access the half chan at flow index idx */
 const struct half_chan *flow_edge(const struct flow *flow, size_t idx);
@@ -40,6 +35,10 @@ double flow_edge_cost(const struct gossmap *gossmap,
 		      double basefee_penalty,
 		      double delay_riskfactor);
 
+/* What's the success probability of this flow in isolation? */
+double flow_probability(const struct flow *flow,
+			const struct route_query *rq);
+
 /* Compute the prob. of success of a set of concurrent set of flows. */
 double flowset_probability(struct flow **flows,
 			   const struct route_query *rq);
@@ -50,45 +49,20 @@ struct amount_msat flow_spend(struct plugin *plugin, const struct flow *flow);
 /* How much do we pay in fees to make this flow arrive. */
 struct amount_msat flow_fee(struct plugin *plugin, const struct flow *flow);
 
+/* What fee to we pay for this entire flow set? */
 struct amount_msat flowset_fee(struct plugin *plugin, struct flow **flows);
 
+/* How much does this entire flowset deliver? */
 struct amount_msat flowset_delivers(struct plugin *plugin,
 				    struct flow **flows);
 
-static inline struct amount_msat flow_delivers(const struct flow *flow)
-{
-	return flow->amount;
-}
-
-/* FIXME: remove */
-enum askrene_errorcode {
-	ASKRENE_NOERROR = 0,
-
-	ASKRENE_AMOUNT_OVERFLOW,
-	ASKRENE_CHANNEL_NOT_FOUND,
-	ASKRENE_BAD_CHANNEL,
-	ASKRENE_BAD_ALLOCATION,
-	ASKRENE_PRECONDITION_ERROR,
-	ASKRENE_UNEXPECTED,
-};
-
-/* Returns problematic channel, OR sets max_deliverable to non-zero amount */
-const struct gossmap_chan *
-flow_maximum_deliverable(struct amount_msat *max_deliverable,
-			 const struct flow *flow,
-			 const struct route_query *rq);
-
-/* Assign the delivered amount to the flow if it fits
- the path maximum capacity. Returns bad channel if max would be zero. */
-const struct gossmap_chan *
-flow_assign_delivery(struct flow *flow,
-		     const struct route_query *rq,
-		     struct amount_msat requested_amount);
-
-double flow_probability(const struct flow *flow,
-			const struct route_query *rq);
-
+/* How much CLTV does this flow require? */
 u64 flow_delay(const struct flow *flow);
+
+/* Max CLTV any of these flows requires */
 u64 flows_worst_delay(struct flow **flows);
 
+const char *fmt_flows_step_scid(const tal_t *ctx,
+				const struct route_query *rq,
+				const struct flow *flow, size_t i);
 #endif /* LIGHTNING_PLUGINS_ASKRENE_FLOW_H */

@@ -388,13 +388,13 @@ struct tlv_invoice *invoice_decode(const tal_t *ctx UNNEEDED,
 				   const struct chainparams *must_be_chain UNNEEDED,
 				   char **fail UNNEEDED)
 { fprintf(stderr, "invoice_decode called!\n"); abort(); }
-/* Generated stub for invoice_decode_nosig */
-struct tlv_invoice *invoice_decode_nosig(const tal_t *ctx UNNEEDED,
-					 const char *b12 UNNEEDED, size_t b12len UNNEEDED,
-					 const struct feature_set *our_features UNNEEDED,
-					 const struct chainparams *must_be_chain UNNEEDED,
-					 char **fail UNNEEDED)
-{ fprintf(stderr, "invoice_decode_nosig called!\n"); abort(); }
+/* Generated stub for invoice_decode_minimal */
+struct tlv_invoice *invoice_decode_minimal(const tal_t *ctx UNNEEDED,
+					   const char *b12 UNNEEDED, size_t b12len UNNEEDED,
+					   const struct feature_set *our_features UNNEEDED,
+					   const struct chainparams *must_be_chain UNNEEDED,
+					   char **fail UNNEEDED)
+{ fprintf(stderr, "invoice_decode_minimal called!\n"); abort(); }
 /* Generated stub for invoice_encode */
 char *invoice_encode(const tal_t *ctx UNNEEDED, const struct tlv_invoice *bolt12_tlv UNNEEDED)
 { fprintf(stderr, "invoice_encode called!\n"); abort(); }
@@ -1023,9 +1023,6 @@ const char *version(void)
 /* Generated stub for wallet_channel_save */
 void wallet_channel_save(struct wallet *w UNNEEDED, struct channel *chan UNNEEDED)
 { fprintf(stderr, "wallet_channel_save called!\n"); abort(); }
-/* Generated stub for wallet_channel_stats_load */
-void wallet_channel_stats_load(struct wallet *w UNNEEDED, u64 cdbid UNNEEDED, struct channel_stats *stats UNNEEDED)
-{ fprintf(stderr, "wallet_channel_stats_load called!\n"); abort(); }
 /* Generated stub for wallet_channeltxs_add */
 void wallet_channeltxs_add(struct wallet *w UNNEEDED, struct channel *chan UNNEEDED,
 			    const int type UNNEEDED, const struct bitcoin_txid *txid UNNEEDED,
@@ -1062,11 +1059,6 @@ char *wallet_offer_find(const tal_t *ctx UNNEEDED,
 			enum offer_status *status)
 
 { fprintf(stderr, "wallet_offer_find called!\n"); abort(); }
-/* Generated stub for wallet_state_change_get */
-struct state_change_entry *wallet_state_change_get(const tal_t *ctx UNNEEDED,
-						   struct wallet *w UNNEEDED,
-						   u64 channel_id UNNEEDED)
-{ fprintf(stderr, "wallet_state_change_get called!\n"); abort(); }
 /* Generated stub for wallet_total_forward_fees */
 struct amount_msat wallet_total_forward_fees(struct wallet *w UNNEEDED)
 { fprintf(stderr, "wallet_total_forward_fees called!\n"); abort(); }

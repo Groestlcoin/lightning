@@ -100,6 +100,10 @@ WARN_UNUSED_RESULT bool amount_sat_add_sat_s64(struct amount_sat *val,
 					       struct amount_sat a,
 					       s64 b);
 
+/* a += b */
+WARN_UNUSED_RESULT bool amount_msat_accumulate(struct amount_msat *a,
+					       struct amount_msat b);
+
 struct amount_msat amount_msat_div(struct amount_msat msat, u64 div);
 struct amount_sat amount_sat_div(struct amount_sat sat, u64 div);
 
@@ -111,8 +115,8 @@ bool amount_sat_eq(struct amount_sat a, struct amount_sat b);
 bool amount_msat_eq(struct amount_msat a, struct amount_msat b);
 
 /* Is a zero? */
-bool amount_sat_zero(struct amount_sat a);
-bool amount_msat_zero(struct amount_msat a);
+bool amount_sat_is_zero(struct amount_sat a);
+bool amount_msat_is_zero(struct amount_msat a);
 
 /* Is a > b? */
 bool amount_sat_greater(struct amount_sat a, struct amount_sat b);
@@ -187,6 +191,11 @@ WARN_UNUSED_RESULT bool amount_msat_fee(struct amount_msat *fee,
 WARN_UNUSED_RESULT bool amount_msat_add_fee(struct amount_msat *amt,
 					    u32 fee_base_msat,
 					    u32 fee_proportional_millionths);
+
+/* Reversed: what is the largest possible output for a given input and fee? */
+struct amount_msat amount_msat_sub_fee(struct amount_msat input,
+				       u32 fee_base_msat,
+				       u32 fee_proportional_millionths);
 
 /* What is the fee for this tx weight? */
 struct amount_sat amount_tx_fee(u32 fee_per_kw, size_t weight);

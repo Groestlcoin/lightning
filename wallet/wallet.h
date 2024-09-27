@@ -366,14 +366,6 @@ struct outpoint {
 	u32 spendheight;
 };
 
-/* Statistics for a channel */
-struct channel_stats {
-	u64  in_payments_offered,  in_payments_fulfilled;
-	struct amount_msat  in_msatoshi_offered,  in_msatoshi_fulfilled;
-	u64 out_payments_offered, out_payments_fulfilled;
-	struct amount_msat out_msatoshi_offered, out_msatoshi_fulfilled;
-};
-
 struct channeltx {
 	u32 channel_id;
 	int type;
@@ -671,13 +663,6 @@ void wallet_state_change_add(struct wallet *w,
 			     const char *message);
 
 /**
- * Gets all state change history entries for a channel from the database
- */
-struct state_change_entry *wallet_state_change_get(const tal_t *ctx,
-						   struct wallet *w,
-						   u64 channel_id);
-
-/**
  * wallet_delete_peer_if_unused -- After no more channels in peer, forget about it
  */
 void wallet_delete_peer_if_unused(struct wallet *w, u64 peer_dbid);
@@ -714,15 +699,6 @@ void wallet_channel_stats_incr_in_offered(struct wallet *w, u64 cdbid, struct am
 void wallet_channel_stats_incr_in_fulfilled(struct wallet *w, u64 cdbid, struct amount_msat msatoshi);
 void wallet_channel_stats_incr_out_offered(struct wallet *w, u64 cdbid, struct amount_msat msatoshi);
 void wallet_channel_stats_incr_out_fulfilled(struct wallet *w, u64 cdbid, struct amount_msat msatoshi);
-
-/**
- * wallet_channel_stats_load - Load channel statistics
- *
- * @w: wallet containing the channel
- * @cdbid: channel database id
- * @stats: location to load statistics to
- */
-void wallet_channel_stats_load(struct wallet *w, u64 cdbid, struct channel_stats *stats);
 
 /**
  * Retrieve the blockheight of the last block processed by lightningd.
@@ -922,18 +898,6 @@ void wallet_payment_delete(struct wallet *wallet,
 			   const struct sha256 *payment_hash,
 			   const u64 *groupid, const u64 *partid,
 			   const enum payment_status *status);
-
-/**
- * wallet_local_htlc_out_delete - Remove a local outgoing failed HTLC
- *
- * This is not a generic HTLC cleanup!  This is specifically for the
- * narrow (and simple!) case of removing the HTLC associated with a
- * local outgoing payment.
- */
-void wallet_local_htlc_out_delete(struct wallet *wallet,
-				  struct channel *chan,
-				  const struct sha256 *payment_hash,
-				  u64 partid);
 
 /**
  * wallet_payment_by_hash - Retrieve a specific payment

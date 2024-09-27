@@ -19,13 +19,39 @@
 #include <plugins/askrene/flow.h>
 #include <plugins/askrene/layer.h>
 #include <plugins/askrene/mcf.h>
+#include <plugins/askrene/refine.h>
 #include <plugins/askrene/reserve.h>
-#include <plugins/libplugin.h>
 
-static struct askrene *get_askrene(struct plugin *plugin)
+/* "spendable" for a channel assumes a single HTLC: for additional HTLCs,
+ * the need to pay for fees (if we're the owner) reduces it */
+struct per_htlc_cost {
+	struct short_channel_id_dir scidd;
+	struct amount_msat per_htlc_cost;
+};
+
+static const struct short_channel_id_dir *
+per_htlc_cost_key(const struct per_htlc_cost *phc)
 {
-	return plugin_get_data(plugin, struct askrene);
+	return &phc->scidd;
 }
+
+static size_t hash_scidd(const struct short_channel_id_dir *scidd)
+{
+	/* scids cost money to generate, so simple hash works here */
+	return (scidd->scid.u64 >> 32) ^ (scidd->scid.u64 << 1) ^ scidd->dir;
+}
+
+static inline bool per_htlc_cost_eq_key(const struct per_htlc_cost *phc,
+					const struct short_channel_id_dir *scidd)
+{
+	return short_channel_id_dir_eq(scidd, &phc->scidd);
+}
+
+HTABLE_DEFINE_TYPE(struct per_htlc_cost,
+		   per_htlc_cost_key,
+		   hash_scidd,
+		   per_htlc_cost_eq_key,
+		   additional_cost_htable);
 
 static bool have_layer(const char **layers, const char *name)
 {
@@ -185,33 +211,62 @@ static void add_free_source(struct plugin *plugin,
 			    struct gossmap_localmods *localmods,
 			    const struct node_id *source)
 {
+	/* We apply existing localmods, save up mods we want, then append
+	 * them: it's not safe to modify localmods while they are applied! */
 	const struct gossmap_node *srcnode;
+	struct mod {
+		struct short_channel_id_dir scidd;
+		fp16_t htlc_min, htlc_max;
+		bool enabled;
+	} *mods = tal_arr(tmpctx, struct mod, 0);
 
-	/* If we're not in map, we complain later (unless we're purely
-	 * using local channels) */
+	gossmap_apply_localmods(gossmap, localmods);
+
+	/* If we're not in map, we complain later */
 	srcnode = gossmap_find_node(gossmap, source);
-	if (!srcnode)
-		return;
 
-	for (size_t i = 0; i < srcnode->num_chans; i++) {
-		struct gossmap_chan *c;
-		int dir;
-		struct short_channel_id scid;
+	for (size_t i = 0; srcnode && i < srcnode->num_chans; i++) {
+		const struct gossmap_chan *c;
+		const struct half_chan *h;
+		struct mod mod;
 
-		c = gossmap_nth_chan(gossmap, srcnode, i, &dir);
-		scid = gossmap_chan_scid(gossmap, c);
+		c = gossmap_nth_chan(gossmap, srcnode, i, &mod.scidd.dir);
+		h = &c->half[mod.scidd.dir];
+
+		mod.scidd.scid = gossmap_chan_scid(gossmap, c);
+		mod.htlc_min = h->htlc_min;
+		mod.htlc_max = h->htlc_max;
+		mod.enabled = h->enabled;
+		tal_arr_expand(&mods, mod);
+	}
+	gossmap_remove_localmods(gossmap, localmods);
+
+	/* Now we can update localmods */
+	for (size_t i = 0; i < tal_count(mods); i++) {
 		if (!gossmap_local_updatechan(localmods,
-					      scid,
+					      mods[i].scidd.scid,
 					      /* Keep min and max */
-					      gossmap_chan_htlc_min(c, dir),
-					      gossmap_chan_htlc_max(c, dir),
+					      /* FIXME: lossy conversion! */
+					      amount_msat(fp16_to_u64(mods[i].htlc_min)),
+					      amount_msat(fp16_to_u64(mods[i].htlc_max)),
 					      0, 0, 0,
 					      /* Keep enabled flag */
-					      c->half[dir].enabled,
-					      dir))
-			plugin_err(plugin, "Could not zero fee on local %s",
-				   fmt_short_channel_id(tmpctx, scid));
+					      mods[i].enabled,
+					      mods[i].scidd.dir))
+			plugin_err(plugin, "Could not zero fee on %s",
+				   fmt_short_channel_id_dir(tmpctx, &mods[i].scidd));
 	}
+}
+
+struct amount_msat get_additional_per_htlc_cost(const struct route_query *rq,
+						const struct short_channel_id_dir *scidd)
+{
+	const struct per_htlc_cost *phc;
+	phc = additional_cost_htable_get(rq->additional_costs, scidd);
+	if (phc)
+		return phc->per_htlc_cost;
+	else
+		return AMOUNT_MSAT(0);
 }
 
 /* Returns an error message, or sets *routes */
@@ -227,6 +282,7 @@ static const char *get_routes(const tal_t *ctx,
 			      const struct layer *local_layer,
 			      struct route ***routes,
 			      struct amount_msat **amounts,
+			      const struct additional_cost_htable *additional_costs,
 			      double *probability)
 {
 	struct askrene *askrene = get_askrene(plugin);
@@ -237,7 +293,6 @@ static const char *get_routes(const tal_t *ctx,
 	double base_fee_penalty;
 	u32 prob_cost_factor, mu;
 	const char *ret;
-	bool zero_cost;
 
 	if (gossmap_refresh(askrene->gossmap, NULL)) {
 		/* FIXME: gossmap_refresh callbacks to we can update in place */
@@ -250,11 +305,7 @@ static const char *get_routes(const tal_t *ctx,
 	rq->reserved = askrene->reserved;
 	rq->layers = tal_arr(rq, const struct layer *, 0);
 	rq->capacities = tal_dup_talarr(rq, fp16_t, askrene->capacities);
-
-	/* If we're told to zerocost local channels, then make sure that's done
-	 * in local mods as well. */
-	zero_cost = have_layer(layers, "auto.sourcefree")
-		&& node_id_eq(source, &askrene->my_id);
+	rq->additional_costs = additional_costs;
 
 	/* Layers don't have to exist: they might be empty! */
 	for (size_t i = 0; i < tal_count(layers); i++) {
@@ -269,15 +320,14 @@ static const char *get_routes(const tal_t *ctx,
 
 		tal_arr_expand(&rq->layers, l);
 		/* FIXME: Implement localmods_merge, and cache this in layer? */
-		layer_add_localmods(l, rq->gossmap, zero_cost, localmods);
+		layer_add_localmods(l, rq->gossmap, false, localmods);
 
 		/* Clear any entries in capacities array if we
 		 * override them (incl local channels) */
 		layer_clear_overridden_capacities(l, askrene->gossmap, rq->capacities);
 	}
 
-	/* This does not see local mods!  If you add local channel in a layer, it won't
-	 * have costs zeroed out here. */
+	/* This also looks into localmods, to zero them */
 	if (have_layer(layers, "auto.sourcefree"))
 		add_free_source(plugin, askrene->gossmap, localmods, source);
 
@@ -309,7 +359,7 @@ static const char *get_routes(const tal_t *ctx,
 	/* This value is somewhat implied by our fee budget: say we would pay
 	 * the entire budget for 100% probability, that means prob_cost_factor
 	 * is (fee / amount) / 1000, or in PPM: (fee / amount) * 1000 */
-	if (amount_msat_zero(amount))
+	if (amount_msat_is_zero(amount))
 		prob_cost_factor = 0;
 	else
 		prob_cost_factor = amount_msat_ratio(maxfee, amount) * 1000;
@@ -360,6 +410,14 @@ static const char *get_routes(const tal_t *ctx,
 		goto out;
 	}
 
+	/* The above did not take into account the extra funds to pay
+	 * fees, so we try to adjust now.  We could re-run MCF if this
+	 * fails, but failure basically never happens where payment is
+	 * still possible */
+	ret = refine_with_fees_and_limits(ctx, rq, amount, &flows);
+	if (ret)
+		goto out;
+
 	/* Convert back into routes, with delay and other information fixed */
 	*routes = tal_arr(ctx, struct route *, tal_count(flows));
 	*amounts = tal_arr(ctx, struct amount_msat, tal_count(flows));
@@ -369,12 +427,11 @@ static const char *get_routes(const tal_t *ctx,
 		u32 delay;
 
 		(*routes)[i] = r = tal(*routes, struct route);
-		/* FIXME: flow_probability doesn't take into account other flows! */
-		r->success_prob = flows[i]->success_prob;
+		r->success_prob = flow_probability(flows[i], rq);
 		r->hops = tal_arr(r, struct route_hop, tal_count(flows[i]->path));
 
 		/* Fill in backwards to calc amount and delay */
-		msat = flows[i]->amount;
+		msat = flows[i]->delivers;
 		delay = finalcltv;
 
 		for (int j = tal_count(flows[i]->path) - 1; j >= 0; j--) {
@@ -393,7 +450,7 @@ static const char *get_routes(const tal_t *ctx,
 			rh->amount = msat;
 			rh->delay = delay;
 		}
-		(*amounts)[i] = flow_delivers(flows[i]);
+		(*amounts)[i] = flows[i]->delivers;
 	}
 
 	*probability = flowset_probability(flows, rq);
@@ -469,15 +526,18 @@ void get_constraints(const struct route_query *rq,
 }
 
 struct getroutes_info {
+	struct command *cmd;
 	struct node_id *source, *dest;
 	struct amount_msat *amount, *maxfee;
 	u32 *finalcltv;
 	const char **layers;
+	struct additional_cost_htable *additional_costs;
+	/* Non-NULL if we are told to use "auto.localchans" */
+	struct layer *local_layer;
 };
 
 static struct command_result *do_getroutes(struct command *cmd,
 					   struct gossmap_localmods *localmods,
-					   const struct layer *local_layer,
 					   const struct getroutes_info *info)
 {
 	const char *err;
@@ -489,8 +549,8 @@ static struct command_result *do_getroutes(struct command *cmd,
 	err = get_routes(cmd, cmd->plugin,
 			 info->source, info->dest,
 			 *info->amount, *info->maxfee, *info->finalcltv,
-			 info->layers, localmods, local_layer,
-			 &routes, &amounts, &probability);
+			 info->layers, localmods, info->local_layer,
+			 &routes, &amounts, info->additional_costs, &probability);
 	if (err)
 		return command_fail(cmd, PAY_ROUTE_NOT_FOUND, "%s", err);
 
@@ -531,17 +591,60 @@ static void add_localchan(struct gossmap_localmods *mods,
 			  u32 fee_proportional,
 			  u32 cltv_delta,
 			  bool enabled,
-			  const char *buf UNUSED,
-			  const jsmntok_t *chantok UNUSED,
-			  struct layer *local_layer)
+			  const char *buf,
+			  const jsmntok_t *chantok,
+			  struct getroutes_info *info)
 {
+	u32 feerate;
+	const char *opener;
+	const char *err;
+
 	gossmod_add_localchan(mods, self, peer, scidd, htlcmin, htlcmax,
 			      spendable, fee_base, fee_proportional, cltv_delta, enabled,
-			      buf, chantok, local_layer);
+			      buf, chantok, info->local_layer);
+
+	/* We also need to know the feerate and opener, so we can calculate per-HTLC cost */
+	feerate = 0; /* Can be unset on unconfirmed channels */
+	err = json_scan(tmpctx, buf, chantok,
+			"{feerate?:{perkw:%},opener:%}",
+			JSON_SCAN(json_to_u32, &feerate),
+			JSON_SCAN_TAL(tmpctx, json_strdup, &opener));
+	if (err) {
+		plugin_log(info->cmd->plugin, LOG_BROKEN,
+			   "Cannot scan channel for feerate and owner (%s): %.*s",
+			   err, json_tok_full_len(chantok), json_tok_full(buf, chantok));
+		return;
+	}
+
+	if (feerate != 0 && streq(opener, "local")) {
+		/* BOLT #3:
+		 * The base fee for a commitment transaction:
+		 *   - MUST be calculated to match:
+		 *     1. Start with `weight` = 724 (1124 if `option_anchors` applies).
+		 *     2. For each committed HTLC, if that output is not trimmed as specified in
+		 *     [Trimmed Outputs](#trimmed-outputs), add 172 to `weight`.
+		 *     3. Multiply `feerate_per_kw` by `weight`, divide by 1000 (rounding down).
+		 */
+		struct per_htlc_cost *phc
+			= tal(info->additional_costs, struct per_htlc_cost);
+
+		phc->scidd = *scidd;
+		if (!amount_sat_to_msat(&phc->per_htlc_cost,
+					amount_tx_fee(feerate, 172))) {
+			/* Can't happen, since feerate is u32... */
+			abort();
+		}
+
+		plugin_log(info->cmd->plugin, LOG_DBG, "Per-htlc cost for %s = %s (%u x 172)",
+			   fmt_short_channel_id_dir(tmpctx, scidd),
+			   fmt_amount_msat(tmpctx, phc->per_htlc_cost),
+			   feerate);
+		additional_cost_htable_add(info->additional_costs, phc);
+	}
 
 	/* Known capacity on local channels (ts = max) */
-	layer_update_constraint(local_layer, scidd, CONSTRAINT_MIN, UINT64_MAX, spendable);
-	layer_update_constraint(local_layer, scidd, CONSTRAINT_MAX, UINT64_MAX, spendable);
+	layer_update_constraint(info->local_layer, scidd, CONSTRAINT_MIN, UINT64_MAX, spendable);
+	layer_update_constraint(info->local_layer, scidd, CONSTRAINT_MAX, UINT64_MAX, spendable);
 }
 
 static struct command_result *
@@ -550,23 +653,17 @@ listpeerchannels_done(struct command *cmd,
 		      const jsmntok_t *toks,
 		      struct getroutes_info *info)
 {
-	struct layer *local_layer = new_temp_layer(info, "auto.localchans");
 	struct gossmap_localmods *localmods;
-	bool zero_cost;
 
-	/* If we're told to zerocost local channels, then make sure that's done
-	 * in local mods as well. */
-	zero_cost = have_layer(info->layers, "auto.sourcefree")
-		&& node_id_eq(info->source, &get_askrene(cmd->plugin)->my_id);
-
+	info->local_layer = new_temp_layer(info, "auto.localchans");
 	localmods = gossmods_from_listpeerchannels(cmd,
 						   &get_askrene(cmd->plugin)->my_id,
 						   buffer, toks,
-						   zero_cost,
+						   false,
 						   add_localchan,
-						   local_layer);
+						   info);
 
-	return do_getroutes(cmd, localmods, local_layer, info);
+	return do_getroutes(cmd, localmods, info);
 }
 
 static struct command_result *json_getroutes(struct command *cmd,
@@ -585,6 +682,10 @@ static struct command_result *json_getroutes(struct command *cmd,
 		   NULL))
 		return command_param_failed();
 
+	info->cmd = cmd;
+	info->additional_costs = tal(info, struct additional_cost_htable);
+	additional_cost_htable_init(info->additional_costs);
+
 	if (have_layer(info->layers, "auto.localchans")) {
 		struct out_req *req;
 
@@ -593,9 +694,10 @@ static struct command_result *json_getroutes(struct command *cmd,
 					    listpeerchannels_done,
 					    forward_error, info);
 		return send_outreq(cmd->plugin, req);
-	}
+	} else
+		info->local_layer = NULL;
 
-	return do_getroutes(cmd, gossmap_localmods_new(cmd), NULL, info);
+	return do_getroutes(cmd, gossmap_localmods_new(cmd), info);
 }
 
 static struct command_result *json_askrene_reserve(struct command *cmd,

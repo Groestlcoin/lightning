@@ -844,9 +844,7 @@ found:
 	return channel;
 }
 
-/* Check if payment already in progress.  Returns NULL if all good;
- * sets old_payment to a previous attempt if there is one (otherwise
- * NULL). */
+/* Check if payment already in progress.  Returns NULL if all good */
 static struct command_result *check_progress(struct lightningd *ld,
 					     struct command *cmd,
 					     const struct sha256 *rhash,
@@ -854,13 +852,10 @@ static struct command_result *check_progress(struct lightningd *ld,
 					     struct amount_msat total_msat,
 					     u64 partid,
 					     u64 group,
-					     const struct node_id *destination,
-					     const struct wallet_payment **old_payment)
+					     const struct node_id *destination)
 {
 	bool have_complete = false;
 	struct amount_msat msat_already_pending = AMOUNT_MSAT(0);
-
-	*old_payment = NULL;
 
 	/* Now, do we already have one or more payments? */
 	for (struct db_stmt *stmt = payments_by_hash(cmd->ld->wallet, rhash);
@@ -959,9 +954,8 @@ static struct command_result *check_progress(struct lightningd *ld,
 								    total_msat));
 			}
 
-			if (!amount_msat_add(&msat_already_pending,
-					     msat_already_pending,
-					     payment->msatoshi)) {
+			if (!amount_msat_accumulate(&msat_already_pending,
+						    payment->msatoshi)) {
 				tal_free(stmt);
 				return command_fail(cmd, LIGHTNINGD,
 						    "Internal amount overflow!"
@@ -974,8 +968,7 @@ static struct command_result *check_progress(struct lightningd *ld,
 			break;
 
 		case PAYMENT_FAILED:
-			if (payment->partid == partid)
-				*old_payment = payment;
+			break;
  		}
 		/* There is no way for us to add a payment with the
 		 * same (payment_hash, partid, groupid) tuple since
@@ -1007,7 +1000,7 @@ static struct command_result *check_progress(struct lightningd *ld,
 	 *   set is already greater or equal to `total_msat`.
 	 */
 	/* We don't do this for single 0-value payments (sendonion does this) */
-	if (!amount_msat_eq(total_msat, AMOUNT_MSAT(0))
+	if (!amount_msat_is_zero(total_msat)
 	    && amount_msat_greater_eq(msat_already_pending, total_msat)) {
 		return command_fail(cmd, PAY_IN_PROGRESS,
 				    "Already have %s of %s payments in progress",
@@ -1040,7 +1033,6 @@ send_payment_core(struct lightningd *ld,
 		  struct secret *path_secrets,
 		  const struct sha256 *local_invreq_id)
 {
-	const struct wallet_payment *old_payment;
 	struct channel *channel;
 	const u8 *failmsg;
 	struct htlc_out *hout;
@@ -1049,8 +1041,8 @@ send_payment_core(struct lightningd *ld,
 	struct wallet_payment *payment;
 
 	/* Reconcile this with previous attempts */
-	ret = check_progress(ld, cmd, rhash, msat, total_msat, partid, group, destination,
-			     &old_payment);
+	ret = check_progress(ld, cmd, rhash, msat, total_msat, partid, group,
+			     destination);
 	if (ret)
 		return ret;
 
@@ -1096,19 +1088,9 @@ send_payment_core(struct lightningd *ld,
 		    &channel->peer->id);
 
 		return sendpay_fail(
-		    cmd, old_payment, PAY_TRY_OTHER_ROUTE, NULL, fail,
+		    cmd, NULL, PAY_TRY_OTHER_ROUTE, NULL, fail,
 		    sendpay_errmsg_fmt(tmpctx, PAY_TRY_OTHER_ROUTE, fail,
 				       "First peer not ready"));
-	}
-
-	/* If we're retrying we delete outgoing HTLC otherwise it gets
-	 * reported to onchaind as a possibility, and we end up in
-	 * handle_missing_htlc_output -> onchain_failed_our_htlc ->
-	 * payment_failed with no payment.
-	 */
-	if (old_payment) {
-		wallet_local_htlc_out_delete(ld->wallet, channel, rhash,
-					     partid);
 	}
 
 	payment = wallet_add_payment(cmd,
