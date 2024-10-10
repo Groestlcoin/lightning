@@ -12,18 +12,18 @@ struct sciddir_or_pubkey;
 
 struct gossmap_node {
 	/* Offset in memory map for node_announce, or 0. */
-	u32 nann_off;
+	u64 nann_off;
 	u32 num_chans;
 	u32 *chan_idxs;
 };
 
 struct gossmap_chan {
-	u32 cann_off;
-	/* Technically redundant, but we have a hole anyway: from cann_off */
-	u32 plus_scid_off;
+	u64 cann_off;
+	/* FIXME: Technically redundant */
+	u64 plus_scid_off;
 	/* Offsets of cupdates (0 if missing).  Logically inside half_chan,
 	 * but that would add padding. */
-	u32 cupdate_off[2];
+	u64 cupdate_off[2];
 	/* two nodes we connect (lesser idx first) */
 	struct half_chan {
 		/* Top bit indicates it's enabled */
@@ -57,7 +57,7 @@ struct gossmap *gossmap_load(const tal_t *ctx, const char *filename,
 			 typesafe_cb_preargs(bool, void *, (unknown_record), (cbarg), \
 					     struct gossmap *,		\
 					     int type,			\
-					     size_t off,		\
+					     u64 off,			\
 					     size_t msglen),		\
 			 (cbarg))
 
@@ -70,7 +70,7 @@ struct gossmap *gossmap_load_fd_(const tal_t *ctx, int fd,
 						      void *cb_arg),
 				 bool (*unknown_record)(struct gossmap *map,
 							int type,
-							size_t off,
+							u64 off,
 							size_t msglen,
 							void *cb_arg),
 				 void *cb_arg);
@@ -94,22 +94,33 @@ bool gossmap_local_addchan(struct gossmap_localmods *localmods,
 			   const struct node_id *n1,
 			   const struct node_id *n2,
 			   struct short_channel_id scid,
+			   struct amount_msat capacity,
 			   const u8 *features)
 	NON_NULL_ARGS(1,2,3);
 
 /* Create a local-only channel_update: can apply to lcoal-only or
  * normal channels.  Returns false if amounts don't fit in our
- * internal representation (implies channel unusable anyway). */
+ * internal representation (implies channel unusable anyway).  Any
+ * NULL arguments mean "leave as is". */
 bool gossmap_local_updatechan(struct gossmap_localmods *localmods,
-			      struct short_channel_id scid,
-			      struct amount_msat htlc_min,
-			      struct amount_msat htlc_max,
-			      u32 base_fee,
-			      u32 proportional_fee,
-			      u16 delay,
-			      bool enabled,
-			      int dir)
-	NO_NULL_ARGS;
+			      const struct short_channel_id_dir *scidd,
+			      const bool *enabled,
+			      const struct amount_msat *htlc_min,
+			      const struct amount_msat *htlc_max,
+			      const struct amount_msat *base_fee,
+			      const u32 *proportional_fee,
+			      const u16 *delay);
+
+/* Convenience version which sets everything (older API) */
+bool gossmap_local_setchan(struct gossmap_localmods *localmods,
+			   struct short_channel_id scid,
+			   struct amount_msat htlc_min,
+			   struct amount_msat htlc_max,
+			   struct amount_msat base_fee,
+			   u32 proportional_fee,
+			   u16 delay,
+			   bool enabled,
+			   int dir);
 
 /* Apply localmods to this map */
 void gossmap_apply_localmods(struct gossmap *map,
@@ -161,10 +172,9 @@ static inline bool gossmap_chan_set(const struct gossmap_chan *chan, int dir)
 	return chan->cupdate_off[dir] != 0;
 }
 
-/* Return capacity if it's known (fails on a local mod) */
-bool gossmap_chan_get_capacity(const struct gossmap *map,
-			       const struct gossmap_chan *c,
-			       struct amount_sat *amount);
+/* Return capacity (in msat). */
+struct amount_msat gossmap_chan_get_capacity(const struct gossmap *map,
+					     const struct gossmap_chan *c);
 
 /* Get the announcement msg which created this chan (NULL for localmods) */
 u8 *gossmap_chan_get_announce(const tal_t *ctx,
@@ -296,7 +306,7 @@ void gossmap_iter_fast_forward(const struct gossmap *map,
 void gossmap_iter_end(const struct gossmap *map, struct gossmap_iter *iter);
 
 /* For debugging: returns length read, and total known length of file */
-size_t gossmap_lengths(const struct gossmap *map, size_t *total);
+u64 gossmap_lengths(const struct gossmap *map, u64 *total);
 
 /* Debugging: connectd wants to enumerate fds */
 int gossmap_fd(const struct gossmap *map);

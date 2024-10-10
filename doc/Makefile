@@ -6,10 +6,14 @@ doc-wrongdir:
 
 GENERATE_MARKDOWN := doc/lightning-addgossip.7 \
 	doc/lightning-addpsbtoutput.7 \
+	doc/lightning-askrene-create-layer.7 \
+	doc/lightning-askrene-remove-layer.7 \
 	doc/lightning-askrene-create-channel.7 \
+	doc/lightning-askrene-update-channel.7 \
 	doc/lightning-askrene-disable-node.7 \
 	doc/lightning-askrene-inform-channel.7 \
 	doc/lightning-askrene-listlayers.7 \
+	doc/lightning-askrene-listreservations.7 \
 	doc/lightning-askrene-reserve.7 \
 	doc/lightning-askrene-unreserve.7 \
 	doc/lightning-autoclean-once.7 \
@@ -56,6 +60,7 @@ GENERATE_MARKDOWN := doc/lightning-addgossip.7 \
 	doc/lightning-fundchannel_start.7 \
 	doc/lightning-funderupdate.7 \
 	doc/lightning-fundpsbt.7 \
+	doc/lightning-getemergencyrecoverdata.7 \
 	doc/lightning-getinfo.7 \
 	doc/lightning-getlog.7 \
 	doc/lightning-getroute.7 \

@@ -224,7 +224,7 @@ static void json_add_halfchan(struct json_stream *response,
 	struct short_channel_id scid;
 	struct node_id node_id[2];
 	const u8 *chanfeatures;
-	struct amount_sat capacity;
+	struct amount_msat capacity_msat;
 	bool local_disable;
 
 	/* These are channel (not per-direction) properties */
@@ -234,9 +234,7 @@ static void json_add_halfchan(struct json_stream *response,
 		gossmap_node_get_id(gossmap, gossmap_nth_node(gossmap, c, i),
 				    &node_id[i]);
 
-	/* This can theoretically happen on partial write races. */
-	if (!gossmap_chan_get_capacity(gossmap, c, &capacity))
-		capacity = AMOUNT_SAT(0);
+	capacity_msat = gossmap_chan_get_capacity(gossmap, c);
 
 	/* Deprecated: local channels are not "active" unless peer is connected. */
 	if (connected && node_id_eq(&node_id[0], &local_id))
@@ -287,7 +285,7 @@ static void json_add_halfchan(struct json_stream *response,
 							&htlc_maximum_msat);
 		}
 
-		json_add_amount_sat_msat(response, "amount_msat", capacity);
+		json_add_amount_msat(response, "amount_msat", capacity_msat);
 		json_add_num(response, "message_flags", message_flags);
 		json_add_num(response, "channel_flags", channel_flags);
 
@@ -362,12 +360,13 @@ static void gossmod_add_unknown_localchan(struct gossmap_localmods *mods,
 					  const struct node_id *self,
 					  const struct node_id *peer,
 					  const struct short_channel_id_dir *scidd,
+					  struct amount_msat capacity_msat,
 					  struct amount_msat min,
 					  struct amount_msat max,
 					  struct amount_msat spendable,
 					  struct amount_msat fee_base,
 					  u32 fee_proportional,
-					  u32 cltv_delta,
+					  u16 cltv_delta,
 					  bool enabled,
 					  const char *buf UNUSED,
 					  const jsmntok_t *chantok UNUSED,
@@ -376,12 +375,12 @@ static void gossmod_add_unknown_localchan(struct gossmap_localmods *mods,
 	if (gossmap_find_chan(gossmap, &scidd->scid))
 		return;
 
-	gossmod_add_localchan(mods, self, peer, scidd, min, max, spendable,
+	gossmod_add_localchan(mods, self, peer, scidd, capacity_msat,
+			      min, max, spendable,
 			      fee_base, fee_proportional, cltv_delta, enabled,
 			      buf, chantok, gossmap);
 }
 
-/* FIXME: We don't need this listpeerchannels at all if not deprecated! */
 static struct command_result *listpeerchannels_done(struct command *cmd,
 					     const char *buf,
 					     const jsmntok_t *result,
@@ -472,9 +471,18 @@ static struct command_result *json_listchannels(struct command *cmd,
 				    "Can only specify one of "
 				    "`short_channel_id`, "
 				    "`source` or `destination`");
-	req = jsonrpc_request_start(cmd->plugin, cmd, "listpeerchannels",
+
+	// FIXME: Once this deprecation is removed, `listpeerchannels_done` can
+	// be embedded in the current function.
+	if (command_deprecated_out_ok(cmd, "include_private", "v24.02", "v24.08")) {
+		req = jsonrpc_request_start(cmd->plugin, cmd, "listpeerchannels",
 				    listpeerchannels_done, forward_error, opts);
-	return send_outreq(cmd->plugin, req);
+		return send_outreq(cmd->plugin, req);
+	}
+
+	// If deprecations are not necessary, call listpeerchannels_done directly,
+	// the output will not be used there.
+	return listpeerchannels_done(cmd, NULL, NULL, opts);
 }
 
 static void json_add_node(struct json_stream *js,
@@ -510,7 +518,7 @@ static void json_add_node(struct json_stream *js,
 						&na_tlvs)) {
 			plugin_log(plugin, LOG_BROKEN,
 				   "Cannot parse stored node_announcement"
-				   " for %s at %u: %s",
+				   " for %s at %"PRIu64": %s",
 				   fmt_node_id(tmpctx, &node_id),
 				   n->nann_off,
 				   tal_hex(tmpctx, nannounce));

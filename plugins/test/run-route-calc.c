@@ -1,4 +1,5 @@
 #include "config.h"
+#include "plugins/channel_hint.h"
 #define TESTING
 #include "../../common/dijkstra.c"
 #include "../libplugin-pay.c"
@@ -42,12 +43,13 @@ void gossmod_add_localchan(struct gossmap_localmods *mods UNNEEDED,
 			   const struct node_id *self UNNEEDED,
 			   const struct node_id *peer UNNEEDED,
 			   const struct short_channel_id_dir *scidd UNNEEDED,
+			   struct amount_msat capacity_msat UNNEEDED,
 			   struct amount_msat htlcmin UNNEEDED,
 			   struct amount_msat htlcmax UNNEEDED,
 			   struct amount_msat spendable UNNEEDED,
 			   struct amount_msat fee_base UNNEEDED,
 			   u32 fee_proportional UNNEEDED,
-			   u32 cltv_delta UNNEEDED,
+			   u16 cltv_delta UNNEEDED,
 			   bool enabled UNNEEDED,
 			   const char *buf UNUSED UNNEEDED,
 			   const jsmntok_t *chantok UNUSED UNNEEDED,
@@ -63,12 +65,13 @@ struct gossmap_localmods *gossmods_from_listpeerchannels_(const tal_t *ctx UNNEE
 								     const struct node_id *self_ UNNEEDED,
 								     const struct node_id *peer UNNEEDED,
 								     const struct short_channel_id_dir *scidd UNNEEDED,
+								     struct amount_msat capacity_msat UNNEEDED,
 								     struct amount_msat htlcmin UNNEEDED,
 								     struct amount_msat htlcmax UNNEEDED,
 								     struct amount_msat spendable UNNEEDED,
 								     struct amount_msat fee_base UNNEEDED,
 								     u32 fee_proportional UNNEEDED,
-								     u32 cltv_delta UNNEEDED,
+								     u16 cltv_delta UNNEEDED,
 								     bool enabled UNNEEDED,
 								     const char *buf_ UNNEEDED,
 								     const jsmntok_t *chantok UNNEEDED,
@@ -81,6 +84,12 @@ void json_add_amount_msat(struct json_stream *result UNNEEDED,
 			  struct amount_msat msat)
 
 { fprintf(stderr, "json_add_amount_msat called!\n"); abort(); }
+/* Generated stub for json_add_amount_sat */
+void json_add_amount_sat(struct json_stream *result UNNEEDED,
+			  const char *satfieldname UNNEEDED,
+			  struct amount_sat sat)
+
+{ fprintf(stderr, "json_add_amount_sat called!\n"); abort(); }
 /* Generated stub for json_add_bool */
 void json_add_bool(struct json_stream *result UNNEEDED, const char *fieldname UNNEEDED,
 		   bool value UNNEEDED)
@@ -213,6 +222,10 @@ bool json_to_sat(const char *buffer UNNEEDED, const jsmntok_t *tok UNNEEDED,
 bool json_to_short_channel_id(const char *buffer UNNEEDED, const jsmntok_t *tok UNNEEDED,
 			      struct short_channel_id *scid UNNEEDED)
 { fprintf(stderr, "json_to_short_channel_id called!\n"); abort(); }
+/* Generated stub for json_to_short_channel_id_dir */
+bool json_to_short_channel_id_dir(const char *buffer UNNEEDED, const jsmntok_t *tok UNNEEDED,
+				  struct short_channel_id_dir *scidd UNNEEDED)
+{ fprintf(stderr, "json_to_short_channel_id_dir called!\n"); abort(); }
 /* Generated stub for json_to_u16 */
 bool json_to_u16(const char *buffer UNNEEDED, const jsmntok_t *tok UNNEEDED,
                  uint16_t *num UNNEEDED)
@@ -259,6 +272,12 @@ struct json_stream *jsonrpc_stream_fail(struct command *cmd UNNEEDED,
 /* Generated stub for jsonrpc_stream_success */
 struct json_stream *jsonrpc_stream_success(struct command *cmd UNNEEDED)
 { fprintf(stderr, "jsonrpc_stream_success called!\n"); abort(); }
+/* Generated stub for memleak_add_helper_ */
+void memleak_add_helper_(const tal_t *p UNNEEDED, void (*cb)(struct htable *memtable UNNEEDED,
+						    const tal_t *)){ }
+/* Generated stub for memleak_scan_htable */
+void memleak_scan_htable(struct htable *memtable UNNEEDED, const struct htable *ht UNNEEDED)
+{ fprintf(stderr, "memleak_scan_htable called!\n"); abort(); }
 /* Generated stub for notleak_ */
 void *notleak_(void *ptr UNNEEDED, bool plus_children UNNEEDED)
 { fprintf(stderr, "notleak_ called!\n"); abort(); }
@@ -417,12 +436,14 @@ int main(int argc, char *argv[])
 {
 	struct payment *p;
 	struct payment_modifier **mods;
+	struct channel_hint_set *hints;
 
 	common_setup(argv[0]);
 	chainparams = chainparams_for_network("regtest");
+	hints = channel_hint_set_new(tmpctx);
 
 	mods = tal_arrz(tmpctx, struct payment_modifier *, 1);
-	p = payment_new(mods, tal(tmpctx, struct command), NULL, mods);
+	p = payment_new(mods, tal(tmpctx, struct command), NULL, hints, mods);
 
 	/* We want to permute order of channels between each node, to
 	 * avoid "it works because it chooses the first one!" */

@@ -265,7 +265,7 @@
       "description": [
         "WARNING: experimental, so API may change.",
         "",
-        "The **askrene-create-channel** RPC command tells askrene to populate one direction of a channel in the given layer.  If the channel already exists, it will be overridden.  If the layer does not exist, it will be created."
+        "The **askrene-create-channel** RPC command tells askrene create a channel in the given layer.  To actually populate the channel use *askrene-update-channel* in each direction."
       ],
       "request": {
         "required": [
@@ -273,12 +273,7 @@
           "source",
           "destination",
           "short_channel_id",
-          "capacity_msat",
-          "htlc_min",
-          "htlc_max",
-          "base_fee",
-          "proportional_fee",
-          "delay"
+          "capacity_msat"
         ],
         "properties": {
           "layer": {
@@ -308,37 +303,8 @@
           "capacity_msat": {
             "type": "msat",
             "description": [
-              "The capacity (onchain size) of the channel."
-            ]
-          },
-          "htlc_min": {
-            "type": "msat",
-            "description": [
-              "The minimum value allowed in this direction."
-            ]
-          },
-          "htlc_max": {
-            "type": "msat",
-            "description": [
-              "The maximum value allowed in this direction."
-            ]
-          },
-          "base_fee": {
-            "type": "msat",
-            "description": [
-              "The base fee to apply to use the channel in this direction."
-            ]
-          },
-          "proportional_fee": {
-            "type": "u32",
-            "description": [
-              "The proportional fee (in parts per million) to apply to use the channel in this direction."
-            ]
-          },
-          "delay": {
-            "type": "u16",
-            "description": [
-              "The CLTV delay required for this direction."
+              "The capacity (onchain size) of the channel.",
+              "NOTE: this is in millisatoshis!"
             ]
           }
         }
@@ -350,6 +316,7 @@
       "see_also": [
         "lightning-getroutes(7)",
         "lightning-askrene-disable-node(7)",
+        "lightning-askrene-update-channel(7)",
         "lightning-askrene-inform-channel(7)",
         "lightning-askrene-listlayers(7)",
         "lightning-askrene-age(7)"
@@ -361,184 +328,26 @@
         "Main web site: <https://github.com/ElementsProject/lightning>"
       ]
     },
-    "lightning-askrene-disable-node.json": {
+    "lightning-askrene-create-layer.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
       "additionalProperties": false,
-      "rpc": "askrene-disable-node",
-      "title": "Command to disable all channels to/from a node in a layer (EXPERIMENTAL)",
+      "rpc": "askrene-create-layer",
+      "title": "Command to create a new layer (EXPERIMENTAL)",
       "description": [
         "WARNING: experimental, so API may change.",
         "",
-        "The **askrene-disable-node** RPC command tells askrene to disable all channels connected to a node whenever the given layer is used.  This is mainly useful to force the use of alternate paths: while individual channels can be disabled using askrene-create-channel or askrene-inform-channel, that would be racy if new channels appeared."
+        "The **askrene-create-layer** RPC command tells askrene to create a new, empty layer.  This layer can then be populated with `askrene-create-channel` and `askrene-inform-channel`, and be used in `getroutes`."
       ],
       "request": {
         "required": [
-          "layer",
-          "node"
+          "layer"
         ],
         "properties": {
           "layer": {
             "type": "string",
             "description": [
-              "The name of the layer to apply this change to."
-            ]
-          },
-          "node": {
-            "type": "pubkey",
-            "description": [
-              "The node to disable.  It does not need to exist."
-            ]
-          }
-        }
-      },
-      "response": {
-        "required": [],
-        "properties": {}
-      },
-      "see_also": [
-        "lightning-getroutes(7)",
-        "lightning-askrene-create-channel(7)",
-        "lightning-askrene-inform-channel(7)",
-        "lightning-askrene-listlayers(7)",
-        "lightning-askrene-age(7)"
-      ],
-      "author": [
-        "Rusty Russell <<rusty@rustcorp.com.au>> is mainly responsible."
-      ],
-      "resources": [
-        "Main web site: <https://github.com/ElementsProject/lightning>"
-      ]
-    },
-    "lightning-askrene-inform-channel.json": {
-      "$schema": "../rpc-schema-draft.json",
-      "type": "object",
-      "additionalProperties": false,
-      "rpc": "askrene-inform-channel",
-      "title": "Command to add channel capacity restrictions to layer (EXPERIMENTAL)",
-      "description": [
-        "WARNING: experimental, so API may change.",
-        "",
-        "The **askrene-inform-channel** RPC command tells askrene about the minimum or maximum current capacity of a given channel.  It can be applied whether the curren channel exists or not.  If the layer does not exist, it will be created."
-      ],
-      "request": {
-        "required": [
-          "layer",
-          "short_channel_id",
-          "direction"
-        ],
-        "properties": {
-          "layer": {
-            "type": "string",
-            "description": [
-              "The name of the layer to apply this change to."
-            ]
-          },
-          "short_channel_id": {
-            "type": "short_channel_id",
-            "description": [
-              "The short channel id to apply this change to."
-            ]
-          },
-          "direction": {
-            "type": "u32",
-            "description": [
-              "The direction to apply this change to."
-            ]
-          },
-          "minimum_msat": {
-            "type": "msat",
-            "description": [
-              "The minumum value which this channel could pass.  This or *minimum_msat* must be specified, but not both."
-            ]
-          },
-          "maximum_msat": {
-            "type": "msat",
-            "description": [
-              "The maximum value which this channel could pass.  This or *minimum_msat* must be specified, but not both."
-            ]
-          }
-        }
-      },
-      "response": {
-        "required": [
-          "constraint"
-        ],
-        "properties": {
-          "constraint": {
-            "type": "object",
-            "required": [
-              "short_channel_id",
-              "direction",
-              "timestamp"
-            ],
-            "properties": {
-              "short_channel_id": {
-                "type": "short_channel_id",
-                "description": [
-                  "The *short_channel_id* specified."
-                ]
-              },
-              "direction": {
-                "type": "u32",
-                "description": [
-                  "The *direction* specified."
-                ]
-              },
-              "timestamp": {
-                "type": "u64",
-                "description": [
-                  "The UNIX time (seconds since 1970) this was created."
-                ]
-              },
-              "maximum_msat": {
-                "type": "msat",
-                "description": [
-                  "The *minimum_msat* (if specified)"
-                ]
-              },
-              "minimum_msat": {
-                "type": "msat",
-                "description": [
-                  "The *maximum_msat* (if specified)"
-                ]
-              }
-            }
-          }
-        }
-      },
-      "see_also": [
-        "lightning-getroutes(7)",
-        "lightning-askrene-disable-node(7)",
-        "lightning-askrene-create-channel(7)",
-        "lightning-askrene-listlayers(7)",
-        "lightning-askrene-age(7)"
-      ],
-      "author": [
-        "Rusty Russell <<rusty@rustcorp.com.au>> is mainly responsible."
-      ],
-      "resources": [
-        "Main web site: <https://github.com/ElementsProject/lightning>"
-      ]
-    },
-    "lightning-askrene-listlayers.json": {
-      "$schema": "../rpc-schema-draft.json",
-      "type": "object",
-      "additionalProperties": false,
-      "rpc": "askrene-listlayers",
-      "title": "Command to display information about layers (EXPERIMENTAL)",
-      "description": [
-        "WARNING: experimental, so API may change.",
-        "",
-        "The **askrene-listlayers** RPC command reports any modifications each layer (or, the layer specified) would make to the topology, if it were used for *getroutes*."
-      ],
-      "request": {
-        "required": [],
-        "properties": {
-          "layer": {
-            "type": "string",
-            "description": [
-              "The name of the layer to report on."
+              "The name of the layer to create."
             ]
           }
         }
@@ -557,6 +366,7 @@
                 "layer",
                 "disabled_nodes",
                 "created_channels",
+                "channel_updates",
                 "constraints"
               ],
               "properties": {
@@ -575,6 +385,15 @@
                     ]
                   }
                 },
+                "disabled_channels": {
+                  "type": "array",
+                  "items": {
+                    "type": "short_channel_id_dir",
+                    "description": [
+                      "The channel and direction which is disabled."
+                    ]
+                  }
+                },
                 "created_channels": {
                   "type": "array",
                   "items": {
@@ -583,12 +402,7 @@
                       "source",
                       "destination",
                       "short_channel_id",
-                      "capacity_msat",
-                      "htlc_minimum_msat",
-                      "htlc_maximum_msat",
-                      "fee_base_msat",
-                      "fee_proportional_millionths",
-                      "delay"
+                      "capacity_msat"
                     ],
                     "properties": {
                       "source": {
@@ -614,7 +428,18 @@
                         "description": [
                           "The capacity (onchain size) of the channel."
                         ]
-                      },
+                      }
+                    }
+                  }
+                },
+                "channel_updates": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "short_channel_id_dir"
+                    ],
+                    "properties": {
                       "htlc_minimum_msat": {
                         "type": "msat",
                         "description": [
@@ -690,11 +515,463 @@
         }
       },
       "see_also": [
+        "lightning-askrene-remove-layer(7)",
+        "lightning-getroutes(7)",
+        "lightning-askrene-create-channel(7)",
+        "lightning-askrene-inform-channel(7)",
+        "lightning-askrene-listlayers(7)",
+        "lightning-askrene-age(7)"
+      ],
+      "author": [
+        "Rusty Russell <<rusty@rustcorp.com.au>> is mainly responsible."
+      ],
+      "resources": [
+        "Main web site: <https://github.com/ElementsProject/lightning>"
+      ]
+    },
+    "lightning-askrene-disable-node.json": {
+      "$schema": "../rpc-schema-draft.json",
+      "type": "object",
+      "additionalProperties": false,
+      "rpc": "askrene-disable-node",
+      "title": "Command to disable all channels to/from a node in a layer (EXPERIMENTAL)",
+      "description": [
+        "WARNING: experimental, so API may change.",
+        "",
+        "The **askrene-disable-node** RPC command tells askrene to disable all channels connected to a node whenever the given layer is used.  This is mainly useful to force the use of alternate paths: while individual channels can be disabled using askrene-create-channel or askrene-inform-channel, that would be racy if new channels appeared."
+      ],
+      "request": {
+        "required": [
+          "layer",
+          "node"
+        ],
+        "properties": {
+          "layer": {
+            "type": "string",
+            "description": [
+              "The name of the layer to apply this change to."
+            ]
+          },
+          "node": {
+            "type": "pubkey",
+            "description": [
+              "The node to disable.  It does not need to exist."
+            ]
+          }
+        }
+      },
+      "response": {
+        "required": [],
+        "properties": {}
+      },
+      "see_also": [
+        "lightning-getroutes(7)",
+        "lightning-askrene-create-channel(7)",
+        "lightning-askrene-inform-channel(7)",
+        "lightning-askrene-listlayers(7)",
+        "lightning-askrene-age(7)"
+      ],
+      "author": [
+        "Rusty Russell <<rusty@rustcorp.com.au>> is mainly responsible."
+      ],
+      "resources": [
+        "Main web site: <https://github.com/ElementsProject/lightning>"
+      ]
+    },
+    "lightning-askrene-inform-channel.json": {
+      "$schema": "../rpc-schema-draft.json",
+      "type": "object",
+      "additionalProperties": false,
+      "rpc": "askrene-inform-channel",
+      "title": "Command to add channel capacity restrictions to layer (EXPERIMENTAL)",
+      "description": [
+        "WARNING: experimental, so API may change.",
+        "",
+        "The **askrene-inform-channel** RPC command tells askrene about channels we used so it can update its capacity estimates.  For most accuracy, you should remove your own reservations before calling this.  It can be applied whether the current channel exists or not."
+      ],
+      "request": {
+        "required": [
+          "layer",
+          "short_channel_id_dir",
+          "amount_msat",
+          "inform"
+        ],
+        "properties": {
+          "layer": {
+            "type": "string",
+            "description": [
+              "The name of the layer to apply this change to."
+            ]
+          },
+          "short_channel_id_dir": {
+            "type": "short_channel_id_dir",
+            "description": [
+              "The short channel id and direction to apply this change to."
+            ]
+          },
+          "amount_msat": {
+            "type": "msat",
+            "description": [
+              "The amount we used on the channel"
+            ]
+          },
+          "inform": {
+            "type": "string",
+            "enum": [
+              "constrained",
+              "unconstrained",
+              "succeeded"
+            ],
+            "description": [
+              "Whether this payment passed (implying capacity of at least that amount), failed (implying maximum capacity of one msat less), or succeeded (implying capacity has been reduced in this direction)"
+            ]
+          }
+        }
+      },
+      "response": {
+        "required": [
+          "constraints"
+        ],
+        "properties": {
+          "constraints": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "short_channel_id_dir"
+              ],
+              "properties": {
+                "short_channel_id_dir": {
+                  "type": "short_channel_id_dir",
+                  "description": [
+                    "The short channel id and direction"
+                  ]
+                },
+                "maximum_msat": {
+                  "type": "msat",
+                  "description": [
+                    "The maximum value which this channel could pass."
+                  ]
+                },
+                "minimum_msat": {
+                  "type": "msat",
+                  "description": [
+                    "The minimum value which this channel could pass."
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "see_also": [
+        "lightning-getroutes(7)",
+        "lightning-askrene-disable-node(7)",
+        "lightning-askrene-create-channel(7)",
+        "lightning-askrene-listlayers(7)",
+        "lightning-askrene-age(7)"
+      ],
+      "author": [
+        "Rusty Russell <<rusty@rustcorp.com.au>> is mainly responsible."
+      ],
+      "resources": [
+        "Main web site: <https://github.com/ElementsProject/lightning>"
+      ]
+    },
+    "lightning-askrene-listlayers.json": {
+      "$schema": "../rpc-schema-draft.json",
+      "type": "object",
+      "additionalProperties": false,
+      "rpc": "askrene-listlayers",
+      "title": "Command to display information about layers (EXPERIMENTAL)",
+      "description": [
+        "WARNING: experimental, so API may change.",
+        "",
+        "The **askrene-listlayers** RPC command reports any modifications each layer (or, the layer specified) would make to the topology, if it were used for *getroutes*."
+      ],
+      "request": {
+        "required": [],
+        "properties": {
+          "layer": {
+            "type": "string",
+            "description": [
+              "The name of the layer to report on."
+            ]
+          }
+        }
+      },
+      "response": {
+        "required": [
+          "layers"
+        ],
+        "properties": {
+          "layers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "layer",
+                "disabled_nodes",
+                "created_channels",
+                "channel_updates",
+                "constraints"
+              ],
+              "properties": {
+                "layer": {
+                  "type": "string",
+                  "description": [
+                    "The name of the layer."
+                  ]
+                },
+                "disabled_nodes": {
+                  "type": "array",
+                  "items": {
+                    "type": "pubkey",
+                    "description": [
+                      "The id of the disabled node."
+                    ]
+                  }
+                },
+                "disabled_channels": {
+                  "type": "array",
+                  "items": {
+                    "type": "short_channel_id_dir",
+                    "description": [
+                      "The channel and direction which is disabled."
+                    ]
+                  }
+                },
+                "created_channels": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "source",
+                      "destination",
+                      "short_channel_id",
+                      "capacity_msat"
+                    ],
+                    "properties": {
+                      "source": {
+                        "type": "pubkey",
+                        "description": [
+                          "The source node id for the channel."
+                        ]
+                      },
+                      "destination": {
+                        "type": "pubkey",
+                        "description": [
+                          "The destination node id for the channel."
+                        ]
+                      },
+                      "short_channel_id": {
+                        "type": "short_channel_id",
+                        "description": [
+                          "The short channel id for the channel."
+                        ]
+                      },
+                      "capacity_msat": {
+                        "type": "msat",
+                        "description": [
+                          "The capacity (onchain size) of the channel."
+                        ]
+                      }
+                    }
+                  }
+                },
+                "channel_updates": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "short_channel_id_dir"
+                    ],
+                    "properties": {
+                      "htlc_minimum_msat": {
+                        "type": "msat",
+                        "description": [
+                          "The minimum value allowed in this direction."
+                        ]
+                      },
+                      "htlc_maximum_msat": {
+                        "type": "msat",
+                        "description": [
+                          "The maximum value allowed in this direction."
+                        ]
+                      },
+                      "fee_base_msat": {
+                        "type": "msat",
+                        "description": [
+                          "The base fee to apply to use the channel in this direction."
+                        ]
+                      },
+                      "fee_proportional_millionths": {
+                        "type": "u32",
+                        "description": [
+                          "The proportional fee (in parts per million) to apply to use the channel in this direction."
+                        ]
+                      },
+                      "delay": {
+                        "type": "u16",
+                        "description": [
+                          "The CLTV delay required for this direction."
+                        ]
+                      }
+                    }
+                  }
+                },
+                "constraints": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "short_channel_id_dir"
+                    ],
+                    "properties": {
+                      "short_channel_id_dir": {
+                        "type": "short_channel_id_dir",
+                        "description": [
+                          "The short channel id and direction"
+                        ]
+                      },
+                      "maximum_msat": {
+                        "type": "msat",
+                        "description": [
+                          "The maximum value which this channel could pass."
+                        ]
+                      },
+                      "minimum_msat": {
+                        "type": "msat",
+                        "description": [
+                          "The minimum value which this channel could pass."
+                        ]
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "see_also": [
         "lightning-getroutes(7)",
         "lightning-askrene-disable-node(7)",
         "lightning-askrene-create-channel(7)",
         "lightning-askrene-inform-channel(7)",
         "lightning-askrene-age(7)"
+      ],
+      "author": [
+        "Rusty Russell <<rusty@rustcorp.com.au>> is mainly responsible."
+      ],
+      "resources": [
+        "Main web site: <https://github.com/ElementsProject/lightning>"
+      ]
+    },
+    "lightning-askrene-listreservations.json": {
+      "$schema": "../rpc-schema-draft.json",
+      "type": "object",
+      "additionalProperties": false,
+      "rpc": "askrene-listreservations",
+      "title": "Command to display information about reservations (EXPERIMENTAL)",
+      "description": [
+        "WARNING: experimental, so API may change.",
+        "",
+        "The **askrene-reservations** RPC command reports outstanding reservations made with `askrene-reserve`, mainly for debugging."
+      ],
+      "request": {
+        "required": [],
+        "properties": {}
+      },
+      "response": {
+        "required": [
+          "reservations"
+        ],
+        "properties": {
+          "layers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "short_channel_id_dir",
+                "amount_msat",
+                "age_in_seconds",
+                "command_id"
+              ],
+              "properties": {
+                "short_channel_id_dir": {
+                  "type": "short_channel_id_dir",
+                  "description": [
+                    "The channel and direction that is reserved."
+                  ]
+                },
+                "amount_msat": {
+                  "type": "msat",
+                  "description": [
+                    "The amount reserved."
+                  ]
+                },
+                "age_in_seconds": {
+                  "type": "u64",
+                  "description": [
+                    "The age of this reservation."
+                  ]
+                },
+                "command_id": {
+                  "type": "string",
+                  "description": [
+                    "The JSON id of the command used to make the reservation."
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "see_also": [
+        "lightning-askrene-reserve(7)",
+        "lightning-askrene-unreserve(7)"
+      ],
+      "author": [
+        "Rusty Russell <<rusty@rustcorp.com.au>> is mainly responsible."
+      ],
+      "resources": [
+        "Main web site: <https://github.com/ElementsProject/lightning>"
+      ]
+    },
+    "lightning-askrene-remove-layer.json": {
+      "$schema": "../rpc-schema-draft.json",
+      "type": "object",
+      "additionalProperties": false,
+      "rpc": "askrene-remove-layer",
+      "title": "Command to destroy a layer (EXPERIMENTAL)",
+      "description": [
+        "WARNING: experimental, so API may change.",
+        "",
+        "The **askrene-remove-layer** RPC command tells askrene to forget a layer."
+      ],
+      "request": {
+        "required": [
+          "layer"
+        ],
+        "properties": {
+          "layer": {
+            "type": "string",
+            "description": [
+              "The name of the layer to remove."
+            ]
+          }
+        }
+      },
+      "response": {
+        "required": [],
+        "properties": {}
+      },
+      "see_also": [
+        "lightning-askrene-create-layer(7)",
+        "lightning-askrene-listlayers(7)"
       ],
       "author": [
         "Rusty Russell <<rusty@rustcorp.com.au>> is mainly responsible."
@@ -712,7 +989,7 @@
       "description": [
         "WARNING: experimental, so API may change.",
         "",
-        "The **askrene-reserve** RPC command tells askrene that a path is being attempted.  This allows it to take that into account when other *getroutes* calls are made.  You should call **askrene-unreserve** after the attempt has completed.",
+        "The **askrene-reserve** RPC command tells askrene that a path is being attempted.  This allows it to take that into account when other *getroutes* calls are made.  You should call *askrene-unreserve* after the attempt has completed (and before calling *askrene-inform*).",
         "",
         "Note that additional properties inside the *path* elements are ignored, which is useful when used with the result of *getroutes*."
       ],
@@ -727,21 +1004,14 @@
               "type": "object",
               "additionalProperties": true,
               "required": [
-                "short_channel_id",
-                "direction",
+                "short_channel_id_dir",
                 "amount_msat"
               ],
               "properties": {
-                "short_channel_id": {
-                  "type": "short_channel_id",
+                "short_channel_id_dir": {
+                  "type": "short_channel_id_dir",
                   "description": [
-                    "The channel joining these nodes."
-                  ]
-                },
-                "direction": {
-                  "type": "u32",
-                  "description": [
-                    "0 if this channel is traversed from lesser to greater **id**, otherwise 1."
+                    "The channel and direction joining these nodes."
                   ]
                 },
                 "amount_msat": {
@@ -762,11 +1032,7 @@
       "see_also": [
         "lightning-getroutes(7)",
         "lightning-askrene-unreserve(7)",
-        "lightning-askrene-disable-node(7)",
-        "lightning-askrene-create-channel(7)",
-        "lightning-askrene-inform-channel(7)",
-        "lightning-askrene-listlayers(7)",
-        "lightning-askrene-age(7)"
+        "lightning-askrene-listreservations(7)"
       ],
       "author": [
         "Rusty Russell <<rusty@rustcorp.com.au>> is mainly responsible."
@@ -799,21 +1065,14 @@
               "type": "object",
               "additionalProperties": true,
               "required": [
-                "short_channel_id",
-                "direction",
+                "short_channel_id_dir",
                 "amount_msat"
               ],
               "properties": {
-                "short_channel_id": {
-                  "type": "short_channel_id",
+                "short_channel_id_dir": {
+                  "type": "short_channel_id_dir",
                   "description": [
-                    "The channel joining these nodes."
-                  ]
-                },
-                "direction": {
-                  "type": "u32",
-                  "description": [
-                    "0 if this channel is traversed from lesser to greater **id**, otherwise 1."
+                    "The channel and direction joining these nodes."
                   ]
                 },
                 "amount_msat": {
@@ -834,11 +1093,83 @@
       "see_also": [
         "lightning-getroutes(7)",
         "lightning-askrene-reserve(7)",
-        "lightning-askrene-disable-node(7)",
-        "lightning-askrene-create-channel(7)",
-        "lightning-askrene-inform-channel(7)",
-        "lightning-askrene-listlayers(7)",
-        "lightning-askrene-age(7)"
+        "lightning-askrene-listreservations(7)"
+      ],
+      "author": [
+        "Rusty Russell <<rusty@rustcorp.com.au>> is mainly responsible."
+      ],
+      "resources": [
+        "Main web site: <https://github.com/ElementsProject/lightning>"
+      ]
+    },
+    "lightning-askrene-update-channel.json": {
+      "$schema": "../rpc-schema-draft.json",
+      "type": "object",
+      "additionalProperties": false,
+      "rpc": "askrene-update-channel",
+      "title": "Command to manipulate channel in a layer (EXPERIMENTAL)",
+      "description": [
+        "WARNING: experimental, so API may change.",
+        "",
+        "The **askrene-update-channel** RPC command overrides updates for an existing channel when the layer is applied."
+      ],
+      "request": {
+        "required": [
+          "layer",
+          "short_channel_id_dir"
+        ],
+        "properties": {
+          "layer": {
+            "type": "string",
+            "description": [
+              "The name of the layer to apply this change to."
+            ]
+          },
+          "short_channel_id_dir": {
+            "type": "short_channel_id_dir",
+            "description": [
+              "The channel and direction to apply the change to."
+            ]
+          },
+          "htlc_min": {
+            "type": "msat",
+            "description": [
+              "The minimum value allowed in this direction."
+            ]
+          },
+          "htlc_max": {
+            "type": "msat",
+            "description": [
+              "The maximum value allowed in this direction."
+            ]
+          },
+          "base_fee": {
+            "type": "msat",
+            "description": [
+              "The base fee to apply to use the channel in this direction."
+            ]
+          },
+          "proportional_fee": {
+            "type": "u32",
+            "description": [
+              "The proportional fee (in parts per million) to apply to use the channel in this direction."
+            ]
+          },
+          "cltv_expiry_delta": {
+            "type": "u16",
+            "description": [
+              "The CLTV delay required for this direction."
+            ]
+          }
+        }
+      },
+      "response": {
+        "required": [],
+        "properties": {}
+      },
+      "see_also": [
+        "lightning-getroutes(7)",
+        "lightning-askrene-create-channel(7)"
       ],
       "author": [
         "Rusty Russell <<rusty@rustcorp.com.au>> is mainly responsible."
@@ -13099,6 +13430,54 @@
         }
       ]
     },
+    "lightning-getemergencyrecoverdata.json": {
+      "$schema": "../rpc-schema-draft.json",
+      "type": "object",
+      "additionalProperties": false,
+      "rpc": "getemergencyrecoverdata",
+      "title": "Command to fetch data from the emergency.recover file",
+      "description": [
+        "The **getemergencyrecoverdata** RPC command is used to fetch data from the emergency.recover file, which contains encrypted data."
+      ],
+      "request": {
+        "required": [],
+        "properties": {}
+      },
+      "response": {
+        "required": [
+          "filedata"
+        ],
+        "properties": {
+          "filedata": {
+            "type": "hex",
+            "description": [
+              "The raw, hex-encoded, emergency.recover file"
+            ]
+          }
+        }
+      },
+      "author": [
+        "Aditya <<aditya.sharma20111@gmail.com>> is mainly responsible."
+      ],
+      "see_also": [
+        "lightning-getsharedsecret(7)"
+      ],
+      "resources": [
+        "Main web site: <https://github.com/ElementsProject/lightning>"
+      ],
+      "examples": [
+        {
+          "request": {
+            "id": "example:getemergencyrecoverdata#1",
+            "method": "getemergencyrecoverdata",
+            "params": {}
+          },
+          "response": {
+            "filedata": "5b3142fa0dd1115c29654b44780dcd9cf56cd53f9168061e964b39f3ce596962594b25660cba5d90ef07cfccbe1620f378ef284c7d1afed49d"
+          }
+        }
+      ]
+    },
     "lightning-getinfo.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
@@ -14375,23 +14754,16 @@
                     "type": "object",
                     "additionalProperties": false,
                     "required": [
-                      "short_channel_id",
-                      "direction",
+                      "short_channel_id_dir",
                       "next_node_id",
                       "amount_msat",
                       "delay"
                     ],
                     "properties": {
-                      "short_channel_id": {
-                        "type": "short_channel_id",
+                      "short_channel_id_dir": {
+                        "type": "short_channel_id_dir",
                         "description": [
-                          "The channel joining these nodes."
-                        ]
-                      },
-                      "direction": {
-                        "type": "u32",
-                        "description": [
-                          "0 if this channel is traversed from lesser to greater **id**, otherwise 1."
+                          "The channel and direction joining these nodes."
                         ]
                       },
                       "amount_msat": {

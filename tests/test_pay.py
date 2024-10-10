@@ -1935,7 +1935,16 @@ def test_pay_avoid_low_fee_chan(node_factory, bitcoind, executor, chainparams):
 
 @pytest.mark.slow_test
 def test_pay_routeboost(node_factory, bitcoind):
-    """Make sure we can use routeboost information. """
+    """Make sure we can use routeboost information.
+
+    ```dot
+    graph {
+      l1 -- l2 -- l3
+      l3 -- l4 [style="dotted"]
+      l4 -- l5 [style="dotted"]
+    }
+    ```
+    """
     # l1->l2->l3--private-->l4
     l1, l2 = node_factory.line_graph(2, announce_channels=True, wait_for_announce=True)
     l3, l4, l5 = node_factory.line_graph(3, announce_channels=False, wait_for_announce=False)
@@ -2012,10 +2021,24 @@ def test_pay_routeboost(node_factory, bitcoind):
     assert 'success' in attempts[0]
 
     # Finally, it should fall back to second routehint if first fails.
-    # (Note, this is not public because it's not 6 deep)
+    # (Note, this is not public because it's not 6 deep). To test this
+    # we add another edge to the graph, resulting in:
+    #
+    # ```dot
+    # graph {
+    #   rankdir=LR
+    #   l1 -- l2 -- l3
+    #   l4 [label="l4 (offline)",style="dashed"]
+    #   l3 -- l4 [style="dotted"]
+    #   l4 -- l5 [style="dotted"]
+    #   l3 -- l5 [style="dotted"]
+    # }
+    # ```
     l3.rpc.connect(l5.info['id'], 'localhost', l5.port)
     scid35, _ = l3.fundchannel(l5, 10**6)
     l4.stop()
+
+    # Now that we have the channels ready, let's build the routehints through l3l5
     routel3l5 = [{'id': l3.info['id'],
                   'short_channel_id': scid35,
                   'fee_base_msat': 1000,
@@ -2036,10 +2059,11 @@ def test_pay_routeboost(node_factory, bitcoind):
     assert 'local_exclusions' not in only_one(status['pay'])
     attempts = only_one(status['pay'])['attempts']
 
-    # First one fails, second one succeeds, no routehint would come last.
-    assert len(attempts) == 2
+    # First routehint in the invoice fails, we may retry that one
+    # unsuccessfully before switching, hence the >2 instead of =2
+    assert len(attempts) >= 2
     assert 'success' not in attempts[0]
-    assert 'success' in attempts[1]
+    assert 'success' in attempts[-1]
     # TODO Add assertion on the routehint once we add them to the pay
     # output
 
@@ -5116,7 +5140,14 @@ def test_listpays_with_filter_by_status(node_factory, bitcoind):
 
 
 def test_sendpay_grouping(node_factory, bitcoind):
-    """Paying an invoice multiple times, listpays should list them individually
+    """`listpays` should be smart enough to group repeated `pay` calls.
+
+    We always use slightly decreasing values for the payment, in order
+    to avoid having to adjust the channel_hints that are being
+    remembered across attempts. In case of a failure the
+    `channel_hint` will be `attempted amount - 1msat` so use that as
+    the next payment's amount.
+
     """
     l1, l2, l3 = node_factory.line_graph(
         3,
@@ -5136,13 +5167,13 @@ def test_sendpay_grouping(node_factory, bitcoind):
     assert(len(l1.rpc.listpays()['pays']) == 0)
 
     with pytest.raises(RpcError, match=r'Ran out of routes to try after [0-9]+ attempts'):
-        l1.rpc.pay(inv, amount_msat='100000msat')
+        l1.rpc.pay(inv, amount_msat='100002msat')
 
     # After this one invocation we have one entry in `listpays`
     assert(len(l1.rpc.listpays()['pays']) == 1)
 
     with pytest.raises(RpcError, match=r'Ran out of routes to try after [0-9]+ attempts'):
-        l1.rpc.pay(inv, amount_msat='200000msat')
+        l1.rpc.pay(inv, amount_msat='100001msat')
 
     # Surprise: we should have 2 entries after 2 invocations
     assert(len(l1.rpc.listpays()['pays']) == 2)
@@ -5155,7 +5186,7 @@ def test_sendpay_grouping(node_factory, bitcoind):
     wait_for(lambda: only_one(l3.rpc.listpeers()['peers'])['connected'] is True)
     scid = l3.rpc.listpeerchannels()['channels'][0]['short_channel_id']
     wait_for(lambda: [c['active'] for c in l1.rpc.listchannels(scid)['channels']] == [True, True])
-    l1.rpc.pay(inv, amount_msat='420000msat')
+    l1.rpc.pay(inv, amount_msat='10000msat')
 
     # And finally we should have all 3 attempts to pay the invoice
     pays = l1.rpc.listpays()['pays']
@@ -5992,3 +6023,79 @@ def test_enableoffer(node_factory):
     # Can't enable unknown.
     with pytest.raises(RpcError, match="Unknown offer"):
         l1.rpc.enableoffer(offer_id=offer1['offer_id'])
+
+
+def diamond_network(node_factory):
+    """Build a diamond, with a cheap route, that is exhausted. The
+    first payment should try that route first, learn it's exhausted,
+    and then succeed over the other leg. The second, unrelated,
+    payment should immediately skip the exhausted leg and go for the
+    more expensive one.
+
+    ```mermaid
+    graph LR
+      Sender -- "propfee=1" --> Forwarder1
+      Forwarder1 -- "propfee="1\nexhausted --> Recipient
+      Sender -- "propfee=1" --> Forwarder2
+      Forwarder2 -- "propfee=5" --> Recipient
+    ```
+    """
+    opts = [
+        {'fee-per-satoshi': 0, 'fee-base': 0},     # Sender
+        {'fee-per-satoshi': 0, 'fee-base': 0},     # Low fee, but exhausted channel
+        {'fee-per-satoshi': 5000, 'fee-base': 0},  # Disincentivize using fw2
+        {'fee-per-satoshi': 0, 'fee-base': 0},     # Recipient
+    ]
+
+    sender, fw1, fw2, recipient, = node_factory.get_nodes(4, opts=opts)
+
+    # And now wire them all up: notice that all channels, except the
+    # recipent <> fw1 are created in the direction of the planned
+    # from, meaning we won't be able to forward through there, causing
+    # a `channel_hint` to be created, disincentivizing usage of this
+    # channel on the second payment.
+    node_factory.join_nodes(
+        [sender, fw2, recipient, fw1],
+        wait_for_announce=True,
+        announce_channels=True,
+    )
+    # And we complete the diamond by adding the edge from sender to fw1
+    node_factory.join_nodes(
+        [sender, fw1],
+        wait_for_announce=True,
+        announce_channels=True
+    )
+    return [sender, fw1, fw2, recipient]
+
+
+def test_pay_remember_hint(node_factory):
+    """Using a diamond graph, with inferred `channel_hint`s, see if we remember
+    """
+    sender, fw1, fw2, recipient, = diamond_network(node_factory)
+
+    inv = recipient.rpc.invoice(
+        4200000,
+        "lbl1",
+        "desc1",
+        exposeprivatechannels=[],  # suppress routehints, so fees alone control route
+    )['bolt11']
+
+    p = sender.rpc.pay(inv)
+
+    # Ensure we failed the first, cheap, path, and then tried the successful one.
+    assert(p['parts'] == 2)
+
+    # Now for the final trick: a new payment should remember the
+    # previous failure, and go directly for the successful route
+    # through fw2
+
+    inv = recipient.rpc.invoice(
+        4200000,
+        "lbl2",
+        "desc2",
+        exposeprivatechannels=[],  # suppress routehints, so fees alone control route
+    )['bolt11']
+
+    # We should not have touched fw1, and should succeed after a single call
+    p = sender.rpc.pay(inv)
+    assert(p['parts'] == 1)

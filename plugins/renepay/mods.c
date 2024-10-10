@@ -384,12 +384,13 @@ static void gossmod_cb(struct gossmap_localmods *mods,
 		       const struct node_id *self,
 		       const struct node_id *peer,
 		       const struct short_channel_id_dir *scidd,
+		       struct amount_msat capacity_msat,
 		       struct amount_msat htlcmin,
 		       struct amount_msat htlcmax,
 		       struct amount_msat spendable,
 		       struct amount_msat fee_base,
 		       u32 fee_proportional,
-		       u32 cltv_delta,
+		       u16 cltv_delta,
 		       bool enabled,
 		       const char *buf,
 		       const jsmntok_t *chantok,
@@ -408,14 +409,12 @@ static void gossmod_cb(struct gossmap_localmods *mods,
 	}
 
 	/* FIXME: features? */
-	gossmap_local_addchan(mods, self, peer, scidd->scid, NULL);
-
-	gossmap_local_updatechan(mods, scidd->scid, min, max,
-				 fee_base.millisatoshis, /* Raw: gossmap */
-				 fee_proportional,
-				 cltv_delta,
-				 enabled,
-				 scidd->dir);
+	gossmap_local_addchan(mods, self, peer, scidd->scid, capacity_msat,
+			      NULL);
+	gossmap_local_updatechan(mods, scidd,
+				 &enabled,
+				 &min, &max,
+				 &fee_base, &fee_proportional, &cltv_delta);
 
 	/* Is it disabled? */
 	if (!enabled)
@@ -516,13 +515,19 @@ static void add_hintchan(struct payment *payment, const struct node_id *src,
 	assert(payment);
 	assert(payment->local_gossmods);
 
-	int dir = node_id_idx(src, dst);
-
 	const char *errmsg;
 	const struct chan_extra *ce =
 	    uncertainty_find_channel(pay_plugin->uncertainty, scid);
 
 	if (!ce) {
+		struct short_channel_id_dir scidd;
+		/* We assume any HTLC is allowed */
+		struct amount_msat htlc_min = AMOUNT_MSAT(0), htlc_max = MAX_CAPACITY;
+		struct amount_msat fee_base = amount_msat(fee_base_msat);
+		bool enabled = true;
+		scidd.scid = scid;
+		scidd.dir = node_id_idx(src, dst);
+
 		/* This channel is not public, we don't know his capacity
 		 One possible solution is set the capacity to
 		 MAX_CAP and the state to [0,MAX_CAP]. Alternatively we could
@@ -540,13 +545,12 @@ static void add_hintchan(struct payment *payment, const struct node_id *src,
 		}
 		/* FIXME: features? */
 		if (!gossmap_local_addchan(payment->local_gossmods, src, dst,
-					   scid, NULL) ||
+					   scid, MAX_CAPACITY, NULL) ||
 		    !gossmap_local_updatechan(
-			payment->local_gossmods, scid,
-			/* We assume any HTLC is allowed */
-			AMOUNT_MSAT(0), MAX_CAPACITY, fee_base_msat,
-			fee_proportional_millionths, cltv_expiry_delta, true,
-			dir)) {
+			payment->local_gossmods, &scidd,
+			&enabled, &htlc_min, &htlc_max,
+			&fee_base, &fee_proportional_millionths,
+			&cltv_expiry_delta)) {
 			errmsg = tal_fmt(
 			    tmpctx,
 			    "Failed to update scid=%s in the local_gossmods.",

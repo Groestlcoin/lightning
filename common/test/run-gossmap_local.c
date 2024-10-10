@@ -333,10 +333,10 @@ int main(int argc, char *argv[])
 	char *gossfile;
 	struct gossmap *map;
 	struct node_id l1, l2, l3, l4;
-	struct short_channel_id scid23, scid12, scid_local;
+	struct short_channel_id scid23, scid12, scid_local, scid_nonexisting;
 	struct gossmap_chan *chan;
 	struct gossmap_localmods *mods;
-	struct amount_sat capacity;
+	struct amount_msat capacity;
 	u32 timestamp, fee_base_msat, fee_proportional_millionths;
 	u8 message_flags, channel_flags;
 	struct amount_msat htlc_minimum_msat, htlc_maximum_msat;
@@ -365,12 +365,10 @@ int main(int argc, char *argv[])
 	assert(!gossmap_chan_is_localmod(map, gossmap_find_chan(map, &scid23)));
 	assert(gossmap_find_chan(map, &scid12));
 	assert(!gossmap_chan_is_localmod(map, gossmap_find_chan(map, &scid12)));
-	assert(gossmap_chan_get_capacity(map, gossmap_find_chan(map, &scid23),
-					 &capacity));
-	assert(amount_sat_eq(capacity, AMOUNT_SAT(1000000)));
-	assert(gossmap_chan_get_capacity(map, gossmap_find_chan(map, &scid12),
-					 &capacity));
-	assert(amount_sat_eq(capacity, AMOUNT_SAT(1000000)));
+	capacity = gossmap_chan_get_capacity(map, gossmap_find_chan(map, &scid23));
+	assert(amount_msat_eq_sat(capacity, AMOUNT_SAT(1000000)));
+	capacity = gossmap_chan_get_capacity(map, gossmap_find_chan(map, &scid12));
+	assert(amount_msat_eq_sat(capacity, AMOUNT_SAT(1000000)));
 
 	gossmap_chan_get_update_details(map, gossmap_find_chan(map, &scid23),
 					0,
@@ -467,7 +465,7 @@ int main(int argc, char *argv[])
 	assert(node_id_from_hexstr("0382ce59ebf18be7d84677c2e35f23294b9992ceca95491fcf8a56c6cb2d9de199", 66, &l4));
 	assert(short_channel_id_from_str("111x1x1", 7, &scid_local));
 
-	assert(gossmap_local_addchan(mods, &l1, &l4, scid_local, NULL));
+	assert(gossmap_local_addchan(mods, &l1, &l4, scid_local, AMOUNT_MSAT(100000), NULL));
 
 	/* Apply changes, check they work. */
 	gossmap_apply_localmods(map, mods);
@@ -478,6 +476,10 @@ int main(int argc, char *argv[])
 	assert(!gossmap_chan_set(chan, 0));
 	assert(!gossmap_chan_set(chan, 1));
 
+	/* Capacity is correct */
+	assert(amount_msat_eq(gossmap_chan_get_capacity(map, chan),
+			      AMOUNT_MSAT(100000)));
+
 	/* Remove, no longer can find. */
 	gossmap_remove_localmods(map, mods);
 
@@ -485,18 +487,25 @@ int main(int argc, char *argv[])
 	assert(!gossmap_find_node(map, &l4));
 
 	/* Now update it both local, and an existing one. */
-	gossmap_local_updatechan(mods, scid_local,
-				 AMOUNT_MSAT(1),
-				 AMOUNT_MSAT(100000),
-				 2, 3, 4, true, 0);
+	gossmap_local_setchan(mods, scid_local,
+			      AMOUNT_MSAT(1),
+			      AMOUNT_MSAT(100000),
+			      AMOUNT_MSAT(2), 3, 4, true, 0);
 
 	/* Adding an existing channel is a noop. */
-	assert(gossmap_local_addchan(mods, &l2, &l3, scid23, NULL));
+	assert(gossmap_local_addchan(mods, &l2, &l3, scid23, AMOUNT_MSAT(100000), NULL));
 
-	gossmap_local_updatechan(mods, scid23,
-				 AMOUNT_MSAT(99),
-				 AMOUNT_MSAT(100),
-				 101, 102, 103, true, 0);
+	gossmap_local_setchan(mods, scid23,
+			      AMOUNT_MSAT(99),
+			      AMOUNT_MSAT(100),
+			      AMOUNT_MSAT(101), 102, 103, true, 0);
+
+	/* We can "update" a channel which doesn't exist, and it's a noop */
+	scid_nonexisting.u64 = 1;
+	gossmap_local_setchan(mods, scid_nonexisting,
+			      AMOUNT_MSAT(1),
+			      AMOUNT_MSAT(100000),
+			      AMOUNT_MSAT(2), 3, 4, false, 0);
 
 	gossmap_apply_localmods(map, mods);
 	chan = gossmap_find_chan(map, &scid_local);
@@ -509,6 +518,8 @@ int main(int argc, char *argv[])
 	assert(chan->half[0].base_fee == 2);
 	assert(chan->half[0].proportional_fee == 3);
 	assert(chan->half[0].delay == 4);
+
+	assert(!gossmap_find_chan(map, &scid_nonexisting));
 
 	chan = gossmap_find_chan(map, &scid23);
 	assert(chan->half[0].enabled);

@@ -9,6 +9,7 @@
 #include "config.h"
 #include <ccan/array_size/array_size.h>
 #include <ccan/tal/str/str.h>
+#include <common/dijkstra.h>
 #include <common/gossmap.h>
 #include <common/gossmods_listpeerchannels.h>
 #include <common/json_param.h>
@@ -16,6 +17,7 @@
 #include <common/route.h>
 #include <errno.h>
 #include <plugins/askrene/askrene.h>
+#include <plugins/askrene/explain_failure.h>
 #include <plugins/askrene/flow.h>
 #include <plugins/askrene/layer.h>
 #include <plugins/askrene/mcf.h>
@@ -33,12 +35,6 @@ static const struct short_channel_id_dir *
 per_htlc_cost_key(const struct per_htlc_cost *phc)
 {
 	return &phc->scidd;
-}
-
-static size_t hash_scidd(const struct short_channel_id_dir *scidd)
-{
-	/* scids cost money to generate, so simple hash works here */
-	return (scidd->scid.u64 >> 32) ^ (scidd->scid.u64 << 1) ^ scidd->dir;
 }
 
 static inline bool per_htlc_cost_eq_key(const struct per_htlc_cost *phc,
@@ -62,24 +58,35 @@ static bool have_layer(const char **layers, const char *name)
 	return false;
 }
 
-/* JSON helpers */
-static struct command_result *param_string_array(struct command *cmd,
-						 const char *name,
-						 const char *buffer,
-						 const jsmntok_t *tok,
-						 const char ***arr)
+/* Valid, known layers */
+static struct command_result *param_layer_names(struct command *cmd,
+						const char *name,
+						const char *buffer,
+						const jsmntok_t *tok,
+						const char ***arr)
 {
 	size_t i;
 	const jsmntok_t *t;
 
 	if (tok->type != JSMN_ARRAY)
-		return command_fail_badparam(cmd, name, buffer, tok, "should be an array");
+		return command_fail_badparam(cmd, name, buffer, tok,
+					     "should be an array");
 
 	*arr = tal_arr(cmd, const char *, tok->size);
 	json_for_each_arr(i, t, tok) {
 		if (t->type != JSMN_STRING)
-			return command_fail_badparam(cmd, name, buffer, t, "should be a string");
+			return command_fail_badparam(cmd, name, buffer, t,
+						     "should be a string");
 		(*arr)[i] = json_strdup(*arr, buffer, t);
+
+		/* Must be a known layer name */
+		if (streq((*arr)[i], "auto.localchans")
+		    || streq((*arr)[i], "auto.sourcefree"))
+			continue;
+		if (!find_layer(get_askrene(cmd->plugin), (*arr)[i])) {
+			return command_fail_badparam(cmd, name, buffer, t,
+						     "unknown layer");
+		}
 	}
 	return NULL;
 }
@@ -102,49 +109,17 @@ static struct command_result *param_known_layer(struct command *cmd,
 	return NULL;
 }
 
-static bool json_to_zero_or_one(const char *buffer, const jsmntok_t *tok, int *num)
-{
-	u32 v32;
-	if (!json_to_u32(buffer, tok, &v32))
-		return false;
-	if (v32 != 0 && v32 != 1)
-		return false;
-	*num = v32;
-	return true;
-}
-
-static struct command_result *param_zero_or_one(struct command *cmd,
+static struct command_result *parse_reserve_hop(struct command *cmd,
 						const char *name,
 						const char *buffer,
 						const jsmntok_t *tok,
-						int **num)
-{
-	*num = tal(cmd, int);
-	if (json_to_zero_or_one(buffer, tok, *num))
-		return NULL;
-
-	return command_fail_badparam(cmd, name, buffer, tok,
-				     "should be 0 or 1");
-}
-
-struct reserve_path {
-	struct short_channel_id_dir *scidds;
-	struct amount_msat *amounts;
-};
-
-static struct command_result *parse_reserve_path(struct command *cmd,
-						 const char *name,
-						 const char *buffer,
-						 const jsmntok_t *tok,
-						 struct short_channel_id_dir *scidd,
-						 struct amount_msat *amount)
+						struct reserve_hop *rhop)
 {
 	const char *err;
 
-	err = json_scan(tmpctx, buffer, tok, "{short_channel_id:%,direction:%,amount_msat:%}",
-			JSON_SCAN(json_to_short_channel_id, &scidd->scid),
-			JSON_SCAN(json_to_zero_or_one, &scidd->dir),
-			JSON_SCAN(json_to_msat, amount));
+	err = json_scan(tmpctx, buffer, tok, "{short_channel_id_dir:%,amount_msat:%}",
+			JSON_SCAN(json_to_short_channel_id_dir, &rhop->scidd),
+			JSON_SCAN(json_to_msat, &rhop->amount));
 	if (err)
 		return command_fail_badparam(cmd, name, buffer, tok, err);
 	return NULL;
@@ -154,7 +129,7 @@ static struct command_result *param_reserve_path(struct command *cmd,
 						 const char *name,
 						 const char *buffer,
 						 const jsmntok_t *tok,
-						 struct reserve_path **path)
+						 struct reserve_hop **path)
 {
 	size_t i;
 	const jsmntok_t *t;
@@ -162,15 +137,11 @@ static struct command_result *param_reserve_path(struct command *cmd,
 	if (tok->type != JSMN_ARRAY)
 		return command_fail_badparam(cmd, name, buffer, tok, "should be an array");
 
-	*path = tal(cmd, struct reserve_path);
-	(*path)->scidds = tal_arr(cmd, struct short_channel_id_dir, tok->size);
-	(*path)->amounts = tal_arr(cmd, struct amount_msat, tok->size);
+	*path = tal_arr(cmd, struct reserve_hop, tok->size);
 	json_for_each_arr(i, t, tok) {
 		struct command_result *ret;
 
-		ret = parse_reserve_path(cmd, name, buffer, t,
-					 &(*path)->scidds[i],
-					 &(*path)->amounts[i]);
+		ret = parse_reserve_hop(cmd, name, buffer, t, &(*path)[i]);
 		if (ret)
 			return ret;
 	}
@@ -188,16 +159,12 @@ static fp16_t *get_capacities(const tal_t *ctx,
 	for (c = gossmap_first_chan(gossmap);
 	     c;
 	     c = gossmap_next_chan(gossmap, c)) {
-		struct amount_sat cap;
+		struct amount_msat cap;
 
-		if (!gossmap_chan_get_capacity(gossmap, c, &cap)) {
-			plugin_log(plugin, LOG_BROKEN,
-				   "get_capacity failed for channel?");
-			cap = AMOUNT_SAT(0);
-		}
+		cap = gossmap_chan_get_capacity(gossmap, c);
 		/* Pessimistic: round down! */
 		caps[gossmap_chan_idx(gossmap, c)]
-			= u64_to_fp16(cap.satoshis, false); /* Raw: fp16 */
+			= u64_to_fp16(cap.millisatoshis/1000, false); /* Raw: fp16 */
 	}
 	return caps;
 }
@@ -214,11 +181,11 @@ static void add_free_source(struct plugin *plugin,
 	/* We apply existing localmods, save up mods we want, then append
 	 * them: it's not safe to modify localmods while they are applied! */
 	const struct gossmap_node *srcnode;
-	struct mod {
-		struct short_channel_id_dir scidd;
-		fp16_t htlc_min, htlc_max;
-		bool enabled;
-	} *mods = tal_arr(tmpctx, struct mod, 0);
+	const struct amount_msat zero_base_fee = AMOUNT_MSAT(0);
+	const u16 zero_delay = 0;
+	const u32 zero_prop_fee = 0;
+	struct short_channel_id_dir *scidds
+		= tal_arr(tmpctx, struct short_channel_id_dir, 0);
 
 	gossmap_apply_localmods(gossmap, localmods);
 
@@ -226,35 +193,24 @@ static void add_free_source(struct plugin *plugin,
 	srcnode = gossmap_find_node(gossmap, source);
 
 	for (size_t i = 0; srcnode && i < srcnode->num_chans; i++) {
+		struct short_channel_id_dir scidd;
 		const struct gossmap_chan *c;
-		const struct half_chan *h;
-		struct mod mod;
 
-		c = gossmap_nth_chan(gossmap, srcnode, i, &mod.scidd.dir);
-		h = &c->half[mod.scidd.dir];
-
-		mod.scidd.scid = gossmap_chan_scid(gossmap, c);
-		mod.htlc_min = h->htlc_min;
-		mod.htlc_max = h->htlc_max;
-		mod.enabled = h->enabled;
-		tal_arr_expand(&mods, mod);
+		c = gossmap_nth_chan(gossmap, srcnode, i, &scidd.dir);
+		scidd.scid = gossmap_chan_scid(gossmap, c);
+		tal_arr_expand(&scidds, scidd);
 	}
 	gossmap_remove_localmods(gossmap, localmods);
 
-	/* Now we can update localmods */
-	for (size_t i = 0; i < tal_count(mods); i++) {
+	/* Now we can update localmods: we only change fee levels and delay */
+	for (size_t i = 0; i < tal_count(scidds); i++) {
 		if (!gossmap_local_updatechan(localmods,
-					      mods[i].scidd.scid,
-					      /* Keep min and max */
-					      /* FIXME: lossy conversion! */
-					      amount_msat(fp16_to_u64(mods[i].htlc_min)),
-					      amount_msat(fp16_to_u64(mods[i].htlc_max)),
-					      0, 0, 0,
-					      /* Keep enabled flag */
-					      mods[i].enabled,
-					      mods[i].scidd.dir))
-			plugin_err(plugin, "Could not zero fee on %s",
-				   fmt_short_channel_id_dir(tmpctx, &mods[i].scidd));
+					      &scidds[i],
+					      NULL, NULL, NULL,
+					      &zero_base_fee, &zero_prop_fee,
+					      &zero_delay))
+			plugin_err(plugin, "Could not zero fee/delay on %s",
+				   fmt_short_channel_id_dir(tmpctx, &scidds[i]));
 	}
 }
 
@@ -269,9 +225,10 @@ struct amount_msat get_additional_per_htlc_cost(const struct route_query *rq,
 		return AMOUNT_MSAT(0);
 }
 
+
 /* Returns an error message, or sets *routes */
 static const char *get_routes(const tal_t *ctx,
-			      struct plugin *plugin,
+			      struct command *cmd,
 			      const struct node_id *source,
 			      const struct node_id *dest,
 			      struct amount_msat amount,
@@ -285,7 +242,7 @@ static const char *get_routes(const tal_t *ctx,
 			      const struct additional_cost_htable *additional_costs,
 			      double *probability)
 {
-	struct askrene *askrene = get_askrene(plugin);
+	struct askrene *askrene = get_askrene(cmd->plugin);
 	struct route_query *rq = tal(ctx, struct route_query);
 	struct flow **flows;
 	const struct gossmap_node *srcnode, *dstnode;
@@ -300,7 +257,8 @@ static const char *get_routes(const tal_t *ctx,
 		askrene->capacities = get_capacities(askrene, askrene->plugin, askrene->gossmap);
 	}
 
-	rq->plugin = plugin;
+	rq->cmd = cmd;
+	rq->plugin = cmd->plugin;
 	rq->gossmap = askrene->gossmap;
 	rq->reserved = askrene->reserved;
 	rq->layers = tal_arr(rq, const struct layer *, 0);
@@ -311,16 +269,19 @@ static const char *get_routes(const tal_t *ctx,
 	for (size_t i = 0; i < tal_count(layers); i++) {
 		const struct layer *l = find_layer(askrene, layers[i]);
 		if (!l) {
-			if (local_layer && streq(layers[i], "auto.localchans")) {
-				plugin_log(plugin, LOG_DBG, "Adding auto.localchans");
+			if (streq(layers[i], "auto.localchans")) {
+				plugin_log(rq->plugin, LOG_DBG, "Adding auto.localchans");
 				l = local_layer;
-			} else
+			} else {
+				/* Handled below, after other layers */
+				assert(streq(layers[i], "auto.sourcefree"));
 				continue;
+			}
 		}
 
 		tal_arr_expand(&rq->layers, l);
 		/* FIXME: Implement localmods_merge, and cache this in layer? */
-		layer_add_localmods(l, rq->gossmap, false, localmods);
+		layer_add_localmods(l, rq->gossmap, localmods);
 
 		/* Clear any entries in capacities array if we
 		 * override them (incl local channels) */
@@ -329,7 +290,7 @@ static const char *get_routes(const tal_t *ctx,
 
 	/* This also looks into localmods, to zero them */
 	if (have_layer(layers, "auto.sourcefree"))
-		add_free_source(plugin, askrene->gossmap, localmods, source);
+		add_free_source(rq->plugin, askrene->gossmap, localmods, source);
 
 	/* Clear scids with reservations, too, so we don't have to look up
 	 * all the time! */
@@ -340,13 +301,13 @@ static const char *get_routes(const tal_t *ctx,
 	srcnode = gossmap_find_node(askrene->gossmap, source);
 	if (!srcnode) {
 		ret = tal_fmt(ctx, "Unknown source node %s", fmt_node_id(tmpctx, source));
-		goto out;
+		goto fail;
 	}
 
 	dstnode = gossmap_find_node(askrene->gossmap, dest);
 	if (!dstnode) {
 		ret = tal_fmt(ctx, "Unknown destination node %s", fmt_node_id(tmpctx, dest));
-		goto out;
+		goto fail;
 	}
 
 	delay_feefactor = 1.0/1000000;
@@ -369,11 +330,8 @@ static const char *get_routes(const tal_t *ctx,
 	flows = minflow(rq, rq, srcnode, dstnode, amount,
 			mu, delay_feefactor, base_fee_penalty, prob_cost_factor);
 	if (!flows) {
-		/* FIXME: disjktra here to see if there is any route, and
-		 * diagnose problem (offline peers?  Not enough capacity at
-		 * our end?  Not enough at theirs?) */
-		ret = tal_fmt(ctx, "Could not find route");
-		goto out;
+		ret = explain_failure(ctx, rq, srcnode, dstnode, amount);
+		goto fail;
 	}
 
 	/* Too much delay? */
@@ -390,24 +348,24 @@ static const char *get_routes(const tal_t *ctx,
 				mu, delay_feefactor, base_fee_penalty, prob_cost_factor);
 		if (!flows || delay_feefactor > 10) {
 			ret = tal_fmt(ctx, "Could not find route without excessive delays");
-			goto out;
+			goto fail;
 		}
 	}
 
 	/* Too expensive? */
-	while (amount_msat_greater(flowset_fee(plugin, flows), maxfee)) {
+	while (amount_msat_greater(flowset_fee(rq->plugin, flows), maxfee)) {
 		mu += 10;
 		flows = minflow(rq, rq, srcnode, dstnode, amount,
 				mu, delay_feefactor, base_fee_penalty, prob_cost_factor);
 		if (!flows || mu == 100) {
 			ret = tal_fmt(ctx, "Could not find route without excessive cost");
-			goto out;
+			goto fail;
 		}
 	}
 
 	if (finalcltv + flows_worst_delay(flows) > 2016) {
 		ret = tal_fmt(ctx, "Could not find route without excessive cost or delays");
-		goto out;
+		goto fail;
 	}
 
 	/* The above did not take into account the extra funds to pay
@@ -416,7 +374,7 @@ static const char *get_routes(const tal_t *ctx,
 	 * still possible */
 	ret = refine_with_fees_and_limits(ctx, rq, amount, &flows);
 	if (ret)
-		goto out;
+		goto fail;
 
 	/* Convert back into routes, with delay and other information fixed */
 	*routes = tal_arr(ctx, struct route *, tal_count(flows));
@@ -440,7 +398,7 @@ static const char *get_routes(const tal_t *ctx,
 			const struct half_chan *h = flow_edge(flows[i], j);
 
 			if (!amount_msat_add_fee(&msat, h->base_fee, h->proportional_fee))
-				plugin_err(plugin, "Adding fee to amount");
+				plugin_err(rq->plugin, "Adding fee to amount");
 			delay += h->delay;
 
 			rh->scid = gossmap_chan_scid(rq->gossmap, flows[i]->path[j]);
@@ -454,9 +412,13 @@ static const char *get_routes(const tal_t *ctx,
 	}
 
 	*probability = flowset_probability(flows, rq);
-	ret = NULL;
+	gossmap_remove_localmods(askrene->gossmap, localmods);
+	return NULL;
 
-out:
+	/* Explicit failure path keeps the compiler (gcc version 12.3.0 -O3) from
+	 * warning about uninitialized variables in the caller */
+fail:
+	assert(ret != NULL);
 	gossmap_remove_localmods(askrene->gossmap, localmods);
 	return ret;
 }
@@ -468,7 +430,6 @@ void get_constraints(const struct route_query *rq,
 		     struct amount_msat *max)
 {
 	struct short_channel_id_dir scidd;
-	const struct reserve *reserve;
 	size_t idx = gossmap_chan_idx(rq->gossmap, chan);
 
 	*min = AMOUNT_MSAT(0);
@@ -484,45 +445,18 @@ void get_constraints(const struct route_query *rq,
 	scidd.dir = dir;
 	*max = AMOUNT_MSAT(-1ULL);
 
-	/* Look through layers for any constraints */
-	for (size_t i = 0; i < tal_count(rq->layers); i++) {
-		const struct constraint *cmin, *cmax;
-		cmin = layer_find_constraint(rq->layers[i], &scidd, CONSTRAINT_MIN);
-		if (cmin && amount_msat_greater(cmin->limit, *min))
-			*min = cmin->limit;
-		cmax = layer_find_constraint(rq->layers[i], &scidd, CONSTRAINT_MAX);
-		if (cmax && amount_msat_less(cmax->limit, *max))
-			*max = cmax->limit;
-	}
+	/* Look through layers for any constraints (might be dummy
+	 * ones, for created channels!) */
+	for (size_t i = 0; i < tal_count(rq->layers); i++)
+		layer_apply_constraints(rq->layers[i], &scidd, min, max);
 
 	/* Might be here because it's reserved, but capacity is normal. */
-	if (amount_msat_eq(*max, AMOUNT_MSAT(-1ULL))) {
-		struct amount_sat cap;
-		if (gossmap_chan_get_capacity(rq->gossmap, chan, &cap)) {
-			/* Shouldn't happen! */
-			if (!amount_sat_to_msat(max, cap)) {
-				plugin_log(rq->plugin, LOG_BROKEN,
-					   "Local channel %s with capacity %s?",
-					   fmt_short_channel_id(tmpctx, scidd.scid),
-					   fmt_amount_sat(tmpctx, cap));
-			}
-		} else {
-			/* Shouldn't happen: local channels have explicit constraints */
-			plugin_log(rq->plugin, LOG_BROKEN,
-				   "Channel %s without capacity?",
-				   fmt_short_channel_id(tmpctx, scidd.scid));
-		}
-	}
+	if (amount_msat_eq(*max, AMOUNT_MSAT(-1ULL)))
+		*max = gossmap_chan_get_capacity(rq->gossmap, chan);
 
 	/* Finally, if any is in use, subtract that! */
-	reserve = find_reserve(rq->reserved, &scidd);
-	if (reserve) {
-		/* They can definitely *try* to push too much through a channel! */
-		if (!amount_msat_sub(min, *min, reserve->amount))
-			*min = AMOUNT_MSAT(0);
-		if (!amount_msat_sub(max, *max, reserve->amount))
-			*max = AMOUNT_MSAT(0);
-	}
+	reserve_sub(rq->reserved, &scidd, min);
+	reserve_sub(rq->reserved, &scidd, max);
 }
 
 struct getroutes_info {
@@ -546,7 +480,7 @@ static struct command_result *do_getroutes(struct command *cmd,
 	struct route **routes;
 	struct json_stream *response;
 
-	err = get_routes(cmd, cmd->plugin,
+	err = get_routes(cmd, cmd,
 			 info->source, info->dest,
 			 *info->amount, *info->maxfee, *info->finalcltv,
 			 info->layers, localmods, info->local_layer,
@@ -564,10 +498,12 @@ static struct command_result *do_getroutes(struct command *cmd,
 		json_add_u32(response, "final_cltv", *info->finalcltv);
 		json_array_start(response, "path");
 		for (size_t j = 0; j < tal_count(routes[i]->hops); j++) {
+			struct short_channel_id_dir scidd;
 			const struct route_hop *r = &routes[i]->hops[j];
 			json_object_start(response, NULL);
-			json_add_short_channel_id(response, "short_channel_id", r->scid);
-			json_add_u32(response, "direction", r->direction);
+			scidd.scid = r->scid;
+			scidd.dir = r->direction;
+			json_add_short_channel_id_dir(response, "short_channel_id_dir", scidd);
 			json_add_node_id(response, "next_node_id", &r->node_id);
 			json_add_amount_msat(response, "amount_msat", r->amount);
 			json_add_u32(response, "delay", r->delay);
@@ -584,12 +520,13 @@ static void add_localchan(struct gossmap_localmods *mods,
 			  const struct node_id *self,
 			  const struct node_id *peer,
 			  const struct short_channel_id_dir *scidd,
+			  struct amount_msat capacity_msat,
 			  struct amount_msat htlcmin,
 			  struct amount_msat htlcmax,
 			  struct amount_msat spendable,
 			  struct amount_msat fee_base,
 			  u32 fee_proportional,
-			  u32 cltv_delta,
+			  u16 cltv_delta,
 			  bool enabled,
 			  const char *buf,
 			  const jsmntok_t *chantok,
@@ -599,7 +536,7 @@ static void add_localchan(struct gossmap_localmods *mods,
 	const char *opener;
 	const char *err;
 
-	gossmod_add_localchan(mods, self, peer, scidd, htlcmin, htlcmax,
+	gossmod_add_localchan(mods, self, peer, scidd, capacity_msat, htlcmin, htlcmax,
 			      spendable, fee_base, fee_proportional, cltv_delta, enabled,
 			      buf, chantok, info->local_layer);
 
@@ -643,8 +580,7 @@ static void add_localchan(struct gossmap_localmods *mods,
 	}
 
 	/* Known capacity on local channels (ts = max) */
-	layer_update_constraint(info->local_layer, scidd, CONSTRAINT_MIN, UINT64_MAX, spendable);
-	layer_update_constraint(info->local_layer, scidd, CONSTRAINT_MAX, UINT64_MAX, spendable);
+	layer_add_constraint(info->local_layer, scidd, UINT64_MAX, &spendable, &spendable);
 }
 
 static struct command_result *
@@ -676,7 +612,7 @@ static struct command_result *json_getroutes(struct command *cmd,
 		   p_req("source", param_node_id, &info->source),
 		   p_req("destination", param_node_id, &info->dest),
 		   p_req("amount_msat", param_msat, &info->amount),
-		   p_req("layers", param_string_array, &info->layers),
+		   p_req("layers", param_layer_names, &info->layers),
 		   p_req("maxfee_msat", param_msat, &info->maxfee),
 		   p_req("final_cltv", param_u32, &info->finalcltv),
 		   NULL))
@@ -704,9 +640,8 @@ static struct command_result *json_askrene_reserve(struct command *cmd,
 						   const char *buffer,
 						   const jsmntok_t *params)
 {
-	struct reserve_path *path;
+	struct reserve_hop *path;
 	struct json_stream *response;
-	size_t num;
 	struct askrene *askrene = get_askrene(cmd->plugin);
 
 	if (!param(cmd, buffer, params,
@@ -714,17 +649,8 @@ static struct command_result *json_askrene_reserve(struct command *cmd,
 		   NULL))
 		return command_param_failed();
 
-	num = reserves_add(askrene->reserved, path->scidds, path->amounts,
-			   tal_count(path->scidds));
-	if (num != tal_count(path->scidds)) {
-		const struct reserve *r = find_reserve(askrene->reserved, &path->scidds[num]);
-		return command_fail(cmd, JSONRPC2_INVALID_PARAMS,
-				    "Overflow reserving %zu: %s amount %s (%s reserved already)",
-				    num,
-				    fmt_short_channel_id_dir(tmpctx, &path->scidds[num]),
-				    fmt_amount_msat(tmpctx, path->amounts[num]),
-				    r ? fmt_amount_msat(tmpctx, r->amount) : "none");
-	}
+	for (size_t i = 0; i < tal_count(path); i++)
+		reserve_add(askrene->reserved, &path[i], cmd->id);
 
 	response = jsonrpc_stream_success(cmd);
 	return command_finished(cmd, response);
@@ -734,9 +660,8 @@ static struct command_result *json_askrene_unreserve(struct command *cmd,
 						     const char *buffer,
 						     const jsmntok_t *params)
 {
-	struct reserve_path *path;
+	struct reserve_hop *path;
 	struct json_stream *response;
-	size_t num;
 	struct askrene *askrene = get_askrene(cmd->plugin);
 
 	if (!param(cmd, buffer, params,
@@ -744,140 +669,181 @@ static struct command_result *json_askrene_unreserve(struct command *cmd,
 		   NULL))
 		return command_param_failed();
 
-	num = reserves_remove(askrene->reserved, path->scidds, path->amounts,
-			      tal_count(path->scidds));
-	if (num != tal_count(path->scidds)) {
-		const struct reserve *r = find_reserve(askrene->reserved, &path->scidds[num]);
-		return command_fail(cmd, JSONRPC2_INVALID_PARAMS,
-				    "Underflow unreserving %zu: %s amount %s (%zu reserved, amount %s)",
-				    num,
-				    fmt_short_channel_id_dir(tmpctx, &path->scidds[num]),
-				    fmt_amount_msat(tmpctx, path->amounts[num]),
-				    r ? r->num_htlcs : 0,
-				    r ? fmt_amount_msat(tmpctx, r->amount) : "none");
-	}
+	for (size_t i = 0; i < tal_count(path); i++) {
+		if (!reserve_remove(askrene->reserved, &path[i])) {
+			return command_fail(cmd, JSONRPC2_INVALID_PARAMS,
+					    "Unknown reservation for %s",
+					    fmt_short_channel_id_dir(tmpctx,
+								     &path[i].scidd));
+		}
+ 	}
 
 	response = jsonrpc_stream_success(cmd);
 	return command_finished(cmd, response);
 }
 
-static struct command_result *param_layername(struct command *cmd,
-					      const char *name,
-					      const char *buffer,
-					      const jsmntok_t *tok,
-					      const char **str)
+static struct command_result *json_askrene_listreservations(struct command *cmd,
+							    const char *buffer,
+							    const jsmntok_t *params)
 {
-	*str = tal_strndup(cmd, buffer + tok->start,
-			   tok->end - tok->start);
-	if (strstarts(*str, "auto."))
-		return command_fail_badparam(cmd, name, buffer, tok,
-					     "New layers cannot start with auto.");
-	return NULL;
+	struct askrene *askrene = get_askrene(cmd->plugin);
+	struct json_stream *response;
+
+	if (!param(cmd, buffer, params,
+		   NULL))
+		return command_param_failed();
+
+	response = jsonrpc_stream_success(cmd);
+	json_add_reservations(response, askrene->reserved, "reservations");
+	return command_finished(cmd, response);
 }
 
 static struct command_result *json_askrene_create_channel(struct command *cmd,
 							  const char *buffer,
 							  const jsmntok_t *params)
 {
-	const char *layername;
 	struct layer *layer;
-	const struct local_channel *lc;
 	struct node_id *src, *dst;
 	struct short_channel_id *scid;
 	struct amount_msat *capacity;
 	struct json_stream *response;
-	struct amount_msat *htlc_min, *htlc_max, *base_fee;
-	u32 *proportional_fee;
-	u16 *delay;
-	struct askrene *askrene = get_askrene(cmd->plugin);
 
 	if (!param_check(cmd, buffer, params,
-			 p_req("layer", param_layername, &layername),
+			 p_req("layer", param_known_layer, &layer),
 			 p_req("source", param_node_id, &src),
 			 p_req("destination", param_node_id, &dst),
 			 p_req("short_channel_id", param_short_channel_id, &scid),
 			 p_req("capacity_msat", param_msat, &capacity),
-			 p_req("htlc_minimum_msat", param_msat, &htlc_min),
-			 p_req("htlc_maximum_msat", param_msat, &htlc_max),
-			 p_req("fee_base_msat", param_msat, &base_fee),
-			 p_req("fee_proportional_millionths", param_u32, &proportional_fee),
-			 p_req("delay", param_u16, &delay),
 			 NULL))
 		return command_param_failed();
 
-	/* If it exists, it must match */
-	layer = find_layer(askrene, layername);
-	if (layer) {
-		lc = layer_find_local_channel(layer, *scid);
-		if (lc && !layer_check_local_channel(lc, src, dst, *capacity)) {
-			return command_fail(cmd, JSONRPC2_INVALID_PARAMS,
-					    "channel already exists with different values!");
-		}
-	} else
-		lc = NULL;
+	if (layer_find_local_channel(layer, *scid)) {
+		return command_fail(cmd, JSONRPC2_INVALID_PARAMS,
+				    "channel already exists");
+	}
 
 	if (command_check_only(cmd))
 		return command_check_done(cmd);
 
-	if (!layer)
-		layer = new_layer(askrene, layername);
-
-	layer_update_local_channel(layer, src, dst, *scid, *capacity,
-				   *base_fee, *proportional_fee, *delay,
-				   *htlc_min, *htlc_max);
+	layer_add_local_channel(layer, src, dst, *scid, *capacity);
 
 	response = jsonrpc_stream_success(cmd);
 	return command_finished(cmd, response);
+}
+
+static struct command_result *json_askrene_update_channel(struct command *cmd,
+							  const char *buffer,
+							  const jsmntok_t *params)
+{
+	struct layer *layer;
+	struct short_channel_id_dir *scidd;
+	bool *enabled;
+	struct amount_msat *htlc_min, *htlc_max, *base_fee;
+	u32 *proportional_fee;
+	u16 *delay;
+	struct json_stream *response;
+
+ 	if (!param(cmd, buffer, params,
+		   p_req("layer", param_known_layer, &layer),
+		   p_req("short_channel_id_dir", param_short_channel_id_dir, &scidd),
+		   p_opt("enabled", param_bool, &enabled),
+		   p_opt("htlc_minimum_msat", param_msat, &htlc_min),
+		   p_opt("htlc_maximum_msat", param_msat, &htlc_max),
+		   p_opt("fee_base_msat", param_msat, &base_fee),
+		   p_opt("fee_proportional_millionths", param_u32, &proportional_fee),
+		   p_opt("cltv_expiry_delta", param_u16, &delay),
+		   NULL))
+		return command_param_failed();
+
+	layer_add_update_channel(layer, scidd,
+				 enabled,
+				 htlc_min, htlc_max,
+				 base_fee, proportional_fee, delay);
+
+	response = jsonrpc_stream_success(cmd);
+	return command_finished(cmd, response);
+}
+
+enum inform {
+	INFORM_CONSTRAINED,
+	INFORM_UNCONSTRAINED,
+	INFORM_SUCCEEDED,
+};
+
+static struct command_result *param_inform(struct command *cmd,
+					   const char *name,
+					   const char *buffer,
+					   const jsmntok_t *tok,
+					   enum inform **inform)
+{
+	*inform = tal(cmd, enum inform);
+	if (json_tok_streq(buffer, tok, "constrained"))
+		**inform = INFORM_CONSTRAINED;
+	else if (json_tok_streq(buffer, tok, "unconstrained"))
+		**inform = INFORM_UNCONSTRAINED;
+	else if (json_tok_streq(buffer, tok, "succeeded"))
+		**inform = INFORM_SUCCEEDED;
+	else
+		command_fail_badparam(cmd, name, buffer, tok,
+				      "must be constrained/unconstrained/succeeded");
+	return NULL;
 }
 
 static struct command_result *json_askrene_inform_channel(struct command *cmd,
 							    const char *buffer,
 							    const jsmntok_t *params)
 {
-	struct layer *layer;
-	const char *layername;
-	struct short_channel_id *scid;
-	int *direction;
-	struct json_stream *response;
-	struct amount_msat *max, *min;
-	const struct constraint *c;
-	struct short_channel_id_dir scidd;
 	struct askrene *askrene = get_askrene(cmd->plugin);
+	struct layer *layer;
+	struct short_channel_id_dir *scidd;
+	struct json_stream *response;
+	struct amount_msat *amount;
+	enum inform *inform;
+	const struct constraint *c;
 
 	if (!param_check(cmd, buffer, params,
-			 p_req("layer", param_layername, &layername),
-			 p_req("short_channel_id", param_short_channel_id, &scid),
-			 p_req("direction", param_zero_or_one, &direction),
-			 p_opt("minimum_msat", param_msat, &min),
-			 p_opt("maximum_msat", param_msat, &max),
+			 p_req("layer", param_known_layer, &layer),
+			 p_req("short_channel_id_dir", param_short_channel_id_dir, &scidd),
+			 p_req("amount_msat", param_msat, &amount),
+			 p_req("inform", param_inform, &inform),
 			 NULL))
 		return command_param_failed();
 
-	if ((!min && !max) || (min && max)) {
-		return command_fail(cmd, JSONRPC2_INVALID_PARAMS,
-				    "Must specify exactly one of maximum_msat/minimum_msat");
+	switch (*inform) {
+	case INFORM_CONSTRAINED:
+		/* It didn't pass, so minimal assumption is that reserve was all used
+		 * then there we were one msat short. */
+		if (!amount_msat_sub(amount, *amount, AMOUNT_MSAT(1)))
+			*amount = AMOUNT_MSAT(0);
+		if (!reserve_accumulate(askrene->reserved, scidd, amount))
+			return command_fail(cmd, JSONRPC2_INVALID_PARAMS,
+					    "Amount overflow with reserves");
+		if (command_check_only(cmd))
+			return command_check_done(cmd);
+		c = layer_add_constraint(layer, scidd, time_now().ts.tv_sec,
+					 NULL, amount);
+		goto output;
+	case INFORM_UNCONSTRAINED:
+		/* It passed, so the capacity is at least this much (minimal assumption is
+		 * that no reserves were used) */
+		if (command_check_only(cmd))
+			return command_check_done(cmd);
+		c = layer_add_constraint(layer, scidd, time_now().ts.tv_sec,
+					 amount, NULL);
+		goto output;
+	case INFORM_SUCCEEDED:
+		/* FIXME: We could do something useful here! */
+		c = NULL;
+		goto output;
 	}
+	abort();
 
-	if (command_check_only(cmd))
-		return command_check_done(cmd);
-
-	layer = find_layer(askrene, layername);
-	if (!layer)
-		layer = new_layer(askrene, layername);
-
-	/* Calls expect a convenient short_channel_id_dir struct */
-	scidd.scid = *scid;
-	scidd.dir = *direction;
-
-	if (min) {
-		c = layer_update_constraint(layer, &scidd, CONSTRAINT_MIN,
-					    time_now().ts.tv_sec, *min);
-	} else {
-		c = layer_update_constraint(layer, &scidd, CONSTRAINT_MAX,
-					    time_now().ts.tv_sec, *max);
-	}
+output:
 	response = jsonrpc_stream_success(cmd);
-	json_add_constraint(response, "constraint", c, layer);
+	json_array_start(response, "constraints");
+	if (c)
+		json_add_constraint(response, NULL, c, layer);
+	json_array_end(response);
 	return command_finished(cmd, response);
 }
 
@@ -886,24 +852,68 @@ static struct command_result *json_askrene_disable_node(struct command *cmd,
 							const jsmntok_t *params)
 {
 	struct node_id *node;
-	const char *layername;
 	struct layer *layer;
 	struct json_stream *response;
-	struct askrene *askrene = get_askrene(cmd->plugin);
 
 	if (!param(cmd, buffer, params,
-		   p_req("layer", param_layername, &layername),
+		   p_req("layer", param_known_layer, &layer),
 		   p_req("node", param_node_id, &node),
 		   NULL))
 		return command_param_failed();
 
-	layer = find_layer(askrene, layername);
-	if (!layer)
-		layer = new_layer(askrene, layername);
-
 	/* We save this in the layer, because they want us to disable all the channels
 	 * to the node at *use* time (a new channel might be gossiped!). */
 	layer_add_disabled_node(layer, node);
+
+	response = jsonrpc_stream_success(cmd);
+	return command_finished(cmd, response);
+}
+
+static struct command_result *json_askrene_create_layer(struct command *cmd,
+							const char *buffer,
+							const jsmntok_t *params)
+{
+	struct askrene *askrene = get_askrene(cmd->plugin);
+	struct layer *layer;
+	const char *layername;
+	struct json_stream *response;
+
+	if (!param_check(cmd, buffer, params,
+			 p_req("layer", param_string, &layername),
+			 NULL))
+		return command_param_failed();
+
+	if (find_layer(askrene, layername))
+		return command_fail(cmd, JSONRPC2_INVALID_PARAMS,
+				    "Layer already exists");
+
+	if (strstarts(layername, "auto."))
+		return command_fail(cmd, JSONRPC2_INVALID_PARAMS,
+				    "Cannot create auto layer");
+
+	if (command_check_only(cmd))
+		return command_check_done(cmd);
+
+	layer = new_layer(askrene, layername);
+
+	response = jsonrpc_stream_success(cmd);
+	json_add_layers(response, askrene, "layers", layer);
+	return command_finished(cmd, response);
+}
+
+static struct command_result *json_askrene_remove_layer(struct command *cmd,
+							const char *buffer,
+							const jsmntok_t *params)
+{
+	struct layer *layer;
+	struct json_stream *response;
+
+	if (!param(cmd, buffer, params,
+		   p_req("layer", param_known_layer, &layer),
+		   NULL))
+		return command_param_failed();
+
+	tal_free(layer);
 
 	response = jsonrpc_stream_success(cmd);
 	return command_finished(cmd, response);
@@ -914,16 +924,16 @@ static struct command_result *json_askrene_listlayers(struct command *cmd,
 						      const jsmntok_t *params)
 {
 	struct askrene *askrene = get_askrene(cmd->plugin);
-	const char *layername;
+	struct layer *layer;
 	struct json_stream *response;
 
 	if (!param(cmd, buffer, params,
-		   p_opt("layer", param_string, &layername),
+		   p_opt("layer", param_known_layer, &layer),
 		   NULL))
 		return command_param_failed();
 
 	response = jsonrpc_stream_success(cmd);
-	json_add_layers(response, askrene, "layers", layername);
+	json_add_layers(response, askrene, "layers", layer);
 	return command_finished(cmd, response);
 }
 
@@ -956,6 +966,10 @@ static const struct plugin_command commands[] = {
 		json_getroutes,
 	},
 	{
+		"askrene-listreservations",
+		json_askrene_listreservations,
+	},
+	{
 		"askrene-reserve",
 		json_askrene_reserve,
 	},
@@ -972,8 +986,20 @@ static const struct plugin_command commands[] = {
 		json_askrene_create_channel,
 	},
 	{
+		"askrene-update-channel",
+		json_askrene_update_channel,
+	},
+	{
 		"askrene-inform-channel",
 		json_askrene_inform_channel,
+	},
+	{
+		"askrene-create-layer",
+		json_askrene_create_layer,
+	},
+	{
+		"askrene-remove-layer",
+		json_askrene_remove_layer,
 	},
 	{
 		"askrene-listlayers",

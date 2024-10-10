@@ -84,11 +84,12 @@ static unsigned int verbose = 0;
 #define GC_HEADERLEN (sizeof(GC_HEADER))
 #define GOSSIP_STORE_VER ((0 << 5) | 14)
 
+/* Backwards, we want larger first */
 static int cmp_node_num_chans(struct gossmap_node *const *a,
 			      struct gossmap_node *const *b,
 			      void *unused)
 {
-	return (int)(*a)->num_chans - (int)(*b)->num_chans;
+	return (int)(*b)->num_chans - (int)(*a)->num_chans;
 }
 
 static void write_bigsize(gzFile outf, u64 val)
@@ -233,18 +234,17 @@ static u64 get_htlc_max(struct gossmap *gossmap,
 			int dir)
 {
 	struct amount_msat msat, capacity_msat;
-	struct amount_sat capacity_sats;
-	gossmap_chan_get_capacity(gossmap, chan, &capacity_sats);
+
+	capacity_msat = gossmap_chan_get_capacity(gossmap, chan);
 	gossmap_chan_get_update_details(gossmap, chan, dir,
 					NULL, NULL, NULL, NULL, NULL, NULL, &msat);
 
 	/* Special value for the common case of "max_htlc == capacity" */
-	if (amount_msat_eq_sat(msat, capacity_sats)) {
+	if (amount_msat_eq(msat, capacity_msat)) {
 		return 0;
 	}
 	/* Other common case: "max_htlc == 99% capacity" */
-	if (amount_sat_to_msat(&capacity_msat, capacity_sats)
-	    && amount_msat_scale(&capacity_msat, capacity_msat, 0.99)
+	if (amount_msat_scale(&capacity_msat, capacity_msat, 0.99)
 	    && amount_msat_eq(msat, capacity_msat)) {
 		return 1;
 	}
@@ -495,10 +495,44 @@ static char *opt_node(const char *optarg, const struct pubkey ***node_ids)
 	return NULL;
 }
 
+static const char *get_alias(const tal_t *ctx,
+			     const struct gossmap *gossmap,
+			     const struct gossmap_node *n)
+{
+	const u8 *ann = gossmap_node_get_announce(tmpctx, gossmap, n);
+	secp256k1_ecdsa_signature signature;
+	u8 *features;
+	u32 timestamp;
+	struct node_id node_id;
+	u8 rgb_color[3];
+	u8 alias[32];
+	u8 *addresses;
+	struct tlv_node_ann_tlvs *tlvs;
+
+	if (!fromwire_node_announcement(tmpctx, ann, &signature, &features, &timestamp,
+					&node_id, rgb_color, alias, &addresses,
+					&tlvs))
+		return "";
+	return tal_strndup(ctx, (const char *)alias, 32);
+}
+
+static void cupdate_bad(struct gossmap *map,
+			const struct short_channel_id_dir *scidd,
+			u16 cltv_expiry_delta,
+			u32 fee_base_msat,
+			u32 fee_proportional_millionths,
+			void *unused)
+{
+	warnx("Bad cupdate for %s, ignoring (delta=%u, fee=%u/%u)",
+	      fmt_short_channel_id_dir(tmpctx, scidd),
+	      cltv_expiry_delta, fee_base_msat, fee_proportional_millionths);
+}
+
 int main(int argc, char *argv[])
 {
 	int infd, outfd;
 	const struct pubkey **node_ids;
+	bool print_nodes = false;
 
 	common_setup(argv[0]);
 	setup_locale();
@@ -507,7 +541,9 @@ int main(int argc, char *argv[])
 	opt_register_noarg("--verbose|-v", opt_add_one, &verbose,
 			   "Print details (each additional gives more!).");
 	opt_register_arg("--node-map=num=<nodeid>", opt_node, NULL, &node_ids,
-			   "Map node num to <nodeid>");
+			   "Map node num to <nodeid> (decompress only)");
+	opt_register_noarg("--output-node-map", opt_set_bool, &print_nodes,
+			   "Output nodenumber:nodeid:alias for each node (compress only)");
 	opt_register_noarg("--help|-h", opt_usage_and_exit,
 			   "[decompress|compress] infile outfile\n"
 			   "Compress or decompress a gossmap file",
@@ -515,25 +551,26 @@ int main(int argc, char *argv[])
 
 	opt_parse(&argc, argv, opt_log_stderr_exit);
 	if (argc != 4)
-		opt_usage_and_exit("Needs 4 arguments");
+		opt_usage_exit_fail("Needs 4 arguments");
 
 	infd = open(argv[2], O_RDONLY);
 	if (infd < 0)
-		opt_usage_and_exit(tal_fmt(tmpctx, "Cannot open %s for reading: %s",
-					   argv[2], strerror(errno)));
+		opt_usage_exit_fail(tal_fmt(tmpctx, "Cannot open %s for reading: %s",
+					    argv[2], strerror(errno)));
 	outfd = open(argv[3], O_WRONLY|O_CREAT|O_TRUNC, 0666);
 	if (outfd < 0)
-		opt_usage_and_exit(tal_fmt(tmpctx, "Cannot open %s for writing: %s",
-					   argv[3], strerror(errno)));
+		opt_usage_exit_fail(tal_fmt(tmpctx, "Cannot open %s for writing: %s",
+					    argv[3], strerror(errno)));
 
 	if (streq(argv[1], "compress")) {
 		struct gossmap_node **nodes, *n;
 		size_t *node_to_compr_idx;
 		size_t node_count, channel_count;
 		struct gossmap_chan **chans, *c;
+		bool *dirs;
 		gzFile outf = gzdopen(outfd, "wb9");
 
-		struct gossmap *gossmap = gossmap_load_fd(tmpctx, infd, NULL, NULL, NULL);
+		struct gossmap *gossmap = gossmap_load_fd(tmpctx, infd, cupdate_bad, NULL, NULL);
 		if (!gossmap)
 			opt_usage_and_exit("Cannot read gossmap");
 
@@ -552,8 +589,18 @@ int main(int argc, char *argv[])
 
 		/* Create map of gossmap index to compression index */
 		node_to_compr_idx = tal_arr(nodes, size_t, gossmap_max_node_idx(gossmap));
-		for (size_t i = 0; i < tal_count(nodes); i++)
+		for (size_t i = 0; i < tal_count(nodes); i++) {
 			node_to_compr_idx[gossmap_node_idx(gossmap, nodes[i])] = i;
+			if (print_nodes) {
+				struct node_id node_id;
+				gossmap_node_get_id(gossmap, nodes[i], &node_id);
+
+				printf("%zu:%s:%s\n",
+				       i,
+				       fmt_node_id(tmpctx, &node_id),
+				       get_alias(tmpctx, gossmap, nodes[i]));
+			}
+		}
 
 		if (gzwrite(outf, GC_HEADER, GC_HEADERLEN) == 0)
 			err(1, "Writing header");
@@ -568,26 +615,41 @@ int main(int argc, char *argv[])
 		if (verbose)
 			printf("%zu channels\n", channel_count);
 		chans = tal_arr(gossmap, struct gossmap_chan *, channel_count);
+		dirs = tal_arr(gossmap, bool, channel_count);
 
 		/*  * <CHANNEL_ENDS> := {channel_count} {start_nodeidx}*{channel_count} {end_nodeidx}*{channel_count} */
 		write_bigsize(outf, channel_count);
 		size_t chanidx = 0;
 		/* We iterate nodes to get to channels.  This gives us nicer ordering for compression */
-		for (size_t wanted_dir = 0; wanted_dir < 2; wanted_dir++) {
-			for (n = gossmap_first_node(gossmap); n; n = gossmap_next_node(gossmap, n)) {
-				for (size_t i = 0; i < n->num_chans; i++) {
-					int dir;
-					c = gossmap_nth_chan(gossmap, n, i, &dir);
-					if (dir != wanted_dir)
-						continue;
+		for (size_t i = 0; i < tal_count(nodes); i++) {
+			n = nodes[i];
+			for (size_t j = 0; j < n->num_chans; j++) {
+				const struct gossmap_node *peer;
+				int dir;
+				c = gossmap_nth_chan(gossmap, n, j, &dir);
 
-					write_bigsize(outf,
-						      node_to_compr_idx[gossmap_node_idx(gossmap, n)]);
-					/* First time reflects channel index for reader */
-					if (wanted_dir == 0)
-						chans[chanidx++] = c;
-				}
+				peer = gossmap_nth_node(gossmap, c, !dir);
+				/* Don't write if peer already wrote it! */
+				/* FIXME: What about self-channels? */
+				if (node_to_compr_idx[gossmap_node_idx(gossmap, peer)] < i)
+					continue;
+
+				write_bigsize(outf, node_to_compr_idx[gossmap_node_idx(gossmap, n)]);
+
+				assert(chanidx < channel_count);
+				dirs[chanidx] = dir;
+				chans[chanidx] = c;
+				chanidx++;
 			}
+		}
+		assert(chanidx == channel_count);
+
+		/* Now write out the other ends of the channels */
+		for (size_t i = 0; i < channel_count; i++) {
+			const struct gossmap_node *peer;
+
+			peer = gossmap_nth_node(gossmap, chans[i], !dirs[i]);
+			write_bigsize(outf, node_to_compr_idx[gossmap_node_idx(gossmap, peer)]);
 		}
 
 		/* <DISABLEDS> := <DISABLED>* {channel_count*2} */
@@ -612,9 +674,9 @@ int main(int argc, char *argv[])
 		/* <CAPACITY_TEMPLATES> := {capacity_count} {capacity_count}*{capacity} */
 		u64 *vals = tal_arr(chans, u64, channel_count);
 		for (size_t i = 0; i < channel_count; i++) {
-			struct amount_sat sats;
-			gossmap_chan_get_capacity(gossmap, chans[i], &sats);
-			vals[i] = sats.satoshis; /* Raw: compression format */
+			struct amount_msat cap;
+			cap = gossmap_chan_get_capacity(gossmap, chans[i]);
+			vals[i] = cap.millisatoshis / 1000; /* Raw: compression format */
 		}
 		write_template_and_values(outf, vals, "capacities");
 

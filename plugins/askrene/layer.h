@@ -17,24 +17,6 @@ struct askrene;
 struct layer;
 struct json_stream;
 
-enum constraint_type {
-	CONSTRAINT_MIN,
-	CONSTRAINT_MAX,
-};
-
-struct constraint_key {
-	struct short_channel_id_dir scidd;
-	enum constraint_type type;
-};
-
-/* A constraint reflects something we learned about a channel */
-struct constraint {
-	struct constraint_key key;
-	/* Time this constraint was last updated */
-	u64 timestamp;
-	struct amount_msat limit;
-};
-
 /* Look up a layer by name. */
 struct layer *find_layer(struct askrene *askrene, const char *name);
 
@@ -60,17 +42,22 @@ bool layer_check_local_channel(const struct local_channel *lc,
 			       const struct node_id *n2,
 			       struct amount_msat capacity);
 
-/* Update a local channel to a layer: fails if you try to change capacity or nodes! */
-void layer_update_local_channel(struct layer *layer,
-				const struct node_id *src,
-				const struct node_id *dst,
-				struct short_channel_id scid,
-				struct amount_msat capacity,
-				struct amount_msat base_fee,
-				u32 proportional_fee,
-				u16 delay,
-				struct amount_msat htlc_min,
-				struct amount_msat htlc_max);
+/* Add a local channel to a layer! */
+void layer_add_local_channel(struct layer *layer,
+			     const struct node_id *src,
+			     const struct node_id *dst,
+			     struct short_channel_id scid,
+			     struct amount_msat capacity);
+
+/* Update details on a channel (could be in this layer, or another) */
+void layer_add_update_channel(struct layer *layer,
+			      const struct short_channel_id_dir *scidd,
+			      const bool *enabled,
+			      const struct amount_msat *htlc_min,
+			      const struct amount_msat *htlc_max,
+			      const struct amount_msat *base_fee,
+			      const u32 *proportional_fee,
+			      const u16 *delay);
 
 /* If any capacities of channels are limited, unset the corresponding element in
  * the capacities[] array */
@@ -78,22 +65,23 @@ void layer_clear_overridden_capacities(const struct layer *layer,
 				       const struct gossmap *gossmap,
 				       fp16_t *capacities);
 
-/* Find a constraint in a layer. */
-const struct constraint *layer_find_constraint(const struct layer *layer,
-					       const struct short_channel_id_dir *scidd,
-					       enum constraint_type type);
+/* Apply constraints from a layer (reduce min, increase max). */
+void layer_apply_constraints(const struct layer *layer,
+			     const struct short_channel_id_dir *scidd,
+			     struct amount_msat *min,
+			     struct amount_msat *max)
+	NO_NULL_ARGS;
 
-/* Add/update a constraint on a layer. */
-const struct constraint *layer_update_constraint(struct layer *layer,
-						 const struct short_channel_id_dir *scidd,
-						 enum constraint_type type,
-						 u64 timestamp,
-						 struct amount_msat limit);
+/* Add one or more constraints on a layer. */
+const struct constraint *layer_add_constraint(struct layer *layer,
+					      const struct short_channel_id_dir *scidd,
+					      u64 timestamp,
+					      const struct amount_msat *min,
+					      const struct amount_msat *max);
 
-/* Add local channels from this layer.  zero_cost means set fees and delay to 0. */
+/* Add local channels from this layer. */
 void layer_add_localmods(const struct layer *layer,
 			 const struct gossmap *gossmap,
-			 bool zero_cost,
 			 struct gossmap_localmods *localmods);
 
 /* Remove constraints older then cutoff: returns num removed. */
@@ -102,17 +90,26 @@ size_t layer_trim_constraints(struct layer *layer, u64 cutoff);
 /* Add a disabled node to a layer. */
 void layer_add_disabled_node(struct layer *layer, const struct node_id *node);
 
-/* Print out a json object per layer, or all if layer is NULL */
+/* Print out a json object for this layer, or all if layer is NULL */
 void json_add_layers(struct json_stream *js,
 		     struct askrene *askrene,
 		     const char *fieldname,
-		     const char *layername);
+		     const struct layer *layer);
 
 /* Print a single constraint */
 void json_add_constraint(struct json_stream *js,
 			 const char *fieldname,
 			 const struct constraint *c,
 			 const struct layer *layer);
+
+/* For explain_failure: did this layer create this scid? */
+bool layer_created(const struct layer *layer, struct short_channel_id scid);
+
+/* For explain_failure: did this layer disable this channel? */
+bool layer_disables_chan(const struct layer *layer, const struct short_channel_id_dir *scidd);
+
+/* For explain_failure: did this layer disable this node? */
+bool layer_disables_node(const struct layer *layer, const struct node_id *node);
 
 /* Scan for memleaks */
 void layer_memleak_mark(struct askrene *askrene, struct htable *memtable);

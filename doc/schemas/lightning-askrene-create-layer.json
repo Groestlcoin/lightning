@@ -2,20 +2,22 @@
   "$schema": "../rpc-schema-draft.json",
   "type": "object",
   "additionalProperties": false,
-  "rpc": "askrene-listlayers",
-  "title": "Command to display information about layers (EXPERIMENTAL)",
+  "rpc": "askrene-create-layer",
+  "title": "Command to create a new layer (EXPERIMENTAL)",
   "description": [
     "WARNING: experimental, so API may change.",
     "",
-    "The **askrene-listlayers** RPC command reports any modifications each layer (or, the layer specified) would make to the topology, if it were used for *getroutes*."
+    "The **askrene-create-layer** RPC command tells askrene to create a new, empty layer.  This layer can then be populated with `askrene-create-channel` and `askrene-inform-channel`, and be used in `getroutes`."
   ],
   "request": {
-    "required": [],
+    "required": [
+      "layer"
+    ],
     "properties": {
       "layer": {
         "type": "string",
         "description": [
-          "The name of the layer to report on."
+          "The name of the layer to create."
         ]
       }
     }
@@ -146,25 +148,32 @@
               "items": {
                 "type": "object",
                 "required": [
-                  "short_channel_id_dir"
+                  "short_channel_id",
+                  "direction"
                 ],
                 "properties": {
-                  "short_channel_id_dir": {
-                    "type": "short_channel_id_dir",
+                  "short_channel_id": {
+                    "type": "short_channel_id",
                     "description": [
-                      "The short channel id and direction"
+                      "The short channel id."
+                    ]
+                  },
+                  "direction": {
+                    "type": "u32",
+                    "description": [
+                      "The direction."
                     ]
                   },
                   "maximum_msat": {
                     "type": "msat",
                     "description": [
-                      "The maximum value which this channel could pass."
+                      "The maximum value which this channel could pass.  This or *minimum_msat* will be present, but not both."
                     ]
                   },
                   "minimum_msat": {
                     "type": "msat",
                     "description": [
-                      "The minimum value which this channel could pass."
+                      "The minimum value which this channel could pass.  This or *minimum_msat* will be present, but not both."
                     ]
                   }
                 }
@@ -176,10 +185,11 @@
     }
   },
   "see_also": [
+    "lightning-askrene-remove-layer(7)",
     "lightning-getroutes(7)",
-    "lightning-askrene-disable-node(7)",
     "lightning-askrene-create-channel(7)",
     "lightning-askrene-inform-channel(7)",
+    "lightning-askrene-listlayers(7)",
     "lightning-askrene-age(7)"
   ],
   "author": [

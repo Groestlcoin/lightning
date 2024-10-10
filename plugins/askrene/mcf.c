@@ -2,7 +2,6 @@
 #include <assert.h>
 #include <ccan/bitmap/bitmap.h>
 #include <ccan/list/list.h>
-#include <ccan/lqueue/lqueue.h>
 #include <ccan/tal/str/str.h>
 #include <ccan/tal/tal.h>
 #include <common/utils.h>
@@ -393,7 +392,7 @@ static s64 get_arc_flow(
 static u32 arc_tail(const struct linear_network *linear_network,
                     const struct arc arc)
 {
-	assert(arc.idx < tal_count(linear_network->arc_tail_node));
+	assert(arc.idx < linear_network->max_num_arcs);
 	return linear_network->arc_tail_node[ arc.idx ];
 }
 /* Helper function.
@@ -402,7 +401,7 @@ static u32 arc_head(const struct linear_network *linear_network,
                     const struct arc arc)
 {
 	const struct arc dual = arc_dual(arc);
-	assert(dual.idx < tal_count(linear_network->arc_tail_node));
+	assert(dual.idx < linear_network->max_num_arcs);
 	return linear_network->arc_tail_node[dual.idx];
 }
 
@@ -413,7 +412,7 @@ static struct arc node_adjacency_begin(
 		const struct linear_network * linear_network,
 		const u32 node)
 {
-	assert(node < tal_count(linear_network->node_adjacency_first_arc));
+	assert(node < linear_network->max_num_nodes);
 	return linear_network->node_adjacency_first_arc[node];
 }
 
@@ -430,7 +429,7 @@ static struct arc node_adjacency_next(
 		const struct linear_network *linear_network,
 		const struct arc arc)
 {
-	assert(arc.idx < tal_count(linear_network->node_adjacency_next_arc));
+	assert(arc.idx < linear_network->max_num_arcs);
 	return linear_network->node_adjacency_next_arc[arc.idx];
 }
 
@@ -541,16 +540,13 @@ static void linear_network_add_adjacenct_arc(
 		const u32 node_idx,
 		const struct arc arc)
 {
-	assert(arc.idx < tal_count(linear_network->arc_tail_node));
+	assert(arc.idx < linear_network->max_num_arcs);
 	linear_network->arc_tail_node[arc.idx] = node_idx;
 
-	assert(node_idx < tal_count(linear_network->node_adjacency_first_arc));
+	assert(node_idx < linear_network->max_num_nodes);
 	const struct arc first_arc = linear_network->node_adjacency_first_arc[node_idx];
 
-	assert(arc.idx < tal_count(linear_network->node_adjacency_next_arc));
 	linear_network->node_adjacency_next_arc[arc.idx]=first_arc;
-
-	assert(node_idx < tal_count(linear_network->node_adjacency_first_arc));
 	linear_network->node_adjacency_first_arc[node_idx]=arc;
 }
 
@@ -597,23 +593,23 @@ init_linear_network(const tal_t *ctx, const struct pay_parameters *params)
 	linear_network->max_num_nodes = max_num_nodes;
 
 	linear_network->arc_tail_node = tal_arr(linear_network,u32,max_num_arcs);
-	for(size_t i=0;i<tal_count(linear_network->arc_tail_node);++i)
+	for(size_t i=0;i<max_num_arcs;++i)
 		linear_network->arc_tail_node[i]=INVALID_INDEX;
 
 	linear_network->node_adjacency_next_arc = tal_arr(linear_network,struct arc,max_num_arcs);
-	for(size_t i=0;i<tal_count(linear_network->node_adjacency_next_arc);++i)
+	for(size_t i=0;i<max_num_arcs;++i)
 		linear_network->node_adjacency_next_arc[i].idx=INVALID_INDEX;
 
 	linear_network->node_adjacency_first_arc = tal_arr(linear_network,struct arc,max_num_nodes);
-	for(size_t i=0;i<tal_count(linear_network->node_adjacency_first_arc);++i)
+	for(size_t i=0;i<max_num_nodes;++i)
 		linear_network->node_adjacency_first_arc[i].idx=INVALID_INDEX;
 
 	linear_network->arc_prob_cost = tal_arr(linear_network,s64,max_num_arcs);
-	for(size_t i=0;i<tal_count(linear_network->arc_prob_cost);++i)
+	for(size_t i=0;i<max_num_arcs;++i)
 		linear_network->arc_prob_cost[i]=INFINITE;
 
 	linear_network->arc_fee_cost = tal_arr(linear_network,s64,max_num_arcs);
-	for(size_t i=0;i<tal_count(linear_network->arc_fee_cost);++i)
+	for(size_t i=0;i<max_num_arcs;++i)
 		linear_network->arc_fee_cost[i]=INFINITE;
 
 	linear_network->capacity = tal_arrz(linear_network,s64,max_num_arcs);
@@ -630,7 +626,7 @@ init_linear_network(const tal_t *ctx, const struct pay_parameters *params)
 			const struct gossmap_chan *c = gossmap_nth_chan(gossmap,
 			                                                node, j, &half);
 
-			if (!gossmap_chan_set(c, half))
+			if (!gossmap_chan_set(c, half) || !c->half[half].enabled)
 				continue;
 
 			const u32 chan_id = gossmap_chan_idx(gossmap, c);
@@ -687,13 +683,6 @@ init_linear_network(const tal_t *ctx, const struct pay_parameters *params)
 	return linear_network;
 }
 
-/* Simple queue to traverse the network. */
-struct queue_data
-{
-	u32 idx;
-	struct lqueue_link ql;
-};
-
 // TODO(eduardo): unit test this
 /* Finds an admissible path from source to target, traversing arcs in the
  * residual network with capacity greater than 0.
@@ -705,25 +694,21 @@ find_admissible_path(const struct linear_network *linear_network,
 		     const u32 source, const u32 target, struct arc *prev)
 {
 	bool target_found = false;
+	/* Simple linear queue of node indexes */
+	u32 *queue = tal_arr(tmpctx, u32, linear_network->max_num_arcs);
+	size_t qstart, qend, prev_len = tal_count(prev);
 
-	for(size_t i=0;i<tal_count(prev);++i)
+	for(size_t i=0;i<prev_len;++i)
 		prev[i].idx=INVALID_INDEX;
 
 	// The graph is dense, and the farthest node is just a few hops away,
 	// hence let's BFS search.
-	LQUEUE(struct queue_data,ql) myqueue = LQUEUE_INIT;
-	struct queue_data *qdata;
+	queue[0] = source;
+	qstart = 0;
+	qend = 1;
 
-	qdata = tal(tmpctx, struct queue_data);
-	qdata->idx = source;
-	lqueue_enqueue(&myqueue,qdata);
-
-	while(!lqueue_empty(&myqueue))
-	{
-		qdata = lqueue_dequeue(&myqueue);
-		u32 cur = qdata->idx;
-
-		tal_free(qdata);
+	while (qstart < qend) {
+		u32 cur = queue[qstart++];
 
 		if(cur==target)
 		{
@@ -741,17 +726,15 @@ find_admissible_path(const struct linear_network *linear_network,
 
 			u32 next = arc_head(linear_network,arc);
 
-			assert(next < tal_count(prev));
+			assert(next < prev_len);
 
 			// if that node has been seen previously
 			if(prev[next].idx!=INVALID_INDEX)
 				continue;
 
 			prev[next] = arc;
-
-			qdata = tal(tmpctx, struct queue_data);
-			qdata->idx = next;
-			lqueue_enqueue(&myqueue,qdata);
+			assert(qend < linear_network->max_num_arcs);
+			queue[qend++] = next;
 		}
 	}
 	return target_found;

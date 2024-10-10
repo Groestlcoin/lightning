@@ -9,12 +9,13 @@ void gossmod_add_localchan(struct gossmap_localmods *mods,
 			   const struct node_id *self,
 			   const struct node_id *peer,
 			   const struct short_channel_id_dir *scidd,
+			   struct amount_msat capacity_msat,
 			   struct amount_msat htlcmin,
 			   struct amount_msat htlcmax,
 			   struct amount_msat spendable,
 			   struct amount_msat fee_base,
 			   u32 fee_proportional,
-			   u32 cltv_delta,
+			   u16 cltv_delta,
 			   bool enabled,
 			   const char *buf UNUSED,
 			   const jsmntok_t *chantok UNUSED,
@@ -26,14 +27,15 @@ void gossmod_add_localchan(struct gossmap_localmods *mods,
 		max = spendable;
 
 	/* FIXME: features? */
-	gossmap_local_addchan(mods, self, peer, scidd->scid, NULL);
+	gossmap_local_addchan(mods, self, peer, scidd->scid, capacity_msat,
+			      NULL);
 
-	gossmap_local_updatechan(mods, scidd->scid, min, max,
-				 fee_base.millisatoshis, /* Raw: gossmap */
-				 fee_proportional,
-				 cltv_delta,
-				 enabled,
-				 scidd->dir);
+	gossmap_local_updatechan(mods, scidd,
+				 &enabled,
+				 &min, &max,
+				 &fee_base,
+				 &fee_proportional,
+				 &cltv_delta);
 }
 
 struct gossmap_localmods *
@@ -46,12 +48,13 @@ gossmods_from_listpeerchannels_(const tal_t *ctx,
 					   const struct node_id *self,
 					   const struct node_id *peer,
 					   const struct short_channel_id_dir *scidd,
+					   struct amount_msat capacity_msat,
 					   struct amount_msat htlcmin,
 					   struct amount_msat htlcmax,
 					   struct amount_msat sr_able,
 					   struct amount_msat fee_base,
 					   u32 fee_proportional,
-					   u32 cltv_delta,
+					   u16 cltv_delta,
 					   bool enabled,
 					   const char *buf,
 					   const jsmntok_t *chantok,
@@ -68,7 +71,7 @@ gossmods_from_listpeerchannels_(const tal_t *ctx,
 		struct short_channel_id alias;
 		bool enabled;
 		struct node_id dst;
-		struct amount_msat spendable, receivable, fee_base[NUM_SIDES], htlc_min[NUM_SIDES], htlc_max[NUM_SIDES];
+		struct amount_msat capacity_msat, spendable, receivable, fee_base[NUM_SIDES], htlc_min[NUM_SIDES], htlc_max[NUM_SIDES];
 		u32 fee_proportional[NUM_SIDES], cltv_delta[NUM_SIDES];
 		const char *state, *err;
 
@@ -87,6 +90,7 @@ gossmods_from_listpeerchannels_(const tal_t *ctx,
 				"peer_connected:%,"
 				"state:%,"
 				"peer_id:%,"
+				"total_msat?:%,"
 				"updates?:{"
 				 "local"
 				 ":{fee_base_msat:%,"
@@ -108,6 +112,7 @@ gossmods_from_listpeerchannels_(const tal_t *ctx,
 				JSON_SCAN(json_to_bool, &enabled),
 				JSON_SCAN_TAL(tmpctx, json_strdup, &state),
 				JSON_SCAN(json_to_node_id, &dst),
+				JSON_SCAN(json_to_msat, &capacity_msat),
 				JSON_SCAN(json_to_msat, &fee_base[LOCAL]),
 				JSON_SCAN(json_to_u32, &fee_proportional[LOCAL]),
 				JSON_SCAN(json_to_msat, &htlc_min[LOCAL]),
@@ -148,7 +153,8 @@ gossmods_from_listpeerchannels_(const tal_t *ctx,
 		}
 
 		/* We add both directions */
-		cb(mods, self, &dst, &scidd, htlc_min[LOCAL], htlc_max[LOCAL],
+		cb(mods, self, &dst, &scidd, capacity_msat,
+		   htlc_min[LOCAL], htlc_max[LOCAL],
 		   spendable, fee_base[LOCAL], fee_proportional[LOCAL],
 		   cltv_delta[LOCAL], enabled, buf, channel, cbarg);
 
@@ -158,7 +164,8 @@ gossmods_from_listpeerchannels_(const tal_t *ctx,
 
 		scidd.dir = !scidd.dir;
 
-		cb(mods, self, &dst, &scidd, htlc_min[REMOTE], htlc_max[REMOTE],
+		cb(mods, self, &dst, &scidd, capacity_msat,
+		   htlc_min[REMOTE], htlc_max[REMOTE],
 		   receivable, fee_base[REMOTE], fee_proportional[REMOTE],
 		   cltv_delta[REMOTE], enabled, buf, channel, cbarg);
 	}

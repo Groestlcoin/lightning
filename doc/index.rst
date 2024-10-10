@@ -15,11 +15,15 @@ Core Lightning Documentation
    lightning-addgossip <lightning-addgossip.7.md>
    lightning-addpsbtoutput <lightning-addpsbtoutput.7.md>
    lightning-askrene-create-channel <lightning-askrene-create-channel.7.md>
+   lightning-askrene-create-layer <lightning-askrene-create-layer.7.md>
    lightning-askrene-disable-node <lightning-askrene-disable-node.7.md>
    lightning-askrene-inform-channel <lightning-askrene-inform-channel.7.md>
    lightning-askrene-listlayers <lightning-askrene-listlayers.7.md>
+   lightning-askrene-listreservations <lightning-askrene-listreservations.7.md>
+   lightning-askrene-remove-layer <lightning-askrene-remove-layer.7.md>
    lightning-askrene-reserve <lightning-askrene-reserve.7.md>
    lightning-askrene-unreserve <lightning-askrene-unreserve.7.md>
+   lightning-askrene-update-channel <lightning-askrene-update-channel.7.md>
    lightning-autoclean-once <lightning-autoclean-once.7.md>
    lightning-autoclean-status <lightning-autoclean-status.7.md>
    lightning-batching <lightning-batching.7.md>
@@ -65,6 +69,7 @@ Core Lightning Documentation
    lightning-fundchannel_start <lightning-fundchannel_start.7.md>
    lightning-funderupdate <lightning-funderupdate.7.md>
    lightning-fundpsbt <lightning-fundpsbt.7.md>
+   lightning-getemergencyrecoverdata <lightning-getemergencyrecoverdata.7.md>
    lightning-getinfo <lightning-getinfo.7.md>
    lightning-getlog <lightning-getlog.7.md>
    lightning-getroute <lightning-getroute.7.md>

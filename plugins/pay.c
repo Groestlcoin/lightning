@@ -14,7 +14,9 @@
 #include <common/json_stream.h>
 #include <common/memleak.h>
 #include <common/pseudorand.h>
+#include <plugins/channel_hint.h>
 #include <plugins/libplugin-pay.h>
+#include <plugins/libplugin.h>
 #include <stdio.h>
 
 /* Public key of this node. */
@@ -22,6 +24,7 @@ static struct node_id my_id;
 static unsigned int maxdelay_default;
 static bool exp_offers;
 static bool disablempp = false;
+static struct channel_hint_set *global_hints;
 
 static LIST_HEAD(payments);
 
@@ -582,14 +585,16 @@ static const char *init(struct plugin *p,
 	 */
 	/* FIXME: Typo in spec for CLTV in descripton!  But it breaks our spelling check, so we omit it above */
 	maxdelay_default = 2016;
-	/* max-locktime-blocks deprecated in v24.05, but still grab it! */
-	rpc_scan(p, "listconfigs",
-		 take(json_out_obj(NULL, NULL, NULL)),
-		 "{configs:"
-		 "{max-locktime-blocks?:{value_int:%},"
-		 "experimental-offers:{set:%}}}",
-		 JSON_SCAN(json_to_number, &maxdelay_default),
-		 JSON_SCAN(json_to_bool, &exp_offers));
+
+	global_hints = notleak_with_children(channel_hint_set_new(p));
+
+	    /* max-locktime-blocks deprecated in v24.05, but still grab it! */
+	    rpc_scan(p, "listconfigs", take(json_out_obj(NULL, NULL, NULL)),
+		     "{configs:"
+		     "{max-locktime-blocks?:{value_int:%},"
+		     "experimental-offers:{set:%}}}",
+		     JSON_SCAN(json_to_number, &maxdelay_default),
+		     JSON_SCAN(json_to_bool, &exp_offers));
 
 	plugin_set_memleak_handler(p, memleak_mark_payments);
 	return NULL;
@@ -1254,7 +1259,7 @@ static struct command_result *json_pay(struct command *cmd,
 		      NULL))
 		return command_param_failed();
 
-	p = payment_new(cmd, cmd, NULL /* No parent */, paymod_mods);
+	p = payment_new(cmd, cmd, NULL /* No parent */, global_hints, paymod_mods);
 	p->invstring = tal_steal(p, b11str);
 	p->description = tal_steal(p, description);
 	/* Overridded by bolt12 if present */
@@ -1471,6 +1476,26 @@ static struct command_result *json_pay(struct command *cmd,
 	return send_outreq(cmd->plugin, req);
 }
 
+static struct command_result *handle_channel_hint_update(struct command *cmd,
+							 const char *buf,
+							 const jsmntok_t *param)
+{
+	struct channel_hint *hint = channel_hint_from_json(NULL, buf, param);
+
+	plugin_log(cmd->plugin, LOG_DBG,
+		   "Received a channel_hint {.scid = %s, .enabled = %d, "
+		   ".estimate = %s, .capacity = %s }",
+		   fmt_short_channel_id_dir(tmpctx, &hint->scid), hint->enabled,
+		   fmt_amount_msat(tmpctx, hint->estimated_capacity),
+		   fmt_amount_msat(tmpctx, hint->capacity)
+	);
+	channel_hint_set_add(global_hints, time_now().ts.tv_sec, &hint->scid,
+			     hint->enabled, &hint->estimated_capacity,
+			     hint->capacity, NULL);
+	tal_free(hint);
+	return notification_handled(cmd);
+}
+
 static const struct plugin_command commands[] = {
 	{
 		"paystatus",
@@ -1491,15 +1516,23 @@ static const char *notification_topics[] = {
 	"channel_hint_update",
 };
 
+static const struct plugin_notification notification_subs[] = {
+    {
+	"channel_hint_update",
+	handle_channel_hint_update,
+    },
+};
+
 int main(int argc, char *argv[])
 {
 	setup_locale();
 	plugin_main(argv, init, NULL, PLUGIN_RESTARTABLE, true, NULL, commands,
-		    ARRAY_SIZE(commands), NULL, 0, NULL, 0,
-		    notification_topics, ARRAY_SIZE(notification_topics),
+		    ARRAY_SIZE(commands), notification_subs,
+		    ARRAY_SIZE(notification_subs), NULL, 0, notification_topics,
+		    ARRAY_SIZE(notification_topics),
 		    plugin_option("disable-mpp", "flag",
-				  "Disable multi-part payments.",
-				  flag_option, flag_jsonfmt, &disablempp),
+				  "Disable multi-part payments.", flag_option,
+				  flag_jsonfmt, &disablempp),
 		    NULL);
 	io_poll_override(libplugin_pay_poll);
 }
