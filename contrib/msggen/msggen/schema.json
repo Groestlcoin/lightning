@@ -7397,7 +7397,7 @@
                   "items": {
                     "type": "object",
                     "required": [
-                      "blinding",
+                      "first_path_key",
                       "path"
                     ],
                     "additionalProperties": false,
@@ -7423,9 +7423,20 @@
                         ]
                       },
                       "blinding": {
+                        "deprecated": [
+                          "v24.11",
+                          "v25.05"
+                        ],
                         "type": "pubkey",
                         "description": [
                           "Blinding factor for this path."
+                        ]
+                      },
+                      "first_path_key": {
+                        "added": "v24.11",
+                        "type": "pubkey",
+                        "description": [
+                          "Path key to deliver to first hop on this path."
                         ]
                       },
                       "path": {
@@ -7815,7 +7826,7 @@
                   "items": {
                     "type": "object",
                     "required": [
-                      "blinding",
+                      "first_path_key",
                       "path"
                     ],
                     "additionalProperties": false,
@@ -7840,7 +7851,18 @@
                           "which end of the first_scid is the start of the path"
                         ]
                       },
+                      "first_path_key": {
+                        "added": "v24.11",
+                        "type": "pubkey",
+                        "description": [
+                          "Path key to deliver to first hop on this path."
+                        ]
+                      },
                       "blinding": {
+                        "deprecated": [
+                          "v24.11",
+                          "v25.05"
+                        ],
                         "type": "pubkey",
                         "description": [
                           "Blinding factor for this path."
@@ -8031,7 +8053,7 @@
                   "items": {
                     "type": "object",
                     "required": [
-                      "blinding",
+                      "first_path_key",
                       "path"
                     ],
                     "additionalProperties": false,
@@ -8059,9 +8081,20 @@
                       },
                       "blinding": {
                         "added": "v24.08",
+                        "deprecated": [
+                          "v24.11",
+                          "v25.05"
+                        ],
                         "type": "pubkey",
                         "description": [
                           "Blinding factor for this path."
+                        ]
+                      },
+                      "first_path_key": {
+                        "added": "v24.11",
+                        "type": "pubkey",
+                        "description": [
+                          "Path key to deliver to first hop on this path."
                         ]
                       },
                       "path": {
@@ -8390,7 +8423,7 @@
                   "items": {
                     "type": "object",
                     "required": [
-                      "blinding",
+                      "first_path_key",
                       "path"
                     ],
                     "additionalProperties": false,
@@ -8416,9 +8449,20 @@
                         ]
                       },
                       "blinding": {
+                        "deprecated": [
+                          "v24.11",
+                          "v25.05"
+                        ],
                         "type": "pubkey",
                         "description": [
                           "Blinding factor for this path."
+                        ]
+                      },
+                      "first_path_key": {
+                        "added": "v24.11",
+                        "type": "pubkey",
+                        "description": [
+                          "Path key to deliver to first hop on this path."
                         ]
                       },
                       "path": {
@@ -8606,7 +8650,7 @@
                   "items": {
                     "type": "object",
                     "required": [
-                      "blinding",
+                      "first_path_key",
                       "path"
                     ],
                     "additionalProperties": false,
@@ -8634,9 +8678,20 @@
                       },
                       "blinding": {
                         "added": "v24.08",
+                        "deprecated": [
+                          "v24.11",
+                          "v25.05"
+                        ],
                         "type": "pubkey",
                         "description": [
                           "Blinding factor for this path."
+                        ]
+                      },
+                      "first_path_key": {
+                        "added": "v24.11",
+                        "type": "pubkey",
+                        "description": [
+                          "Path key to deliver to first hop on this path."
                         ]
                       },
                       "path": {
@@ -8693,7 +8748,7 @@
                   "items": {
                     "type": "object",
                     "required": [
-                      "blinding",
+                      "first_path_key",
                       "payinfo",
                       "path"
                     ],
@@ -8721,8 +8776,19 @@
                       },
                       "blinding": {
                         "type": "pubkey",
+                        "deprecated": [
+                          "v24.11",
+                          "v25.05"
+                        ],
                         "description": [
                           "Blinding factor for this path."
+                        ]
+                      },
+                      "first_path_key": {
+                        "added": "v24.11",
+                        "type": "pubkey",
+                        "description": [
+                          "Path key to deliver to first hop on this path."
                         ]
                       },
                       "payinfo": {
@@ -14647,7 +14713,7 @@
         "",
         "Layers are generally maintained by plugins, either to contain persistent information about capacities which have been discovered, or to contain transient information for this particular payment (such as blinded paths or routehints).",
         "",
-        "There are two automatic layers: *auto.localchans* contains information on local channels from this node (including non-public ones), and their exact current spendable capacities, and *auto.sourcefree* overrides all channels leading out of the *source* to be zero fee and zero delay.  These are both useful in the case where the source is the current node."
+        "There are two automatic layers: *auto.localchans* contains information on local channels from this node (including non-public ones), and their exact current spendable capacities, and *auto.sourcefree* overrides all channels (including those from previous layers) leading out of the *source* to be zero fee and zero delay.  These are both useful in the case where the source is the current node."
       ],
       "categories": [
         "readonly"
@@ -15420,6 +15486,13 @@
             "description": [
               "Dictionary of additional fields to insert into the final tlv. The format is 'fieldnumber': 'hexstring'."
             ]
+          },
+          "maxfee": {
+            "added": "v24.11",
+            "type": "msat",
+            "description": [
+              "*maxfee* overrides both *maxfeepercent* and *exemptfee* defaults (and if you specify *maxfee* you cannot specify either of those), and creates an absolute limit on what fee we will pay. This allows you to implement your own heuristics rather than the primitive ones used here."
+            ]
           }
         }
       },
@@ -15552,12 +15625,12 @@
           },
           "response": {
             "destination": "035d2b1192dfba134e10e540875d366ebc8bc353d5aa766b80c090b39c3a5d885d",
-            "payment_hash": "80ff407792947a23f193f9a1968e9a437b071364ae3159f83631335c9a453c1b",
-            "created_at": 1722303677.1300898,
+            "payment_hash": "bf2806c76e67fbc07bccd878a2c583664f97ba49eebb707939bacaa9d6813858",
+            "created_at": 1726169170.7366238,
             "parts": 1,
             "amount_msat": 10000,
             "amount_sent_msat": 10001,
-            "payment_preimage": "0d802c9c611bae611d51afa8ddf396df8ba4e0580a2eccfd1120da97e70482a0",
+            "payment_preimage": "8e9f92f7f4928fde1469b199680aa09ca2690fa4e1c0b21ea60fd87e962ecce4",
             "status": "complete"
           }
         },
@@ -15576,12 +15649,12 @@
           },
           "response": {
             "destination": "0382ce59ebf18be7d84677c2e35f23294b9992ceca95491fcf8a56c6cb2d9de199",
-            "payment_hash": "3b80a3028343b16f8ab7261343eae40ff73ba833b0b7d4dcbfd42a3078dc322b",
-            "created_at": 1722303679.3164163,
+            "payment_hash": "06f861fa426d342ca144785243c44093654ff8dfc7cec7db346286c20010cffc",
+            "created_at": 1726169172.886992,
             "parts": 1,
             "amount_msat": 10000000,
             "amount_sent_msat": 10000202,
-            "payment_preimage": "f76d6b7ef362f33e25eb5571e616f6e539a2c77caf0afa4227d1351546823664",
+            "payment_preimage": "9416f0889f0dfe6316e047aee01a5451e29753a51b10ddda83fe6b8ccad2eb72",
             "status": "complete"
           }
         },
@@ -15595,7 +15668,7 @@
               "routehints": [
                 [
                   {
-                    "scid": "6250403x3681116x19863",
+                    "scid": "6974878x14919575x17443",
                     "id": "022d223620a359a47ff7f7ac447c85c46c923da53389221a0054c11c1e3ca31d59",
                     "feebase": "1msat",
                     "feeprop": 10,
@@ -15607,12 +15680,12 @@
           },
           "response": {
             "destination": "035d2b1192dfba134e10e540875d366ebc8bc353d5aa766b80c090b39c3a5d885d",
-            "payment_hash": "0458c01fdd3aa0b9829002390301f92083e78dc27bb293bc3e7caee5d4ed7259",
-            "created_at": 1722303682.5805738,
+            "payment_hash": "c9e6b85aafb27fbaceb3f0eca6d0940d6e1d93a4be2d6da981aed9503fcec92c",
+            "created_at": 1726169175.977477,
             "parts": 2,
             "amount_msat": 10000,
             "amount_sent_msat": 10001,
-            "payment_preimage": "4dad6dcf625f650a35a8199fbda18ea4f6717cdfadb40e6bed2bf5f96a4742b0",
+            "payment_preimage": "1cd3749122f3a1b8c1cbd9f4585ec820ec4e1b8f2aa3514a4dd9deda170bdf5d",
             "status": "complete"
           }
         }

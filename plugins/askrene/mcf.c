@@ -1,10 +1,12 @@
 #include "config.h"
 #include <assert.h>
+#include <ccan/asort/asort.h>
 #include <ccan/bitmap/bitmap.h>
 #include <ccan/list/list.h>
 #include <ccan/tal/str/str.h>
 #include <ccan/tal/tal.h>
 #include <common/utils.h>
+#include <float.h>
 #include <math.h>
 #include <plugins/askrene/askrene.h>
 #include <plugins/askrene/dijkstra.h>
@@ -134,38 +136,7 @@
  * However we propose to scale the prob. cost by a global factor k that
  * translates into the monetization of prob. cost.
  *
- * k/1000, for instance, becomes the equivalent monetary cost
- * of increasing the probability of success by 0.1% for P~100%.
- *
- * The input parameter `prob_cost_factor` in the function `minflow` is defined
- * as the PPM from the delivery amount `T` we are *willing to pay* to increase the
- * prob. of success by 0.1%:
- *
- * 	k_microsat = floor(1000*prob_cost_factor * T_sat)
- *
- * Is this enough to make integer prob. cost per unit flow?
- * For `prob_cost_factor=10`; i.e. we pay 10ppm for increasing the prob. by
- * 0.1%, we get that
- *
- * 	-> any arc with (b-a) > 10000 T, will have zero prob. cost, which is
- * 	reasonable because even if all the flow passes through that arc, we get
- * 	a 1.3 T/(b-a) ~ 0.01% prob. of failure at most.
- *
- * 	-> if (b-a) ~ 10000 T, then the arc will have unit cost, or just that we
- * 	pay 1 microsat for every sat we send through this arc.
- *
- * 	-> it would be desirable to have a high proportional fee when (b-a)~T,
- * 	because prob. of failure start to become very high.
- * 	In this case we get to pay 10000 microsats for every sat.
- *
- * Once `k` is fixed then we can combine the linear prob. and fee costs, both
- * are in monetary units.
- *
- * Note: with costs in microsats, because slopes represent ppm and flows are in
- * sats, then our integer bounds with 64 bits are such that we can move as many
- * as 10'000 BTC without overflow:
- *
- * 	10^6 (max ppm) * 10^8 (sats per BTC) * 10^4 = 10^18
+ * This was chosen empirically from examination of typical network values.
  *
  * # References
  *
@@ -193,7 +164,7 @@ static const double CHANNEL_PIVOTS[]={0,0.5,0.8,0.95};
 
 static const s64 INFINITE = INT64_MAX;
 static const u32 INVALID_INDEX = 0xffffffff;
-static const s64 MU_MAX = 101;
+static const s64 MU_MAX = 100;
 
 /* Let's try this encoding of arcs:
  * Each channel `c` has two possible directions identified by a bit
@@ -324,7 +295,6 @@ struct pay_parameters {
 
 	double delay_feefactor;
 	double base_fee_penalty;
-	u32 prob_cost_factor;
 };
 
 /* Representation of the linear MCF network.
@@ -342,7 +312,8 @@ struct linear_network
 	struct arc *node_adjacency_first_arc;
 
 	// probability and fee cost associated to an arc
-	s64 *arc_prob_cost, *arc_fee_cost;
+	double *arc_prob_cost;
+	s64 *arc_fee_cost;
 	s64 *capacity;
 
 	size_t max_num_arcs,max_num_nodes;
@@ -444,7 +415,7 @@ static void set_capacity(s64 *capacity, u64 value, u64 *cap_on_capacity)
 /* Split a directed channel into parts with linear cost function. */
 static void linearize_channel(const struct pay_parameters *params,
 			      const struct gossmap_chan *c, const int dir,
-			      s64 *capacity, s64 *cost)
+			      s64 *capacity, double *cost)
 {
 	struct amount_msat mincap, maxcap;
 
@@ -470,7 +441,7 @@ static void linearize_channel(const struct pay_parameters *params,
 
 		cost[i] = params->cost_fraction[i]
 		          *params->amount.millisatoshis /* Raw: linearize_channel */
-		          *params->prob_cost_factor*1.0/(b-a);
+		          /(b-a);
 	}
 }
 
@@ -513,25 +484,71 @@ static void init_residual_network(
 	}
 }
 
+static int cmp_u64(const u64 *a, const u64 *b, void *unused)
+{
+	if (*a < *b)
+		return -1;
+	if (*a > *b)
+		return 1;
+	return 0;
+}
+
+static int cmp_double(const double *a, const double *b, void *unused)
+{
+	if (*a < *b)
+		return -1;
+	if (*a > *b)
+		return 1;
+	return 0;
+}
+
+static double get_median_ratio(const tal_t *working_ctx,
+			       const struct linear_network* linear_network)
+{
+	u64 *u64_arr = tal_arr(working_ctx, u64, linear_network->max_num_arcs/2);
+	double *double_arr = tal_arr(working_ctx, double, linear_network->max_num_arcs/2);
+	size_t n = 0;
+
+	for (struct arc arc = {0};arc.idx < linear_network->max_num_arcs; ++arc.idx) {
+		if (arc_is_dual(arc))
+			continue;
+		assert(n < linear_network->max_num_arcs/2);
+		u64_arr[n] = linear_network->arc_fee_cost[arc.idx];
+		double_arr[n] = linear_network->arc_prob_cost[arc.idx];
+		n++;
+	}
+	asort(u64_arr, n, cmp_u64, NULL);
+	asort(double_arr, n, cmp_double, NULL);
+
+	/* Empty network, or tiny probability, nobody cares */
+	if (n == 0 || double_arr[n/2] < 0.001)
+		return 1;
+
+	/* You need to scale arc_prob_cost by this to match arc_fee_cost */
+	return u64_arr[n/2] / double_arr[n/2];
+}
+
 static void combine_cost_function(
+		const tal_t *working_ctx,
 		const struct linear_network* linear_network,
 		struct residual_network *residual_network,
 		s64 mu)
 {
+	/* probabilty and fee costs are not directly comparable!
+	 * Scale by ratio of (positive) medians. */
+	const double k = get_median_ratio(working_ctx, linear_network);
+
 	for(struct arc arc = {0};arc.idx < linear_network->max_num_arcs; ++arc.idx)
 	{
 		if(arc_tail(linear_network,arc)==INVALID_INDEX)
 			continue;
 
-		const s64 pcost = linear_network->arc_prob_cost[arc.idx],
-		          fcost = linear_network->arc_fee_cost[arc.idx];
+		const double pcost = linear_network->arc_prob_cost[arc.idx];
+		const s64 fcost = linear_network->arc_fee_cost[arc.idx];
 
-		const s64 combined = pcost==INFINITE || fcost==INFINITE ? INFINITE :
-		                     mu*fcost + (MU_MAX-1-mu)*pcost;
-
-		residual_network->cost[arc.idx]
-			= mu==0 ? pcost :
-			          (mu==(MU_MAX-1) ? fcost : combined);
+		assert(fcost != INFINITE);
+		assert(pcost != DBL_MAX);
+		residual_network->cost[arc.idx] = fcost*mu + (MU_MAX-mu)*pcost*k;
 	}
 }
 
@@ -564,19 +581,43 @@ static void linear_network_add_adjacenct_arc(
  *  use `base_fee_penalty` to weight the base fee and `delay_feefactor` to
  *  weight the CLTV delay.
  *  */
-static s64 linear_fee_cost(
-		const struct gossmap_chan *c,
-		const int dir,
-		double base_fee_penalty,
-		double delay_feefactor)
+static s64 linear_fee_cost(u32 base_fee, u32 proportional_fee, u16 cltv_delta,
+			   double base_fee_penalty,
+			   double delay_feefactor)
 {
-	assert(c);
-	assert(dir==0 || dir==1);
-	s64 pfee = c->half[dir].proportional_fee,
-	    bfee = c->half[dir].base_fee,
-	    delay = c->half[dir].delay;
+	s64 pfee = proportional_fee,
+	    bfee = base_fee,
+	    delay = cltv_delta;
 
 	return pfee + bfee* base_fee_penalty+ delay*delay_feefactor;
+}
+
+/* This is inversely proportional to the amount we expect to send.  Let's
+ * assume we will send ~10th of the total amount per path.  But note
+ * that it converts to parts per million! */
+static double base_fee_penalty_estimate(struct amount_msat amount)
+{
+	return amount_msat_ratio(AMOUNT_MSAT(10000000), amount);
+}
+
+struct amount_msat linear_flow_cost(const struct flow *flow,
+				    struct amount_msat total_amount,
+				    double delay_feefactor)
+{
+	struct amount_msat msat_cost;
+	s64 cost = 0;
+	double base_fee_penalty = base_fee_penalty_estimate(total_amount);
+
+	for (size_t i = 0; i < tal_count(flow->path); i++) {
+		const struct half_chan *h = &flow->path[i]->half[flow->dirs[i]];
+
+		cost += linear_fee_cost(h->base_fee, h ->proportional_fee, h->delay,
+					base_fee_penalty, delay_feefactor);
+	}
+
+	if (!amount_msat_mul(&msat_cost, flow->delivers, cost))
+		abort();
+	return msat_cost;
 }
 
 static struct linear_network *
@@ -604,9 +645,9 @@ init_linear_network(const tal_t *ctx, const struct pay_parameters *params)
 	for(size_t i=0;i<max_num_nodes;++i)
 		linear_network->node_adjacency_first_arc[i].idx=INVALID_INDEX;
 
-	linear_network->arc_prob_cost = tal_arr(linear_network,s64,max_num_arcs);
+	linear_network->arc_prob_cost = tal_arr(linear_network,double,max_num_arcs);
 	for(size_t i=0;i<max_num_arcs;++i)
-		linear_network->arc_prob_cost[i]=INFINITE;
+		linear_network->arc_prob_cost[i]=DBL_MAX;
 
 	linear_network->arc_fee_cost = tal_arr(linear_network,s64,max_num_arcs);
 	for(size_t i=0;i<max_num_arcs;++i)
@@ -641,15 +682,19 @@ init_linear_network(const tal_t *ctx, const struct pay_parameters *params)
 
 			// `cost` is the word normally used to denote cost per
 			// unit of flow in the context of MCF.
-			s64 prob_cost[CHANNEL_PARTS], capacity[CHANNEL_PARTS];
+			double prob_cost[CHANNEL_PARTS];
+			s64 capacity[CHANNEL_PARTS];
 
 			// split this channel direction to obtain the arcs
 			// that are outgoing to `node`
 			linearize_channel(params, c, half, capacity, prob_cost);
 
-			const s64 fee_cost = linear_fee_cost(c,half,
-						params->base_fee_penalty,
-						params->delay_feefactor);
+			const s64 fee_cost = linear_fee_cost(
+				c->half[half].base_fee,
+				c->half[half].proportional_fee,
+				c->half[half].delay,
+				params->base_fee_penalty,
+				params->delay_feefactor);
 
 			// let's subscribe the 4 parts of the channel direction
 			// (c,half), the dual of these guys will be subscribed
@@ -688,14 +733,17 @@ init_linear_network(const tal_t *ctx, const struct pay_parameters *params)
  * residual network with capacity greater than 0.
  * The path is encoded into prev, which contains the idx of the arcs that are
  * traversed. */
+
+/* Note we eschew tmpctx here, as this can be called multiple times! */
 static bool
-find_admissible_path(const struct linear_network *linear_network,
+find_admissible_path(const tal_t *working_ctx,
+		     const struct linear_network *linear_network,
 		     const struct residual_network *residual_network,
 		     const u32 source, const u32 target, struct arc *prev)
 {
 	bool target_found = false;
 	/* Simple linear queue of node indexes */
-	u32 *queue = tal_arr(tmpctx, u32, linear_network->max_num_arcs);
+	u32 *queue = tal_arr(working_ctx, u32, linear_network->max_num_arcs);
 	size_t qstart, qend, prev_len = tal_count(prev);
 
 	for(size_t i=0;i<prev_len;++i)
@@ -808,7 +856,8 @@ static void augment_flow(
  *
  * 13/04/2023 This implementation uses a simple augmenting path approach.
  * */
-static bool find_feasible_flow(const struct linear_network *linear_network,
+static bool find_feasible_flow(const tal_t *working_ctx,
+			       const struct linear_network *linear_network,
 			       struct residual_network *residual_network,
 			       const u32 source, const u32 target, s64 amount)
 {
@@ -816,12 +865,13 @@ static bool find_feasible_flow(const struct linear_network *linear_network,
 
 	/* path information
 	 * prev: is the id of the arc that lead to the node. */
-	struct arc *prev = tal_arr(tmpctx,struct arc,linear_network->max_num_nodes);
+	struct arc *prev = tal_arr(working_ctx,struct arc,linear_network->max_num_nodes);
 
 	while(amount>0)
 	{
 		// find a path from source to target
-		if (!find_admissible_path(linear_network,
+		if (!find_admissible_path(working_ctx,
+					  linear_network,
 					  residual_network, source, target,
 					  prev)) {
 			return false;
@@ -846,7 +896,8 @@ static bool find_feasible_flow(const struct linear_network *linear_network,
 // TODO(eduardo): unit test this
 /* Similar to `find_admissible_path` but use Dijkstra to optimize the distance
  * label. Stops when the target is hit. */
-static bool find_optimal_path(struct dijkstra *dijkstra,
+static bool find_optimal_path(const tal_t *working_ctx,
+			      struct dijkstra *dijkstra,
 			      const struct linear_network *linear_network,
 			      const struct residual_network *residual_network,
 			      const u32 source, const u32 target,
@@ -854,7 +905,7 @@ static bool find_optimal_path(struct dijkstra *dijkstra,
 {
 	bool target_found = false;
 
-	bitmap *visited = tal_arrz(tmpctx, bitmap,
+	bitmap *visited = tal_arrz(working_ctx, bitmap,
 				   BITMAP_NWORDS(linear_network->max_num_nodes));
 	for(size_t i=0;i<tal_count(prev);++i)
 		prev[i].idx=INVALID_INDEX;
@@ -939,7 +990,8 @@ static void zero_flow(
  * each step, we might use the previous flow result, which is not optimal in the
  * current iteration but I might be not too far from the truth.
  * It comes to mind to use cycle cancelling. */
-static bool optimize_mcf(struct dijkstra *dijkstra,
+static bool optimize_mcf(const tal_t *working_ctx,
+			 struct dijkstra *dijkstra,
 			 const struct linear_network *linear_network,
 			 struct residual_network *residual_network,
 			 const u32 source, const u32 target, const s64 amount)
@@ -947,7 +999,7 @@ static bool optimize_mcf(struct dijkstra *dijkstra,
 	assert(amount>=0);
 
 	zero_flow(linear_network,residual_network);
-	struct arc *prev = tal_arr(tmpctx,struct arc,linear_network->max_num_nodes);
+	struct arc *prev = tal_arr(working_ctx,struct arc,linear_network->max_num_nodes);
 
 	const s64 *const distance = dijkstra_distance_data(dijkstra);
 
@@ -955,7 +1007,7 @@ static bool optimize_mcf(struct dijkstra *dijkstra,
 
 	while(remaining_amount>0)
 	{
-		if (!find_optimal_path(dijkstra, linear_network,
+		if (!find_optimal_path(working_ctx, dijkstra, linear_network,
 				       residual_network, source, target, prev)) {
 			return false;
 		}
@@ -998,8 +1050,11 @@ struct chan_flow
 };
 
 /* Search in the network a path of positive flow until we reach a node with
- * positive balance. */
-static u32 find_positive_balance(
+ * positive balance (returns a node idx with positive balance)
+ * or we discover a cycle (returns a node idx with 0 balance).
+ * */
+static u32 find_path_or_cycle(
+		const tal_t *working_ctx,
 		const struct gossmap *gossmap,
 		const struct chan_flow *chan_flow,
 		const u32 start_idx,
@@ -1009,42 +1064,34 @@ static u32 find_positive_balance(
 		int *prev_dir,
 		u32 *prev_idx)
 {
+	const size_t max_num_nodes = gossmap_max_node_idx(gossmap);
+	bitmap *visited =
+	    tal_arrz(working_ctx, bitmap, BITMAP_NWORDS(max_num_nodes));
 	u32 final_idx = start_idx;
+	bitmap_set_bit(visited, start_idx);
 
-	/* TODO(eduardo)
-	 * This is guaranteed to halt if there are no directed flow cycles.
-	 * There souldn't be any. In fact if cost is strickly
-	 * positive, then flow cycles do not exist at all in the
-	 * MCF solution. But if cost is allowed to be zero for
-	 * some arcs, then we might have flow cyles in the final
-	 * solution. We must somehow ensure that the MCF
-	 * algorithm does not come up with spurious flow cycles. */
-	while(balance[final_idx]<=0)
-	{
-		// printf("%s: node = %d\n",__PRETTY_FUNCTION__,final_idx);
-		u32 updated_idx=INVALID_INDEX;
-		struct gossmap_node *cur
-			= gossmap_node_byidx(gossmap,final_idx);
+	/* It is guaranteed to halt, because we either find a node with
+	 * balance[]>0 or we hit a node twice and we stop. */
+	while (balance[final_idx] <= 0) {
+		u32 updated_idx = INVALID_INDEX;
+		struct gossmap_node *cur =
+		    gossmap_node_byidx(gossmap, final_idx);
 
-		for(size_t i=0;i<cur->num_chans;++i)
-		{
+		for (size_t i = 0; i < cur->num_chans; ++i) {
 			int dir;
-			const struct gossmap_chan *c
-				= gossmap_nth_chan(gossmap,
-				                   cur,i,&dir);
+			const struct gossmap_chan *c =
+			    gossmap_nth_chan(gossmap, cur, i, &dir);
 
-			if (!gossmap_chan_set(c, dir))
+			if (!gossmap_chan_set(c, dir) || !c->half[dir].enabled)
 				continue;
 
-			const u32 c_idx = gossmap_chan_idx(gossmap,c);
+			const u32 c_idx = gossmap_chan_idx(gossmap, c);
 
-			// follow the flow
-			if(chan_flow[c_idx].half[dir]>0)
-			{
-				const struct gossmap_node *next
-					= gossmap_nth_node(gossmap,c,!dir);
-				u32 next_idx = gossmap_node_idx(gossmap,next);
-
+			/* follow the flow */
+			if (chan_flow[c_idx].half[dir] > 0) {
+				const struct gossmap_node *next =
+				    gossmap_nth_node(gossmap, c, !dir);
+				u32 next_idx = gossmap_node_idx(gossmap, next);
 
 				prev_dir[next_idx] = dir;
 				prev_chan[next_idx] = c;
@@ -1055,10 +1102,17 @@ static u32 find_positive_balance(
 			}
 		}
 
-		assert(updated_idx!=INVALID_INDEX);
-		assert(updated_idx!=final_idx);
-
+		assert(updated_idx != INVALID_INDEX);
+		assert(updated_idx != final_idx);
 		final_idx = updated_idx;
+
+		if (bitmap_test_bit(visited, updated_idx)) {
+			/* We have seen this node before, we've found a cycle.
+			 */
+			assert(balance[updated_idx] <= 0);
+			break;
+		}
+		bitmap_set_bit(visited, updated_idx);
 	}
 	return final_idx;
 }
@@ -1069,10 +1123,113 @@ struct list_data
 	struct flow *flow_path;
 };
 
+/* Given a path from a node with negative balance to a node with positive
+ * balance, compute the bigest flow and substract it from the nodes balance and
+ * the channels allocation. */
+static struct flow *substract_flow(const tal_t *ctx,
+				   const struct gossmap *gossmap,
+				   const u32 start_idx, const u32 final_idx,
+				   s64 *balance, struct chan_flow *chan_flow,
+				   const u32 *prev_idx, const int *prev_dir,
+				   const struct gossmap_chan *const *prev_chan)
+{
+	assert(balance[start_idx] < 0);
+	assert(balance[final_idx] > 0);
+	s64 delta = -balance[start_idx];
+	size_t length = 0;
+	delta = MIN(delta, balance[final_idx]);
+
+	/* We can only walk backwards, now get me the legth of the path and the
+	 * max flow we can send through this route. */
+	for (u32 cur_idx = final_idx; cur_idx != start_idx;
+	     cur_idx = prev_idx[cur_idx]) {
+		assert(cur_idx != INVALID_INDEX);
+		const int dir = prev_dir[cur_idx];
+		const struct gossmap_chan *const chan = prev_chan[cur_idx];
+
+		/* we could optimize here by caching the idx of the channels in
+		 * the path, but the bottleneck of the algorithm is the MCF
+		 * computation not here. */
+		const u32 chan_idx = gossmap_chan_idx(gossmap, chan);
+
+		delta = MIN(delta, chan_flow[chan_idx].half[dir]);
+		length++;
+	}
+
+	struct flow *f = tal(ctx, struct flow);
+	f->path = tal_arr(f, const struct gossmap_chan *, length);
+	f->dirs = tal_arr(f, int, length);
+
+	/* Walk again and substract the flow value (delta). */
+	assert(delta > 0);
+	balance[start_idx] += delta;
+	balance[final_idx] -= delta;
+	for (u32 cur_idx = final_idx; cur_idx != start_idx;
+	     cur_idx = prev_idx[cur_idx]) {
+		const int dir = prev_dir[cur_idx];
+		const struct gossmap_chan *const chan = prev_chan[cur_idx];
+		const u32 chan_idx = gossmap_chan_idx(gossmap, chan);
+
+		length--;
+		/* f->path and f->dirs contain the channels in the path in the
+		 * correct order. */
+		f->path[length] = chan;
+		f->dirs[length] = dir;
+
+		chan_flow[chan_idx].half[dir] -= delta;
+	}
+	f->delivers = amount_msat(delta * 1000);
+	return f;
+}
+
+/* Substract a flow cycle from the channel allocation. */
+static void substract_cycle(const struct gossmap *gossmap, const u32 final_idx,
+			    struct chan_flow *chan_flow, const u32 *prev_idx,
+			    const int *prev_dir,
+			    const struct gossmap_chan *const *prev_chan)
+{
+	s64 delta = INFINITE;
+	u32 cur_idx;
+
+	/* Compute greatest flow in this cycle. */
+	for (cur_idx = final_idx; cur_idx!=INVALID_INDEX;) {
+		const int dir = prev_dir[cur_idx];
+		const struct gossmap_chan *const chan = prev_chan[cur_idx];
+		const u32 chan_idx = gossmap_chan_idx(gossmap, chan);
+
+		delta = MIN(delta, chan_flow[chan_idx].half[dir]);
+
+		cur_idx = prev_idx[cur_idx];
+		if (cur_idx == final_idx)
+			/* we have come back full circle */
+			break;
+	}
+	assert(cur_idx==final_idx);
+
+	/* Walk again and substract the flow value (delta). */
+	assert(delta < INFINITE);
+	assert(delta > 0);
+
+	for (cur_idx = final_idx;cur_idx!=INVALID_INDEX;) {
+		const int dir = prev_dir[cur_idx];
+		const struct gossmap_chan *const chan = prev_chan[cur_idx];
+		const u32 chan_idx = gossmap_chan_idx(gossmap, chan);
+
+		chan_flow[chan_idx].half[dir] -= delta;
+
+		cur_idx = prev_idx[cur_idx];
+		if (cur_idx == final_idx)
+			/* we have come back full circle */
+			break;
+	}
+	assert(cur_idx==final_idx);
+}
+
 /* Given a flow in the residual network, build a set of payment flows in the
  * gossmap that corresponds to this flow. */
 static struct flow **
 get_flow_paths(const tal_t *ctx,
+	       const tal_t *working_ctx,
 	       const struct route_query *rq,
 	       const struct linear_network *linear_network,
 	       const struct residual_network *residual_network)
@@ -1080,17 +1237,20 @@ get_flow_paths(const tal_t *ctx,
 	struct flow **flows = tal_arr(ctx,struct flow*,0);
 
 	const size_t max_num_chans = gossmap_max_chan_idx(rq->gossmap);
-	struct chan_flow *chan_flow = tal_arrz(tmpctx,struct chan_flow,max_num_chans);
+	struct chan_flow *chan_flow = tal_arrz(working_ctx,struct chan_flow,max_num_chans);
 
 	const size_t max_num_nodes = gossmap_max_node_idx(rq->gossmap);
-	s64 *balance = tal_arrz(tmpctx,s64,max_num_nodes);
+	s64 *balance = tal_arrz(working_ctx,s64,max_num_nodes);
 
 	const struct gossmap_chan **prev_chan
-		= tal_arr(tmpctx,const struct gossmap_chan *,max_num_nodes);
+		= tal_arr(working_ctx,const struct gossmap_chan *,max_num_nodes);
 
 
-	int *prev_dir = tal_arr(tmpctx,int,max_num_nodes);
-	u32 *prev_idx = tal_arr(tmpctx,u32,max_num_nodes);
+	int *prev_dir = tal_arr(working_ctx,int,max_num_nodes);
+	u32 *prev_idx = tal_arr(working_ctx,u32,max_num_nodes);
+
+	for (u32 node_idx = 0; node_idx < max_num_nodes; node_idx++)
+		prev_idx[node_idx] = INVALID_INDEX;
 
 	// Convert the arc based residual network flow into a flow in the
 	// directed channel network.
@@ -1117,75 +1277,35 @@ get_flow_paths(const tal_t *ctx,
 
 	}
 
-
 	// Select all nodes with negative balance and find a flow that reaches a
 	// positive balance node.
 	for(u32 node_idx=0;node_idx<max_num_nodes;++node_idx)
 	{
-		// for(size_t i=0;i<tal_count(prev_idx);++i)
-		// {
-		// 	prev_idx[i]=INVALID_INDEX;
-		// }
 		// this node has negative balance, flows leaves from here
 		while(balance[node_idx]<0)
 		{
-			prev_chan[node_idx]=NULL;
-			u32 final_idx = find_positive_balance(
+			prev_chan[node_idx] = NULL;
+			u32 final_idx = find_path_or_cycle(
+			    working_ctx,
 			    rq->gossmap, chan_flow, node_idx, balance,
 			    prev_chan, prev_dir, prev_idx);
 
-			s64 delta=-balance[node_idx];
-			int length = 0;
-			delta = MIN(delta,balance[final_idx]);
-
-			// walk backwards, get me the length and the max flow we
-			// can send.
-			for(u32 cur_idx = final_idx;
-			    cur_idx!=node_idx;
-			    cur_idx=prev_idx[cur_idx])
+			if (balance[final_idx] > 0)
+			/* case 1. found a path */
 			{
-				assert(cur_idx!=INVALID_INDEX);
+				struct flow *fp = substract_flow(
+				    flows, rq->gossmap, node_idx, final_idx,
+				    balance, chan_flow, prev_idx, prev_dir,
+				    prev_chan);
 
-				const int dir = prev_dir[cur_idx];
-				const struct gossmap_chan *const c = prev_chan[cur_idx];
-				const u32 c_idx = gossmap_chan_idx(rq->gossmap,c);
-
-				delta=MIN(delta,chan_flow[c_idx].half[dir]);
-				length++;
-			}
-
-			struct flow *fp = tal(flows,struct flow);
-			fp->path = tal_arr(fp,const struct gossmap_chan *,length);
-			fp->dirs = tal_arr(fp,int,length);
-
-			balance[node_idx] += delta;
-			balance[final_idx]-= delta;
-
-			// walk backwards, substract flow
-			for(u32 cur_idx = final_idx;
-			    cur_idx!=node_idx;
-			    cur_idx=prev_idx[cur_idx])
+				tal_arr_expand(&flows, fp);
+			} else
+			/* case 2. found a cycle */
 			{
-				assert(cur_idx!=INVALID_INDEX);
-
-				const int dir = prev_dir[cur_idx];
-				const struct gossmap_chan *const c = prev_chan[cur_idx];
-				const u32 c_idx = gossmap_chan_idx(rq->gossmap,c);
-
-				length--;
-				fp->path[length]=c;
-				fp->dirs[length]=dir;
-				// notice: fp->path and fp->dirs have the path
-				// in the correct order.
-
-				chan_flow[c_idx].half[prev_dir[cur_idx]]-=delta;
+				substract_cycle(rq->gossmap, final_idx,
+						chan_flow, prev_idx, prev_dir,
+						prev_chan);
 			}
-
-			assert(delta>0);
-			fp->delivers = amount_msat(delta*1000);
-
-			// add fp to flows
-			tal_arr_expand(&flows, fp);
 		}
 	}
 	return flows;
@@ -1209,12 +1329,13 @@ struct flow **minflow(const tal_t *ctx,
 		      const struct gossmap_node *target,
 		      struct amount_msat amount,
 		      u32 mu,
-		      double delay_feefactor, double base_fee_penalty,
-		      u32 prob_cost_factor)
+		      double delay_feefactor)
 {
 	struct flow **flow_paths;
-
-	struct pay_parameters *params = tal(tmpctx,struct pay_parameters);
+	/* We allocate everything off this, and free it at the end,
+	 * as we can be called multiple times without cleaning tmpctx! */
+	tal_t *working_ctx = tal(NULL, char);
+	struct pay_parameters *params = tal(working_ctx, struct pay_parameters);
 	struct dijkstra *dijkstra;
 
 	params->rq = rq;
@@ -1237,15 +1358,14 @@ struct flow **minflow(const tal_t *ctx,
 	}
 
 	params->delay_feefactor = delay_feefactor;
-	params->base_fee_penalty = base_fee_penalty;
-	params->prob_cost_factor = prob_cost_factor;
+	params->base_fee_penalty = base_fee_penalty_estimate(amount);
 
 	// build the uncertainty network with linearization and residual arcs
-	struct linear_network *linear_network= init_linear_network(tmpctx, params);
+	struct linear_network *linear_network= init_linear_network(working_ctx, params);
 	struct residual_network *residual_network =
-	    alloc_residual_network(tmpctx, linear_network->max_num_nodes,
+	    alloc_residual_network(working_ctx, linear_network->max_num_nodes,
 				  linear_network->max_num_arcs);
-	dijkstra = dijkstra_new(tmpctx, gossmap_max_node_idx(rq->gossmap));
+	dijkstra = dijkstra_new(working_ctx, gossmap_max_node_idx(rq->gossmap));
 
 	const u32 target_idx = gossmap_node_idx(rq->gossmap,target);
 	const u32 source_idx = gossmap_node_idx(rq->gossmap,source);
@@ -1268,23 +1388,26 @@ struct flow **minflow(const tal_t *ctx,
 	 * flow units. */
 	const u64 pay_amount_sats = (params->amount.millisatoshis + 999)/1000; /* Raw: minflow */
 
-	if (!find_feasible_flow(linear_network, residual_network,
+	if (!find_feasible_flow(working_ctx, linear_network, residual_network,
 				source_idx, target_idx, pay_amount_sats)) {
+		tal_free(working_ctx);
 		return NULL;
 	}
-	combine_cost_function(linear_network, residual_network, mu);
+	combine_cost_function(working_ctx, linear_network, residual_network, mu);
 
 	/* We solve a linear MCF problem. */
-	if(!optimize_mcf(dijkstra,linear_network,residual_network,
+	if(!optimize_mcf(working_ctx, dijkstra,linear_network,residual_network,
 			 source_idx,target_idx,pay_amount_sats))
 	{
+		tal_free(working_ctx);
 		return NULL;
 	}
 
 	/* We dissect the solution of the MCF into payment routes.
 	 * Actual amounts considering fees are computed for every
 	 * channel in the routes. */
-	flow_paths = get_flow_paths(tmpctx, rq,
+	flow_paths = get_flow_paths(ctx, working_ctx, rq,
 				    linear_network, residual_network);
+	tal_free(working_ctx);
 	return flow_paths;
 }

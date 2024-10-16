@@ -3675,6 +3675,31 @@ def test_keysend_routehint(node_factory):
     assert(inv['amount_received_msat'] >= Millisatoshi(amt))
 
 
+def test_keysend_maxfee(node_factory):
+    l1, l2, l3 = node_factory.line_graph(
+        3,
+        wait_for_announce=True,
+        opts=[{}, {'fee-base': 50, 'fee-per-satoshi': 0}, {}]
+    )
+
+    # We should fail because maxfee and exemptfee cannot be set simultaneously.
+    with pytest.raises(RpcError):
+        l1.rpc.call("keysend", payload={'destination': l3.info['id'], 'amount_msat': 1, 'maxfee': 1, 'exemptfee': 5000})
+
+    # We should fail because maxfee and maxfeepercent cannot be set simultaneously.
+    with pytest.raises(RpcError):
+        l1.rpc.call("keysend", payload={'destination': l3.info['id'], 'amount_msat': 1, 'maxfee': 1, 'maxfeepercent': 0.0001})
+
+    # We should fail because 50msat base fee on l2 exceeds maxfee of 1msat.
+    with pytest.raises(RpcError):
+        l1.rpc.call("keysend", payload={'destination': l3.info['id'], 'amount_msat': 1, 'maxfee': 1})
+    assert len(l3.rpc.listinvoices()['invoices']) == 0
+
+    # Perform a normal keysend with maxfee.
+    l1.rpc.call("keysend", payload={'destination': l3.info['id'], 'amount_msat': 1, 'maxfee': 50})
+    assert len(l3.rpc.listinvoices()['invoices']) == 1
+
+
 def test_invalid_onion_channel_update(node_factory):
     '''
     Some onion failures "should" send a `channel_update`.
@@ -5928,7 +5953,7 @@ def test_decryptencrypteddata(node_factory):
     decode = l2.rpc.decode(inv)
     path = decode['invoice_paths'][0]
     assert path['first_node_id'] == l2.info['id']
-    blinding = path['blinding']
+    first_path_key = path['first_path_key']
 
     encdata1 = path['path'][0]['encrypted_recipient_data']
     # BOLT #4:
@@ -5938,7 +5963,7 @@ def test_decryptencrypteddata(node_factory):
     #     1. type: 4 (`next_node_id`)
     #     2. data:
     #         * [`point`:`node_id`]
-    dec = l2.rpc.decryptencrypteddata(encrypted_data=encdata1, blinding=blinding)['decryptencrypteddata']
+    dec = l2.rpc.decryptencrypteddata(encrypted_data=encdata1, path_key=first_path_key)['decryptencrypteddata']
     assert dec['decrypted'].startswith('0421' + l3.info['id'])
 
 

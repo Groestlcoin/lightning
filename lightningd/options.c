@@ -1264,10 +1264,6 @@ static char *opt_set_dual_fund(struct lightningd *ld)
 
 static char *opt_set_splicing(struct lightningd *ld)
 {
-	/* Splicing requires STFU to be enabled */
-	feature_set_or(ld->our_features,
-		       take(feature_set_for_feature(NULL,
-						    OPTIONAL_FEATURE(OPT_QUIESCE))));
 	feature_set_or(ld->our_features,
 		       take(feature_set_for_feature(NULL,
 						    OPTIONAL_FEATURE(OPT_EXPERIMENTAL_SPLICE))));
@@ -1303,9 +1299,9 @@ static char *opt_set_peer_storage(struct lightningd *ld)
 
 static char *opt_set_quiesce(struct lightningd *ld)
 {
-	feature_set_or(ld->our_features,
-		       take(feature_set_for_feature(NULL,
-						    OPTIONAL_FEATURE(OPT_QUIESCE))));
+	if (!opt_deprecated_ok(ld, "experimental-quiesce", NULL,
+			       "v24.11", "v25.05"))
+		return "--experimental-quiesce is now enabled by default";
 	return NULL;
 }
 
