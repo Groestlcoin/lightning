@@ -1,7 +1,6 @@
 {
   "$schema": "../rpc-schema-draft.json",
   "type": "object",
-  "additionalProperties": false,
   "rpc": "askrene-listlayers",
   "title": "Command to display information about layers (EXPERIMENTAL)",
   "description": [
@@ -11,6 +10,7 @@
   ],
   "request": {
     "required": [],
+    "additionalProperties": false,
     "properties": {
       "layer": {
         "type": "string",
@@ -24,6 +24,7 @@
     "required": [
       "layers"
     ],
+    "additionalProperties": false,
     "properties": {
       "layers": {
         "type": "array",
@@ -72,6 +73,7 @@
                   "short_channel_id",
                   "capacity_msat"
                 ],
+                "additionalProperties": false,
                 "properties": {
                   "source": {
                     "type": "pubkey",
@@ -107,7 +109,20 @@
                 "required": [
                   "short_channel_id_dir"
                 ],
+                "additionalProperties": false,
                 "properties": {
+                  "short_channel_id_dir": {
+                    "type": "short_channel_id_dir",
+                    "description": [
+                      "The short channel id and direction this update applies to."
+                    ]
+                  },
+                  "enabled": {
+                    "type": "boolean",
+                    "description": [
+                      "True if this can be used, false otherwise."
+                    ]
+                  },
                   "htlc_minimum_msat": {
                     "type": "msat",
                     "description": [
@@ -132,7 +147,7 @@
                       "The proportional fee (in parts per million) to apply to use the channel in this direction."
                     ]
                   },
-                  "delay": {
+                  "cltv_expiry_delta": {
                     "type": "u16",
                     "description": [
                       "The CLTV delay required for this direction."
@@ -148,11 +163,18 @@
                 "required": [
                   "short_channel_id_dir"
                 ],
+                "additionalProperties": false,
                 "properties": {
                   "short_channel_id_dir": {
                     "type": "short_channel_id_dir",
                     "description": [
                       "The short channel id and direction"
+                    ]
+                  },
+                  "timestamp": {
+                    "type": "u64",
+                    "description": [
+                      "The UNIX timestamp when this constraint was created."
                     ]
                   },
                   "maximum_msat": {

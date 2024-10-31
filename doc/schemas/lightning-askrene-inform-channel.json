@@ -1,7 +1,6 @@
 {
   "$schema": "../rpc-schema-draft.json",
   "type": "object",
-  "additionalProperties": false,
   "rpc": "askrene-inform-channel",
   "title": "Command to add channel capacity restrictions to layer (EXPERIMENTAL)",
   "description": [
@@ -16,6 +15,7 @@
       "amount_msat",
       "inform"
     ],
+    "additionalProperties": false,
     "properties": {
       "layer": {
         "type": "string",
@@ -52,19 +52,35 @@
     "required": [
       "constraints"
     ],
+    "additionalProperties": false,
     "properties": {
       "constraints": {
         "type": "array",
         "items": {
           "type": "object",
           "required": [
-            "short_channel_id_dir"
+            "layer",
+            "short_channel_id_dir",
+            "timestamp"
           ],
+          "additionalProperties": false,
           "properties": {
             "short_channel_id_dir": {
               "type": "short_channel_id_dir",
               "description": [
                 "The short channel id and direction"
+              ]
+            },
+            "layer": {
+              "type": "string",
+              "description": [
+                "The name of the layer to apply this change to."
+              ]
+            },
+            "timestamp": {
+              "type": "u64",
+              "description": [
+                "The UNIX timestamp when this constraint was created."
               ]
             },
             "maximum_msat": {

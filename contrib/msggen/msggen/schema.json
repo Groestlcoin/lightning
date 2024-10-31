@@ -3,7 +3,6 @@
     "lightning-addgossip.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "addgossip",
       "title": "Command for injecting a gossip message (low-level)",
       "description": [
@@ -17,6 +16,7 @@
         "required": [
           "message"
         ],
+        "additionalProperties": false,
         "properties": {
           "message": {
             "type": "hex",
@@ -27,6 +27,7 @@
         }
       },
       "response": {
+        "additionalProperties": false,
         "properties": {}
       },
       "author": [
@@ -64,7 +65,6 @@
     "lightning-addpsbtoutput.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "added": "v23.11",
       "rpc": "addpsbtoutput",
       "title": "Command to populate PSBT outputs from the wallet",
@@ -77,6 +77,7 @@
         "required": [
           "satoshi"
         ],
+        "additionalProperties": false,
         "properties": {
           "satoshi": {
             "type": "sat",
@@ -110,6 +111,7 @@
           "estimated_added_weight",
           "outnum"
         ],
+        "additionalProperties": false,
         "properties": {
           "psbt": {
             "type": "string",
@@ -196,7 +198,6 @@
     "lightning-askrene-age.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "askrene-age",
       "title": "Command for expiring information in a layer (EXPERIMENTAL)",
       "description": [
@@ -209,6 +210,7 @@
           "layer",
           "cutoff"
         ],
+        "additionalProperties": false,
         "properties": {
           "layer": {
             "type": "string",
@@ -229,6 +231,7 @@
           "layer",
           "num_removed"
         ],
+        "additionalProperties": false,
         "properties": {
           "layer": {
             "type": "string",
@@ -259,7 +262,6 @@
     "lightning-askrene-create-channel.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "askrene-create-channel",
       "title": "Command to add a channel to layer (EXPERIMENTAL)",
       "description": [
@@ -275,6 +277,7 @@
           "short_channel_id",
           "capacity_msat"
         ],
+        "additionalProperties": false,
         "properties": {
           "layer": {
             "type": "string",
@@ -311,6 +314,7 @@
       },
       "response": {
         "required": [],
+        "additionalProperties": false,
         "properties": {}
       },
       "see_also": [
@@ -331,7 +335,6 @@
     "lightning-askrene-create-layer.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "askrene-create-layer",
       "title": "Command to create a new layer (EXPERIMENTAL)",
       "description": [
@@ -343,6 +346,7 @@
         "required": [
           "layer"
         ],
+        "additionalProperties": false,
         "properties": {
           "layer": {
             "type": "string",
@@ -356,6 +360,7 @@
         "required": [
           "layers"
         ],
+        "additionalProperties": false,
         "properties": {
           "layers": {
             "type": "array",
@@ -404,6 +409,7 @@
                       "short_channel_id",
                       "capacity_msat"
                     ],
+                    "additionalProperties": false,
                     "properties": {
                       "source": {
                         "type": "pubkey",
@@ -439,6 +445,7 @@
                     "required": [
                       "short_channel_id_dir"
                     ],
+                    "additionalProperties": false,
                     "properties": {
                       "htlc_minimum_msat": {
                         "type": "msat",
@@ -481,6 +488,7 @@
                       "short_channel_id",
                       "direction"
                     ],
+                    "additionalProperties": false,
                     "properties": {
                       "short_channel_id": {
                         "type": "short_channel_id",
@@ -532,7 +540,6 @@
     "lightning-askrene-disable-node.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "askrene-disable-node",
       "title": "Command to disable all channels to/from a node in a layer (EXPERIMENTAL)",
       "description": [
@@ -545,6 +552,7 @@
           "layer",
           "node"
         ],
+        "additionalProperties": false,
         "properties": {
           "layer": {
             "type": "string",
@@ -562,6 +570,7 @@
       },
       "response": {
         "required": [],
+        "additionalProperties": false,
         "properties": {}
       },
       "see_also": [
@@ -581,7 +590,6 @@
     "lightning-askrene-inform-channel.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "askrene-inform-channel",
       "title": "Command to add channel capacity restrictions to layer (EXPERIMENTAL)",
       "description": [
@@ -596,6 +604,7 @@
           "amount_msat",
           "inform"
         ],
+        "additionalProperties": false,
         "properties": {
           "layer": {
             "type": "string",
@@ -632,19 +641,35 @@
         "required": [
           "constraints"
         ],
+        "additionalProperties": false,
         "properties": {
           "constraints": {
             "type": "array",
             "items": {
               "type": "object",
               "required": [
-                "short_channel_id_dir"
+                "layer",
+                "short_channel_id_dir",
+                "timestamp"
               ],
+              "additionalProperties": false,
               "properties": {
                 "short_channel_id_dir": {
                   "type": "short_channel_id_dir",
                   "description": [
                     "The short channel id and direction"
+                  ]
+                },
+                "layer": {
+                  "type": "string",
+                  "description": [
+                    "The name of the layer to apply this change to."
+                  ]
+                },
+                "timestamp": {
+                  "type": "u64",
+                  "description": [
+                    "The UNIX timestamp when this constraint was created."
                   ]
                 },
                 "maximum_msat": {
@@ -681,7 +706,6 @@
     "lightning-askrene-listlayers.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "askrene-listlayers",
       "title": "Command to display information about layers (EXPERIMENTAL)",
       "description": [
@@ -691,6 +715,7 @@
       ],
       "request": {
         "required": [],
+        "additionalProperties": false,
         "properties": {
           "layer": {
             "type": "string",
@@ -704,6 +729,7 @@
         "required": [
           "layers"
         ],
+        "additionalProperties": false,
         "properties": {
           "layers": {
             "type": "array",
@@ -752,6 +778,7 @@
                       "short_channel_id",
                       "capacity_msat"
                     ],
+                    "additionalProperties": false,
                     "properties": {
                       "source": {
                         "type": "pubkey",
@@ -787,7 +814,20 @@
                     "required": [
                       "short_channel_id_dir"
                     ],
+                    "additionalProperties": false,
                     "properties": {
+                      "short_channel_id_dir": {
+                        "type": "short_channel_id_dir",
+                        "description": [
+                          "The short channel id and direction this update applies to."
+                        ]
+                      },
+                      "enabled": {
+                        "type": "boolean",
+                        "description": [
+                          "True if this can be used, false otherwise."
+                        ]
+                      },
                       "htlc_minimum_msat": {
                         "type": "msat",
                         "description": [
@@ -812,7 +852,7 @@
                           "The proportional fee (in parts per million) to apply to use the channel in this direction."
                         ]
                       },
-                      "delay": {
+                      "cltv_expiry_delta": {
                         "type": "u16",
                         "description": [
                           "The CLTV delay required for this direction."
@@ -828,11 +868,18 @@
                     "required": [
                       "short_channel_id_dir"
                     ],
+                    "additionalProperties": false,
                     "properties": {
                       "short_channel_id_dir": {
                         "type": "short_channel_id_dir",
                         "description": [
                           "The short channel id and direction"
+                        ]
+                      },
+                      "timestamp": {
+                        "type": "u64",
+                        "description": [
+                          "The UNIX timestamp when this constraint was created."
                         ]
                       },
                       "maximum_msat": {
@@ -872,7 +919,6 @@
     "lightning-askrene-listreservations.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "askrene-listreservations",
       "title": "Command to display information about reservations (EXPERIMENTAL)",
       "description": [
@@ -882,24 +928,26 @@
       ],
       "request": {
         "required": [],
+        "additionalProperties": false,
         "properties": {}
       },
       "response": {
         "required": [
           "reservations"
         ],
+        "additionalProperties": false,
         "properties": {
-          "layers": {
+          "reservations": {
             "type": "array",
             "items": {
               "type": "object",
-              "additionalProperties": false,
               "required": [
                 "short_channel_id_dir",
                 "amount_msat",
                 "age_in_seconds",
                 "command_id"
               ],
+              "additionalProperties": false,
               "properties": {
                 "short_channel_id_dir": {
                   "type": "short_channel_id_dir",
@@ -944,7 +992,6 @@
     "lightning-askrene-remove-layer.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "askrene-remove-layer",
       "title": "Command to destroy a layer (EXPERIMENTAL)",
       "description": [
@@ -956,6 +1003,7 @@
         "required": [
           "layer"
         ],
+        "additionalProperties": false,
         "properties": {
           "layer": {
             "type": "string",
@@ -967,6 +1015,7 @@
       },
       "response": {
         "required": [],
+        "additionalProperties": false,
         "properties": {}
       },
       "see_also": [
@@ -983,7 +1032,6 @@
     "lightning-askrene-reserve.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "askrene-reserve",
       "title": "Command for informing askrene that you are trying a path (EXPERIMENTAL)",
       "description": [
@@ -997,12 +1045,13 @@
         "required": [
           "path"
         ],
+        "additionalProperties": false,
         "properties": {
           "path": {
             "type": "array",
             "items": {
               "type": "object",
-              "additionalProperties": true,
+              "additionalProperties": false,
               "required": [
                 "short_channel_id_dir",
                 "amount_msat"
@@ -1027,6 +1076,7 @@
       },
       "response": {
         "required": [],
+        "additionalProperties": false,
         "properties": {}
       },
       "see_also": [
@@ -1044,7 +1094,6 @@
     "lightning-askrene-unreserve.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "askrene-unreserve",
       "title": "Command for informing askrene that you are no longer trying a path (EXPERIMENTAL)",
       "description": [
@@ -1058,12 +1107,13 @@
         "required": [
           "path"
         ],
+        "additionalProperties": false,
         "properties": {
           "path": {
             "type": "array",
             "items": {
               "type": "object",
-              "additionalProperties": true,
+              "additionalProperties": false,
               "required": [
                 "short_channel_id_dir",
                 "amount_msat"
@@ -1088,6 +1138,7 @@
       },
       "response": {
         "required": [],
+        "additionalProperties": false,
         "properties": {}
       },
       "see_also": [
@@ -1105,7 +1156,6 @@
     "lightning-askrene-update-channel.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "askrene-update-channel",
       "title": "Command to manipulate channel in a layer (EXPERIMENTAL)",
       "description": [
@@ -1118,6 +1168,7 @@
           "layer",
           "short_channel_id_dir"
         ],
+        "additionalProperties": false,
         "properties": {
           "layer": {
             "type": "string",
@@ -1131,25 +1182,31 @@
               "The channel and direction to apply the change to."
             ]
           },
-          "htlc_min": {
+          "enabled": {
+            "type": "boolean",
+            "description": [
+              "Whether the channel is usable at all."
+            ]
+          },
+          "htlc_minimum_msat": {
             "type": "msat",
             "description": [
               "The minimum value allowed in this direction."
             ]
           },
-          "htlc_max": {
+          "htlc_maximum_msat": {
             "type": "msat",
             "description": [
               "The maximum value allowed in this direction."
             ]
           },
-          "base_fee": {
+          "fee_base_msat": {
             "type": "msat",
             "description": [
               "The base fee to apply to use the channel in this direction."
             ]
           },
-          "proportional_fee": {
+          "fee_proportional_millionths": {
             "type": "u32",
             "description": [
               "The proportional fee (in parts per million) to apply to use the channel in this direction."
@@ -1165,6 +1222,7 @@
       },
       "response": {
         "required": [],
+        "additionalProperties": false,
         "properties": {}
       },
       "see_also": [
@@ -1181,7 +1239,6 @@
     "lightning-autoclean-once.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "autoclean-once",
       "title": "A single deletion of old invoices/payments/forwards",
       "description": [
@@ -1192,6 +1249,7 @@
           "subsystem",
           "age"
         ],
+        "additionalProperties": false,
         "properties": {
           "subsystem": {
             "type": "string",
@@ -1225,6 +1283,7 @@
         "required": [
           "autoclean"
         ],
+        "additionalProperties": false,
         "properties": {
           "autoclean": {
             "type": "object",
@@ -1418,14 +1477,14 @@
     "lightning-autoclean-status.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "autoclean-status",
       "title": "Examine auto-delete of old invoices/payments/forwards",
       "description": [
-        "The **autoclean-status** RPC command tells you about the status of the autclean plugin, optionally for only one subsystem."
+        "The **autoclean-status** RPC command tells you about the status of the autoclean plugin, optionally for only one subsystem."
       ],
       "request": {
         "required": [],
+        "additionalProperties": false,
         "properties": {
           "subsystem": {
             "type": "string",
@@ -1453,6 +1512,7 @@
         "required": [
           "autoclean"
         ],
+        "additionalProperties": false,
         "properties": {
           "autoclean": {
             "type": "object",
@@ -1480,6 +1540,7 @@
                   }
                 },
                 "if": {
+                  "additionalProperties": true,
                   "properties": {
                     "enabled": {
                       "type": "boolean",
@@ -1541,6 +1602,7 @@
                   }
                 },
                 "if": {
+                  "additionalProperties": true,
                   "properties": {
                     "enabled": {
                       "type": "boolean",
@@ -1602,6 +1664,7 @@
                   }
                 },
                 "if": {
+                  "additionalProperties": true,
                   "properties": {
                     "enabled": {
                       "type": "boolean",
@@ -1663,6 +1726,7 @@
                   }
                 },
                 "if": {
+                  "additionalProperties": true,
                   "properties": {
                     "enabled": {
                       "type": "boolean",
@@ -1724,6 +1788,7 @@
                   }
                 },
                 "if": {
+                  "additionalProperties": true,
                   "properties": {
                     "enabled": {
                       "type": "boolean",
@@ -1785,6 +1850,7 @@
                   }
                 },
                 "if": {
+                  "additionalProperties": true,
                   "properties": {
                     "enabled": {
                       "type": "boolean",
@@ -1903,7 +1969,6 @@
     "lightning-batching.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "batching",
       "title": "Command to allow database batching.",
       "description": [
@@ -1913,6 +1978,7 @@
         "required": [
           "enable"
         ],
+        "additionalProperties": false,
         "properties": {
           "enable": {
             "type": "boolean",
@@ -1924,6 +1990,7 @@
         }
       },
       "response": {
+        "additionalProperties": false,
         "properties": {}
       },
       "errors": [
@@ -1953,7 +2020,6 @@
     "lightning-bkpr-channelsapy.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "bkpr-channelsapy",
       "title": "Command to list stats on channel earnings",
       "description": [
@@ -1961,6 +2027,7 @@
       ],
       "request": {
         "required": [],
+        "additionalProperties": false,
         "properties": {
           "start_time": {
             "type": "u64",
@@ -1982,6 +2049,7 @@
         "required": [
           "channels_apy"
         ],
+        "additionalProperties": false,
         "properties": {
           "channels_apy": {
             "type": "array",
@@ -2258,7 +2326,6 @@
     "lightning-bkpr-dumpincomecsv.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "bkpr-dumpincomecsv",
       "title": "Command to emit a CSV of income events",
       "description": [
@@ -2268,6 +2335,7 @@
         "required": [
           "csv_format"
         ],
+        "additionalProperties": false,
         "properties": {
           "csv_format": {
             "type": "string",
@@ -2309,6 +2377,7 @@
           "csv_file",
           "csv_format"
         ],
+        "additionalProperties": false,
         "properties": {
           "csv_file": {
             "type": "string",
@@ -2363,7 +2432,6 @@
     "lightning-bkpr-inspect.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "bkpr-inspect",
       "title": "Command to show onchain footprint of a channel",
       "description": [
@@ -2373,6 +2441,7 @@
         "required": [
           "account"
         ],
+        "additionalProperties": false,
         "properties": {
           "account": {
             "type": "string",
@@ -2386,6 +2455,7 @@
         "required": [
           "txs"
         ],
+        "additionalProperties": false,
         "properties": {
           "txs": {
             "type": "array",
@@ -2629,7 +2699,6 @@
     "lightning-bkpr-listaccountevents.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "bkpr-listaccountevents",
       "title": "Command for listing recorded bookkeeping events",
       "description": [
@@ -2645,6 +2714,7 @@
       ],
       "request": {
         "required": [],
+        "additionalProperties": false,
         "properties": {
           "account": {
             "type": "string",
@@ -2665,6 +2735,7 @@
         "required": [
           "events"
         ],
+        "additionalProperties": false,
         "properties": {
           "events": {
             "type": "array",
@@ -2732,6 +2803,7 @@
               "allOf": [
                 {
                   "if": {
+                    "additionalProperties": true,
                     "properties": {
                       "type": {
                         "type": "string",
@@ -2742,6 +2814,7 @@
                     }
                   },
                   "then": {
+                    "additionalProperties": false,
                     "properties": {
                       "account": {},
                       "type": {},
@@ -2790,12 +2863,12 @@
                     "required": [
                       "outpoint",
                       "blockheight"
-                    ],
-                    "additionalProperties": false
+                    ]
                   }
                 },
                 {
                   "if": {
+                    "additionalProperties": true,
                     "properties": {
                       "type": {
                         "type": "string",
@@ -2806,6 +2879,7 @@
                     }
                   },
                   "then": {
+                    "additionalProperties": false,
                     "properties": {
                       "account": {},
                       "type": {},
@@ -2824,12 +2898,12 @@
                     },
                     "required": [
                       "txid"
-                    ],
-                    "additionalProperties": false
+                    ]
                   }
                 },
                 {
                   "if": {
+                    "additionalProperties": true,
                     "properties": {
                       "type": {
                         "type": "string",
@@ -2840,6 +2914,7 @@
                     }
                   },
                   "then": {
+                    "additionalProperties": false,
                     "properties": {
                       "account": {},
                       "type": {},
@@ -2873,8 +2948,7 @@
                           "Counter for multi-part payments."
                         ]
                       }
-                    },
-                    "additionalProperties": false
+                    }
                   }
                 }
               ]
@@ -3468,7 +3542,6 @@
     "lightning-bkpr-listbalances.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "bkpr-listbalances",
       "title": "Command for listing current channel + wallet balances",
       "description": [
@@ -3478,12 +3551,14 @@
       ],
       "request": {
         "required": [],
+        "additionalProperties": false,
         "properties": {}
       },
       "response": {
         "required": [
           "accounts"
         ],
+        "additionalProperties": false,
         "properties": {
           "accounts": {
             "type": "array",
@@ -3579,11 +3654,11 @@
                 }
               },
               "else": {
+                "additionalProperties": false,
                 "properties": {
                   "account": {},
                   "balances": {}
-                },
-                "additionalProperties": false
+                }
               }
             }
           }
@@ -3681,7 +3756,6 @@
     "lightning-bkpr-listincome.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "added": "pre-v0.10.1",
       "rpc": "bkpr-listincome",
       "title": "Command for listing all income impacting events",
@@ -3690,6 +3764,7 @@
       ],
       "request": {
         "required": [],
+        "additionalProperties": false,
         "properties": {
           "consolidate_fees": {
             "type": "boolean",
@@ -3718,6 +3793,7 @@
         "required": [
           "income_events"
         ],
+        "additionalProperties": false,
         "properties": {
           "income_events": {
             "type": "array",
@@ -4159,7 +4235,6 @@
     "lightning-blacklistrune.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "added": "v23.08",
       "rpc": "blacklistrune",
       "title": "Command to prevent a rune from working",
@@ -4172,6 +4247,7 @@
       ],
       "request": {
         "required": [],
+        "additionalProperties": false,
         "properties": {
           "start": {
             "type": "u64",
@@ -4196,6 +4272,7 @@
         "required": [
           "blacklist"
         ],
+        "additionalProperties": false,
         "properties": {
           "blacklist": {
             "type": "array",
@@ -4296,7 +4373,6 @@
     "lightning-check.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "check",
       "title": "Command for verifying parameters",
       "description": [
@@ -4310,6 +4386,7 @@
         "required": [
           "command_to_check"
         ],
+        "additionalProperties": true,
         "properties": {
           "command_to_check": {
             "type": "string",
@@ -4320,6 +4397,7 @@
         }
       },
       "response": {
+        "additionalProperties": false,
         "properties": {
           "command_to_check": {
             "type": "string",
@@ -4398,7 +4476,6 @@
     "lightning-checkmessage.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "checkmessage",
       "title": "Command to check if a signature is from a node",
       "description": [
@@ -4411,6 +4488,7 @@
           "message",
           "zbase"
         ],
+        "additionalProperties": false,
         "properties": {
           "message": {
             "type": "string",
@@ -4437,6 +4515,7 @@
           "verified",
           "pubkey"
         ],
+        "additionalProperties": false,
         "properties": {
           "verified": {
             "type": "boolean",
@@ -4505,7 +4584,6 @@
     "lightning-checkrune.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "added": "v23.08",
       "rpc": "checkrune",
       "title": "Command to Validate Rune",
@@ -4520,6 +4598,7 @@
         "required": [
           "rune"
         ],
+        "additionalProperties": false,
         "properties": {
           "rune": {
             "type": "string",
@@ -4561,6 +4640,7 @@
         "required": [
           "valid"
         ],
+        "additionalProperties": false,
         "properties": {
           "valid": {
             "type": "boolean",
@@ -4625,7 +4705,6 @@
     "lightning-close.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "close",
       "title": "Command for closing channels with direct peers",
       "description": [
@@ -4637,6 +4716,7 @@
         "required": [
           "id"
         ],
+        "additionalProperties": true,
         "properties": {
           "id": {
             "type": "string",
@@ -4699,6 +4779,7 @@
         "required": [
           "type"
         ],
+        "additionalProperties": true,
         "properties": {
           "type": {
             "type": "string",
@@ -4715,6 +4796,7 @@
         "allOf": [
           {
             "if": {
+              "additionalProperties": true,
               "properties": {
                 "type": {
                   "type": "string",
@@ -4814,7 +4896,6 @@
     "lightning-commando-blacklist.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "added": "v23.05",
       "deprecated": [
         "v23.08",
@@ -4829,6 +4910,7 @@
       ],
       "request": {
         "required": [],
+        "additionalProperties": false,
         "properties": {
           "start": {
             "type": "u64",
@@ -4853,6 +4935,7 @@
         "required": [
           "blacklist"
         ],
+        "additionalProperties": false,
         "properties": {
           "blacklist": {
             "type": "array",
@@ -4934,7 +5017,6 @@
     "lightning-commando-listrunes.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "added": "v23.05",
       "deprecated": [
         "v23.08",
@@ -4949,6 +5031,7 @@
       ],
       "request": {
         "required": [],
+        "additionalProperties": false,
         "properties": {
           "rune": {
             "type": "string",
@@ -4962,6 +5045,7 @@
         "required": [
           "runes"
         ],
+        "additionalProperties": false,
         "properties": {
           "runes": {
             "type": "array",
@@ -5340,7 +5424,6 @@
     "lightning-commando-rune.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "deprecated": [
         "v23.08",
         "v25.02"
@@ -5352,6 +5435,7 @@
       ],
       "request": {
         "required": [],
+        "additionalProperties": false,
         "properties": {
           "rune": {
             "type": "string",
@@ -5403,6 +5487,7 @@
           "rune",
           "unique_id"
         ],
+        "additionalProperties": false,
         "properties": {
           "rune": {
             "type": "string",
@@ -5710,7 +5795,6 @@
     "lightning-commando.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "commando",
       "title": "Command to Send a Command to a Remote Peer",
       "description": [
@@ -5721,6 +5805,7 @@
           "peer_id",
           "method"
         ],
+        "additionalProperties": false,
         "properties": {
           "peer_id": {
             "type": "pubkey",
@@ -5766,6 +5851,7 @@
       },
       "response": {
         "required": [],
+        "additionalProperties": true,
         "properties": {},
         "pre_return_value_notes": [
           "On success, the return depends on the *method* invoked."
@@ -5890,7 +5976,6 @@
     "lightning-connect.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "connect",
       "title": "Command for connecting to another lightning node",
       "description": [
@@ -5904,6 +5989,7 @@
         "required": [
           "id"
         ],
+        "additionalProperties": false,
         "properties": {
           "id": {
             "type": "string",
@@ -5936,6 +6022,7 @@
           "direction",
           "address"
         ],
+        "additionalProperties": false,
         "properties": {
           "id": {
             "type": "pubkey",
@@ -5986,6 +6073,7 @@
             "allOf": [
               {
                 "if": {
+                  "additionalProperties": true,
                   "properties": {
                     "type": {
                       "type": "string",
@@ -6013,6 +6101,7 @@
               },
               {
                 "if": {
+                  "additionalProperties": true,
                   "properties": {
                     "type": {
                       "type": "string",
@@ -6120,7 +6209,6 @@
     "lightning-createinvoice.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "createinvoice",
       "title": "Low-level invoice creation",
       "description": [
@@ -6132,6 +6220,7 @@
           "label",
           "preimage"
         ],
+        "additionalProperties": false,
         "properties": {
           "invstring": {
             "type": "string",
@@ -6169,6 +6258,7 @@
           "description",
           "expires_at"
         ],
+        "additionalProperties": false,
         "properties": {
           "label": {
             "type": "string",
@@ -6350,7 +6440,6 @@
     "lightning-createonion.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "createonion",
       "title": "Low-level command to create a custom onion",
       "description": [
@@ -6361,6 +6450,7 @@
           "hops",
           "assocdata"
         ],
+        "additionalProperties": false,
         "properties": {
           "hops": {
             "type": "array",
@@ -6415,6 +6505,7 @@
           "onion",
           "shared_secrets"
         ],
+        "additionalProperties": false,
         "properties": {
           "onion": {
             "type": "hex",
@@ -6517,7 +6608,6 @@
     "lightning-createrune.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "added": "v23.08",
       "rpc": "createrune",
       "title": "Command to Create/Update Rune for Authorizing Remote Peer Access",
@@ -6528,6 +6618,7 @@
       ],
       "request": {
         "required": [],
+        "additionalProperties": false,
         "properties": {
           "rune": {
             "type": "string",
@@ -6583,6 +6674,7 @@
           "rune",
           "unique_id"
         ],
+        "additionalProperties": false,
         "properties": {
           "rune": {
             "type": "string",
@@ -6890,7 +6982,6 @@
     "lightning-datastore.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "datastore",
       "title": "Command for storing (plugin) data",
       "description": [
@@ -6900,6 +6991,7 @@
         "required": [
           "key"
         ],
+        "additionalProperties": false,
         "properties": {
           "key": {
             "description": [
@@ -6963,6 +7055,7 @@
         "required": [
           "key"
         ],
+        "additionalProperties": false,
         "properties": {
           "key": {
             "type": "array",
@@ -7101,7 +7194,6 @@
     "lightning-datastoreusage.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "added": "v23.11",
       "rpc": "datastoreusage",
       "title": "Command for listing datastore usage info",
@@ -7112,6 +7204,7 @@
       ],
       "request": {
         "required": [],
+        "additionalProperties": false,
         "properties": {
           "key": {
             "oneOf": [
@@ -7135,6 +7228,7 @@
         "required": [
           "datastoreusage"
         ],
+        "additionalProperties": false,
         "properties": {
           "datastoreusage": {
             "type": "object",
@@ -7225,7 +7319,6 @@
     "lightning-decode.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "added": "v23.05",
       "rpc": "decode",
       "title": "Command for decoding an invoice string (low-level)",
@@ -7236,6 +7329,7 @@
         "required": [
           "string"
         ],
+        "additionalProperties": false,
         "properties": {
           "string": {
             "type": "string",
@@ -7253,6 +7347,7 @@
           "type",
           "valid"
         ],
+        "additionalProperties": true,
         "properties": {
           "type": {
             "type": "string",
@@ -7278,6 +7373,7 @@
         "allOf": [
           {
             "if": {
+              "additionalProperties": true,
               "properties": {
                 "type": {
                   "type": "string",
@@ -7618,6 +7714,7 @@
           },
           {
             "if": {
+              "additionalProperties": true,
               "properties": {
                 "type": {
                   "type": "string",
@@ -7703,6 +7800,7 @@
           },
           {
             "if": {
+              "additionalProperties": true,
               "properties": {
                 "type": {
                   "type": "string",
@@ -8189,6 +8287,7 @@
           },
           {
             "if": {
+              "additionalProperties": true,
               "properties": {
                 "type": {
                   "type": "string",
@@ -8296,6 +8395,7 @@
           },
           {
             "if": {
+              "additionalProperties": true,
               "properties": {
                 "type": {
                   "type": "string",
@@ -8982,6 +9082,7 @@
           },
           {
             "if": {
+              "additionalProperties": true,
               "properties": {
                 "type": {
                   "type": "string",
@@ -9129,6 +9230,7 @@
                       "version",
                       "hex"
                     ],
+                    "additionalProperties": false,
                     "properties": {
                       "version": {},
                       "hex": {},
@@ -9147,6 +9249,7 @@
           },
           {
             "if": {
+              "additionalProperties": true,
               "properties": {
                 "type": {
                   "type": "string",
@@ -9385,6 +9488,7 @@
           },
           {
             "if": {
+              "additionalProperties": true,
               "properties": {
                 "type": {
                   "type": "string",
@@ -9472,6 +9576,7 @@
           },
           {
             "if": {
+              "additionalProperties": true,
               "properties": {
                 "type": {
                   "type": "string",
@@ -9517,6 +9622,7 @@
           },
           {
             "if": {
+              "additionalProperties": true,
               "properties": {
                 "type": {
                   "type": "string",
@@ -9627,7 +9733,6 @@
     "lightning-decodepay.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "added": "v23.05",
       "rpc": "decodepay",
       "title": "Command for decoding a bolt11 string (low-level)",
@@ -9638,6 +9743,7 @@
         "required": [
           "bolt11"
         ],
+        "additionalProperties": false,
         "properties": {
           "bolt11": {
             "type": "string",
@@ -9663,6 +9769,7 @@
           "payment_hash",
           "signature"
         ],
+        "additionalProperties": false,
         "properties": {
           "currency": {
             "type": "string",
@@ -9925,7 +10032,6 @@
     "lightning-deldatastore.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "deldatastore",
       "title": "Command for removing (plugin) data",
       "description": [
@@ -9937,6 +10043,7 @@
         "required": [
           "key"
         ],
+        "additionalProperties": false,
         "properties": {
           "key": {
             "oneOf": [
@@ -9966,6 +10073,7 @@
         "required": [
           "key"
         ],
+        "additionalProperties": false,
         "properties": {
           "key": {
             "type": "array",
@@ -10059,7 +10167,6 @@
     "lightning-delforward.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "delforward",
       "title": "Command for removing a forwarding entry",
       "description": [
@@ -10073,6 +10180,7 @@
           "in_htlc_id",
           "status"
         ],
+        "additionalProperties": false,
         "properties": {
           "in_channel": {
             "type": "short_channel_id",
@@ -10101,6 +10209,7 @@
       },
       "response": {
         "required": [],
+        "additionalProperties": false,
         "properties": {}
       },
       "errors": [
@@ -10147,7 +10256,6 @@
     "lightning-delinvoice.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "delinvoice",
       "title": "Command for removing an invoice (or just its description)",
       "description": [
@@ -10158,6 +10266,7 @@
           "label",
           "status"
         ],
+        "additionalProperties": true,
         "properties": {
           "label": {
             "oneOf": [
@@ -10199,6 +10308,7 @@
           "created_index",
           "expires_at"
         ],
+        "additionalProperties": true,
         "properties": {
           "label": {
             "type": "string",
@@ -10333,6 +10443,7 @@
           },
           {
             "if": {
+              "additionalProperties": true,
               "properties": {
                 "status": {
                   "type": "string",
@@ -10486,7 +10597,6 @@
     "lightning-delpay.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "delpay",
       "title": "Command for removing a completed or failed payment",
       "description": [
@@ -10497,6 +10607,7 @@
           "payment_hash",
           "status"
         ],
+        "additionalProperties": false,
         "properties": {
           "payment_hash": {
             "type": "hash",
@@ -10538,6 +10649,7 @@
         "required": [
           "payments"
         ],
+        "additionalProperties": false,
         "properties": {
           "payments": {
             "type": "array",
@@ -10784,7 +10896,6 @@
     "lightning-deprecations.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "added": "v24.02",
       "rpc": "deprecations",
       "title": "Command to enable/disable deprecated APIs",
@@ -10795,6 +10906,7 @@
         "required": [
           "enable"
         ],
+        "additionalProperties": false,
         "properties": {
           "enable": {
             "type": "boolean",
@@ -10805,6 +10917,7 @@
         }
       },
       "response": {
+        "additionalProperties": false,
         "properties": {}
       },
       "errors": [
@@ -10848,7 +10961,6 @@
     "lightning-dev-forget-channel.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "dev-forget-channel",
       "title": "Command to remove the DB entries from the database after a close",
       "warning": "For advanced users only",
@@ -10863,6 +10975,7 @@
         "required": [
           "id"
         ],
+        "additionalProperties": false,
         "properties": {
           "id": {
             "type": "pubkey",
@@ -10897,6 +11010,7 @@
           "funding_unspent",
           "funding_txid"
         ],
+        "additionalProperties": false,
         "properties": {
           "forced": {
             "type": "boolean",
@@ -10978,7 +11092,6 @@
     "lightning-disableinvoicerequest.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "added": "v22.11",
       "rpc": "disableinvoicerequest",
       "title": "Command for removing an invoice request",
@@ -10992,6 +11105,7 @@
         "required": [
           "invreq_id"
         ],
+        "additionalProperties": false,
         "properties": {
           "invreq_id": {
             "type": "string",
@@ -11009,6 +11123,7 @@
           "bolt12",
           "used"
         ],
+        "additionalProperties": false,
         "properties": {
           "invreq_id": {
             "type": "hash",
@@ -11086,7 +11201,6 @@
     "lightning-disableoffer.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "disableoffer",
       "title": "Command for removing an offer",
       "warning": "experimental-offers only",
@@ -11099,6 +11213,7 @@
         "required": [
           "offer_id"
         ],
+        "additionalProperties": false,
         "properties": {
           "offer_id": {
             "type": "hash",
@@ -11116,6 +11231,7 @@
           "bolt12",
           "used"
         ],
+        "additionalProperties": false,
         "properties": {
           "offer_id": {
             "type": "hash",
@@ -11194,7 +11310,6 @@
     "lightning-disconnect.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "disconnect",
       "title": "Command for disconnecting from another lightning node",
       "description": [
@@ -11204,6 +11319,7 @@
         "required": [
           "id"
         ],
+        "additionalProperties": false,
         "properties": {
           "id": {
             "type": "pubkey",
@@ -11220,6 +11336,7 @@
         }
       },
       "response": {
+        "additionalProperties": false,
         "properties": {}
       },
       "errors": [
@@ -11266,7 +11383,6 @@
     "lightning-emergencyrecover.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "emergencyrecover",
       "title": "Command for recovering channels from the emergency.recovery file in the lightning directory",
       "description": [
@@ -11276,12 +11392,14 @@
       ],
       "request": {
         "required": [],
+        "additionalProperties": false,
         "properties": {}
       },
       "response": {
         "required": [
           "stubs"
         ],
+        "additionalProperties": false,
         "properties": {
           "stubs": {
             "type": "array",
@@ -11333,7 +11451,6 @@
     "lightning-enableoffer.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "disableoffer",
       "title": "Command for re-enabling an offer",
       "warning": "experimental-offers only",
@@ -11344,6 +11461,7 @@
         "required": [
           "offer_id"
         ],
+        "additionalProperties": false,
         "properties": {
           "offer_id": {
             "type": "hash",
@@ -11361,6 +11479,7 @@
           "bolt12",
           "used"
         ],
+        "additionalProperties": false,
         "properties": {
           "offer_id": {
             "type": "hash",
@@ -11445,7 +11564,6 @@
     "lightning-feerates.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "feerates",
       "title": "Command for querying recommended onchain feerates",
       "description": [
@@ -11467,6 +11585,7 @@
         "required": [
           "style"
         ],
+        "additionalProperties": false,
         "properties": {
           "style": {
             "type": "string",
@@ -11484,6 +11603,7 @@
       },
       "response": {
         "required": [],
+        "additionalProperties": false,
         "properties": {
           "warning_missing_feerates": {
             "type": "string",
@@ -11934,7 +12054,6 @@
     "lightning-fetchinvoice.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "fetchinvoice",
       "title": "Command for fetch an invoice for an offer",
       "warning": "experimental-offers only",
@@ -11947,6 +12066,7 @@
         "required": [
           "offer"
         ],
+        "additionalProperties": false,
         "properties": {
           "offer": {
             "type": "string",
@@ -11995,6 +12115,12 @@
             "description": [
               "To ask the issuer to include in the fetched invoice."
             ]
+          },
+          "dev_reply_path": {
+            "hidden": true
+          },
+          "dev_path_use_scidd": {
+            "hidden": true
           }
         }
       },
@@ -12003,6 +12129,7 @@
           "invoice",
           "changes"
         ],
+        "additionalProperties": false,
         "properties": {
           "invoice": {
             "type": "string",
@@ -12152,7 +12279,6 @@
     "lightning-fundchannel.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "fundchannel",
       "title": "Command for establishing a lightning channel",
       "description": [
@@ -12169,6 +12295,7 @@
           "id",
           "amount"
         ],
+        "additionalProperties": false,
         "properties": {
           "id": {
             "type": "pubkey",
@@ -12278,6 +12405,7 @@
           "channel_type",
           "channel_id"
         ],
+        "additionalProperties": false,
         "properties": {
           "tx": {
             "type": "hex",
@@ -12454,7 +12582,6 @@
     "lightning-fundchannel_cancel.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "fundchannel_cancel",
       "title": "Command for completing channel establishment",
       "description": [
@@ -12468,6 +12595,7 @@
         "required": [
           "id"
         ],
+        "additionalProperties": false,
         "properties": {
           "id": {
             "type": "pubkey",
@@ -12481,6 +12609,7 @@
         "required": [
           "cancelled"
         ],
+        "additionalProperties": false,
         "properties": {
           "cancelled": {
             "type": "string",
@@ -12545,7 +12674,6 @@
     "lightning-fundchannel_complete.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "fundchannel_complete",
       "title": "Command for completing channel establishment",
       "description": [
@@ -12558,6 +12686,7 @@
           "id",
           "psbt"
         ],
+        "additionalProperties": false,
         "properties": {
           "id": {
             "type": "pubkey",
@@ -12578,6 +12707,7 @@
           "channel_id",
           "commitments_secured"
         ],
+        "additionalProperties": false,
         "properties": {
           "channel_id": {
             "type": "hash",
@@ -12657,7 +12787,6 @@
     "lightning-fundchannel_start.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "fundchannel_start",
       "title": "Command for initiating channel establishment for a lightning channel",
       "description": [
@@ -12670,6 +12799,7 @@
           "id",
           "amount"
         ],
+        "additionalProperties": false,
         "properties": {
           "id": {
             "type": "pubkey",
@@ -12750,6 +12880,7 @@
           "scriptpubkey",
           "warning_usage"
         ],
+        "additionalProperties": false,
         "properties": {
           "funding_address": {
             "type": "string",
@@ -12917,7 +13048,6 @@
     "lightning-funderupdate.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "funderupdate",
       "title": "Command for adjusting node funding v2 channels",
       "description": [
@@ -12931,6 +13061,7 @@
       ],
       "request": {
         "required": [],
+        "additionalProperties": false,
         "properties": {
           "policy": {
             "type": "string",
@@ -13068,6 +13199,7 @@
           "fuzz_percent",
           "fund_probability"
         ],
+        "additionalProperties": false,
         "properties": {
           "summary": {
             "type": "string",
@@ -13248,7 +13380,6 @@
     "lightning-fundpsbt.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "fundpsbt",
       "title": "Command to populate PSBT inputs from the wallet",
       "description": [
@@ -13260,6 +13391,7 @@
           "feerate",
           "startweight"
         ],
+        "additionalProperties": false,
         "properties": {
           "satoshi": {
             "type": "sat_or_all",
@@ -13335,6 +13467,7 @@
           "estimated_final_weight",
           "excess_msat"
         ],
+        "additionalProperties": false,
         "properties": {
           "psbt": {
             "type": "string",
@@ -13499,7 +13632,6 @@
     "lightning-getemergencyrecoverdata.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "getemergencyrecoverdata",
       "title": "Command to fetch data from the emergency.recover file",
       "description": [
@@ -13507,12 +13639,14 @@
       ],
       "request": {
         "required": [],
+        "additionalProperties": false,
         "properties": {}
       },
       "response": {
         "required": [
           "filedata"
         ],
+        "additionalProperties": false,
         "properties": {
           "filedata": {
             "type": "hex",
@@ -13547,7 +13681,6 @@
     "lightning-getinfo.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "getinfo",
       "title": "Command to receive all information about the Core Lightning node.",
       "description": [
@@ -13558,6 +13691,7 @@
       ],
       "request": {
         "required": [],
+        "additionalProperties": false,
         "properties": {}
       },
       "response": {
@@ -13576,6 +13710,7 @@
           "lightning-dir",
           "address"
         ],
+        "additionalProperties": false,
         "properties": {
           "id": {
             "type": "pubkey",
@@ -13725,6 +13860,7 @@
                 }
               },
               "if": {
+                "additionalProperties": true,
                 "properties": {
                   "type": {
                     "type": "string",
@@ -13779,6 +13915,7 @@
               "required": [
                 "type"
               ],
+              "additionalProperties": true,
               "properties": {
                 "type": {
                   "type": "string",
@@ -13810,6 +13947,7 @@
               "allOf": [
                 {
                   "if": {
+                    "additionalProperties": true,
                     "properties": {
                       "type": {
                         "type": "string",
@@ -13852,6 +13990,7 @@
                 },
                 {
                   "if": {
+                    "additionalProperties": true,
                     "properties": {
                       "type": {
                         "type": "string",
@@ -13970,7 +14109,6 @@
     "lightning-getlog.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "getlog",
       "title": "Command to show logs.",
       "description": [
@@ -13981,6 +14119,7 @@
       ],
       "request": {
         "required": [],
+        "additionalProperties": false,
         "properties": {
           "level": {
             "type": "string",
@@ -14006,6 +14145,7 @@
           "bytes_max",
           "log"
         ],
+        "additionalProperties": false,
         "properties": {
           "created_at": {
             "type": "string",
@@ -14267,7 +14407,6 @@
     "lightning-getroute.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "getroute",
       "title": "Command for routing a payment (low-level)",
       "description": [
@@ -14284,6 +14423,7 @@
           "amount_msat",
           "riskfactor"
         ],
+        "additionalProperties": false,
         "properties": {
           "id": {
             "type": "pubkey",
@@ -14346,6 +14486,7 @@
         "required": [
           "route"
         ],
+        "additionalProperties": false,
         "properties": {
           "route": {
             "type": "array",
@@ -14700,7 +14841,6 @@
     "lightning-getroutes.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "getroutes",
       "title": "Command for routing a payment (EXPERIMENTAL)",
       "added": "v24.08",
@@ -14727,6 +14867,7 @@
           "maxfee_msat",
           "final_cltv"
         ],
+        "additionalProperties": false,
         "properties": {
           "source": {
             "type": "pubkey",
@@ -14774,6 +14915,7 @@
           "probability_ppm",
           "routes"
         ],
+        "additionalProperties": false,
         "properties": {
           "probability_ppm": {
             "type": "u64",
@@ -14877,7 +15019,6 @@
     "lightning-help.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "help",
       "title": "Command to return all information about RPC commands.",
       "description": [
@@ -14887,6 +15028,7 @@
       ],
       "request": {
         "required": [],
+        "additionalProperties": false,
         "properties": {
           "command": {
             "type": "string",
@@ -14900,6 +15042,7 @@
         "required": [
           "help"
         ],
+        "additionalProperties": false,
         "properties": {
           "help": {
             "type": "array",
@@ -14979,10 +15122,134 @@
         }
       ]
     },
-    "lightning-invoice.json": {
+    "lightning-injectpaymentonion.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
       "additionalProperties": false,
+      "rpc": "injectpaymentonion",
+      "title": "Send a payment with a custom onion packet",
+      "description": [
+        "The **injectpaymentonion** RPC command causes the node to receive a payment attempt similar to the way it would receive one from a peer. The onion packet is unwrapped, then handled normally: either as a local payment, or forwarded to the next peer.",
+        "Compared to lightning-sendonion(7): the handling of blinded paths and self-payments is trivial, and the interface blocks until the payment succeeds or fails."
+      ],
+      "request": {
+        "required": [
+          "onion",
+          "payment_hash",
+          "amount_msat",
+          "cltv_expiry",
+          "partid",
+          "groupid"
+        ],
+        "properties": {
+          "onion": {
+            "type": "hex",
+            "description": [
+              "Hex-encoded 1366 bytes long blob that was returned by either of the tools that can generate onions. It contains the payloads destined for each hop and some metadata. Please refer to [BOLT 04][bolt04] for further details. If is specific to the route that is being used and the *payment_hash* used to construct, and therefore cannot be reused for other payments or to attempt a separate route. The custom onion can generally be created using the `devtools/onion` CLI tool, or the **createonion** RPC command."
+            ]
+          },
+          "payment_hash": {
+            "type": "hash",
+            "description": [
+              "Specifies the 32 byte hex-encoded hash to use as a challenge to the HTLC that we are sending. It is specific to the onion and has to match the one the onion was created with."
+            ]
+          },
+          "amount_msat": {
+            "type": "msat",
+            "description": [
+              "The amount for the first HTLC in millisatoshis.  This is also the amount which will be forwarded to the first peer (if any) as we do not charge fees on our own payments."
+            ]
+          },
+          "cltv_expiry": {
+            "type": "u16",
+            "description": [
+              "The cltv_expiry for the first HTLC in blocks.  This must be greater than the current blockheight."
+            ]
+          },
+          "partid": {
+            "type": "u64",
+            "description": [
+              "The non-zero identifier for multiple parallel partial payments with the same *payment_hash*."
+            ]
+          },
+          "groupid": {
+            "type": "u64",
+            "description": [
+              "Grouping key to disambiguate multiple attempts to pay the same *payment_hash*.  All payments in other groups must be completed before starting a new group."
+            ]
+          },
+          "label": {
+            "type": "string",
+            "description": [
+              "Can be used to provide a human readable reference to retrieve the payment at a later time."
+            ]
+          },
+          "invstring": {
+            "type": "string",
+            "description": [
+              "Usually a bolt11 or bolt12 string, which, it will be returned in *waitsendpay* and *listsendpays* results."
+            ]
+          },
+          "localinvreqid": {
+            "type": "hash",
+            "description": [
+              "`localinvreqid` is used by offers to link a payment attempt to a local `invoice_request` offer created by lightningd-invoicerequest(7)."
+            ]
+          }
+        }
+      },
+      "response": {
+        "required": [
+          "created_index",
+          "created_at",
+          "completed_at",
+          "payment_preimage"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "u64",
+            "description": [
+              "The UNIX timestamp showing when this payment was initiated."
+            ]
+          },
+          "completed_at": {
+            "type": "u64",
+            "description": [
+              "The UNIX timestamp showing when this payment was completed."
+            ]
+          },
+          "created_index": {
+            "type": "u64",
+            "description": [
+              "1-based index indicating order this payment was created in."
+            ]
+          }
+        }
+      },
+      "errors": [
+        "The following error codes may occur:",
+        "",
+        "- 218: injectpaymentonion failed",
+        "",
+        "The *onionreply* is returned in the error details, which can be unwrapped to discover the error"
+      ],
+      "author": [
+        "Rusty Russell <<rusty@rustcorp.com.au>> is mainly responsible."
+      ],
+      "see_also": [
+        "lightning-createonion(7)",
+        "lightning-sendonion(7)",
+        "lightning-listsendpays(7)"
+      ],
+      "resources": [
+        "Main web site: <https://github.com/ElementsProject/lightning>",
+        "",
+        "[bolt04]: https://github.com/lightning/bolts/blob/master/04-onion-routing.md"
+      ]
+    },
+    "lightning-invoice.json": {
+      "$schema": "../rpc-schema-draft.json",
+      "type": "object",
       "rpc": "invoice",
       "title": "Command for accepting payments",
       "description": [
@@ -14994,6 +15261,7 @@
           "label",
           "description"
         ],
+        "additionalProperties": false,
         "properties": {
           "amount_msat": {
             "type": "msat_or_any",
@@ -15092,6 +15360,7 @@
           "bolt11",
           "payment_secret"
         ],
+        "additionalProperties": false,
         "properties": {
           "bolt11": {
             "type": "string",
@@ -15222,7 +15491,6 @@
     "lightning-invoicerequest.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "added": "v22.11",
       "rpc": "invoicerequest",
       "title": "Command for offering payments",
@@ -15235,6 +15503,7 @@
           "amount",
           "description"
         ],
+        "additionalProperties": false,
         "properties": {
           "amount": {
             "type": "msat",
@@ -15283,6 +15552,7 @@
           "bolt12",
           "used"
         ],
+        "additionalProperties": false,
         "properties": {
           "invreq_id": {
             "type": "hash",
@@ -15384,7 +15654,6 @@
     "lightning-keysend.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "keysend",
       "title": "Send funds to a node without an invoice",
       "description": [
@@ -15399,6 +15668,7 @@
           "destination",
           "amount_msat"
         ],
+        "additionalProperties": false,
         "properties": {
           "destination": {
             "type": "pubkey",
@@ -15506,6 +15776,7 @@
           "amount_sent_msat",
           "status"
         ],
+        "additionalProperties": false,
         "properties": {
           "payment_preimage": {
             "type": "secret",
@@ -15694,7 +15965,6 @@
     "lightning-listchannels.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "listchannels",
       "title": "Command to query active lightning channels in the entire network",
       "description": [
@@ -15707,6 +15977,7 @@
       ],
       "request": {
         "required": [],
+        "additionalProperties": false,
         "properties": {
           "short_channel_id": {
             "type": "short_channel_id",
@@ -15732,6 +16003,7 @@
         "required": [
           "channels"
         ],
+        "additionalProperties": false,
         "properties": {
           "channels": {
             "type": "array",
@@ -16123,7 +16395,6 @@
     "lightning-listclosedchannels.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "added": "v23.05",
       "rpc": "listclosedchannels",
       "title": "Get data on our closed historical channels",
@@ -16135,6 +16406,7 @@
       ],
       "request": {
         "required": [],
+        "additionalProperties": false,
         "properties": {
           "id": {
             "type": "pubkey",
@@ -16148,6 +16420,7 @@
         "required": [
           "closedchannels"
         ],
+        "additionalProperties": false,
         "properties": {
           "closedchannels": {
             "type": "array",
@@ -16192,6 +16465,7 @@
                 "alias": {
                   "type": "object",
                   "required": [],
+                  "additionalProperties": false,
                   "properties": {
                     "local": {
                       "type": "short_channel_id",
@@ -16424,7 +16698,6 @@
     "lightning-listconfigs.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "listconfigs",
       "title": "Command to list all configuration options.",
       "description": [
@@ -16435,6 +16708,7 @@
       ],
       "request": {
         "required": [],
+        "additionalProperties": false,
         "properties": {
           "config": {
             "type": "string",
@@ -16446,6 +16720,7 @@
       },
       "response": {
         "required": [],
+        "additionalProperties": false,
         "properties": {
           "configs": {
             "added": "v23.08",
@@ -19478,7 +19753,6 @@
     "lightning-listdatastore.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "listdatastore",
       "title": "Command for listing (plugin) data",
       "description": [
@@ -19486,6 +19760,7 @@
       ],
       "request": {
         "required": [],
+        "additionalProperties": false,
         "properties": {
           "key": {
             "oneOf": [
@@ -19511,6 +19786,7 @@
         "required": [
           "datastore"
         ],
+        "additionalProperties": false,
         "properties": {
           "datastore": {
             "type": "array",
@@ -19620,7 +19896,6 @@
     "lightning-listforwards.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "listforwards",
       "title": "Command showing all htlcs and their information",
       "description": [
@@ -19631,6 +19906,7 @@
       ],
       "request": {
         "required": [],
+        "additionalProperties": false,
         "properties": {
           "status": {
             "type": "string",
@@ -19694,6 +19970,7 @@
         "required": [
           "forwards"
         ],
+        "additionalProperties": false,
         "properties": {
           "forwards": {
             "type": "array",
@@ -19846,6 +20123,7 @@
                 },
                 {
                   "if": {
+                    "additionalProperties": true,
                     "properties": {
                       "status": {
                         "type": "string",
@@ -19912,6 +20190,7 @@
                 },
                 {
                   "if": {
+                    "additionalProperties": true,
                     "properties": {
                       "status": {
                         "type": "string",
@@ -20230,7 +20509,6 @@
     "lightning-listfunds.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "listfunds",
       "title": "Command showing all funds currently managed by the Core Lightning node",
       "description": [
@@ -20241,6 +20519,7 @@
       ],
       "request": {
         "required": [],
+        "additionalProperties": false,
         "properties": {
           "spent": {
             "type": "boolean",
@@ -20256,6 +20535,7 @@
           "outputs",
           "channels"
         ],
+        "additionalProperties": false,
         "properties": {
           "outputs": {
             "type": "array",
@@ -20326,6 +20606,7 @@
               "allOf": [
                 {
                   "if": {
+                    "additionalProperties": true,
                     "properties": {
                       "status": {
                         "type": "string",
@@ -20362,6 +20643,7 @@
                 },
                 {
                   "if": {
+                    "additionalProperties": true,
                     "properties": {
                       "reserved": {
                         "type": "boolean",
@@ -20483,6 +20765,7 @@
               "allOf": [
                 {
                   "if": {
+                    "additionalProperties": true,
                     "properties": {
                       "state": {
                         "type": "string",
@@ -20519,6 +20802,7 @@
                 },
                 {
                   "if": {
+                    "additionalProperties": true,
                     "properties": {
                       "state": {
                         "type": "string",
@@ -20633,7 +20917,6 @@
     "lightning-listhtlcs.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "listhtlcs",
       "title": "Command for querying HTLCs",
       "description": [
@@ -20644,6 +20927,7 @@
       ],
       "request": {
         "required": [],
+        "additionalProperties": false,
         "properties": {
           "id": {
             "type": "string",
@@ -20657,6 +20941,7 @@
         "required": [
           "htlcs"
         ],
+        "additionalProperties": false,
         "properties": {
           "htlcs": {
             "type": "array",
@@ -20983,7 +21268,6 @@
     "lightning-listinvoicerequests.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "added": "v22.11",
       "rpc": "listinvoicerequests",
       "title": "Command for querying invoice_request status",
@@ -20995,6 +21279,7 @@
       ],
       "request": {
         "required": [],
+        "additionalProperties": false,
         "properties": {
           "invreq_id": {
             "type": "string",
@@ -21015,6 +21300,7 @@
         "required": [
           "invoicerequests"
         ],
+        "additionalProperties": false,
         "properties": {
           "invoicerequests": {
             "type": "array",
@@ -21131,7 +21417,6 @@
     "lightning-listinvoices.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "listinvoices",
       "title": "Command for querying invoice status",
       "description": [
@@ -21144,6 +21429,7 @@
       ],
       "request": {
         "required": [],
+        "additionalProperties": false,
         "properties": {
           "label": {
             "oneOf": [
@@ -21214,6 +21500,7 @@
         "required": [
           "invoices"
         ],
+        "additionalProperties": false,
         "properties": {
           "invoices": {
             "type": "array",
@@ -21311,6 +21598,7 @@
               "allOf": [
                 {
                   "if": {
+                    "additionalProperties": true,
                     "properties": {
                       "status": {
                         "type": "string",
@@ -21591,7 +21879,6 @@
     "lightning-listnodes.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "listnodes",
       "title": "Command to get the list of nodes in the known network.",
       "description": [
@@ -21602,6 +21889,7 @@
       ],
       "request": {
         "required": [],
+        "additionalProperties": false,
         "properties": {
           "id": {
             "type": "pubkey",
@@ -21615,6 +21903,7 @@
         "required": [
           "nodes"
         ],
+        "additionalProperties": false,
         "properties": {
           "nodes": {
             "type": "array",
@@ -21714,6 +22003,7 @@
                             }
                           },
                           "if": {
+                            "additionalProperties": true,
                             "properties": {
                               "type": {
                                 "type": "string",
@@ -21922,7 +22212,6 @@
     "lightning-listoffers.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "listoffers",
       "title": "Command for listing offers",
       "warning": "experimental-offers only",
@@ -21934,6 +22223,7 @@
       ],
       "request": {
         "required": [],
+        "additionalProperties": false,
         "properties": {
           "offer_id": {
             "type": "hash",
@@ -21953,6 +22243,7 @@
         "required": [
           "offers"
         ],
+        "additionalProperties": false,
         "properties": {
           "offers": {
             "type": "array",
@@ -22071,7 +22362,6 @@
     "lightning-listpays.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "listpays",
       "title": "Command for querying payment status",
       "description": [
@@ -22082,6 +22372,7 @@
       ],
       "request": {
         "required": [],
+        "additionalProperties": false,
         "properties": {
           "bolt11": {
             "type": "string",
@@ -22112,6 +22403,7 @@
         "required": [
           "pays"
         ],
+        "additionalProperties": false,
         "properties": {
           "pays": {
             "type": "array",
@@ -22187,6 +22479,7 @@
               "allOf": [
                 {
                   "if": {
+                    "additionalProperties": true,
                     "properties": {
                       "status": {
                         "type": "string",
@@ -22241,6 +22534,7 @@
                 },
                 {
                   "if": {
+                    "additionalProperties": true,
                     "properties": {
                       "status": {
                         "type": "string",
@@ -22388,7 +22682,6 @@
     "lightning-listpeerchannels.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "added": "v23.02",
       "rpc": "listpeerchannels",
       "title": "Command returning data on channels of connected lightning nodes",
@@ -22402,6 +22695,7 @@
       ],
       "request": {
         "required": [],
+        "additionalProperties": false,
         "properties": {
           "id": {
             "type": "pubkey",
@@ -22415,6 +22709,7 @@
         "required": [
           "channels"
         ],
+        "additionalProperties": false,
         "properties": {
           "channels": {
             "type": "array",
@@ -22996,6 +23291,7 @@
                 "alias": {
                   "type": "object",
                   "required": [],
+                  "additionalProperties": false,
                   "properties": {
                     "local": {
                       "type": "short_channel_id",
@@ -23235,6 +23531,7 @@
                     "allOf": [
                       {
                         "if": {
+                          "additionalProperties": true,
                           "properties": {
                             "direction": {
                               "enum": [
@@ -23284,6 +23581,7 @@
                       },
                       {
                         "if": {
+                          "additionalProperties": true,
                           "properties": {
                             "direction": {
                               "enum": [
@@ -23337,6 +23635,7 @@
               "allOf": [
                 {
                   "if": {
+                    "additionalProperties": true,
                     "properties": {
                       "peer_connected": {
                         "type": "boolean",
@@ -23347,6 +23646,7 @@
                     }
                   },
                   "then": {
+                    "additionalProperties": true,
                     "properties": {
                       "reestablished": {
                         "type": "boolean",
@@ -24040,7 +24340,6 @@
     "lightning-listpeers.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "listpeers",
       "title": "Command returning data on connected lightning nodes",
       "description": [
@@ -24059,6 +24358,7 @@
       ],
       "request": {
         "required": [],
+        "additionalProperties": false,
         "properties": {
           "id": {
             "type": "pubkey",
@@ -24085,6 +24385,7 @@
         "required": [
           "peers"
         ],
+        "additionalProperties": false,
         "properties": {
           "peers": {
             "type": "array",
@@ -24145,6 +24446,7 @@
                     "allOf": [
                       {
                         "if": {
+                          "additionalProperties": true,
                           "properties": {
                             "type": {
                               "enum": [
@@ -24172,6 +24474,7 @@
                       },
                       {
                         "if": {
+                          "additionalProperties": true,
                           "properties": {
                             "type": {
                               "enum": [
@@ -24224,6 +24527,7 @@
                       },
                       {
                         "if": {
+                          "additionalProperties": true,
                           "properties": {
                             "type": {
                               "enum": [
@@ -24425,7 +24729,6 @@
     "lightning-listsendpays.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "listsendpays",
       "title": "Low-level command for querying sendpay status",
       "description": [
@@ -24438,6 +24741,7 @@
       ],
       "request": {
         "required": [],
+        "additionalProperties": false,
         "properties": {
           "bolt11": {
             "type": "string",
@@ -24499,6 +24803,7 @@
         "required": [
           "payments"
         ],
+        "additionalProperties": false,
         "properties": {
           "payments": {
             "type": "array",
@@ -24616,6 +24921,7 @@
               "allOf": [
                 {
                   "if": {
+                    "additionalProperties": true,
                     "properties": {
                       "status": {
                         "type": "string",
@@ -24666,6 +24972,7 @@
                 },
                 {
                   "if": {
+                    "additionalProperties": true,
                     "properties": {
                       "status": {
                         "type": "string",
@@ -24708,6 +25015,7 @@
                 },
                 {
                   "if": {
+                    "additionalProperties": true,
                     "properties": {
                       "status": {
                         "type": "string",
@@ -24945,7 +25253,6 @@
     "lightning-listsqlschemas.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "added": "v23.02",
       "rpc": "listsqlschemas",
       "title": "Command to example lightning-sql schemas",
@@ -24959,6 +25266,7 @@
       ],
       "request": {
         "required": [],
+        "additionalProperties": false,
         "properties": {
           "table": {
             "type": "string"
@@ -24969,6 +25277,7 @@
         "required": [
           "schemas"
         ],
+        "additionalProperties": false,
         "properties": {
           "schemas": {
             "type": "array",
@@ -25231,7 +25540,6 @@
     "lightning-listtransactions.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "listtransactions",
       "title": "Command to get the list of transactions that was stored in the wallet.",
       "description": [
@@ -25242,12 +25550,14 @@
       ],
       "request": {
         "required": [],
+        "additionalProperties": false,
         "properties": {}
       },
       "response": {
         "required": [
           "transactions"
         ],
+        "additionalProperties": false,
         "properties": {
           "transactions": {
             "type": "array",
@@ -25539,7 +25849,6 @@
     "lightning-makesecret.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "makesecret",
       "title": "Command for deriving pseudorandom key from HSM",
       "description": [
@@ -25547,6 +25856,7 @@
       ],
       "request": {
         "required": [],
+        "additionalProperties": false,
         "properties": {
           "hex": {
             "type": "hex",
@@ -25566,6 +25876,7 @@
         "required": [
           "secret"
         ],
+        "additionalProperties": false,
         "properties": {
           "secret": {
             "type": "secret",
@@ -25616,7 +25927,6 @@
     "lightning-multifundchannel.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "multifundchannel",
       "title": "Command for establishing many lightning channels",
       "description": [
@@ -25630,6 +25940,7 @@
         "required": [
           "destinations"
         ],
+        "additionalProperties": false,
         "properties": {
           "destinations": {
             "type": "array",
@@ -25746,6 +26057,7 @@
           "txid",
           "channel_ids"
         ],
+        "additionalProperties": false,
         "properties": {
           "tx": {
             "type": "hex",
@@ -26094,7 +26406,6 @@
     "lightning-multiwithdraw.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "multiwithdraw",
       "title": "Command for withdrawing to multiple addresses",
       "description": [
@@ -26104,6 +26415,7 @@
         "required": [
           "outputs"
         ],
+        "additionalProperties": false,
         "properties": {
           "outputs": {
             "type": "array",
@@ -26144,6 +26456,7 @@
           "tx",
           "txid"
         ],
+        "additionalProperties": false,
         "properties": {
           "tx": {
             "type": "hex",
@@ -26240,7 +26553,6 @@
     "lightning-newaddr.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "newaddr",
       "title": "Command for generating a new address to be used by Core Lightning",
       "description": [
@@ -26252,6 +26564,7 @@
       ],
       "request": {
         "required": [],
+        "additionalProperties": false,
         "properties": {
           "addresstype": {
             "type": "string",
@@ -26269,6 +26582,7 @@
       },
       "response": {
         "required": [],
+        "additionalProperties": false,
         "properties": {
           "p2tr": {
             "added": "v23.08",
@@ -26328,7 +26642,6 @@
     "lightning-notifications.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "notifications",
       "title": "Command to set up notifications.",
       "description": [
@@ -26340,6 +26653,7 @@
         "required": [
           "enable"
         ],
+        "additionalProperties": false,
         "properties": {
           "enable": {
             "type": "boolean",
@@ -26350,6 +26664,7 @@
         }
       },
       "response": {
+        "additionalProperties": false,
         "properties": {},
         "post_return_value_notes": [
           "On success, if *enable* was *true*, notifications will be forwarded from then on."
@@ -26423,7 +26738,6 @@
     "lightning-offer.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "offer",
       "title": "Command for accepting payments",
       "warning": "experimental-offers only",
@@ -26436,6 +26750,7 @@
         "required": [
           "amount"
         ],
+        "additionalProperties": false,
         "properties": {
           "amount": {
             "oneOf": [
@@ -26519,6 +26834,9 @@
               "This means that the invoice may start by paying during any period; otherwise it must start by paying at the first period.  Setting this to false only makes sense if *recurrence_base* was provided. This is encoded in the offer."
             ],
             "default": "True"
+          },
+          "dev_paths": {
+            "hidden": true
           }
         }
       },
@@ -26531,6 +26849,7 @@
           "used",
           "created"
         ],
+        "additionalProperties": false,
         "properties": {
           "offer_id": {
             "type": "hash",
@@ -26641,7 +26960,6 @@
     "lightning-openchannel_abort.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "openchannel_abort",
       "title": "Command to abort a channel to a peer",
       "description": [
@@ -26651,6 +26969,7 @@
         "required": [
           "channel_id"
         ],
+        "additionalProperties": false,
         "properties": {
           "channel_id": {
             "type": "hash",
@@ -26666,6 +26985,7 @@
           "channel_canceled",
           "reason"
         ],
+        "additionalProperties": false,
         "properties": {
           "channel_id": {
             "type": "hash",
@@ -26734,7 +27054,6 @@
     "lightning-openchannel_bump.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "openchannel_bump",
       "title": "Command to initiate a channel RBF",
       "description": [
@@ -26748,6 +27067,7 @@
           "amount",
           "initialpsbt"
         ],
+        "additionalProperties": false,
         "properties": {
           "channel_id": {
             "type": "hash",
@@ -26784,6 +27104,7 @@
           "commitments_secured",
           "funding_serial"
         ],
+        "additionalProperties": false,
         "properties": {
           "channel_id": {
             "type": "hash",
@@ -26996,7 +27317,6 @@
     "lightning-openchannel_init.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "openchannel_init",
       "title": "Command to initiate a channel to a peer",
       "description": [
@@ -27008,6 +27328,7 @@
           "amount",
           "initialpsbt"
         ],
+        "additionalProperties": false,
         "properties": {
           "id": {
             "type": "pubkey",
@@ -27086,6 +27407,7 @@
           "commitments_secured",
           "funding_serial"
         ],
+        "additionalProperties": false,
         "properties": {
           "channel_id": {
             "type": "hash",
@@ -27269,7 +27591,6 @@
     "lightning-openchannel_signed.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "openchannel_signed",
       "title": "Command to conclude a channel open",
       "description": [
@@ -27284,6 +27605,7 @@
           "channel_id",
           "signed_psbt"
         ],
+        "additionalProperties": false,
         "properties": {
           "channel_id": {
             "type": "hash",
@@ -27305,6 +27627,7 @@
           "tx",
           "txid"
         ],
+        "additionalProperties": false,
         "properties": {
           "channel_id": {
             "type": "hash",
@@ -27391,7 +27714,6 @@
     "lightning-openchannel_update.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "openchannel_update",
       "title": "Command to update a collab channel open",
       "description": [
@@ -27406,6 +27728,7 @@
           "channel_id",
           "psbt"
         ],
+        "additionalProperties": false,
         "properties": {
           "channel_id": {
             "type": "hash",
@@ -27429,6 +27752,7 @@
           "channel_type",
           "funding_outnum"
         ],
+        "additionalProperties": false,
         "properties": {
           "channel_id": {
             "type": "hash",
@@ -27518,6 +27842,7 @@
         "allOf": [
           {
             "if": {
+              "additionalProperties": true,
               "properties": {
                 "commitments_secured": {
                   "type": "boolean",
@@ -27653,7 +27978,6 @@
     "lightning-parsefeerate.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "parsefeerate",
       "title": "Command for parsing a feerate string to a feerate",
       "description": [
@@ -27663,6 +27987,7 @@
         "required": [
           "feerate_str"
         ],
+        "additionalProperties": false,
         "properties": {
           "feerate_str": {
             "type": "string",
@@ -27674,6 +27999,7 @@
       },
       "response": {
         "required": [],
+        "additionalProperties": false,
         "properties": {
           "perkw": {
             "type": "u32",
@@ -27749,7 +28075,6 @@
     "lightning-pay.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "pay",
       "title": "Command for sending a payment to a BOLT11 invoice",
       "description": [
@@ -27763,6 +28088,7 @@
         "required": [
           "bolt11"
         ],
+        "additionalProperties": false,
         "properties": {
           "bolt11": {
             "type": "string",
@@ -27870,6 +28196,7 @@
           "amount_sent_msat",
           "status"
         ],
+        "additionalProperties": false,
         "properties": {
           "payment_preimage": {
             "type": "secret",
@@ -28029,7 +28356,6 @@
     "lightning-ping.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "ping",
       "title": "Command to check if a node is up.",
       "description": [
@@ -28039,6 +28365,7 @@
         "required": [
           "id"
         ],
+        "additionalProperties": false,
         "properties": {
           "id": {
             "type": "pubkey",
@@ -28066,6 +28393,7 @@
         "required": [
           "totlen"
         ],
+        "additionalProperties": false,
         "properties": {
           "totlen": {
             "type": "u16",
@@ -28140,6 +28468,7 @@
             "directory"
           ]
         ],
+        "additionalProperties": true,
         "properties": {
           "subcommand": {
             "type": "string",
@@ -28189,6 +28518,7 @@
         "required": [
           "command"
         ],
+        "additionalProperties": true,
         "properties": {
           "command": {
             "type": "string",
@@ -28207,6 +28537,7 @@
         "allOf": [
           {
             "if": {
+              "additionalProperties": true,
               "properties": {
                 "command": {
                   "type": "string",
@@ -28264,6 +28595,7 @@
           },
           {
             "if": {
+              "additionalProperties": true,
               "properties": {
                 "command": {
                   "type": "string",
@@ -28512,7 +28844,6 @@
     "lightning-preapproveinvoice.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "added": "v23.02",
       "rpc": "preapproveinvoice",
       "title": "Ask the HSM to preapprove an invoice (low-level)",
@@ -28531,6 +28862,7 @@
         "required": [
           "bolt11"
         ],
+        "additionalProperties": false,
         "properties": {
           "bolt11": {
             "type": "string",
@@ -28542,6 +28874,7 @@
         }
       },
       "response": {
+        "additionalProperties": false,
         "properties": {}
       },
       "author": [
@@ -28579,7 +28912,6 @@
     "lightning-preapprovekeysend.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "added": "v23.02",
       "rpc": "preapprovekeysend",
       "title": "Ask the HSM to preapprove a keysend payment (low-level)",
@@ -28600,6 +28932,7 @@
           "payment_hash",
           "amount_msat"
         ],
+        "additionalProperties": false,
         "properties": {
           "destination": {
             "type": "pubkey",
@@ -28627,6 +28960,7 @@
         }
       },
       "response": {
+        "additionalProperties": false,
         "properties": {}
       },
       "author": [
@@ -28668,7 +29002,6 @@
     "lightning-reckless.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "reckless",
       "title": "Issue a command to the reckless plugin manager utility",
       "description": [
@@ -28678,6 +29011,7 @@
         "required": [
           "command"
         ],
+        "additionalProperties": false,
         "properties": {
           "command": {
             "type": "string",
@@ -28731,6 +29065,7 @@
           "log",
           "result"
         ],
+        "additionalProperties": false,
         "properties": {
           "result": {
             "type": "array",
@@ -28859,7 +29194,6 @@
     "lightning-recover.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "recover",
       "title": "Reinitialize Your Node for Recovery",
       "description": [
@@ -28873,6 +29207,7 @@
         "required": [
           "hsmsecret"
         ],
+        "additionalProperties": false,
         "properties": {
           "hsmsecret": {
             "type": "string",
@@ -28886,6 +29221,7 @@
         "required": [
           "result"
         ],
+        "additionalProperties": false,
         "properties": {
           "result": {
             "type": "string",
@@ -28935,7 +29271,6 @@
     "lightning-recoverchannel.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "recoverchannel",
       "title": "Command for recovering channels bundeled in an array in the form of *Static Backup*",
       "description": [
@@ -28947,6 +29282,7 @@
         "required": [
           "scb"
         ],
+        "additionalProperties": false,
         "properties": {
           "scb": {
             "type": "array",
@@ -28963,6 +29299,7 @@
         "required": [
           "stubs"
         ],
+        "additionalProperties": false,
         "properties": {
           "stubs": {
             "type": "array",
@@ -29016,7 +29353,6 @@
     "lightning-renepay.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "renepay",
       "title": "Command for sending a payment to a BOLT11 invoice",
       "added": "v23.08",
@@ -29031,6 +29367,7 @@
         "required": [
           "invstring"
         ],
+        "additionalProperties": false,
         "properties": {
           "invstring": {
             "type": "string",
@@ -29109,6 +29446,7 @@
           "amount_sent_msat",
           "status"
         ],
+        "additionalProperties": false,
         "properties": {
           "payment_preimage": {
             "type": "secret",
@@ -29122,10 +29460,31 @@
               "The hash of the *payment_preimage* which will prove payment."
             ]
           },
+          "bolt11": {
+            "type": "string",
+            "added": "v23.08",
+            "description": [
+              "The bolt11 invoice paid."
+            ]
+          },
+          "bolt12": {
+            "type": "string",
+            "added": "v23.08",
+            "description": [
+              "The bolt12 invoice paid."
+            ]
+          },
           "created_at": {
             "type": "number",
             "description": [
               "The UNIX timestamp showing when this payment was initiated."
+            ]
+          },
+          "groupid": {
+            "type": "u64",
+            "added": "v23.08",
+            "description": [
+              "The groupid used for these payment parts (as can be seen in listsendpays)"
             ]
           },
           "parts": {
@@ -29256,7 +29615,6 @@
     "lightning-renepaystatus.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "renepaystatus",
       "title": "Command for quering the status of previous renepay attempts",
       "added": "v23.08",
@@ -29267,6 +29625,7 @@
       ],
       "request": {
         "required": [],
+        "additionalProperties": false,
         "properties": {
           "invstring": {
             "type": "string",
@@ -29280,6 +29639,7 @@
         "required": [
           "paystatus"
         ],
+        "additionalProperties": false,
         "properties": {
           "paystatus": {
             "type": "array",
@@ -29421,7 +29781,6 @@
     "lightning-reserveinputs.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "reserveinputs",
       "title": "Construct a transaction and reserve the UTXOs it spends",
       "description": [
@@ -29433,6 +29792,7 @@
         "required": [
           "psbt"
         ],
+        "additionalProperties": false,
         "properties": {
           "psbt": {
             "type": "string",
@@ -29458,6 +29818,7 @@
         "required": [
           "reservations"
         ],
+        "additionalProperties": false,
         "properties": {
           "reservations": {
             "type": "array",
@@ -29572,7 +29933,6 @@
     "lightning-sendcustommsg.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "added": "v0.10.1",
       "rpc": "sendcustommsg",
       "title": "Low-level interface to send protocol messages to peers",
@@ -29586,6 +29946,7 @@
           "node_id",
           "msg"
         ],
+        "additionalProperties": false,
         "properties": {
           "node_id": {
             "type": "pubkey",
@@ -29605,6 +29966,7 @@
         "required": [
           "status"
         ],
+        "additionalProperties": false,
         "properties": {
           "status": {
             "type": "string",
@@ -29648,7 +30010,6 @@
     "lightning-sendinvoice.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "sendinvoice",
       "title": "Command for send an invoice for an offer",
       "warning": "experimental-offers only",
@@ -29662,6 +30023,7 @@
           "invreq",
           "label"
         ],
+        "additionalProperties": false,
         "properties": {
           "invreq": {
             "type": "string",
@@ -29706,6 +30068,7 @@
           "created_index",
           "expires_at"
         ],
+        "additionalProperties": false,
         "properties": {
           "label": {
             "type": "string",
@@ -29767,11 +30130,16 @@
             "description": [
               "1-based index indicating order this invoice was changed (only present if it has changed since creation)."
             ]
-          }
+          },
+          "amount_received_msat": {},
+          "paid_at": {},
+          "pay_index": {},
+          "payment_preimage": {}
         },
         "allOf": [
           {
             "if": {
+              "additionalProperties": true,
               "properties": {
                 "status": {
                   "type": "string",
@@ -29878,7 +30246,6 @@
     "lightning-sendonion.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "sendonion",
       "title": "Send a payment with a custom onion packet",
       "description": [
@@ -29900,6 +30267,7 @@
           "first_hop",
           "payment_hash"
         ],
+        "additionalProperties": false,
         "properties": {
           "onion": {
             "type": "hex",
@@ -29910,13 +30278,14 @@
           "first_hop": {
             "type": "object",
             "description": [
-              "Instructs Core Lightning which peer to send the onion to. It is a JSON dictionary that corresponds to the first element of the route array returned by *getroute*."
+              "Instructs Core Lightning which peer to send the onion to. It is a JSON dictionary that corresponds to the first element of the route array returned by *getroute* (so fields not mentioned here are ignored)."
             ],
             "required": [
               "id",
               "amount_msat",
               "delay"
             ],
+            "additionalProperties": true,
             "properties": {
               "id": {
                 "type": "pubkey",
@@ -30013,6 +30382,7 @@
           "created_at",
           "amount_sent_msat"
         ],
+        "additionalProperties": true,
         "properties": {
           "created_index": {
             "added": "v23.11",
@@ -30095,6 +30465,7 @@
         "allOf": [
           {
             "if": {
+              "additionalProperties": true,
               "properties": {
                 "status": {
                   "type": "string",
@@ -30143,6 +30514,7 @@
           },
           {
             "if": {
+              "additionalProperties": true,
               "properties": {
                 "status": {
                   "type": "string",
@@ -30236,7 +30608,6 @@
     "lightning-sendpay.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "sendpay",
       "title": "Low-level command for sending a payment via a route",
       "description": [
@@ -30253,6 +30624,7 @@
           "route",
           "payment_hash"
         ],
+        "additionalProperties": false,
         "properties": {
           "route": {
             "type": "array",
@@ -30264,6 +30636,7 @@
                 "delay",
                 "channel"
               ],
+              "additionalProperties": true,
               "properties": {
                 "id": {
                   "type": "pubkey",
@@ -30354,6 +30727,9 @@
             "description": [
               "Description used in the invoice."
             ]
+          },
+          "dev_legacy_hop": {
+            "hidden": true
           }
         }
       },
@@ -30366,6 +30742,7 @@
           "created_at",
           "amount_sent_msat"
         ],
+        "additionalProperties": false,
         "properties": {
           "created_index": {
             "added": "v23.11",
@@ -30462,11 +30839,14 @@
             "description": [
               "The bolt12 string (if supplied: **experimental-offers** only)."
             ]
-          }
+          },
+          "message": {},
+          "payment_preimage": {}
         },
         "allOf": [
           {
             "if": {
+              "additionalProperties": true,
               "properties": {
                 "status": {
                   "type": "string",
@@ -30510,6 +30890,7 @@
           },
           {
             "if": {
+              "additionalProperties": true,
               "properties": {
                 "status": {
                   "type": "string",
@@ -30631,7 +31012,6 @@
     "lightning-sendpsbt.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "sendpsbt",
       "title": "Command to finalize, extract and send a partially signed bitcoin transaction (PSBT).",
       "description": [
@@ -30641,6 +31021,7 @@
         "required": [
           "psbt"
         ],
+        "additionalProperties": false,
         "properties": {
           "psbt": {
             "type": "string",
@@ -30662,6 +31043,7 @@
           "tx",
           "txid"
         ],
+        "additionalProperties": false,
         "properties": {
           "tx": {
             "type": "hex",
@@ -30713,7 +31095,6 @@
     "lightning-setchannel.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "setchannel",
       "title": "Command for configuring fees / htlc range advertized for a channel",
       "description": [
@@ -30725,6 +31106,7 @@
         "required": [
           "id"
         ],
+        "additionalProperties": false,
         "properties": {
           "id": {
             "type": "string",
@@ -30778,6 +31160,7 @@
         "required": [
           "channels"
         ],
+        "additionalProperties": false,
         "properties": {
           "channels": {
             "type": "array",
@@ -30937,7 +31320,6 @@
     "lightning-setconfig.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "added": "v23.08",
       "rpc": "setconfig",
       "title": "Dynamically change some config options",
@@ -30952,6 +31334,7 @@
         "required": [
           "config"
         ],
+        "additionalProperties": false,
         "properties": {
           "config": {
             "type": "string",
@@ -30981,6 +31364,7 @@
         "required": [
           "config"
         ],
+        "additionalProperties": false,
         "properties": {
           "config": {
             "type": "object",
@@ -31113,7 +31497,6 @@
     "lightning-setpsbtversion.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "setpsbtversion",
       "title": "Command for setting PSBT version",
       "description": [
@@ -31124,6 +31507,7 @@
           "psbt",
           "version"
         ],
+        "additionalProperties": false,
         "properties": {
           "psbt": {
             "type": "string",
@@ -31143,6 +31527,7 @@
         "required": [
           "psbt"
         ],
+        "additionalProperties": false,
         "properties": {
           "psbt": {
             "type": "string",
@@ -31200,7 +31585,6 @@
     "lightning-showrunes.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "added": "v23.08",
       "rpc": "showrunes",
       "title": "Command to list previously generated runes",
@@ -31209,6 +31593,7 @@
       ],
       "request": {
         "required": [],
+        "additionalProperties": false,
         "properties": {
           "rune": {
             "type": "string",
@@ -31222,6 +31607,7 @@
         "required": [
           "runes"
         ],
+        "additionalProperties": false,
         "properties": {
           "runes": {
             "type": "array",
@@ -31581,7 +31967,6 @@
     "lightning-signinvoice.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "added": "v23.02",
       "rpc": "signinvoice",
       "title": "Low-level invoice signing",
@@ -31592,6 +31977,7 @@
         "required": [
           "invstring"
         ],
+        "additionalProperties": false,
         "properties": {
           "invstring": {
             "type": "string",
@@ -31605,6 +31991,7 @@
         "required": [
           "bolt11"
         ],
+        "additionalProperties": false,
         "properties": {
           "bolt11": {
             "type": "string",
@@ -31664,7 +32051,6 @@
     "lightning-signmessage.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "signmessage",
       "title": "Command to create a signature from this node",
       "description": [
@@ -31674,6 +32060,7 @@
         "required": [
           "message"
         ],
+        "additionalProperties": false,
         "properties": {
           "message": {
             "type": "string",
@@ -31689,6 +32076,7 @@
           "recid",
           "zbase"
         ],
+        "additionalProperties": false,
         "properties": {
           "signature": {
             "type": "hex",
@@ -31759,7 +32147,6 @@
     "lightning-signpsbt.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "signpsbt",
       "title": "Command to sign a wallet's inputs on a provided bitcoin transaction (PSBT).",
       "description": [
@@ -31773,6 +32160,7 @@
         "required": [
           "psbt"
         ],
+        "additionalProperties": false,
         "properties": {
           "psbt": {
             "type": "string",
@@ -31795,6 +32183,7 @@
         "required": [
           "signed_psbt"
         ],
+        "additionalProperties": false,
         "properties": {
           "signed_psbt": {
             "type": "string",
@@ -31850,7 +32239,6 @@
     "lightning-splice_init.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "added": "v23.08",
       "rpc": "splice_init",
       "title": "Command to initiate a channel to a peer",
@@ -31863,6 +32251,7 @@
           "channel_id",
           "relative_amount"
         ],
+        "additionalProperties": false,
         "properties": {
           "channel_id": {
             "type": "hash",
@@ -31900,6 +32289,7 @@
         "required": [
           "psbt"
         ],
+        "additionalProperties": false,
         "properties": {
           "psbt": {
             "type": "string",
@@ -31989,7 +32379,6 @@
     "lightning-splice_signed.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "added": "v23.08",
       "rpc": "splice_signed",
       "title": "Command to initiate a channel to a peer",
@@ -32004,6 +32393,7 @@
           "channel_id",
           "psbt"
         ],
+        "additionalProperties": false,
         "properties": {
           "channel_id": {
             "type": "hash",
@@ -32030,6 +32420,7 @@
           "tx",
           "txid"
         ],
+        "additionalProperties": false,
         "properties": {
           "tx": {
             "type": "hex",
@@ -32147,7 +32538,6 @@
     "lightning-splice_update.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "added": "v23.08",
       "rpc": "splice_update",
       "title": "Command to initiate a channel to a peer",
@@ -32168,6 +32558,7 @@
           "channel_id",
           "psbt"
         ],
+        "additionalProperties": false,
         "properties": {
           "channel_id": {
             "type": "hash",
@@ -32188,6 +32579,7 @@
           "psbt",
           "commitments_secured"
         ],
+        "additionalProperties": false,
         "properties": {
           "psbt": {
             "type": "string",
@@ -32302,7 +32694,6 @@
     "lightning-sql-template.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "added": "v23.02",
       "rpc": "sql",
       "title": "Command to do complex queries on list commands",
@@ -32319,6 +32710,7 @@
         "required": [
           "query"
         ],
+        "additionalProperties": false,
         "properties": {
           "query": {
             "type": "string",
@@ -32333,6 +32725,7 @@
         "required": [
           "rows"
         ],
+        "additionalProperties": false,
         "properties": {
           "rows": {
             "type": "array",
@@ -32606,7 +32999,6 @@
     "lightning-staticbackup.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "staticbackup",
       "title": "Command for deriving getting SCB of all the existing channels",
       "description": [
@@ -32614,12 +33006,14 @@
       ],
       "request": {
         "required": [],
+        "additionalProperties": false,
         "properties": {}
       },
       "response": {
         "required": [
           "scb"
         ],
+        "additionalProperties": false,
         "properties": {
           "scb": {
             "type": "array",
@@ -32664,7 +33058,6 @@
     "lightning-stop.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "stop",
       "title": "Command to shutdown the Core Lightning node.",
       "description": [
@@ -32672,12 +33065,14 @@
       ],
       "request": {
         "required": [],
+        "additionalProperties": false,
         "properties": {}
       },
       "response": {
         "required": [
           "result"
         ],
+        "additionalProperties": false,
         "properties": {
           "result": {
             "type": "string",
@@ -32711,7 +33106,6 @@
     "lightning-txdiscard.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "txdiscard",
       "title": "Abandon a transaction from txprepare, release inputs",
       "description": [
@@ -32721,6 +33115,7 @@
         "required": [
           "txid"
         ],
+        "additionalProperties": false,
         "properties": {
           "txid": {
             "type": "txid",
@@ -32735,6 +33130,7 @@
           "unsigned_tx",
           "txid"
         ],
+        "additionalProperties": false,
         "properties": {
           "unsigned_tx": {
             "type": "hex",
@@ -32800,7 +33196,6 @@
     "lightning-txprepare.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "txprepare",
       "title": "Command to prepare to withdraw funds from the internal wallet",
       "description": [
@@ -32812,6 +33207,7 @@
         "required": [
           "outputs"
         ],
+        "additionalProperties": false,
         "properties": {
           "outputs": {
             "type": "array",
@@ -32853,6 +33249,7 @@
           "unsigned_tx",
           "txid"
         ],
+        "additionalProperties": false,
         "properties": {
           "psbt": {
             "type": "string",
@@ -32935,7 +33332,6 @@
     "lightning-txsend.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "txsend",
       "title": "Command to sign and send transaction from txprepare",
       "description": [
@@ -32945,6 +33341,7 @@
         "required": [
           "txid"
         ],
+        "additionalProperties": false,
         "properties": {
           "txid": {
             "type": "txid",
@@ -32960,6 +33357,7 @@
           "tx",
           "txid"
         ],
+        "additionalProperties": false,
         "properties": {
           "psbt": {
             "type": "string",
@@ -33030,7 +33428,6 @@
     "lightning-unreserveinputs.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "unreserveinputs",
       "title": "Release reserved UTXOs",
       "description": [
@@ -33040,6 +33437,7 @@
         "required": [
           "psbt"
         ],
+        "additionalProperties": false,
         "properties": {
           "psbt": {
             "type": "string",
@@ -33060,6 +33458,7 @@
         "required": [
           "reservations"
         ],
+        "additionalProperties": false,
         "properties": {
           "reservations": {
             "type": "array",
@@ -33114,6 +33513,7 @@
                     "required": [
                       "reserved_to_block"
                     ],
+                    "additionalProperties": false,
                     "properties": {
                       "txid": {},
                       "vout": {},
@@ -33180,7 +33580,6 @@
     "lightning-upgradewallet.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "upgradewallet",
       "title": "Command to spend all P2SH-wrapped inputs into a Native Segwit output",
       "description": [
@@ -33188,6 +33587,7 @@
       ],
       "request": {
         "required": [],
+        "additionalProperties": false,
         "properties": {
           "feerate": {
             "type": "feerate",
@@ -33210,6 +33610,7 @@
         "required": [
           "upgraded_outs"
         ],
+        "additionalProperties": false,
         "properties": {
           "upgraded_outs": {
             "type": "u64",
@@ -33289,7 +33690,6 @@
     "lightning-utxopsbt.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "utxopsbt",
       "title": "Command to populate PSBT inputs from given UTXOs",
       "description": [
@@ -33304,6 +33704,7 @@
           "startweight",
           "utxos"
         ],
+        "additionalProperties": false,
         "properties": {
           "satoshi": {
             "type": "sat_or_all",
@@ -33381,6 +33782,7 @@
           "estimated_final_weight",
           "excess_msat"
         ],
+        "additionalProperties": false,
         "properties": {
           "psbt": {
             "type": "string",
@@ -33562,7 +33964,6 @@
     "lightning-wait.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "added": "v23.08",
       "rpc": "wait",
       "title": "Command to wait for creations, changes and deletions",
@@ -33575,6 +33976,7 @@
           "indexname",
           "nextvalue"
         ],
+        "additionalProperties": false,
         "properties": {
           "subsystem": {
             "type": "string",
@@ -33616,6 +34018,7 @@
         "required": [
           "subsystem"
         ],
+        "additionalProperties": false,
         "properties": {
           "subsystem": {
             "type": "string",
@@ -33933,7 +34336,6 @@
     "lightning-waitanyinvoice.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "waitanyinvoice",
       "title": "Command for waiting for payments",
       "description": [
@@ -33943,6 +34345,7 @@
       ],
       "request": {
         "required": [],
+        "additionalProperties": false,
         "properties": {
           "lastpay_index": {
             "type": "u64",
@@ -33966,6 +34369,7 @@
           "created_index",
           "expires_at"
         ],
+        "additionalProperties": true,
         "properties": {
           "label": {
             "type": "string",
@@ -34037,6 +34441,7 @@
         "allOf": [
           {
             "if": {
+              "additionalProperties": true,
               "properties": {
                 "status": {
                   "type": "string",
@@ -34208,7 +34613,6 @@
     "lightning-waitblockheight.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "waitblockheight",
       "title": "Command for waiting for blocks on the blockchain",
       "description": [
@@ -34218,6 +34622,7 @@
         "required": [
           "blockheight"
         ],
+        "additionalProperties": false,
         "properties": {
           "blockheight": {
             "type": "u32",
@@ -34238,6 +34643,7 @@
         "required": [
           "blockheight"
         ],
+        "additionalProperties": false,
         "properties": {
           "blockheight": {
             "type": "u32",
@@ -34292,7 +34698,6 @@
     "lightning-waitinvoice.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "waitinvoice",
       "title": "Command for waiting for specific payment",
       "description": [
@@ -34302,6 +34707,7 @@
         "required": [
           "label"
         ],
+        "additionalProperties": true,
         "properties": {
           "label": {
             "oneOf": [
@@ -34326,6 +34732,7 @@
           "created_index",
           "expires_at"
         ],
+        "additionalProperties": true,
         "properties": {
           "label": {
             "type": "string",
@@ -34397,6 +34804,7 @@
         "allOf": [
           {
             "if": {
+              "additionalProperties": true,
               "properties": {
                 "status": {
                   "type": "string",
@@ -34572,7 +34980,6 @@
     "lightning-waitsendpay.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "waitsendpay",
       "title": "Command for sending a payment via a route",
       "description": [
@@ -34584,6 +34991,7 @@
         "required": [
           "payment_hash"
         ],
+        "additionalProperties": false,
         "properties": {
           "payment_hash": {
             "type": "hash",
@@ -34626,6 +35034,7 @@
           "created_at",
           "amount_sent_msat"
         ],
+        "additionalProperties": false,
         "properties": {
           "created_index": {
             "added": "v23.11",
@@ -34721,11 +35130,14 @@
             "description": [
               "The bolt12 string (if supplied for pay: **experimental-offers** only)."
             ]
-          }
+          },
+          "message": {},
+          "payment_preimage": {}
         },
         "allOf": [
           {
             "if": {
+              "additionalProperties": true,
               "properties": {
                 "status": {
                   "type": "string",
@@ -34828,7 +35240,6 @@
     "lightning-withdraw.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "withdraw",
       "title": "Command for withdrawing funds from the internal wallet",
       "description": [
@@ -34839,6 +35250,7 @@
           "destination",
           "satoshi"
         ],
+        "additionalProperties": false,
         "properties": {
           "destination": {
             "type": "string",
@@ -34883,6 +35295,7 @@
           "tx",
           "txid"
         ],
+        "additionalProperties": false,
         "properties": {
           "tx": {
             "type": "hex",

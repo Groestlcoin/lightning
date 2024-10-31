@@ -1,7 +1,6 @@
 {
   "$schema": "../rpc-schema-draft.json",
   "type": "object",
-  "additionalProperties": false,
   "rpc": "fetchinvoice",
   "title": "Command for fetch an invoice for an offer",
   "warning": "experimental-offers only",
@@ -14,6 +13,7 @@
     "required": [
       "offer"
     ],
+    "additionalProperties": false,
     "properties": {
       "offer": {
         "type": "string",
@@ -62,6 +62,12 @@
         "description": [
           "To ask the issuer to include in the fetched invoice."
         ]
+      },
+      "dev_reply_path": {
+        "hidden": true
+      },
+      "dev_path_use_scidd": {
+        "hidden": true
       }
     }
   },
@@ -70,6 +76,7 @@
       "invoice",
       "changes"
     ],
+    "additionalProperties": false,
     "properties": {
       "invoice": {
         "type": "string",

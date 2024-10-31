@@ -1,7 +1,6 @@
 {
   "$schema": "../rpc-schema-draft.json",
   "type": "object",
-  "additionalProperties": false,
   "rpc": "sendpay",
   "title": "Low-level command for sending a payment via a route",
   "description": [
@@ -18,6 +17,7 @@
       "route",
       "payment_hash"
     ],
+    "additionalProperties": false,
     "properties": {
       "route": {
         "type": "array",
@@ -29,6 +29,7 @@
             "delay",
             "channel"
           ],
+          "additionalProperties": true,
           "properties": {
             "id": {
               "type": "pubkey",
@@ -119,6 +120,9 @@
         "description": [
           "Description used in the invoice."
         ]
+      },
+      "dev_legacy_hop": {
+        "hidden": true
       }
     }
   },
@@ -131,6 +135,7 @@
       "created_at",
       "amount_sent_msat"
     ],
+    "additionalProperties": false,
     "properties": {
       "created_index": {
         "added": "v23.11",
@@ -227,11 +232,14 @@
         "description": [
           "The bolt12 string (if supplied: **experimental-offers** only)."
         ]
-      }
+      },
+      "message": {},
+      "payment_preimage": {}
     },
     "allOf": [
       {
         "if": {
+          "additionalProperties": true,
           "properties": {
             "status": {
               "type": "string",
@@ -275,6 +283,7 @@
       },
       {
         "if": {
+          "additionalProperties": true,
           "properties": {
             "status": {
               "type": "string",

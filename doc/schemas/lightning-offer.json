@@ -1,7 +1,6 @@
 {
   "$schema": "../rpc-schema-draft.json",
   "type": "object",
-  "additionalProperties": false,
   "rpc": "offer",
   "title": "Command for accepting payments",
   "warning": "experimental-offers only",
@@ -14,6 +13,7 @@
     "required": [
       "amount"
     ],
+    "additionalProperties": false,
     "properties": {
       "amount": {
         "oneOf": [
@@ -97,6 +97,9 @@
           "This means that the invoice may start by paying during any period; otherwise it must start by paying at the first period.  Setting this to false only makes sense if *recurrence_base* was provided. This is encoded in the offer."
         ],
         "default": "True"
+      },
+      "dev_paths": {
+        "hidden": true
       }
     }
   },
@@ -109,6 +112,7 @@
       "used",
       "created"
     ],
+    "additionalProperties": false,
     "properties": {
       "offer_id": {
         "type": "hash",

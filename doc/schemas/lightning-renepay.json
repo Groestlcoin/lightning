@@ -1,7 +1,6 @@
 {
   "$schema": "../rpc-schema-draft.json",
   "type": "object",
-  "additionalProperties": false,
   "rpc": "renepay",
   "title": "Command for sending a payment to a BOLT11 invoice",
   "added": "v23.08",
@@ -16,6 +15,7 @@
     "required": [
       "invstring"
     ],
+    "additionalProperties": false,
     "properties": {
       "invstring": {
         "type": "string",
@@ -94,6 +94,7 @@
       "amount_sent_msat",
       "status"
     ],
+    "additionalProperties": false,
     "properties": {
       "payment_preimage": {
         "type": "secret",
@@ -107,10 +108,31 @@
           "The hash of the *payment_preimage* which will prove payment."
         ]
       },
+      "bolt11": {
+        "type": "string",
+        "added": "v23.08",
+        "description": [
+          "The bolt11 invoice paid."
+        ]
+      },
+      "bolt12": {
+        "type": "string",
+        "added": "v23.08",
+        "description": [
+          "The bolt12 invoice paid."
+        ]
+      },
       "created_at": {
         "type": "number",
         "description": [
           "The UNIX timestamp showing when this payment was initiated."
+        ]
+      },
+      "groupid": {
+        "type": "u64",
+        "added": "v23.08",
+        "description": [
+          "The groupid used for these payment parts (as can be seen in listsendpays)"
         ]
       },
       "parts": {
