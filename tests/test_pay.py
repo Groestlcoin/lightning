@@ -4510,7 +4510,7 @@ def test_fetchinvoice(node_factory, bitcoind):
     # If no amount is specified in offer, one must be in invoice.
     offer_noamount = l3.rpc.call('offer', {'amount': 'any',
                                            'description': 'any amount test'})
-    with pytest.raises(RpcError, match="msatoshi parameter required"):
+    with pytest.raises(RpcError, match="amount_msat parameter required"):
         l1.rpc.call('fetchinvoice', {'offer': offer_noamount['bolt12']})
     inv1 = l1.rpc.call('fetchinvoice', {'offer': offer_noamount['bolt12'], 'amount_msat': 100})
     # But amount won't appear in changes
@@ -5130,13 +5130,19 @@ def test_sendpay_grouping(node_factory, bitcoind):
     assert(len(l1.db.query("SELECT * FROM payments")) == 0)
     assert(len(l1.rpc.listpays()['pays']) == 0)
 
-    with pytest.raises(RpcError, match=r'Ran out of routes to try after [0-9]+ attempts'):
+    with pytest.raises(RpcError, match=r'Ran out of routes to try after [1-9]+ attempts'):
         l1.rpc.pay(inv, amount_msat='100002msat')
 
     # After this one invocation we have one entry in `listpays`
     assert(len(l1.rpc.listpays()['pays']) == 1)
 
-    with pytest.raises(RpcError, match=r'Ran out of routes to try after [0-9]+ attempts'):
+    # Pay learns, and sometimes now refuses to even attempt.  Give it a new channel.
+    l3.start()
+    node_factory.join_nodes([l2, l3], wait_for_announce=True)
+    wait_for(lambda: len(l1.rpc.listchannels()['channels']) == 6)
+    l3.stop()
+
+    with pytest.raises(RpcError, match=r'Ran out of routes to try after [1-9]+ attempts'):
         l1.rpc.pay(inv, amount_msat='100001msat')
 
     # Surprise: we should have 2 entries after 2 invocations

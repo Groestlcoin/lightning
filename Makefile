@@ -840,6 +840,7 @@ install: install-program install-data
 TESTBINS = \
 	$(CLN_PLUGIN_EXAMPLES) \
 	tests/plugins/test_libplugin \
+	tests/plugins/channeld_fakenet \
 	tests/plugins/test_selfdisable_after_getmanifest \
 	tools/hsmtool
 
@@ -903,8 +904,11 @@ installcheck: all-programs
 	fi
 	@rm -rf testinstall || true
 
+version:
+	@echo ${VERSION}
+
 .PHONY: installdirs install-program install-data install uninstall \
-	installcheck ncc bin-tarball show-flags
+	installcheck ncc bin-tarball show-flags version
 
 # Make a tarball of opt/clightning/, optionally with label for distribution.
 ifneq ($(VERSION),)
