@@ -397,21 +397,24 @@ static void destroy_sent(struct sent *sent)
 }
 
 /* We've received neither a reply nor a payment; return failure. */
-static void timeout_sent_invreq(struct sent *sent)
+static struct command_result *timeout_sent_invreq(struct command *timer_cmd,
+						  struct sent *sent)
 {
 	/* This will free sent! */
 	discard_result(command_fail(sent->cmd, OFFER_TIMEOUT,
 				    "Timeout waiting for response"));
+	return timer_complete(timer_cmd);
 }
 
 static struct command_result *sendonionmsg_done(struct command *cmd,
+						const char *method UNUSED,
 						const char *buf UNUSED,
 						const jsmntok_t *result UNUSED,
 						struct sent *sent)
 {
-	tal_steal(cmd, plugin_timer(cmd->plugin,
-				    time_from_sec(sent->wait_timeout),
-				    timeout_sent_invreq, sent));
+	command_timer(cmd,
+		      time_from_sec(sent->wait_timeout),
+		      timeout_sent_invreq, sent);
 	return command_still_pending(cmd);
 }
 
@@ -491,6 +494,7 @@ struct establishing_paths {
 	struct sent *sent;
 	struct tlv_onionmsg_tlv *final_tlv;
 	struct command_result *(*done)(struct command *cmd,
+				       const char *method UNUSED,
 				       const char *buf UNUSED,
 				       const jsmntok_t *result UNUSED,
 				       struct sent *sent);
@@ -603,6 +607,7 @@ static struct command_result *send_message(struct command *cmd,
 					   struct tlv_onionmsg_tlv *final_tlv STEALS,
 					   struct command_result *(*done)
 					   (struct command *cmd,
+					    const char *method UNUSED,
 					    const char *buf UNUSED,
 					    const jsmntok_t *result UNUSED,
 					    struct sent *sent))
@@ -618,7 +623,8 @@ static struct command_result *send_message(struct command *cmd,
 }
 
 /* We've received neither a reply nor a payment; return failure. */
-static void timeout_sent_inv(struct sent *sent)
+static struct command_result *timeout_sent_inv(struct command *timer_cmd,
+					       struct sent *sent)
 {
 	struct json_out *details = json_out_new(sent);
 
@@ -630,20 +636,23 @@ static void timeout_sent_inv(struct sent *sent)
 	discard_result(command_done_err(sent->cmd, OFFER_TIMEOUT,
 					"Failed: timeout waiting for response",
 					details));
+	return timer_complete(timer_cmd);
 }
 
 static struct command_result *prepare_inv_timeout(struct command *cmd,
+						  const char *method UNUSED,
 						  const char *buf UNUSED,
 						  const jsmntok_t *result UNUSED,
 						  struct sent *sent)
 {
-	tal_steal(cmd, plugin_timer(cmd->plugin,
-				    time_from_sec(sent->wait_timeout),
-				    timeout_sent_inv, sent));
-	return sendonionmsg_done(cmd, buf, result, sent);
+	command_timer(cmd,
+		      time_from_sec(sent->wait_timeout),
+		      timeout_sent_inv, sent);
+	return sendonionmsg_done(cmd, method, buf, result, sent);
 }
 
 static struct command_result *invreq_done(struct command *cmd,
+					  const char *method,
 					  const char *buf,
 					  const jsmntok_t *result,
 					  struct sent *sent)
@@ -1041,7 +1050,7 @@ struct command_result *json_fetchinvoice(struct command *cmd,
 							0);
 
 	/* Make the invoice request (fills in payer_key and payer_info) */
-	req = jsonrpc_request_start(cmd->plugin, cmd, "createinvoicerequest",
+	req = jsonrpc_request_start(cmd, "createinvoicerequest",
 				    &invreq_done,
 				    &forward_error,
 				    sent);
@@ -1051,7 +1060,7 @@ struct command_result *json_fetchinvoice(struct command *cmd,
 	json_add_bool(req->js, "savetodb", false);
 	if (rec_label)
 		json_add_string(req->js, "recurrence_label", rec_label);
-	return send_outreq(cmd->plugin, req);
+	return send_outreq(req);
 }
 
 /* FIXME: Using a hook here is not ideal: technically it doesn't mean
@@ -1090,18 +1099,19 @@ struct command_result *invoice_payment(struct command *cmd,
 			continue;
 
 		/* It was paid!  Success.  Return as per waitinvoice. */
-		req = jsonrpc_request_start(cmd->plugin, i->cmd, "waitinvoice",
+		req = jsonrpc_request_start(i->cmd, "waitinvoice",
 					    &forward_result,
 					    &forward_error,
 					    i);
 		json_add_escaped_string(req->js, "label", i->inv_label);
-		discard_result(send_outreq(cmd->plugin, req));
+		discard_result(send_outreq(req));
 		break;
 	}
 	return command_hook_success(cmd);
 }
 
 static struct command_result *createinvoice_done(struct command *cmd,
+						 const char *method,
 						 const char *buf,
 						 const jsmntok_t *result,
 						 struct sent *sent)
@@ -1153,14 +1163,14 @@ static struct command_result *sign_invoice(struct command *cmd,
 	struct out_req *req;
 
 	/* Get invoice signature and put in db so we can receive payment */
-	req = jsonrpc_request_start(cmd->plugin, cmd, "createinvoice",
+	req = jsonrpc_request_start(cmd, "createinvoice",
 				    &createinvoice_done,
 				    &forward_error,
 				    sent);
 	json_add_string(req->js, "invstring", invoice_encode(tmpctx, sent->inv));
 	json_add_preimage(req->js, "preimage", &sent->inv_preimage);
 	json_add_escaped_string(req->js, "label", sent->inv_label);
-	return send_outreq(cmd->plugin, req);
+	return send_outreq(req);
 }
 
 static struct command_result *param_invreq(struct command *cmd,

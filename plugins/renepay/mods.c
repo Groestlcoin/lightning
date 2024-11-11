@@ -73,6 +73,7 @@ struct command_result *payment_continue(struct payment *payment)
 
 /* Generic handler for RPC failures that should end up failing the payment. */
 static struct command_result *payment_rpc_failure(struct command *cmd,
+						  const char *method UNUSED,
 						  const char *buffer,
 						  const jsmntok_t *toks,
 						  struct payment *payment)
@@ -180,6 +181,7 @@ static bool success_data_from_listsendpays(const char *buf,
 }
 
 static struct command_result *previoussuccess_done(struct command *cmd,
+						   const char *method UNUSED,
 						   const char *buf,
 						   const jsmntok_t *result,
 						   struct payment *payment)
@@ -216,13 +218,13 @@ static struct command_result *previoussuccess_cb(struct payment *payment)
 	assert(cmd);
 
 	struct out_req *req = jsonrpc_request_start(
-	    cmd->plugin, cmd, "listsendpays", previoussuccess_done,
+	    cmd, "listsendpays", previoussuccess_done,
 	    payment_rpc_failure, payment);
 
 	json_add_sha256(req->js, "payment_hash",
 			&payment->payment_info.payment_hash);
 	json_add_string(req->js, "status", "complete");
-	return send_outreq(cmd->plugin, req);
+	return send_outreq(req);
 }
 
 REGISTER_PAYMENT_MODIFIER(previoussuccess, previoussuccess_cb);
@@ -252,6 +254,7 @@ REGISTER_PAYMENT_MODIFIER(initial_sanity_checks, initial_sanity_checks_cb);
  */
 
 static struct command_result *selfpay_success(struct command *cmd,
+					      const char *method UNUSED,
 					      const char *buf,
 					      const jsmntok_t *tok,
 					      struct route *route)
@@ -275,6 +278,7 @@ static struct command_result *selfpay_success(struct command *cmd,
 	return payment_success(payment, &preimage);
 }
 static struct command_result *selfpay_failure(struct command *cmd,
+					      const char *method UNUSED,
 					      const char *buf,
 					      const jsmntok_t *tok,
 					      struct route *route)
@@ -312,11 +316,11 @@ static struct command_result *selfpay_cb(struct payment *payment)
 		      /*partid=*/0, pinfo->payment_hash,
 		      pinfo->amount, pinfo->amount);
 	struct out_req *req;
-	req = jsonrpc_request_start(cmd->plugin, cmd, "sendpay",
+	req = jsonrpc_request_start(cmd, "sendpay",
 				    selfpay_success, selfpay_failure, route);
 	route->hops = tal_arr(route, struct route_hop, 0);
 	json_add_route(req->js, route, payment);
-	return send_outreq(cmd->plugin, req);
+	return send_outreq(req);
 }
 
 REGISTER_PAYMENT_MODIFIER(selfpay, selfpay_cb);
@@ -431,6 +435,7 @@ static void gossmod_cb(struct gossmap_localmods *mods,
 }
 
 static struct command_result *getmychannels_done(struct command *cmd,
+						 const char *method UNUSED,
 						 const char *buf,
 						 const jsmntok_t *result,
 						 struct payment *payment)
@@ -452,9 +457,9 @@ static struct command_result *getmychannels_cb(struct payment *payment)
 			   "getmychannels_pay_mod: cannot get a valid cmd.");
 
 	struct out_req *req = jsonrpc_request_start(
-	    cmd->plugin, cmd, "listpeerchannels", getmychannels_done,
+	    cmd, "listpeerchannels", getmychannels_done,
 	    payment_rpc_failure, payment);
-	return send_outreq(cmd->plugin, req);
+	return send_outreq(req);
 }
 
 REGISTER_PAYMENT_MODIFIER(getmychannels, getmychannels_cb);
@@ -576,6 +581,7 @@ function_error:
 }
 
 static struct command_result *routehints_done(struct command *cmd UNUSED,
+					      const char *method UNUSED,
 					      const char *buf UNUSED,
 					      const jsmntok_t *result UNUSED,
 					      struct payment *payment)
@@ -622,10 +628,10 @@ static struct command_result *routehints_cb(struct payment *payment)
 	struct command *cmd = payment_command(payment);
 	assert(cmd);
 	struct out_req *req = jsonrpc_request_start(
-	    cmd->plugin, cmd, "waitblockheight", routehints_done,
+	    cmd, "waitblockheight", routehints_done,
 	    payment_rpc_failure, payment);
 	json_add_num(req->js, "blockheight", 0);
-	return send_outreq(cmd->plugin, req);
+	return send_outreq(req);
 }
 
 REGISTER_PAYMENT_MODIFIER(routehints, routehints_cb);
@@ -771,21 +777,24 @@ REGISTER_PAYMENT_MODIFIER(send_routes, send_routes_cb);
  * The payment main thread sleeps for some time.
  */
 
-static void sleep_done(struct payment *payment)
+static struct command_result *sleep_done(struct command *cmd, struct payment *payment)
 {
+	struct command_result *ret;
 	payment->waitresult_timer = NULL;
-	// TODO: is this compulsory?
-	timer_complete(pay_plugin->plugin);
+	ret = timer_complete(cmd);
 	payment_continue(payment);
+	return ret;
 }
 
 static struct command_result *sleep_cb(struct payment *payment)
 {
-	assert(payment->waitresult_timer == NULL);
-	payment->waitresult_timer = plugin_timer(
-	    pay_plugin->plugin, time_from_msec(COLLECTOR_TIME_WINDOW_MSEC), sleep_done, payment);
 	struct command *cmd = payment_command(payment);
 	assert(cmd);
+	assert(payment->waitresult_timer == NULL);
+	payment->waitresult_timer
+		= command_timer(cmd,
+				time_from_msec(COLLECTOR_TIME_WINDOW_MSEC),
+				sleep_done, payment);
 	return command_still_pending(cmd);
 }
 
@@ -864,6 +873,7 @@ REGISTER_PAYMENT_MODIFIER(collect_results, collect_results_cb);
  * The default ending of a payment.
  */
 static struct command_result *end_done(struct command *cmd UNUSED,
+				       const char *method UNUSED,
 				       const char *buf UNUSED,
 				       const jsmntok_t *result UNUSED,
 				       struct payment *payment)
@@ -876,10 +886,10 @@ static struct command_result *end_cb(struct payment *payment)
 	struct command *cmd = payment_command(payment);
 	assert(cmd);
 	struct out_req *req =
-	    jsonrpc_request_start(cmd->plugin, cmd, "waitblockheight", end_done,
+	    jsonrpc_request_start(cmd, "waitblockheight", end_done,
 				  payment_rpc_failure, payment);
 	json_add_num(req->js, "blockheight", 0);
-	return send_outreq(cmd->plugin, req);
+	return send_outreq(req);
 }
 
 REGISTER_PAYMENT_MODIFIER(end, end_cb);
@@ -909,6 +919,7 @@ REGISTER_PAYMENT_MODIFIER(checktimeout, checktimeout_cb);
  */
 
 static struct command_result *pendingsendpays_done(struct command *cmd,
+						   const char *method UNUSED,
 						   const char *buf,
 						   const jsmntok_t *result,
 						   struct payment *payment)
@@ -1065,12 +1076,12 @@ static struct command_result *pendingsendpays_cb(struct payment *payment)
 	assert(cmd);
 
 	struct out_req *req = jsonrpc_request_start(
-	    cmd->plugin, cmd, "listsendpays", pendingsendpays_done,
+	    cmd, "listsendpays", pendingsendpays_done,
 	    payment_rpc_failure, payment);
 
 	json_add_sha256(req->js, "payment_hash",
 			&payment->payment_info.payment_hash);
-	return send_outreq(cmd->plugin, req);
+	return send_outreq(req);
 }
 
 REGISTER_PAYMENT_MODIFIER(pendingsendpays, pendingsendpays_cb);

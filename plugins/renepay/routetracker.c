@@ -194,6 +194,7 @@ static void route_pending_register(struct routetracker *routetracker,
 
 /* Callback function for sendpay request success. */
 static struct command_result *sendpay_done(struct command *cmd,
+					   const char *method UNUSED,
 					   const char *buf UNUSED,
 					   const jsmntok_t *result UNUSED,
 					   struct route *route)
@@ -209,6 +210,7 @@ static struct command_result *sendpay_done(struct command *cmd,
  * 2. The first peer is disconnected.
  */
 static struct command_result *sendpay_failed(struct command *cmd,
+					     const char *method UNUSED,
 					     const char *buf,
 					     const jsmntok_t *tok,
 					     struct route *route)
@@ -329,7 +331,7 @@ struct command_result *route_sendpay_request(struct command *cmd,
 					     struct payment *payment)
 {
 	struct out_req *req =
-	    jsonrpc_request_start(pay_plugin->plugin, cmd, "sendpay",
+	    jsonrpc_request_start(cmd, "sendpay",
 				  sendpay_done, sendpay_failed, route);
 
 	json_add_route(req->js, route, payment);
@@ -337,7 +339,7 @@ struct command_result *route_sendpay_request(struct command *cmd,
 	route_map_add(payment->routetracker->sent_routes, route);
 	if(taken(route))
 		tal_steal(payment->routetracker->sent_routes, route);
-	return send_outreq(pay_plugin->plugin, req);
+	return send_outreq(req);
 }
 
 struct command_result *notification_sendpay_failure(struct command *cmd,

@@ -199,15 +199,16 @@ static void destroy_bcli(struct bitcoin_cli *bcli)
 	list_del_from(&bitcoind->current, &bcli->list);
 }
 
-static void retry_bcli(void *cb_arg)
+static struct command_result *retry_bcli(struct command *cmd,
+					 struct bitcoin_cli *bcli)
 {
-	struct bitcoin_cli *bcli = cb_arg;
 	list_del_from(&bitcoind->current, &bcli->list);
 	tal_del_destructor(bcli, destroy_bcli);
 
 	list_add_tail(&bitcoind->pending[bcli->prio], &bcli->list);
 	tal_free(bcli->output);
 	next_bcli(bcli->prio);
+	return timer_complete(cmd);
 }
 
 /* We allow 60 seconds of spurious errors, eg. reorg. */
@@ -238,7 +239,7 @@ static void bcli_failure(struct bitcoin_cli *bcli,
 	bitcoind->error_count++;
 
 	/* Retry in 1 second */
-	plugin_timer(bcli->cmd->plugin, time_from_sec(1), retry_bcli, bcli);
+	command_timer(bcli->cmd, time_from_sec(1), retry_bcli, bcli);
 }
 
 static void bcli_finished(struct io_conn *conn UNUSED, struct bitcoin_cli *bcli)
@@ -1006,17 +1007,18 @@ static void parse_getnetworkinfo_result(struct plugin *p, const char *buf)
 	if (!result)
 		plugin_err(p, "Invalid response to '%s': '%s'. Can not "
 			      "continue without proceeding to sanity checks.",
-			      gather_args(bitcoind, "getnetworkinfo", NULL), buf);
+			   args_string(tmpctx, gather_args(bitcoind, "getnetworkinfo", NULL)),
+			   buf);
 
 	/* Check that we have a fully-featured `estimatesmartfee`. */
 	err = json_scan(tmpctx, buf, result, "{version:%,localrelay:%}",
 			JSON_SCAN(json_to_u32, &bitcoind->version),
 			JSON_SCAN(json_to_bool, &tx_relay));
 	if (err)
-		plugin_err(p, "%s.  Got '%s'. Can not"
+		plugin_err(p, "%s.  Got '%.*s'. Can not"
 			   " continue without proceeding to sanity checks.",
 			   err,
-			   gather_args(bitcoind, "getnetworkinfo", NULL), buf);
+			   json_tok_full_len(result), json_tok_full(buf, result));
 
 	if (bitcoind->version < min_version)
 		plugin_err(p, "Unsupported bitcoind version %"PRIu32", at least"
@@ -1098,10 +1100,10 @@ static void memleak_mark_bitcoind(struct plugin *p, struct htable *memtable)
 	memleak_scan_obj(memtable, bitcoind);
 }
 
-static const char *init(struct plugin *p, const char *buffer UNUSED,
+static const char *init(struct command *init_cmd, const char *buffer UNUSED,
 			const jsmntok_t *config UNUSED)
 {
-	wait_and_check_bitcoind(p);
+	wait_and_check_bitcoind(init_cmd->plugin);
 
 	/* Usually we fake up fees in regtest */
 	if (streq(chainparams->network_name, "regtest"))
@@ -1109,8 +1111,8 @@ static const char *init(struct plugin *p, const char *buffer UNUSED,
 	else
 		bitcoind->fake_fees = false;
 
-	plugin_set_memleak_handler(p, memleak_mark_bitcoind);
-	plugin_log(p, LOG_INFORM,
+	plugin_set_memleak_handler(init_cmd->plugin, memleak_mark_bitcoind);
+	plugin_log(init_cmd->plugin, LOG_INFORM,
 		   "groestlcoin-cli initialized and connected to groestlcoind.");
 
 	return NULL;

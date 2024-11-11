@@ -52,7 +52,9 @@ struct apy_req {
 };
 
 static struct command_result *
-getblockheight_done(struct command *cmd, const char *buf,
+getblockheight_done(struct command *cmd,
+		    const char *method,
+		    const char *buf,
 		    const jsmntok_t *result,
 		    struct apy_req *req)
 {
@@ -123,11 +125,11 @@ static struct command_result *json_channel_apy(struct command *cmd,
 		return command_param_failed();
 
 	/* First get the current blockheight */
-	req = jsonrpc_request_start(cmd->plugin, cmd, "getinfo",
+	req = jsonrpc_request_start(cmd, "getinfo",
 				    &getblockheight_done,
 				    forward_error,
 				    apyreq);
-	return send_outreq(cmd->plugin, req);
+	return send_outreq(req);
 }
 
 static struct command_result *param_csv_format(struct command *cmd, const char *name,
@@ -851,19 +853,21 @@ static void log_journal_entry(struct account *acct,
 }
 
 static struct command_result *log_error(struct command *cmd,
+					const char *method,
 					const char *buf,
 					const jsmntok_t *error,
 					void *arg UNNEEDED)
 {
 	plugin_log(cmd->plugin, LOG_BROKEN,
-		   "error calling rpc: %.*s",
-		   json_tok_full_len(error),
+		   "error calling %s: %.*s",
+		   method, json_tok_full_len(error),
 		   json_tok_full(buf, error));
 
 	return notification_handled(cmd);
 }
 
 static struct command_result *listpeerchannels_multi_done(struct command *cmd,
+		     const char *method,
 		     const char *buf,
 		     const jsmntok_t *result,
 		     struct new_account_info **new_accts)
@@ -891,7 +895,7 @@ static struct command_result *listpeerchannels_multi_done(struct command *cmd,
 		db_commit_transaction(db);
 
 		if (err)
-			plugin_err(cmd->plugin, err);
+			plugin_err(cmd->plugin, "%s", err);
 
 		/* FIXME: multiple currencies */
 		if (tal_count(balances) > 0)
@@ -907,7 +911,7 @@ static struct command_result *listpeerchannels_multi_done(struct command *cmd,
 				     bal->debit,
 				     &credit_diff, &debit_diff);
 		if (err)
-			plugin_err(cmd->plugin, err);
+			plugin_err(cmd->plugin, "%s", err);
 
 		log_journal_entry(info->acct,
 				  info->currency,
@@ -1122,13 +1126,13 @@ static struct command_result *json_balance_snapshot(struct command *cmd,
 	if (tal_count(new_accts) > 0) {
 		struct out_req *req;
 
-		req = jsonrpc_request_start(cmd->plugin, cmd,
+		req = jsonrpc_request_start(cmd,
 					    "listpeerchannels",
 					    listpeerchannels_multi_done,
 					    log_error,
 					    new_accts);
 		/* FIXME(vicenzopalazzo) require the channel by channel_id to avoid parsing not useful json  */
-		return send_outreq(cmd->plugin, req);
+		return send_outreq(req);
 	}
 
 	plugin_log(cmd->plugin, LOG_DBG, "Snapshot balances updated");
@@ -1198,8 +1202,11 @@ static char *fetch_out_desc_invstr(const tal_t *ctx, const char *buf,
 }
 
 static struct command_result *
-listinvoices_done(struct command *cmd, const char *buf,
-		  const jsmntok_t *result, struct sha256 *payment_hash)
+listinvoices_done(struct command *cmd,
+		  const char *method,
+		  const char *buf,
+		  const jsmntok_t *result,
+		  struct sha256 *payment_hash)
 {
 	size_t i;
 	const jsmntok_t *inv_arr_tok, *inv_tok;
@@ -1243,8 +1250,11 @@ listinvoices_done(struct command *cmd, const char *buf,
 }
 
 static struct command_result *
-listsendpays_done(struct command *cmd, const char *buf,
-		  const jsmntok_t *result, struct sha256 *payment_hash)
+listsendpays_done(struct command *cmd,
+		  const char *method,
+		  const char *buf,
+		  const jsmntok_t *result,
+		  struct sha256 *payment_hash)
 {
 	size_t i;
 	const jsmntok_t *pays_arr_tok, *pays_tok;
@@ -1288,20 +1298,20 @@ static struct command_result *lookup_invoice_desc(struct command *cmd,
 	/* Otherwise will go away when event is cleaned up */
 	tal_steal(cmd, payment_hash);
 	if (!amount_msat_is_zero(credit))
-		req = jsonrpc_request_start(cmd->plugin, cmd,
+		req = jsonrpc_request_start(cmd,
 					    "listinvoices",
 					    listinvoices_done,
 					    log_error,
 					    payment_hash);
 	else
-		req = jsonrpc_request_start(cmd->plugin, cmd,
+		req = jsonrpc_request_start(cmd,
 					    "listsendpays",
 					    listsendpays_done,
 					    log_error,
 					    payment_hash);
 
 	json_add_sha256(req->js, "payment_hash", payment_hash);
-	return send_outreq(cmd->plugin, req);
+	return send_outreq(req);
 }
 
 struct event_info {
@@ -1310,8 +1320,11 @@ struct event_info {
 };
 
 static struct command_result *
-listpeerchannels_done(struct command *cmd, const char *buf,
-	       const jsmntok_t *result, struct event_info *info)
+listpeerchannels_done(struct command *cmd,
+		      const char *method,
+		      const char *buf,
+		      const jsmntok_t *result,
+		      struct event_info *info)
 {
 	struct acct_balance **balances, *bal;
 	struct amount_msat credit_diff, debit_diff;
@@ -1327,7 +1340,7 @@ listpeerchannels_done(struct command *cmd, const char *buf,
 		db_commit_transaction(db);
 
 		if (err)
-			plugin_err(cmd->plugin, err);
+			plugin_err(cmd->plugin, "%s", err);
 
 		/* FIXME: multiple currencies per account? */
 		if (tal_count(balances) > 0)
@@ -1346,7 +1359,7 @@ listpeerchannels_done(struct command *cmd, const char *buf,
 				     bal->debit,
 				     &credit_diff, &debit_diff);
 		if (err)
-			plugin_err(cmd->plugin, err);
+			plugin_err(cmd->plugin, "%s", err);
 
 		log_journal_entry(info->acct,
 				  info->ev->currency,
@@ -1360,7 +1373,7 @@ listpeerchannels_done(struct command *cmd, const char *buf,
 	/* Maybe mark acct as onchain resolved */
 	err = do_account_close_checks(cmd, info->ev, info->acct);
 	if (err)
-		plugin_err(cmd->plugin, err);
+		plugin_err(cmd->plugin, "%s", err);
 
 	if (info->ev->payment_id &&
 	    streq(info->ev->tag, mvt_tag_str(INVOICE))) {
@@ -1564,19 +1577,19 @@ parse_and_log_chain_move(struct command *cmd,
 				       is_channel_account(acct) ?
 				       acct : orig_acct);
 
-		req = jsonrpc_request_start(cmd->plugin, cmd,
+		req = jsonrpc_request_start(cmd,
 					    "listpeerchannels",
 					    listpeerchannels_done,
 					    log_error,
 					    info);
 		/* FIXME: use the peer_id to reduce work here */
-		return send_outreq(cmd->plugin, req);
+		return send_outreq(req);
 	}
 
 	/* Maybe mark acct as onchain resolved */
 	err = do_account_close_checks(cmd, e, acct);
 	if (err)
-		plugin_err(cmd->plugin, err);
+		plugin_err(cmd->plugin, "%s", err);
 
 	/* Check for invoice desc data, necessary */
 	if (e->payment_id) {
@@ -1977,8 +1990,10 @@ static const struct plugin_command commands[] = {
 	},
 };
 
-static const char *init(struct plugin *p, const char *b, const jsmntok_t *t)
+static const char *init(struct command *init_cmd, const char *b, const jsmntok_t *t)
 {
+	struct plugin *p = init_cmd->plugin;
+
 	/* Switch to bookkeeper-dir, if specified */
 	if (datadir && chdir(datadir) != 0) {
 		if (mkdir(datadir, 0700) != 0 && errno != EEXIST)

@@ -32,6 +32,7 @@ enum commando_msgtype {
 };
 
 struct commando {
+	/* Only non-NULL for outgoing cmds */
 	struct command *cmd;
 	struct node_id peer;
 	u64 id;
@@ -116,7 +117,8 @@ struct reply {
 };
 
 /* Calls itself repeatedly: first time, result is NULL */
-static struct command_result *send_response(struct command *command UNUSED,
+static struct command_result *send_response(struct command *cmd,
+					    const char *method UNUSED,
 					    const char *buf UNUSED,
 					    const jsmntok_t *result,
 					    struct reply *reply)
@@ -133,7 +135,7 @@ static struct command_result *send_response(struct command *command UNUSED,
 	} else {
 		if (msglen == 0) {
 			tal_free(reply);
-			return command_done();
+			return command_hook_success(cmd);
 		}
 		msgtype = COMMANDO_MSG_REPLY_TERM;
 	}
@@ -144,18 +146,19 @@ static struct command_result *send_response(struct command *command UNUSED,
 	towire(&cmd_msg, reply->buf + reply->off, msglen);
 	reply->off += msglen;
 
-	req = jsonrpc_request_start(plugin, NULL, "sendcustommsg",
+	req = jsonrpc_request_start(cmd, "sendcustommsg",
 				    send_response, send_response,
 				    reply);
 	json_add_node_id(req->js, "node_id", &reply->incoming->peer);
 	json_add_hex_talarr(req->js, "msg", cmd_msg);
 	tal_free(cmd_msg);
-	send_outreq(plugin, req);
+	send_outreq(req);
 
-	return command_done();
+	return command_still_pending(cmd);
 }
 
 static struct command_result *cmd_done(struct command *command,
+				       const char *method,
 				       const char *buf,
 				       const jsmntok_t *obj,
 				       struct commando *incoming)
@@ -189,17 +192,19 @@ static struct command_result *cmd_done(struct command *command,
 	}
 	reply->off = 0;
 
-	return send_response(command, NULL, NULL, reply);
+	return send_response(command, NULL, NULL, NULL, reply);
 }
 
-static void commando_error(struct commando *incoming,
-			   int ecode,
-			   const char *fmt, ...)
-	PRINTF_FMT(3,4);
+static struct command_result *commando_error(struct command *cmd,
+					     struct commando *incoming,
+					     int ecode,
+					     const char *fmt, ...)
+	PRINTF_FMT(4, 5);
 
-static void commando_error(struct commando *incoming,
-			   int ecode,
-			   const char *fmt, ...)
+static struct command_result *commando_error(struct command *cmd,
+					     struct commando *incoming,
+					     int ecode,
+					     const char *fmt, ...)
 {
 	struct reply *reply = tal(plugin, struct reply);
 	va_list ap;
@@ -213,7 +218,7 @@ static void commando_error(struct commando *incoming,
 	reply->off = 0;
 	reply->len = tal_bytelen(reply->buf) - 1;
 
-	send_response(NULL, NULL, NULL, reply);
+	return send_response(cmd, NULL, NULL, NULL, reply);
 }
 
 struct cond_info {
@@ -259,9 +264,7 @@ static struct cond_info *new_cond_info(const tal_t *ctx,
 		cinfo->cmdid_prefix = NULL;
 		incoming->json_id = NULL;
 	} else {
-		cinfo->cmdid_prefix = tal_fmt(cinfo, "%.*s/",
-					      id->end - id->start,
-					      cinfo->buf + id->start);
+		cinfo->cmdid_prefix = json_strdup(cinfo, cinfo->buf, id);
 		/* Includes quotes, if any! */
 		incoming->json_id = tal_strndup(incoming,
 						json_tok_full(cinfo->buf, id),
@@ -270,12 +273,13 @@ static struct cond_info *new_cond_info(const tal_t *ctx,
 	return cinfo;
 }
 
-static struct command_result *execute_command(struct cond_info *cinfo)
+static struct command_result *execute_command(struct command *cmd,
+					      struct cond_info *cinfo)
 {
 	struct out_req *req;
 
 	/* We handle success and failure the same */
-	req = jsonrpc_request_whole_object_start(plugin, NULL,
+	req = jsonrpc_request_whole_object_start(cmd,
 						 json_strdup(tmpctx, cinfo->buf, cinfo->method),
 						 cinfo->cmdid_prefix,
 						 cmd_done, cinfo->incoming);
@@ -314,10 +318,11 @@ static struct command_result *execute_command(struct cond_info *cinfo)
 				 json_tok_full(cinfo->buf, cinfo->filter),
 				 json_tok_full_len(cinfo->filter));
 	}
-	return send_outreq(plugin, req);
+	return send_outreq(req);
 }
 
 static struct command_result *checkrune_done(struct command *cmd,
+					     const char *method,
 					     const char *buf,
 					     const jsmntok_t *result,
 					     struct cond_info *cinfo)
@@ -336,15 +341,16 @@ static struct command_result *checkrune_done(struct command *cmd,
 
 	/* Shouldn't happen! */
 	if (!valid) {
-		commando_error(cinfo->incoming, COMMANDO_ERROR_REMOTE,
-			       "Invalid rune");
-		return command_done();
+		return commando_error(cmd, cinfo->incoming,
+				      COMMANDO_ERROR_REMOTE,
+				      "Invalid rune");
 	}
 
-	return execute_command(cinfo);
+	return execute_command(cmd, cinfo);
 }
 
 static struct command_result *checkrune_failed(struct command *cmd,
+					       const char *method,
 					       const char *buf,
 					       const jsmntok_t *result,
 					       struct cond_info *cinfo)
@@ -357,13 +363,14 @@ static struct command_result *checkrune_failed(struct command *cmd,
 			   json_tok_full(buf, result));
 	}
 
-	commando_error(cinfo->incoming, COMMANDO_ERROR_REMOTE_AUTH,
-		       "Invalid rune: %.*s",
-		       msg->end - msg->start, buf + msg->start);
-	return command_done();
+	return commando_error(cmd, cinfo->incoming,
+			      COMMANDO_ERROR_REMOTE_AUTH,
+			      "Invalid rune: %.*s",
+			      msg->end - msg->start, buf + msg->start);
 }
 
-static void try_command(struct commando *incoming STEALS)
+static struct command_result *try_command(struct command *cmd,
+					  struct commando *incoming STEALS)
 {
 	const jsmntok_t *toks, *method, *params, *runetok, *id, *filter;
 	const char *buf = (const char *)incoming->contents;
@@ -373,45 +380,40 @@ static void try_command(struct commando *incoming STEALS)
 
 	toks = json_parse_simple(incoming, buf, tal_bytelen(buf));
 	if (!toks) {
-		commando_error(incoming, COMMANDO_ERROR_REMOTE,
-			       "Invalid JSON");
-		return;
+		return commando_error(cmd, incoming, COMMANDO_ERROR_REMOTE,
+				      "Invalid JSON");
 	}
 
 	if (toks[0].type != JSMN_OBJECT) {
-		commando_error(incoming, COMMANDO_ERROR_REMOTE,
-			       "Not a JSON object");
-		return;
+		return commando_error(cmd, incoming, COMMANDO_ERROR_REMOTE,
+				      "Not a JSON object");
 	}
 	method = json_get_member(buf, toks, "method");
 	if (!method) {
-		commando_error(incoming, COMMANDO_ERROR_REMOTE,
-			       "No method");
-		return;
+		return commando_error(cmd, incoming, COMMANDO_ERROR_REMOTE,
+				      "No method");
 	}
 	params = json_get_member(buf, toks, "params");
 	if (params && (params->type != JSMN_OBJECT && params->type != JSMN_ARRAY)) {
-		commando_error(incoming, COMMANDO_ERROR_REMOTE,
-			       "Params must be object or array");
-		return;
+		return commando_error(cmd, incoming, COMMANDO_ERROR_REMOTE,
+				      "Params must be object or array");
 	}
 	filter = json_get_member(buf, toks, "filter");
 	id = json_get_member(buf, toks, "id");
 	if (!id) {
-		commando_error(incoming, COMMANDO_ERROR_REMOTE,
-			       "missing id field");
-		return;
+		return commando_error(cmd, incoming, COMMANDO_ERROR_REMOTE,
+				      "missing id field");
 	}
 	runetok = json_get_member(buf, toks, "rune");
 	if (!runetok) {
-		commando_error(incoming, COMMANDO_ERROR_REMOTE, "Missing rune");
-		return;
+		return commando_error(cmd, incoming, COMMANDO_ERROR_REMOTE,
+				      "Missing rune");
 	}
 	rune = rune_from_base64n(tmpctx, buf + runetok->start,
 				 runetok->end - runetok->start);
 	if (!rune) {
-		commando_error(incoming, COMMANDO_ERROR_REMOTE, "Invalid rune");
-		return;
+		return commando_error(cmd, incoming, COMMANDO_ERROR_REMOTE,
+				      "Invalid rune");
 	}
 	/* Gather all the info we need to execute this command (steals toks). */
 	cinfo = new_cond_info(incoming, incoming, toks, method, params, id, filter);
@@ -420,7 +422,7 @@ static void try_command(struct commando *incoming STEALS)
 	destroy_commando(incoming, &incoming_commands);
 	tal_del_destructor2(incoming, destroy_commando, &incoming_commands);
 
-	req = jsonrpc_request_start(plugin, NULL, "checkrune",
+	req = jsonrpc_request_start(cmd, "checkrune",
 				    checkrune_done, checkrune_failed,
 				    cinfo);
 	json_add_node_id(req->js, "nodeid", &incoming->peer);
@@ -428,14 +430,14 @@ static void try_command(struct commando *incoming STEALS)
 	json_add_tok(req->js, "method", method, cinfo->buf);
 	if (params)
 		json_add_tok(req->js, "params", params, cinfo->buf);
-	send_outreq(plugin, req);
+	return send_outreq(req);
 }
 
-static void handle_incmd(struct command *cmd,
-			 struct node_id *peer,
-			 u64 idnum,
-			 const u8 *msg, size_t msglen,
-			 bool terminal)
+static struct command_result *handle_incmd(struct command *cmd,
+					   struct node_id *peer,
+					   u64 idnum,
+					   const u8 *msg, size_t msglen,
+					   bool terminal)
 {
 	struct commando *incmd;
 
@@ -462,15 +464,15 @@ static void handle_incmd(struct command *cmd,
 	append_contents(incmd, msg, msglen, 1024*1024);
 
 	if (!terminal)
-		return;
+		return command_hook_success(cmd);
 
 	if (!incmd->contents) {
 		plugin_log(plugin, LOG_UNUSUAL, "%s: ignoring oversize request",
 			   fmt_node_id(tmpctx, peer));
-		return;
+		return command_hook_success(cmd);
 	}
 
-	try_command(incmd);
+	return try_command(cmd, incmd);
 }
 
 static struct command_result *handle_reply(struct node_id *peer,
@@ -592,9 +594,8 @@ static struct command_result *handle_custommsg(struct command *cmd,
 		switch (mtype) {
 		case COMMANDO_MSG_CMD_CONTINUES:
 		case COMMANDO_MSG_CMD_TERM:
-			handle_incmd(cmd, &peer, idnum, msg, len,
-				     mtype == COMMANDO_MSG_CMD_TERM);
-			break;
+			return handle_incmd(cmd, &peer, idnum, msg, len,
+					    mtype == COMMANDO_MSG_CMD_TERM);
 		case COMMANDO_MSG_REPLY_CONTINUES:
 		case COMMANDO_MSG_REPLY_TERM:
 			handle_reply(&peer, idnum, msg, len,
@@ -620,6 +621,7 @@ struct outgoing {
 };
 
 static struct command_result *send_more_cmd(struct command *cmd,
+					    const char *method UNUSED,
 					    const char *buf UNUSED,
 					    const jsmntok_t *result UNUSED,
 					    struct outgoing *outgoing)
@@ -631,12 +633,12 @@ static struct command_result *send_more_cmd(struct command *cmd,
 		return command_still_pending(cmd);
 	}
 
-	req = jsonrpc_request_start(plugin, cmd, "sendcustommsg",
+	req = jsonrpc_request_start(cmd, "sendcustommsg",
 				    send_more_cmd, forward_error, outgoing);
 	json_add_node_id(req->js, "node_id", &outgoing->peer);
 	json_add_hex_talarr(req->js, "msg", outgoing->msgs[outgoing->msg_off++]);
 
-	return send_outreq(plugin, req);
+	return send_outreq(req);
 }
 
 static struct command_result *json_commando(struct command *cmd,
@@ -706,19 +708,20 @@ static struct command_result *json_commando(struct command *cmd,
 		outgoing->msgs[i] = cmd_msg;
 	}
 
-	return send_more_cmd(cmd, NULL, NULL, outgoing);
+	return send_more_cmd(cmd, NULL, NULL, NULL, outgoing);
 }
 
 /* Handles error or success */
 static struct command_result *forward_reply(struct command *cmd,
+					    const char *method,
 					    const char *buf,
 					    const jsmntok_t *result,
 					    void *arg)
 {
 	const jsmntok_t *err = json_get_member(buf, result, "error");
 	if (err)
-		return forward_error(cmd, buf, err, arg);
-	return forward_result(cmd, buf, json_get_member(buf, result, "result"), arg);
+		return forward_error(cmd, method, buf, err, arg);
+	return forward_result(cmd, method, buf, json_get_member(buf, result, "result"), arg);
 }
 
 static struct command_result *forward_command(struct command *cmd,
@@ -729,11 +732,10 @@ static struct command_result *forward_command(struct command *cmd,
 	/* params could be an array, so use low-level helper */
 	struct out_req *req;
 
-	req = jsonrpc_request_whole_object_start(plugin, cmd, method,
-						 json_id_prefix(tmpctx, cmd),
+	req = jsonrpc_request_whole_object_start(cmd, method, NULL,
 						 forward_reply, NULL);
 	json_add_tok(req->js, "params", params, buffer);
-	return send_outreq(plugin, req);
+	return send_outreq(req);
 }
 
 static struct command_result *json_commando_rune(struct command *cmd,
@@ -788,13 +790,13 @@ static void memleak_mark_globals(struct plugin *p, struct htable *memtable)
 	memleak_scan_obj(memtable, incoming_commands);
 }
 
-static const char *init(struct plugin *p,
+static const char *init(struct command *init_cmd,
 			const char *buf UNUSED, const jsmntok_t *config UNUSED)
 {
-	outgoing_commands = tal_arr(p, struct commando *, 0);
-	incoming_commands = tal_arr(p, struct commando *, 0);
-	plugin = p;
-	plugin_set_memleak_handler(p, memleak_mark_globals);
+	plugin = init_cmd->plugin;
+	outgoing_commands = tal_arr(plugin, struct commando *, 0);
+	incoming_commands = tal_arr(plugin, struct commando *, 0);
+	plugin_set_memleak_handler(plugin, memleak_mark_globals);
 
 	return NULL;
 }

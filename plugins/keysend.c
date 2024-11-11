@@ -62,7 +62,7 @@ static struct keysend_data *keysend_init(struct payment *p)
 	}
 }
 
-static void keysend_cb(struct keysend_data *d, struct payment *p) {
+static struct command_result *keysend_cb(struct keysend_data *d, struct payment *p) {
 	struct createonion_hop *last_payload;
 	size_t hopcount;
 
@@ -154,13 +154,13 @@ static bool jsonarr_accumulate_u64(const char *buffer,
 	return true;
 }
 
-static const char *init(struct plugin *p, const char *buf UNUSED,
+static const char *init(struct command *init_cmd, const char *buf UNUSED,
 			const jsmntok_t *config UNUSED)
 {
-	rpc_scan(p, "getinfo", take(json_out_obj(NULL, NULL, NULL)), "{id:%}",
+	rpc_scan(init_cmd, "getinfo", take(json_out_obj(NULL, NULL, NULL)), "{id:%}",
 		 JSON_SCAN(json_to_node_id, &my_id));
 
-	global_hints = notleak_with_children(channel_hint_set_new(p));
+	global_hints = notleak_with_children(channel_hint_set_new(init_cmd->plugin));
 
 	accepted_extra_tlvs = notleak(tal_arr(NULL, u64, 0));
 	/* BOLT #4:
@@ -173,7 +173,7 @@ static const char *init(struct plugin *p, const char *buf UNUSED,
 	maxdelay_default = 2016;
 	/* accept-htlc-tlv-types deprecated in v23.08, but still grab it! */
 	/* max-locktime-blocks deprecated in v24.05, but still grab it! */
-	rpc_scan(p, "listconfigs", take(json_out_obj(NULL, NULL, NULL)),
+	rpc_scan(init_cmd, "listconfigs", take(json_out_obj(NULL, NULL, NULL)),
 		 "{configs:{"
 		 "max-locktime-blocks?:{value_int:%},"
 		 "accept-htlc-tlv-types?:{value_str:%},"
@@ -198,6 +198,7 @@ struct payment_modifier *pay_mods[] = {
 
 static struct command_result *
 preapprovekeysend_succeed(struct command *cmd,
+			  const char *method,
 			  const char *buf,
 			  const jsmntok_t *result,
 			  struct payment *p)
@@ -311,19 +312,19 @@ static struct command_result *json_keysend(struct command *cmd, const char *buf,
 
 	/* We do pre-approval immediately (note: even if command_check_only!) */
 	if (command_check_only(cmd)) {
-		req = jsonrpc_request_start(p->plugin, cmd, "check",
+		req = jsonrpc_request_start(cmd, "check",
 					    preapprovekeysend_succeed,
 					    forward_error, p);
 		json_add_string(req->js, "command_to_check", "preapprovekeysend");
 	} else {
-		req = jsonrpc_request_start(p->plugin, cmd, "preapprovekeysend",
+		req = jsonrpc_request_start(cmd, "preapprovekeysend",
 					    preapprovekeysend_succeed,
 					    forward_error, p);
 	}
 	json_add_node_id(req->js, "destination", p->route_destination);
 	json_add_sha256(req->js, "payment_hash", p->payment_hash);
 	json_add_amount_msat(req->js, "amount_msat", p->our_amount);
-	return send_outreq(cmd->plugin, req);
+	return send_outreq(req);
 }
 
 static const struct plugin_command commands[] = {
@@ -378,7 +379,9 @@ static bool keysend_accept_extra_tlv_type(u64 type)
 }
 
 static struct command_result *
-htlc_accepted_invoice_created(struct command *cmd, const char *buf,
+htlc_accepted_invoice_created(struct command *cmd,
+			      const char *method,
+			      const char *buf,
 			      const jsmntok_t *result,
 			      struct keysend_in *ki)
 {
@@ -445,7 +448,9 @@ htlc_accepted_invoice_created(struct command *cmd, const char *buf,
 }
 
 static struct command_result *
-htlc_accepted_invoice_failed(struct command *cmd, const char *buf,
+htlc_accepted_invoice_failed(struct command *cmd,
+			     const char *method,
+			     const char *buf,
 			     const jsmntok_t *error,
 			     struct keysend_in *ki)
 {
@@ -571,7 +576,7 @@ static struct command_result *htlc_accepted_call(struct command *cmd,
 	 * label could collide (unlikely since we use the nanosecond time). If
 	 * the call to `invoice` fails we will just continue, and `lightningd`
 	 * will be nice and reject the payment. */
-	req = jsonrpc_request_start(cmd->plugin, cmd, "invoice",
+	req = jsonrpc_request_start(cmd, "invoice",
 				    &htlc_accepted_invoice_created,
 				    &htlc_accepted_invoice_failed,
 				    ki);
@@ -592,7 +597,7 @@ static struct command_result *htlc_accepted_call(struct command *cmd,
 	}
 	json_add_preimage(req->js, "preimage", &ki->payment_preimage);
 
-	return send_outreq(cmd->plugin, req);
+	return send_outreq(req);
 }
 
 static const struct plugin_hook hooks[] = {

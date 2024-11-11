@@ -110,6 +110,7 @@ static u8 *channel_update_from_onion_error(const tal_t *ctx,
 }
 
 static struct command_result *update_gossip_done(struct command *cmd UNUSED,
+						 const char *method UNUSED,
 						 const char *buf UNUSED,
 						 const jsmntok_t *result UNUSED,
 						 struct routefail *r)
@@ -118,6 +119,7 @@ static struct command_result *update_gossip_done(struct command *cmd UNUSED,
 }
 
 static struct command_result *update_gossip_failure(struct command *cmd UNUSED,
+						    const char *method UNUSED,
 						    const char *buf,
 						    const jsmntok_t *result,
 						    struct routefail *r)
@@ -136,7 +138,7 @@ static struct command_result *update_gossip_failure(struct command *cmd UNUSED,
 	    r->payment, scidd, LOG_INFORM,
 	    "addgossip failed (%.*s)", json_tok_full_len(result),
 	    json_tok_full(buf, result));
-	return update_gossip_done(cmd, buf, result, r);
+	return update_gossip_done(cmd, method, buf, result, r);
 }
 
 static struct command_result *update_gossip(struct routefail *r)
@@ -152,10 +154,10 @@ static struct command_result *update_gossip(struct routefail *r)
 		goto skip_update_gossip;
 
 	struct out_req *req =
-	    jsonrpc_request_start(r->cmd->plugin, r->cmd, "addgossip",
+	    jsonrpc_request_start(r->cmd, "addgossip",
 				  update_gossip_done, update_gossip_failure, r);
 	json_add_hex_talarr(req->js, "message", update);
-	return send_outreq(r->cmd->plugin, req);
+	return send_outreq(req);
 
 skip_update_gossip:
 	return handle_failure(r);

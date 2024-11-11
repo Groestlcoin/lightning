@@ -235,6 +235,7 @@ struct offer_info {
 };
 
 static struct command_result *check_result(struct command *cmd,
+					   const char *method,
 					   const char *buf,
 					   const jsmntok_t *result,
 					   void *arg UNNEEDED)
@@ -256,7 +257,7 @@ static struct command_result *check_result(struct command *cmd,
 				    "Already exists, but isn't active");
 
 	/* Otherwise, push through the result. */
-	return forward_result(cmd, buf, result, arg);
+	return forward_result(cmd, method, buf, result, arg);
 }
 
 static struct command_result *create_offer(struct command *cmd,
@@ -265,7 +266,7 @@ static struct command_result *create_offer(struct command *cmd,
 	struct out_req *req;
 
 	/* We simply pass this through. */
-	req = jsonrpc_request_start(cmd->plugin, cmd, "createoffer",
+	req = jsonrpc_request_start(cmd, "createoffer",
 				    check_result, forward_error,
 				    offinfo);
 	json_add_string(req->js, "bolt12",
@@ -274,7 +275,7 @@ static struct command_result *create_offer(struct command *cmd,
 		json_add_string(req->js, "label", offinfo->label);
 	json_add_bool(req->js, "single_use", *offinfo->single_use);
 
-	return send_outreq(cmd->plugin, req);
+	return send_outreq(req);
 }
 
 static struct command_result *found_best_peer(struct command *cmd,
@@ -339,13 +340,14 @@ static struct command_result *maybe_add_path(struct command *cmd,
 }
 
 static struct command_result *currency_done(struct command *cmd,
+					    const char *method,
 					    const char *buf,
 					    const jsmntok_t *result,
 					    struct offer_info *offinfo)
 {
 	/* Fail in this case, by forwarding warnings. */
 	if (!json_get_member(buf, result, "msat"))
-		return forward_error(cmd, buf, result, offinfo);
+		return forward_error(cmd, method, buf, result, offinfo);
 
 	return maybe_add_path(cmd, offinfo);
 }
@@ -567,14 +569,14 @@ struct command_result *json_offer(struct command *cmd,
 	if (offer->offer_currency) {
 		struct out_req *req;
 
-		req = jsonrpc_request_start(cmd->plugin, cmd, "currencyconvert",
+		req = jsonrpc_request_start(cmd, "currencyconvert",
 					    currency_done, forward_error,
 					    offinfo);
 		json_add_u32(req->js, "amount", 1);
 		json_add_stringn(req->js, "currency",
 				 (const char *)offer->offer_currency,
 				 tal_bytelen(offer->offer_currency));
-		return send_outreq(cmd->plugin, req);
+		return send_outreq(req);
 	}
 
 	return maybe_add_path(cmd, offinfo);
@@ -587,7 +589,7 @@ static struct command_result *call_createinvoicerequest(struct command *cmd,
 {
 	struct out_req *req;
 
-	req = jsonrpc_request_start(cmd->plugin, cmd, "createinvoicerequest",
+	req = jsonrpc_request_start(cmd, "createinvoicerequest",
 				    check_result, forward_error,
 				    invreq);
 	json_add_string(req->js, "bolt12", invrequest_encode(tmpctx, invreq));
@@ -595,7 +597,7 @@ static struct command_result *call_createinvoicerequest(struct command *cmd,
 	json_add_bool(req->js, "single_use", single_use);
 	if (label)
 		json_add_string(req->js, "recurrence_label", label);
-	return send_outreq(cmd->plugin, req);
+	return send_outreq(req);
 }
 
 struct invrequest_data {

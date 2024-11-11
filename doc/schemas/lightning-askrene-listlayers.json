@@ -2,10 +2,9 @@
   "$schema": "../rpc-schema-draft.json",
   "type": "object",
   "rpc": "askrene-listlayers",
-  "title": "Command to display information about layers (EXPERIMENTAL)",
+  "title": "Command to display information about layers",
+  "added": "v24.11",
   "description": [
-    "WARNING: experimental, so API may change.",
-    "",
     "The **askrene-listlayers** RPC command reports any modifications each layer (or, the layer specified) would make to the topology, if it were used for *getroutes*."
   ],
   "request": {
@@ -33,6 +32,7 @@
           "additionalProperties": false,
           "required": [
             "layer",
+            "persistent",
             "disabled_nodes",
             "created_channels",
             "channel_updates",
@@ -43,6 +43,12 @@
               "type": "string",
               "description": [
                 "The name of the layer."
+              ]
+            },
+            "persistent": {
+              "type": "boolean",
+              "description": [
+                "Whether the layer is saved across restarts."
               ]
             },
             "disabled_nodes": {
@@ -191,6 +197,37 @@
                   }
                 }
               }
+            },
+            "biases": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "short_channel_id_dir",
+                  "bias"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "short_channel_id_dir": {
+                    "type": "short_channel_id_dir",
+                    "description": [
+                      "The short channel id and direction"
+                    ]
+                  },
+                  "bias": {
+                    "type": "integer",
+                    "description": [
+                      "The bias (-100 to +100)"
+                    ]
+                  },
+                  "description": {
+                    "type": "string",
+                    "description": [
+                      "The bias (-100 to +100)"
+                    ]
+                  }
+                }
+              }
             }
           }
         }
@@ -202,6 +239,7 @@
     "lightning-askrene-disable-node(7)",
     "lightning-askrene-create-channel(7)",
     "lightning-askrene-inform-channel(7)",
+    "lightning-askrene-bias-channel(7)",
     "lightning-askrene-age(7)"
   ],
   "author": [

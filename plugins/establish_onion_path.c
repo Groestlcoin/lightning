@@ -20,6 +20,7 @@ struct connect_info {
 };
 
 static struct command_result *connect_ok(struct command *cmd,
+					 const char *method,
 					 const char *buf,
 					 const jsmntok_t *result,
 					 struct connect_info *ci)
@@ -34,6 +35,7 @@ static struct command_result *connect_ok(struct command *cmd,
 }
 
 static struct command_result *command_failed(struct command *cmd,
+					     const char *method,
 					     const char *buf,
 					     const jsmntok_t *result,
 					     struct connect_info *ci)
@@ -53,10 +55,10 @@ static struct command_result *connect_direct(struct command *cmd,
 	plugin_log(cmd->plugin, LOG_DBG, "connecting directly to %s",
 		   fmt_pubkey(tmpctx, &ci->dst));
 
-	req = jsonrpc_request_start(cmd->plugin, cmd,
+	req = jsonrpc_request_start(cmd,
 				    "connect", connect_ok, command_failed, ci);
 	json_add_pubkey(req->js, "id", &ci->dst);
-	return send_outreq(cmd->plugin, req);
+	return send_outreq(req);
 }
 
 static bool can_carry_onionmsg(const struct gossmap *map,
@@ -185,6 +187,7 @@ fail:
 }
 
 static struct command_result *listpeers_done(struct command *cmd,
+					     const char *method,
 					     const char *buf,
 					     const jsmntok_t *result,
 					     struct connect_info *ci)
@@ -231,9 +234,9 @@ struct command_result *establish_onion_path_(struct command *cmd,
 	ci->gossmap = gossmap;
 
 	/* We use listpeers here: we don't actually care about channels, just connections! */
-	req = jsonrpc_request_start(cmd->plugin, cmd, "listpeers",
+	req = jsonrpc_request_start(cmd, "listpeers",
 				    listpeers_done,
 				    command_failed,
 				    ci);
-	return send_outreq(cmd->plugin, req);
+	return send_outreq(req);
 }

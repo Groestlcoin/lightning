@@ -150,6 +150,7 @@ static struct command_result *try_route(struct command *cmd,
 
 static struct command_result *
 listpeerchannels_getroute_done(struct command *cmd,
+			       const char *method,
 			       const char *buf,
 			       const jsmntok_t *result,
 			       struct getroute_info *info)
@@ -170,17 +171,6 @@ listpeerchannels_getroute_done(struct command *cmd,
 	gossmap_remove_localmods(gossmap, mods);
 
 	return res;
-}
-
-static struct command_result *listpeerchannels_err(struct command *cmd,
-						   const char *buf,
-						   const jsmntok_t *result,
-						   void *unused)
-{
-	plugin_err(cmd->plugin,
-		   "Bad listpeerchannels: %.*s",
-		   json_tok_full_len(result),
-		   json_tok_full(buf, result));
 }
 
 static struct command_result *json_getroute(struct command *cmd,
@@ -204,10 +194,10 @@ static struct command_result *json_getroute(struct command *cmd,
 		return command_param_failed();
 
 	/* Add local info */
-	req = jsonrpc_request_start(cmd->plugin, cmd, "listpeerchannels",
+	req = jsonrpc_request_start(cmd, "listpeerchannels",
 				    listpeerchannels_getroute_done,
-				    listpeerchannels_err, info);
-	return send_outreq(cmd->plugin, req);
+				    plugin_broken_cb, info);
+	return send_outreq(req);
 }
 
 HTABLE_DEFINE_TYPE(struct node_id, node_id_keyof, node_id_hash, node_id_eq,
@@ -383,9 +373,10 @@ static void gossmod_add_unknown_localchan(struct gossmap_localmods *mods,
 }
 
 static struct command_result *listpeerchannels_done(struct command *cmd,
-					     const char *buf,
-					     const jsmntok_t *result,
-					     struct listchannels_opts *opts)
+						    const char *method,
+						    const char *buf,
+						    const jsmntok_t *result,
+						    struct listchannels_opts *opts)
 {
 	struct node_map *connected;
 	struct gossmap_chan *c;
@@ -476,14 +467,14 @@ static struct command_result *json_listchannels(struct command *cmd,
 	// FIXME: Once this deprecation is removed, `listpeerchannels_done` can
 	// be embedded in the current function.
 	if (command_deprecated_out_ok(cmd, "include_private", "v24.02", "v24.08")) {
-		req = jsonrpc_request_start(cmd->plugin, cmd, "listpeerchannels",
+		req = jsonrpc_request_start(cmd, "listpeerchannels",
 				    listpeerchannels_done, forward_error, opts);
-		return send_outreq(cmd->plugin, req);
+		return send_outreq(req);
 	}
 
 	// If deprecations are not necessary, call listpeerchannels_done directly,
 	// the output will not be used there.
-	return listpeerchannels_done(cmd, NULL, NULL, opts);
+	return listpeerchannels_done(cmd, NULL, NULL, NULL, opts);
 }
 
 static void json_add_node(struct json_stream *js,
@@ -613,6 +604,7 @@ static struct amount_msat peer_capacity(const struct gossmap *gossmap,
 
 static struct command_result *
 listpeerchannels_listincoming_done(struct command *cmd,
+				   const char *method,
 				   const char *buffer,
 				   const jsmntok_t *result,
 				   void *unused)
@@ -696,11 +688,10 @@ static struct command_result *json_listincoming(struct command *cmd,
 		return command_param_failed();
 
 	/* Add local info */
-	req = jsonrpc_request_start(cmd->plugin,
-				    cmd, "listpeerchannels",
+	req = jsonrpc_request_start(cmd, "listpeerchannels",
 				    listpeerchannels_listincoming_done,
-				    listpeerchannels_err, NULL);
-	return send_outreq(cmd->plugin, req);
+				    plugin_broken_cb, NULL);
+	return send_outreq(req);
 }
 
 static void memleak_mark(struct plugin *p, struct htable *memtable)
@@ -708,13 +699,13 @@ static void memleak_mark(struct plugin *p, struct htable *memtable)
 	memleak_scan_obj(memtable, global_gossmap);
 }
 
-static const char *init(struct plugin *p,
+static const char *init(struct command *init_cmd,
 			const char *buf UNUSED, const jsmntok_t *config UNUSED)
 {
 	size_t num_cupdates_rejected;
 
-	plugin = p;
-	rpc_scan(p, "getinfo",
+	plugin = init_cmd->plugin;
+	rpc_scan(init_cmd, "getinfo",
 		 take(json_out_obj(NULL, NULL, NULL)),
 		 "{id:%}", JSON_SCAN(json_to_node_id, &local_id));
 
@@ -729,7 +720,7 @@ static const char *init(struct plugin *p,
 		plugin_log(plugin, LOG_DBG,
 			   "gossmap ignored %zu channel updates",
 			   num_cupdates_rejected);
- 	plugin_set_memleak_handler(p, memleak_mark);
+ 	plugin_set_memleak_handler(plugin, memleak_mark);
 	return NULL;
 }
 

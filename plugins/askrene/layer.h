@@ -21,10 +21,16 @@ struct json_stream;
 struct layer *find_layer(struct askrene *askrene, const char *name);
 
 /* Create new layer by name. */
-struct layer *new_layer(struct askrene *askrene, const char *name);
+struct layer *new_layer(struct askrene *askrene, const char *name TAKES, bool persistent);
+
+/* Save new (persistent) layer */
+void save_new_layer(struct layer *layer);
 
 /* New temporary layer (not in askrene's hash table) */
-struct layer *new_temp_layer(const tal_t *ctx, const char *name);
+struct layer *new_temp_layer(const tal_t *ctx, struct askrene *askrene, const char *name TAKES);
+
+/* Remove this layer. */
+void remove_layer(struct layer *layer);
 
 /* Get the name of the layer */
 const char *layer_name(const struct layer *layer);
@@ -35,6 +41,9 @@ const struct local_channel *layer_find_local_channel(const struct layer *layer,
 
 /* Get capacity of that channel. */
 struct amount_msat local_channel_capacity(const struct local_channel *lc);
+
+/* Load any persistent layers */
+void load_layers(struct askrene *askrene);
 
 /* Check local channel matches these */
 bool layer_check_local_channel(const struct local_channel *lc,
@@ -48,6 +57,12 @@ void layer_add_local_channel(struct layer *layer,
 			     const struct node_id *dst,
 			     struct short_channel_id scid,
 			     struct amount_msat capacity);
+
+/* Add/set a bias for this layer.  Returns NULL if bias_factor is 0. */
+const struct bias *layer_set_bias(struct layer *layer,
+				  const struct short_channel_id_dir *scidd,
+				  const char *description TAKES,
+				  s8 bias_factor);
 
 /* Update details on a channel (could be in this layer, or another) */
 void layer_add_update_channel(struct layer *layer,
@@ -71,6 +86,11 @@ void layer_apply_constraints(const struct layer *layer,
 			     struct amount_msat *min,
 			     struct amount_msat *max)
 	NO_NULL_ARGS;
+
+/* Apply biases from a layer. */
+void layer_apply_biases(const struct layer *layer,
+			const struct gossmap *gossmap,
+			s8 *biases);
 
 /* Add one or more constraints on a layer. */
 const struct constraint *layer_add_constraint(struct layer *layer,
@@ -101,6 +121,12 @@ void json_add_constraint(struct json_stream *js,
 			 const char *fieldname,
 			 const struct constraint *c,
 			 const struct layer *layer);
+
+/* Print a single bias */
+void json_add_bias(struct json_stream *js,
+		   const char *fieldname,
+		   const struct bias *b,
+		   const struct layer *layer);
 
 /* For explain_failure: did this layer create this scid? */
 bool layer_created(const struct layer *layer, struct short_channel_id scid);

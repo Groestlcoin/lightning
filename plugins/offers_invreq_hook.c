@@ -161,6 +161,7 @@ static void json_add_label(struct json_stream *js,
  * used at the same time between the check and now.
  */
 static struct command_result *error(struct command *cmd,
+				    const char *method,
 				    const char *buf,
 				    const jsmntok_t *err,
 				    struct invreq *ir)
@@ -173,6 +174,7 @@ static struct command_result *error(struct command *cmd,
 
 /* We can fail to create the invoice if we've already done so. */
 static struct command_result *createinvoice_done(struct command *cmd,
+						 const char *method,
 						 const char *buf,
 						 const jsmntok_t *result,
 						 struct invreq *ir)
@@ -198,6 +200,7 @@ static struct command_result *createinvoice_done(struct command *cmd,
 }
 
 static struct command_result *createinvoice_error(struct command *cmd,
+						  const char *method,
 						  const char *buf,
 						  const jsmntok_t *err,
 						  struct invreq *ir)
@@ -208,10 +211,10 @@ static struct command_result *createinvoice_error(struct command *cmd,
 	if (json_scan(tmpctx, buf, err,
 		      "{code:%}", JSON_SCAN(json_to_u32, &code)) == NULL
 	    && code == INVOICE_LABEL_ALREADY_EXISTS) {
-		return createinvoice_done(cmd, buf,
+		return createinvoice_done(cmd, method, buf,
 					  json_get_member(buf, err, "data"), ir);
 	}
-	return error(cmd, buf, err, ir);
+	return error(cmd, method, buf, err, ir);
 }
 
 static struct command_result *create_invoicereq(struct command *cmd,
@@ -223,7 +226,7 @@ static struct command_result *create_invoicereq(struct command *cmd,
 	 * if we don't have public channels! */
 
 	/* Now, write invoice to db (returns the signed version) */
-	req = jsonrpc_request_start(cmd->plugin, cmd, "createinvoice",
+	req = jsonrpc_request_start(cmd, "createinvoice",
 				    createinvoice_done, createinvoice_error, ir);
 
 	json_add_string(req->js, "invstring", invoice_encode(tmpctx, ir->inv));
@@ -231,7 +234,7 @@ static struct command_result *create_invoicereq(struct command *cmd,
 	json_add_label(req->js, &ir->offer_id, ir->inv->invreq_payer_id,
 		       ir->inv->invreq_recurrence_counter
 		       ? *ir->inv->invreq_recurrence_counter : 0);
-	return send_outreq(cmd->plugin, req);
+	return send_outreq(req);
 }
 
 /* FIXME: This is naive:
@@ -483,6 +486,7 @@ static struct command_result *check_period(struct command *cmd,
 }
 
 static struct command_result *prev_invoice_done(struct command *cmd,
+						const char *method,
 						const char *buf,
 						const jsmntok_t *result,
 						struct invreq *ir)
@@ -545,7 +549,7 @@ static struct command_result *check_previous_invoice(struct command *cmd,
 	if (*ir->invreq->invreq_recurrence_counter == 0)
 		return check_period(cmd, ir, *ir->inv->invoice_created_at);
 
-	req = jsonrpc_request_start(cmd->plugin, cmd,
+	req = jsonrpc_request_start(cmd,
 				    "listinvoices",
 				    prev_invoice_done,
 				    error,
@@ -554,7 +558,7 @@ static struct command_result *check_previous_invoice(struct command *cmd,
 		       &ir->offer_id,
 		       ir->invreq->invreq_payer_id,
 		       *ir->invreq->invreq_recurrence_counter - 1);
-	return send_outreq(cmd->plugin, req);
+	return send_outreq(req);
 }
 
 /* BOLT-offers #12:
@@ -690,6 +694,7 @@ static struct command_result *handle_amount_and_recurrence(struct command *cmd,
 }
 
 static struct command_result *currency_done(struct command *cmd,
+					    const char *method,
 					    const char *buf,
 					    const jsmntok_t *result,
 					    struct invreq *ir)
@@ -750,16 +755,17 @@ static struct command_result *convert_currency(struct command *cmd,
 	for (size_t i = 0; i < iso4217->minor_unit; i++)
 		double_amount /= 10;
 
-	req = jsonrpc_request_start(cmd->plugin, cmd, "currencyconvert",
+	req = jsonrpc_request_start(cmd, "currencyconvert",
 				    currency_done, error, ir);
 	json_add_stringn(req->js, "currency",
 			 (const char *)ir->invreq->offer_currency,
 			 tal_bytelen(ir->invreq->offer_currency));
 	json_add_primitive_fmt(req->js, "amount", "%f", double_amount);
-	return send_outreq(cmd->plugin, req);
+	return send_outreq(req);
 }
 
 static struct command_result *listoffers_done(struct command *cmd,
+					      const char *method,
 					      const char *buf,
 					      const jsmntok_t *result,
 					      struct invreq *ir)
@@ -1063,8 +1069,8 @@ struct command_result *handle_invoice_request(struct command *cmd,
 	invreq_offer_id(ir->invreq, &ir->offer_id);
 
 	/* Now, look up offer */
-	req = jsonrpc_request_start(cmd->plugin, cmd, "listoffers",
+	req = jsonrpc_request_start(cmd, "listoffers",
 				    listoffers_done, error, ir);
 	json_add_sha256(req->js, "offer_id", &ir->offer_id);
-	return send_outreq(cmd->plugin, req);
+	return send_outreq(req);
 }

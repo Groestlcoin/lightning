@@ -73,7 +73,8 @@ new_channel_open(const tal_t *ctx,
 }
 
 static struct command_result *
-unreserve_done(struct command *cmd UNUSED,
+unreserve_done(struct command *aux_cmd,
+	       const char *method,
 	       const char *buf,
 	       const jsmntok_t *result,
 	       struct pending_open *open)
@@ -84,39 +85,45 @@ unreserve_done(struct command *cmd UNUSED,
 		   json_tok_full_len(result),
 		   json_tok_full(buf, result));
 
-	tal_free(open);
-	return command_done();
+	return aux_command_done(aux_cmd);
 }
 
 /* Frees open (eventually, in unreserve_done callback) */
-static void unreserve_psbt(struct pending_open *open)
+static struct command_result *unreserve_psbt(struct command *cmd,
+					     struct pending_open *open)
 {
 	struct out_req *req;
+	struct command *aux;
 
 	plugin_log(open->p, LOG_DBG,
 		   "Calling `unreserveinputs` for channel %s",
 		   fmt_channel_id(tmpctx,
 				  &open->channel_id));
 
-	req = jsonrpc_request_start(open->p, NULL,
+	/* This can outlive the underlying cmd, so use an aux! */
+	aux = aux_command(cmd);
+	req = jsonrpc_request_start(aux,
 				    "unreserveinputs",
 				    unreserve_done, unreserve_done,
 				    open);
 	json_add_psbt(req->js, "psbt", open->psbt);
-	send_outreq(open->p, req);
+	send_outreq(req);
 
 	/* We will free this in callback, but remove from list *now*
 	 * to avoid calling twice! */
 	list_del_from(&pending_opens, &open->list);
-	notleak(open);
+	tal_steal(aux, open);
+
+	return command_still_pending(aux);
 }
 
-static void cleanup_peer_pending_opens(const struct node_id *id)
+static void cleanup_peer_pending_opens(struct command *cmd,
+				       const struct node_id *id)
 {
 	struct pending_open *i, *next;
 	list_for_each_safe(&pending_opens, i, next, list) {
 		if (node_id_eq(&i->peer_id, id)) {
-			unreserve_psbt(i);
+			unreserve_psbt(cmd, i);
 		}
 	}
 }
@@ -134,6 +141,7 @@ command_hook_cont_psbt(struct command *cmd, struct wally_psbt *psbt)
 
 static struct command_result *
 datastore_del_fail(struct command *cmd,
+		   const char *method,
 		   const char *buf,
 		   const jsmntok_t *error,
 		   void *data UNUSED)
@@ -144,6 +152,7 @@ datastore_del_fail(struct command *cmd,
 
 static struct command_result *
 datastore_del_success(struct command *cmd,
+		      const char *method,
 		      const char *buf,
 		      const jsmntok_t *result,
 		      void *data UNUSED)
@@ -159,14 +168,15 @@ datastore_del_success(struct command *cmd,
 
 static struct command_result *
 datastore_add_fail(struct command *cmd,
+		   const char *method,
 		   const char *buf,
 		   const jsmntok_t *error,
 		   struct wally_psbt *signed_psbt)
 {
 	/* Oops, something's broken */
 	plugin_log(cmd->plugin, LOG_BROKEN,
-		   "`datastore` add failed: %*.s",
-		   json_tok_full_len(error),
+		   "%s failed: %*.s",
+		   method, json_tok_full_len(error),
 		   json_tok_full(buf, error));
 
 	return command_hook_cont_psbt(cmd, signed_psbt);
@@ -174,6 +184,7 @@ datastore_add_fail(struct command *cmd,
 
 static struct command_result *
 datastore_add_success(struct command *cmd,
+		      const char *method,
 		      const char *buf,
 		      const jsmntok_t *result,
 		      struct wally_psbt *signed_psbt)
@@ -209,7 +220,7 @@ remember_channel_utxos(struct command *cmd,
 				 fmt_channel_id(cmd,
 						&open->channel_id));
 
-	req = jsonrpc_request_start(cmd->plugin, cmd,
+	req = jsonrpc_request_start(cmd,
 				    "datastore",
 				    &datastore_add_success,
 				    &datastore_add_fail,
@@ -231,11 +242,12 @@ remember_channel_utxos(struct command *cmd,
 	/* We either update the existing or add a new one, nbd */
 	json_add_string(req->js, "mode", "create-or-replace");
 	json_add_hex(req->js, "hex", utxos_bin, tal_bytelen(utxos_bin));
-	return send_outreq(cmd->plugin, req);
+	return send_outreq(req);
 }
 
 static struct command_result *
 signpsbt_done(struct command *cmd,
+	      const char *method,
 	      const char *buf,
 	      const jsmntok_t *result,
 	      struct pending_open *open)
@@ -313,7 +325,7 @@ json_openchannel2_sign_call(struct command *cmd,
 		   "openchannel_sign PSBT is %s",
 		   fmt_wally_psbt(tmpctx, psbt));
 
-	req = jsonrpc_request_start(cmd->plugin, cmd,
+	req = jsonrpc_request_start(cmd,
 				    "signpsbt",
 				    &signpsbt_done,
 				    &forward_error,
@@ -336,7 +348,7 @@ json_openchannel2_sign_call(struct command *cmd,
 		   fmt_channel_id(tmpctx,
 				  &open->channel_id), count,
 		   count == 1 ? "" : "s");
-	return send_outreq(cmd->plugin, req);
+	return send_outreq(req);
 }
 
 static struct command_result *
@@ -411,6 +423,7 @@ static struct open_info *new_open_info(const tal_t *ctx)
 
 static struct command_result *
 psbt_funded(struct command *cmd,
+	    const char *method,
 	    const char *buf,
 	    const jsmntok_t *result,
 	    struct open_info *info)
@@ -456,6 +469,7 @@ psbt_funded(struct command *cmd,
 
 static struct command_result *
 psbt_fund_failed(struct command *cmd,
+		 const char *method,
 		 const char *buf,
 		 const jsmntok_t *error,
 		 struct open_info *info)
@@ -463,9 +477,10 @@ psbt_fund_failed(struct command *cmd,
 	/* Attempt to fund a psbt for this open failed.
 	 * We probably ran out of funds (race?) */
 	plugin_log(cmd->plugin, LOG_INFORM,
-		   "Unable to secure %s from wallet,"
+		   "%s: unable to secure %s from wallet,"
 		   " continuing channel open to %s"
 		   " without our participation. err %.*s",
+		   method,
 		   fmt_amount_sat(tmpctx, info->our_funding),
 		   fmt_node_id(tmpctx, &info->id),
 		   json_tok_full_len(error),
@@ -528,7 +543,7 @@ build_utxopsbt_request(struct command *cmd,
 {
 	struct out_req *req;
 
-	req = jsonrpc_request_start(cmd->plugin, cmd,
+	req = jsonrpc_request_start(cmd,
 				    "utxopsbt",
 				    &psbt_funded,
 				    &psbt_fund_failed,
@@ -561,6 +576,7 @@ build_utxopsbt_request(struct command *cmd,
 
 static struct command_result *
 listfunds_success(struct command *cmd,
+		  const char *method,
 		  const char *buf,
 		  const jsmntok_t *result,
 		  struct open_info *info)
@@ -717,7 +733,7 @@ listfunds_success(struct command *cmd,
 		/* We don't re-reserve any UTXOS :) */
 		json_add_num(req->js, "reserve", 0);
 	} else {
-		req = jsonrpc_request_start(cmd->plugin, cmd,
+		req = jsonrpc_request_start(cmd,
 					    "fundpsbt",
 					    &psbt_funded,
 					    &psbt_fund_failed,
@@ -739,11 +755,12 @@ listfunds_success(struct command *cmd,
 	json_add_bool(req->js, "excess_as_change", true);
 	json_add_num(req->js, "locktime", info->locktime);
 
-	return send_outreq(cmd->plugin, req);
+	return send_outreq(req);
 }
 
 static struct command_result *
 listfunds_failed(struct command *cmd,
+		 const char *method,
 		 const char *buf,
 		 const jsmntok_t *error,
 		 struct open_info *info)
@@ -886,17 +903,18 @@ json_openchannel2_call(struct command *cmd,
 	}
 
 	/* Figure out what our funds are */
-	req = jsonrpc_request_start(cmd->plugin, cmd,
+	req = jsonrpc_request_start(cmd,
 				    "listfunds",
 				    &listfunds_success,
 				    &listfunds_failed,
 				    info);
 
-	return send_outreq(cmd->plugin, req);
+	return send_outreq(req);
 }
 
 static struct command_result *
 datastore_list_fail(struct command *cmd,
+		    const char *method,
 		    const char *buf,
 		    const jsmntok_t *error,
 		    struct open_info *info)
@@ -911,16 +929,17 @@ datastore_list_fail(struct command *cmd,
 
 	/* Figure out what our funds are... same flow
 	 * as with openchannel2 callback.  */
-	req = jsonrpc_request_start(cmd->plugin, cmd,
+	req = jsonrpc_request_start(cmd,
 				    "listfunds",
 				    &listfunds_success,
 				    &listfunds_failed,
 				    info);
-	return send_outreq(cmd->plugin, req);
+	return send_outreq(req);
 }
 
 static struct command_result *
 datastore_list_success(struct command *cmd,
+		       const char *method,
 		       const char *buf,
 		       const jsmntok_t *result,
 		       struct open_info *info)
@@ -980,12 +999,12 @@ datastore_list_success(struct command *cmd,
 		tal_arr_expand(&info->prev_outs, outpoint);
 	}
 
-	req = jsonrpc_request_start(cmd->plugin, cmd,
+	req = jsonrpc_request_start(cmd,
 				    "listfunds",
 				    &listfunds_success,
 				    &listfunds_failed,
 				    info);
-	return send_outreq(cmd->plugin, req);
+	return send_outreq(req);
 }
 
 /* Peer has asked us to RBF */
@@ -1055,7 +1074,7 @@ json_rbf_channel_call(struct command *cmd,
 	}
 
 	/* Fetch out previous utxos from the datastore */
-	req = jsonrpc_request_start(cmd->plugin, cmd,
+	req = jsonrpc_request_start(cmd,
 				    "listdatastore",
 				    &datastore_list_success,
 				    &datastore_list_fail,
@@ -1064,7 +1083,7 @@ json_rbf_channel_call(struct command *cmd,
 			   fmt_channel_id(cmd,
 					  &info->cid));
 	json_add_string(req->js, "key", chan_key);
-	return send_outreq(cmd->plugin, req);
+	return send_outreq(req);
 }
 
 static struct command_result *json_disconnect(struct command *cmd,
@@ -1088,7 +1107,7 @@ static struct command_result *json_disconnect(struct command *cmd,
 		   "Cleaning up inflights for peer id %s",
 		   fmt_node_id(tmpctx, &id));
 
-	cleanup_peer_pending_opens(&id);
+	cleanup_peer_pending_opens(cmd, &id);
 
 	return notification_handled(cmd);
 }
@@ -1103,7 +1122,7 @@ delete_channel_from_datastore(struct command *cmd,
 	 * If we were clever, we'd have some way of tracking
 	 * channels that we actually might have data for
 	 * but this is much easier */
-	req = jsonrpc_request_start(cmd->plugin, cmd,
+	req = jsonrpc_request_start(cmd,
 				    "deldatastore",
 				    &datastore_del_success,
 				    &datastore_del_fail,
@@ -1111,7 +1130,7 @@ delete_channel_from_datastore(struct command *cmd,
 	json_add_string(req->js, "key",
 			tal_fmt(cmd, "funder/%s",
 				fmt_channel_id(cmd, cid)));
-	return send_outreq(cmd->plugin, req);
+	return send_outreq(req);
 }
 
 static struct command_result *json_channel_state_changed(struct command *cmd,
@@ -1176,7 +1195,7 @@ static struct command_result *json_channel_open_failed(struct command *cmd,
 
 	open = find_channel_pending_open(&cid);
 	if (open)
-		unreserve_psbt(open);
+		unreserve_psbt(cmd, open);
 
 	/* Also clean up datastore for this channel */
 	return delete_channel_from_datastore(cmd, &cid);
@@ -1311,7 +1330,9 @@ parse_lease_rates(struct command *cmd, const char *buffer,
 }
 
 static struct command_result *
-leaserates_set(struct command *cmd, const char *buf,
+leaserates_set(struct command *cmd,
+	       const char *method,
+	       const char *buf,
 	       const jsmntok_t *result,
 	       struct funder_policy *policy)
 {
@@ -1411,7 +1432,7 @@ json_funderupdate(struct command *cmd,
 	current_policy = tal_steal(NULL, policy);
 
 	/* Update lightningd, also */
-	req = jsonrpc_request_start(cmd->plugin, cmd,
+	req = jsonrpc_request_start(cmd,
 				    "setleaserates",
 				    &leaserates_set,
 				    &forward_error,
@@ -1426,7 +1447,7 @@ json_funderupdate(struct command *cmd,
 		json_add_lease_rates(req->js, &rates);
 	}
 
-	return send_outreq(cmd->plugin, req);
+	return send_outreq(req);
 }
 
 static const struct plugin_command commands[] = {
@@ -1436,7 +1457,7 @@ static const struct plugin_command commands[] = {
 	},
 };
 
-static void tell_lightningd_lease_rates(struct plugin *p,
+static void tell_lightningd_lease_rates(struct command *init_cmd,
 					struct lease_rates *rates)
 {
 	struct json_out *jout;
@@ -1464,7 +1485,7 @@ static void tell_lightningd_lease_rates(struct plugin *p,
 	json_out_end(jout, '}');
 	json_out_finished(jout);
 
-	rpc_scan(p, "setleaserates", take(jout),
+	rpc_scan(init_cmd, "setleaserates", take(jout),
 		 /* Unused */
 		 "{lease_fee_base_msat:%}",
 		 JSON_SCAN(json_to_msat, &mval));
@@ -1477,7 +1498,7 @@ static void memleak_mark(struct plugin *p, struct htable *memtable)
 	memleak_scan_obj(memtable, current_policy);
 }
 
-static const char *init(struct plugin *p, const char *b, const jsmntok_t *t)
+static const char *init(struct command *init_cmd, const char *b, const jsmntok_t *t)
 {
 	const char *err;
 	struct amount_msat msat;
@@ -1486,19 +1507,19 @@ static const char *init(struct plugin *p, const char *b, const jsmntok_t *t)
 
 	err = funder_check_policy(current_policy);
 	if (err)
-		plugin_err(p, "Invalid parameter combination: %s", err);
+		plugin_err(init_cmd->plugin, "Invalid parameter combination: %s", err);
 
 	if (current_policy->rates)
-		tell_lightningd_lease_rates(p, current_policy->rates);
+		tell_lightningd_lease_rates(init_cmd, current_policy->rates);
 
-	rpc_scan(p, "listconfigs",
+	rpc_scan(init_cmd, "listconfigs",
 		 take(json_out_obj(NULL, NULL, NULL)),
 		 "{configs:"
 		 "{min-emergency-msat:{value_msat:%}}}",
 		 JSON_SCAN(json_to_msat, &msat));
 
 	emergency_reserve = amount_msat_to_sat_round_down(msat);
-	plugin_set_memleak_handler(p, memleak_mark);
+	plugin_set_memleak_handler(init_cmd->plugin, memleak_mark);
 
 	return NULL;
 }

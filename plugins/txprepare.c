@@ -128,6 +128,7 @@ static struct command_result *param_outputs(struct command *cmd,
 
 /* Called after lightningd has broadcast the transaction. */
 static struct command_result *sendpsbt_done(struct command *cmd,
+					    const char *method,
 					    const char *buf,
 					    const jsmntok_t *result,
 					    struct unreleased_tx *utx)
@@ -145,6 +146,7 @@ static struct command_result *sendpsbt_done(struct command *cmd,
 
 /* Called after lightningd has signed the inputs. */
 static struct command_result *signpsbt_done(struct command *cmd,
+					    const char *method,
 					    const char *buf,
 					    const jsmntok_t *result,
 					    struct unreleased_tx *utx)
@@ -168,11 +170,11 @@ static struct command_result *signpsbt_done(struct command *cmd,
 				    fmt_wally_psbt(tmpctx, utx->psbt));
 	}
 
-	req = jsonrpc_request_start(cmd->plugin, cmd, "sendpsbt",
+	req = jsonrpc_request_start(cmd, "sendpsbt",
 				    sendpsbt_done, forward_error,
 				    utx);
 	json_add_psbt(req->js, "psbt", utx->psbt);
-	return send_outreq(cmd->plugin, req);
+	return send_outreq(req);
 }
 
 static struct command_result *finish_txprepare(struct command *cmd,
@@ -218,11 +220,11 @@ static struct command_result *finish_txprepare(struct command *cmd,
 
 		/* Won't live beyond this cmd. */
 		tal_steal(cmd, utx);
-		req = jsonrpc_request_start(cmd->plugin, cmd, "signpsbt",
+		req = jsonrpc_request_start(cmd, "signpsbt",
 					    signpsbt_done, forward_error,
 					    utx);
 		json_add_psbt(req->js, "psbt", utx->psbt);
-		return send_outreq(cmd->plugin, req);
+		return send_outreq(req);
 	}
 
 	list_add(&unreleased_txs, &utx->list);
@@ -235,6 +237,7 @@ static struct command_result *finish_txprepare(struct command *cmd,
 
 /* fundpsbt/utxopsbt gets a viable PSBT for us. */
 static struct command_result *psbt_created(struct command *cmd,
+					   const char *method,
 					   const char *buf,
 					   const jsmntok_t *result,
 					   struct txprepare *txp)
@@ -308,7 +311,7 @@ static struct command_result *txprepare_continue(struct command *cmd,
 	/* These calls are deliberately very similar, but utxopsbt wants utxos,
 	 * and fundpsbt wants minconf */
 	if (utxos) {
-		req = jsonrpc_request_start(cmd->plugin, cmd, "utxopsbt",
+		req = jsonrpc_request_start(cmd, "utxopsbt",
 					    psbt_created, forward_error,
 					    txp);
 		json_array_start(req->js, "utxos");
@@ -318,7 +321,7 @@ static struct command_result *txprepare_continue(struct command *cmd,
 		json_array_end(req->js);
 		json_add_bool(req->js, "reservedok", reservedok);
 	} else {
-		req = jsonrpc_request_start(cmd->plugin, cmd, "fundpsbt",
+		req = jsonrpc_request_start(cmd, "fundpsbt",
 					    psbt_created, forward_error,
 					    txp);
 		if (minconf)
@@ -334,7 +337,7 @@ static struct command_result *txprepare_continue(struct command *cmd,
 	json_add_bool(req->js, "excess_as_change", true);
 
 	json_add_string(req->js, "feerate", feerate);
-	return send_outreq(cmd->plugin, req);
+	return send_outreq(req);
 }
 
 static struct command_result *json_txprepare(struct command *cmd,
@@ -360,6 +363,7 @@ static struct command_result *json_txprepare(struct command *cmd,
 
 /* Called after we've unreserved the inputs. */
 static struct command_result *unreserve_done(struct command *cmd,
+					     const char *method,
 					     const char *buf,
 					     const jsmntok_t *result,
 					     struct unreleased_tx *utx)
@@ -413,11 +417,11 @@ static struct command_result *json_txdiscard(struct command *cmd,
 	/* Whatever happens, we free it once this command is done. */
 	tal_steal(cmd, utx);
 
-	req = jsonrpc_request_start(cmd->plugin, cmd, "unreserveinputs",
+	req = jsonrpc_request_start(cmd, "unreserveinputs",
 				    unreserve_done, forward_error,
 				    utx);
 	json_add_psbt(req->js, "psbt", utx->psbt);
-	return send_outreq(cmd->plugin, req);
+	return send_outreq(req);
 }
 
 static struct command_result *json_txsend(struct command *cmd,
@@ -437,11 +441,11 @@ static struct command_result *json_txsend(struct command *cmd,
 	/* If things go wrong, free it. */
 	tal_steal(cmd, utx);
 
-	req = jsonrpc_request_start(cmd->plugin, cmd, "signpsbt",
+	req = jsonrpc_request_start(cmd, "signpsbt",
 				    signpsbt_done, forward_error,
 				    utx);
 	json_add_psbt(req->js, "psbt", utx->psbt);
-	return send_outreq(cmd->plugin, req);
+	return send_outreq(req);
 }
 
 static struct command_result *json_withdraw(struct command *cmd,
@@ -493,6 +497,7 @@ struct listfunds_info {
 
 /* Find all the utxos that are p2sh in our wallet */
 static struct command_result *listfunds_done(struct command *cmd,
+					     const char *method,
 					     const char *buf,
 					     const jsmntok_t *result,
 					     struct listfunds_info *info)
@@ -566,6 +571,7 @@ static struct command_result *listfunds_done(struct command *cmd,
 
 /* We've got an address for sending funds */
 static struct command_result *newaddr_sweep_done(struct command *cmd,
+						 const char *method,
 						 const char *buf,
 						 const jsmntok_t *result,
 						 struct listfunds_info *info)
@@ -597,12 +603,12 @@ static struct command_result *newaddr_sweep_done(struct command *cmd,
 		+ bitcoin_tx_output_weight(tal_bytelen(info->txp->outputs[0].script));
 
 	/* Find all the utxos we want to spend on this tx */
-	req = jsonrpc_request_start(cmd->plugin, cmd,
+	req = jsonrpc_request_start(cmd,
 				    "listfunds",
 				    listfunds_done,
 				    forward_error,
 				    info);
-	return send_outreq(cmd->plugin, req);
+	return send_outreq(req);
 }
 
 static struct command_result *json_upgradewallet(struct command *cmd,
@@ -621,13 +627,13 @@ static struct command_result *json_upgradewallet(struct command *cmd,
 
 	info->reservedok = *reservedok;
 	/* Get an address to send everything to */
-	req = jsonrpc_request_start(cmd->plugin, cmd,
+	req = jsonrpc_request_start(cmd,
 				    "newaddr",
 				    newaddr_sweep_done,
 				    forward_error,
 				    info);
 	json_add_string(req->js, "addresstype", "all");
-	return send_outreq(cmd->plugin, req);
+	return send_outreq(req);
 }
 
 static const struct plugin_command commands[] = {
@@ -658,10 +664,10 @@ static void mark_unreleased_txs(struct plugin *plugin, struct htable *memtable)
 	memleak_scan_list_head(memtable, &unreleased_txs);
 }
 
-static const char *init(struct plugin *p,
+static const char *init(struct command *init_cmd,
 			const char *buf UNUSED, const jsmntok_t *config UNUSED)
 {
-	plugin_set_memleak_handler(p, mark_unreleased_txs);
+	plugin_set_memleak_handler(init_cmd->plugin, mark_unreleased_txs);
 	return NULL;
 }
 

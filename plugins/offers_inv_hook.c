@@ -91,6 +91,7 @@ fail_internalerr(struct command *cmd,
 }
 
 static struct command_result *pay_done(struct command *cmd,
+				       const char *method,
 				       const char *buf,
 				       const jsmntok_t *result,
 				       struct inv *inv)
@@ -107,6 +108,7 @@ static struct command_result *pay_done(struct command *cmd,
 }
 
 static struct command_result *pay_error(struct command *cmd,
+					const char *method,
 					const char *buf,
 					const jsmntok_t *error,
 					struct inv *inv)
@@ -119,6 +121,7 @@ static struct command_result *pay_error(struct command *cmd,
 }
 
 static struct command_result *listinvreqs_done(struct command *cmd,
+					       const char *method,
 					       const char *buf,
 					       const jsmntok_t *result,
 					       struct inv *inv)
@@ -190,14 +193,15 @@ static struct command_result *listinvreqs_done(struct command *cmd,
 		   fmt_amount_msat(tmpctx, amt),
 		   fmt_sha256(tmpctx, &inv->invreq_id));
 
-	req = jsonrpc_request_start(cmd->plugin, cmd, "pay",
+	req = jsonrpc_request_start(cmd, "pay",
 				    pay_done, pay_error, inv);
 	json_add_string(req->js, "bolt11", invoice_encode(tmpctx, inv->inv));
 	json_add_sha256(req->js, "localinvreqid", &inv->invreq_id);
-	return send_outreq(cmd->plugin, req);
+	return send_outreq(req);
 }
 
 static struct command_result *listinvreqs_error(struct command *cmd,
+						const char *method,
 						const char *buf,
 						const jsmntok_t *err,
 						struct inv *inv)
@@ -359,9 +363,9 @@ struct command_result *handle_invoice(struct command *cmd,
 	}
 
 	/* Now find the invoice_request. */
-	req = jsonrpc_request_start(cmd->plugin, cmd, "listinvoicerequests",
+	req = jsonrpc_request_start(cmd, "listinvoicerequests",
 				    listinvreqs_done, listinvreqs_error, inv);
 	json_add_sha256(req->js, "invreq_id", &inv->invreq_id);
-	return send_outreq(cmd->plugin, req);
+	return send_outreq(req);
 }
 

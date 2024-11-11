@@ -206,7 +206,7 @@ static const struct subsystem_ops *get_subsystem_ops(const struct per_subsystem 
 }
 
 /* Mutual recursion */
-static void do_clean_timer(void *unused);
+static struct command_result *do_clean_timer(struct command *cmd, void *unused);
 static struct command_result *do_clean(struct clean_info *cinfo);
 
 static struct clean_info *new_clean_info(const tal_t *ctx,
@@ -259,7 +259,7 @@ static struct command_result *clean_finished(struct clean_info *cinfo)
 		plugin_log(plugin, LOG_DBG, "cleaned %zu from %s",
 			   num_cleaned, subsystem_to_str(&sv));
 		*total_cleaned(&sv) += num_cleaned;
-		jsonrpc_set_datastore_string(plugin, cinfo->cmd,
+		jsonrpc_set_datastore_string(cinfo->cmd,
 					     datastore_path(tmpctx, &sv, "num"),
 					     tal_fmt(tmpctx, "%"PRIu64,
 						     *total_cleaned(&sv)),
@@ -267,7 +267,7 @@ static struct command_result *clean_finished(struct clean_info *cinfo)
 	} while (next_sv(&sv));
 
 	/* autoclean-once? */
-	if (cinfo->cmd) {
+	if (cinfo != timer_cinfo) {
 		struct json_stream *response = jsonrpc_stream_success(cinfo->cmd);
 
 		json_object_start(response, "autoclean");
@@ -287,9 +287,10 @@ static struct command_result *clean_finished(struct clean_info *cinfo)
 		return command_finished(cinfo->cmd, response);
 	} else { /* timer */
 		plugin_log(plugin, LOG_DBG, "setting next timer");
-		cleantimer = plugin_timer(plugin, time_from_sec(cycle_seconds),
+		cleantimer = global_timer(plugin,
+					  time_from_sec(cycle_seconds),
 					  do_clean_timer, NULL);
-		return timer_complete(plugin);
+		return timer_complete(cinfo->cmd);
 	}
 }
 
@@ -304,6 +305,7 @@ static struct command_result *clean_finished_one(struct clean_info *cinfo)
 }
 
 static struct command_result *del_done(struct command *cmd,
+				       const char *method,
 				       const char *buf,
 				       const jsmntok_t *result,
 				       struct per_variant *variant)
@@ -313,6 +315,7 @@ static struct command_result *del_done(struct command *cmd,
 }
 
 static struct command_result *del_failed(struct command *cmd,
+					 const char *method,
 					 const char *buf,
 					 const jsmntok_t *result,
 					 struct per_variant *variant)
@@ -476,6 +479,7 @@ static void add_forward_del_fields(struct out_req *req,
 }
 
 static struct command_result *list_done(struct command *cmd,
+					const char *method,
 					const char *buf,
 					const jsmntok_t *result,
 					struct per_subsystem *subsystem)
@@ -508,10 +512,10 @@ static struct command_result *list_done(struct command *cmd,
 		}
 
 		subsystem->cinfo->cleanup_reqs_remaining++;
-		req = jsonrpc_request_start(plugin, NULL, ops->del_command,
+		req = jsonrpc_request_start(cmd, ops->del_command,
 					    del_done, del_failed, variant);
 		ops->add_del_fields(req, buf, t);
-		send_outreq(plugin, req);
+		send_outreq(req);
 	}
 
 	subsystem->offset += max_entries_per_call;
@@ -519,6 +523,7 @@ static struct command_result *list_done(struct command *cmd,
 }
 
 static struct command_result *list_failed(struct command *cmd,
+					  const char *method,
 					  const char *buf,
 					  const jsmntok_t *result,
 					  struct per_subsystem *subsystem)
@@ -554,7 +559,7 @@ static struct command_result *do_clean(struct clean_info *cinfo)
 
 		filter = tal_fmt(tmpctx, "{\"%s\":[{%s}]}",
 				 ops->arr_name, ops->list_filter);
-		req = jsonrpc_request_with_filter_start(plugin, NULL,
+		req = jsonrpc_request_with_filter_start(cinfo->cmd,
 							tal_fmt(tmpctx,
 								"list%s",
 								ops->system_name),
@@ -566,16 +571,17 @@ static struct command_result *do_clean(struct clean_info *cinfo)
 		json_add_string(req->js, "index", "created");
 		json_add_u64(req->js, "start", ps->offset);
 		json_add_u64(req->js, "limit", max_entries_per_call);
-		send_outreq(plugin, req);
+		send_outreq(req);
 		cinfo->cleanup_reqs_remaining++;
 	}
 
 	if (cinfo->cleanup_reqs_remaining)
-		return command_still_pending(NULL);
+		return command_still_pending(cinfo->cmd);
 	return clean_finished(cinfo);
 }
 
 static struct command_result *wait_done(struct command *cmd,
+					const char *method,
 					const char *buf,
 					const jsmntok_t *result,
 					struct per_subsystem *ps)
@@ -598,17 +604,6 @@ static struct command_result *wait_done(struct command *cmd,
 	return do_clean(ps->cinfo);
 }
 
-static struct command_result *wait_failed(struct command *cmd,
-					  const char *buf,
-					  const jsmntok_t *result,
-					  struct per_subsystem *subsystem)
-{
-	plugin_err(plugin, "Failed wait '%s': '%.*s'",
-		   get_subsystem_ops(subsystem)->system_name,
-		   json_tok_full_len(result),
-		   json_tok_full(buf, result));
-}
-
 static struct command_result *start_clean(struct clean_info *cinfo)
 {
 	cinfo->cleanup_reqs_remaining = 0;
@@ -627,13 +622,13 @@ static struct command_result *start_clean(struct clean_info *cinfo)
 		}
 		ps->offset = 0;
 
-		req = jsonrpc_request_start(plugin, NULL,
+		req = jsonrpc_request_start(cinfo->cmd,
 					    "wait",
-					    wait_done, wait_failed, ps);
+					    wait_done, plugin_broken_cb, ps);
 		json_add_string(req->js, "subsystem", ops->system_name);
 		json_add_string(req->js, "indexname", "created");
 		json_add_u64(req->js, "nextvalue", 0);
-		send_outreq(plugin, req);
+		send_outreq(req);
 		cinfo->cleanup_reqs_remaining++;
 	}
 
@@ -641,11 +636,12 @@ static struct command_result *start_clean(struct clean_info *cinfo)
 }
 
 /* Needs a different signature than do_clean */
-static void do_clean_timer(void *unused)
+static struct command_result *do_clean_timer(struct command *cmd, void *unused)
 {
 	assert(timer_cinfo->cleanup_reqs_remaining == 0);
 	cleantimer = NULL;
-	start_clean(timer_cinfo);
+	timer_cinfo->cmd = cmd;
+	return start_clean(timer_cinfo);
 }
 
 static struct command_result *param_subsystem(struct command *cmd,
@@ -740,29 +736,29 @@ static void memleak_mark_timer_cinfo(struct plugin *plugin,
 	memleak_scan_obj(memtable, timer_cinfo);
 }
 
-static const char *init(struct plugin *p,
+static const char *init(struct command *init_cmd,
 			const char *buf UNUSED, const jsmntok_t *config UNUSED)
 {
 	struct subsystem_and_variant sv;
-	plugin = p;
+	plugin = init_cmd->plugin;
 
 	/* Plugin owns global */
 	tal_steal(plugin, timer_cinfo);
 	plugin_set_memleak_handler(plugin, memleak_mark_timer_cinfo);
 
-	cleantimer = plugin_timer(p, time_from_sec(cycle_seconds), do_clean_timer, NULL);
+	cleantimer = global_timer(plugin, time_from_sec(cycle_seconds), do_clean_timer, NULL);
 
 	/* We don't care if this fails (it usually does, since entries
 	 * don't exist! */
 	sv = first_sv();
 	do {
-		rpc_scan_datastore_str(tmpctx, plugin,
+		rpc_scan_datastore_str(tmpctx, init_cmd,
 				       datastore_path(tmpctx, &sv, "num"),
 				       JSON_SCAN(json_to_u64, total_cleaned(&sv)));
 	} while (next_sv(&sv));
 
 	/* Optimization FTW! */
-	rpc_enable_batching(p);
+	rpc_enable_batching(plugin);
 	return NULL;
 }
 
@@ -777,7 +773,8 @@ static char *cycle_seconds_option(struct plugin *plugin, const char *arg,
 	/* If timer is not running right now, reset it to new cycle_seconds */
 	if (cleantimer) {
 		tal_free(cleantimer);
-		cleantimer = plugin_timer(plugin, time_from_sec(*cycle_seconds),
+		cleantimer = global_timer(plugin,
+					  time_from_sec(*cycle_seconds),
 					  do_clean_timer, NULL);
 	}
 	return NULL;

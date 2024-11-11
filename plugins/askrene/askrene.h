@@ -31,6 +31,8 @@ struct askrene {
 	fp16_t *capacities;
 	/* My own id */
 	struct node_id my_id;
+	/* Aux command for layer */
+	struct command *layer_cmd;
 };
 
 /* Information for a single route query. */
@@ -52,6 +54,9 @@ struct route_query {
 
 	/* Cache of channel capacities for non-reserved, unknown channels. */
 	fp16_t *capacities;
+
+	/* Compact cache of biases */
+	s8 *biases;
 
 	/* Additional per-htlc cost for local channels */
 	const struct additional_cost_htable *additional_costs;
