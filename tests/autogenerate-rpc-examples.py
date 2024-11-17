@@ -483,7 +483,18 @@ def generate_bookkeeper_examples(l2, l3, c23_chan_id):
         update_example(node=l3, method='bkpr-listaccountevents', params={})
         update_example(node=l3, method='bkpr-listaccountevents', params=[c23_chan_id])
         update_example(node=l3, method='bkpr-listincome', params={})
-        update_example(node=l3, method='bkpr-listincome', params={'consolidate_fees': False})
+
+        # listincome and editing descriptions
+        listincome_result = update_example(node=l3, method='bkpr-listincome', params={'consolidate_fees': False})
+        invoice = next((event for event in listincome_result['income_events'] if 'payment_id' in event), None)
+        utxo_event = next((event for event in listincome_result['income_events'] if 'outpoint' in event), None)
+        update_example(node=l3, method='bkpr-editdescriptionbypaymentid', params={'payment_id': invoice['payment_id'], 'description': 'edited invoice description'})
+        # Try to edit a payment_id that does not exist
+        update_example(node=l3, method='bkpr-editdescriptionbypaymentid', params={'payment_id': 'c97b61113636256111835c0204d70111c42f19069cefdc659849a6afc6b595a4', 'description': 'edited invoice description'})
+        update_example(node=l3, method='bkpr-editdescriptionbyoutpoint', params={'outpoint': utxo_event['outpoint'], 'description': 'edited utxo description'})
+        # Try to edit an outpoint that does not exist
+        update_example(node=l3, method='bkpr-editdescriptionbyoutpoint', params={'outpoint': '6472b4c9d39d8478ed9c848df7a62a512d953a4b2e6e7b09902d76a7bbb761ca:1', 'description': 'edited utxo description'})
+
         logger.info('Bookkeeper Done!')
     except TaskFinished:
         raise
@@ -689,7 +700,6 @@ def generate_utils_examples(l1, l2, l3, l4, l5, l6, c23, c34, inv_l11, inv_l22, 
         update_example(node=l2, method='signmessage', params={'message': 'message for you'})
         update_example(node=l2, method='checkmessage', params={'message': 'testcase to check new rpc error', 'zbase': 'd66bqz3qsku5fxtqsi37j11pci47ydxa95iusphutggz9ezaxt56neh77kxe5hyr41kwgkncgiu94p9ecxiexgpgsz8daoq4tw8kj8yx', 'pubkey': '03be3b0e9992153b1d5a6e1623670b6c3663f72ce6cf2e0dd39c0a373a7de5a3b7'})
         update_example(node=l2, method='checkmessage', params={'message': 'this is a test!', 'zbase': 'd6tqaeuonjhi98mmont9m4wag7gg4krg1f4txonug3h31e9h6p6k6nbwjondnj46dkyausobstnk7fhyy998bhgc1yr98dfmhb4k54d7'})
-        update_example(node=l2, method='decodepay', params={'bolt11': inv_l11['bolt11']})
         update_example(node=l2, method='decode', params=[rune_l21['rune']])
         update_example(node=l2, method='decode', params=[inv_l22['bolt11']])
 

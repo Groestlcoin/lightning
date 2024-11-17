@@ -1,6 +1,7 @@
 from fixtures import *  # noqa: F401,F403
 from hashlib import sha256
 from pyln.client import RpcError
+from pyln.testing.utils import SLOW_MACHINE
 from utils import (
     only_one, first_scid, GenChannel, generate_gossip_store,
     sync_blockheight, wait_for, TEST_NETWORK, TIMEOUT
@@ -995,7 +996,7 @@ def test_min_htlc_after_excess(node_factory, bitcoind):
 
 @pytest.mark.slow_test
 def test_real_data(node_factory, bitcoind):
-    # Route from Rusty's node to the top 100.
+    # Route from Rusty's node to the top nodes
     # From tests/data/gossip-store-2024-09-22-node-map.xz:
     # Me: 3301:024b9a1fa8e006f1e3937f65f66c408e6da8e1ca728ea43222a7381df1cc449605:BLUEIRON
     # So we make l2 node 3301.
@@ -1030,8 +1031,16 @@ def test_real_data(node_factory, bitcoind):
         97: r"We could not find a usable set of paths\.  The shortest path is 103x1x0->0x3301x1646->0x1281x2323->97x1281x33241, but 97x1281x33241/1 isn't big enough to carry 100000000msat\.",
     }
 
+    # CI, it's slow.
+    if SLOW_MACHINE:
+        limit = 25
+        expected = (4, 25, 1533317, 143026, 91)
+    else:
+        limit = 100
+        expected = (8, 95, 6007785, 564997, 91)
+
     fees = {}
-    for n in range(0, 100):
+    for n in range(0, limit):
         print(f"XXX: {n}")
         # 0.5% is the norm
         MAX_FEE = AMOUNT // 200
@@ -1099,7 +1108,7 @@ def test_real_data(node_factory, bitcoind):
         if len(fees[n]) > len(fees[best]):
             best = n
 
-    assert (len(fees[best]), len(improved), total_first_fee, total_final_fee, percent_fee_reduction) == (8, 95, 6007785, 564997, 91)
+    assert (len(fees[best]), len(improved), total_first_fee, total_final_fee, percent_fee_reduction) == expected
 
 
 @pytest.mark.slow_test
@@ -1139,13 +1148,21 @@ def test_real_biases(node_factory, bitcoind):
         97: r"We could not find a usable set of paths\.  The shortest path is 103x1x0->0x3301x1646->0x1281x2323->97x1281x33241, but 97x1281x33241/1 isn't big enough to carry 100000000msat\.",
     }
 
+    # CI, it's slow.
+    if SLOW_MACHINE:
+        limit = 25
+        expected = ({1: 4, 2: 5, 4: 7, 8: 11, 16: 14, 32: 19, 64: 25, 100: 25}, 0)
+    else:
+        limit = 100
+        expected = ({1: 19, 2: 25, 4: 36, 8: 51, 16: 66, 32: 81, 64: 96, 100: 96}, 0)
+
     l1.rpc.askrene_create_layer('biases')
     num_changed = {}
     bias_ineffective = 0
 
     for bias in (1, 2, 4, 8, 16, 32, 64, 100):
         num_changed[bias] = 0
-        for n in range(0, 100):
+        for n in range(0, limit):
             # 0.5% is the norm
             MAX_FEE = AMOUNT // 200
 
@@ -1207,7 +1224,7 @@ def test_real_biases(node_factory, bitcoind):
                                               enabled=True)
 
     # With e^(-bias / (100/ln(30))):
-    assert (num_changed, bias_ineffective) == ({1: 19, 2: 25, 4: 36, 8: 51, 16: 66, 32: 81, 64: 96, 100: 96}, 0)
+    assert (num_changed, bias_ineffective) == expected
 
 
 @pytest.mark.slow_test

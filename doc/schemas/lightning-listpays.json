@@ -4,7 +4,7 @@
   "rpc": "listpays",
   "title": "Command for querying payment status",
   "description": [
-    "The **listpay** RPC command gets the status of all *pay* commands, or a single one if either *bolt11* or *payment_hash* was specified."
+    "The **listpays** RPC command gets the status of all *pay* commands (by combining results from listsendpays which lists every payment part), or a single one if either *bolt11* or *payment_hash* was specified."
   ],
   "categories": [
     "readonly"
@@ -35,6 +35,34 @@
           "complete",
           "failed"
         ]
+      },
+      "index": {
+        "type": "string",
+        "added": "v24.11",
+        "enum": [
+          "created",
+          "updated"
+        ],
+        "description": [
+          "If neither *in_channel* nor *out_channel* is specified, it controls ordering, by `created` or `updated`."
+        ]
+      },
+      "start": {
+        "type": "u64",
+        "added": "v24.11",
+        "description": [
+          "If `index` is specified, `start` may be specified to start from that value, which is generally returned from lightning-wait(7).",
+          "NOTE: if this is used, `amount_sent_msat` and `number_of_parts` fields may be lower than expected, as not all payment parts will be considered"
+        ]
+      },
+      "limit": {
+        "type": "u32",
+        "added": "v24.11",
+        "description": [
+          "If `index` is specified, `limit` can be used to specify the maximum number of entries to return.",
+          "NOTE: if this is used, `amount_sent_msat` and `number_of_parts` fields may be lower than expected, as not all payment parts will be considered",
+          "NOTE: the actual number returned may be less than the limit, as individual payment parts are combined together"
+        ]
       }
     }
   },
@@ -52,7 +80,8 @@
           "required": [
             "payment_hash",
             "status",
-            "created_at"
+            "created_at",
+            "created_index"
           ],
           "properties": {
             "payment_hash": {
@@ -113,6 +142,20 @@
               "description": [
                 "The bolt12 string (if supplied for pay: **experimental-offers** only)."
               ]
+            },
+            "created_index": {
+              "type": "u64",
+              "added": "v24.11",
+              "description": [
+                "1-based index indicating order this payment was created in."
+              ]
+            },
+            "updated_index": {
+              "type": "u64",
+              "added": "v24.11",
+              "description": [
+                "1-based index indicating order this payment was changed (only present if it has changed since creation)."
+              ]
             }
           },
           "allOf": [
@@ -135,6 +178,8 @@
                   "preimage"
                 ],
                 "properties": {
+                  "created_index": {},
+                  "updated_index": {},
                   "payment_hash": {},
                   "status": {},
                   "destination": {},
@@ -189,6 +234,8 @@
                   "amount_sent_msat"
                 ],
                 "properties": {
+                  "created_index": {},
+                  "updated_index": {},
                   "payment_hash": {},
                   "status": {},
                   "destination": {},

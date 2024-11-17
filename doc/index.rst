@@ -59,10 +59,12 @@ Core Lightning Documentation
    lightning-delpay <lightning-delpay.7.md>
    lightning-deprecations <lightning-deprecations.7.md>
    lightning-dev-forget-channel <lightning-dev-forget-channel.7.md>
+   lightning-dev-splice <lightning-dev-splice.7.md>
    lightning-disableinvoicerequest <lightning-disableinvoicerequest.7.md>
    lightning-disableoffer <lightning-disableoffer.7.md>
    lightning-disconnect <lightning-disconnect.7.md>
    lightning-emergencyrecover <lightning-emergencyrecover.7.md>
+   lightning-exposesecret <lightning-exposesecret.7.md>
    lightning-feerates <lightning-feerates.7.md>
    lightning-fetchinvoice <lightning-fetchinvoice.7.md>
    lightning-fundchannel <lightning-fundchannel.7.md>
@@ -82,6 +84,7 @@ Core Lightning Documentation
    lightning-invoice <lightning-invoice.7.md>
    lightning-invoicerequest <lightning-invoicerequest.7.md>
    lightning-keysend <lightning-keysend.7.md>
+   lightning-listaddresses <lightning-listaddresses.7.md>
    lightning-listchannels <lightning-listchannels.7.md>
    lightning-listclosedchannels <lightning-listclosedchannels.7.md>
    lightning-listconfigs <lightning-listconfigs.7.md>

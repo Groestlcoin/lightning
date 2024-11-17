@@ -836,15 +836,48 @@ bool wallet_can_spend(struct wallet *w, const u8 *script,
 	return false;
 }
 
-s64 wallet_get_newindex(struct lightningd *ld)
+s64 wallet_get_newindex(struct lightningd *ld, enum addrtype addrtype)
 {
+	struct db_stmt *stmt;
 	u64 newidx = db_get_intvar(ld->wallet->db, "bip32_max_index", 0) + 1;
 
 	if (newidx == BIP32_INITIAL_HARDENED_CHILD)
 		return -1;
 
 	db_set_intvar(ld->wallet->db, "bip32_max_index", newidx);
+	stmt = db_prepare_v2(ld->wallet->db,
+			     SQL("INSERT INTO addresses ("
+				 "  keyidx"
+				 ", addrtype"
+				 ") VALUES (?, ?);"));
+	db_bind_u64(stmt, newidx);
+	db_bind_int(stmt, wallet_addrtype_in_db(addrtype));
+	db_exec_prepared_v2(take(stmt));
+
 	return newidx;
+}
+
+enum addrtype wallet_get_addrtype(struct wallet *wallet, u64 idx)
+{
+	struct db_stmt *stmt;
+	enum addrtype type;
+
+	stmt = db_prepare_v2(wallet->db,
+			     SQL("SELECT addrtype"
+				 " FROM addresses"
+				 " WHERE keyidx=?"));
+	db_bind_u64(stmt, idx);
+	db_query_prepared(stmt);
+
+	/* Unknown means prior to v24.11 */
+	if (!db_step(stmt)) {
+		tal_free(stmt);
+		return ADDR_P2TR|ADDR_BECH32;
+	}
+
+	type = wallet_addrtype_in_db(db_col_int(stmt, "addrtype"));
+	tal_free(stmt);
+	return type;
 }
 
 static void wallet_shachain_init(struct wallet *wallet,
@@ -4198,7 +4231,7 @@ bool wallet_sanity_check(struct wallet *w)
 /**
  * wallet_utxoset_prune -- Remove spent UTXO entries that are old
  */
-static void wallet_utxoset_prune(struct wallet *w, const u32 blockheight)
+void wallet_utxoset_prune(struct wallet *w, u32 blockheight)
 {
 	struct db_stmt *stmt;
 
@@ -4236,9 +4269,6 @@ void wallet_block_add(struct wallet *w, struct block *b)
 		db_bind_null(stmt);
 	}
 	db_exec_prepared_v2(take(stmt));
-
-	/* Now cleanup UTXOs that we don't care about anymore */
-	wallet_utxoset_prune(w, b->height);
 }
 
 void wallet_block_remove(struct wallet *w, struct block *b)
@@ -4465,6 +4495,26 @@ wallet_utxoset_get_spent(const tal_t *ctx, struct wallet *w,
 	return db_scids(ctx, stmt);
 }
 
+u32 wallet_utxoset_oldest_spentheight(const tal_t *ctx, struct wallet *w)
+{
+	struct db_stmt *stmt;
+	u32 height;
+	stmt = db_prepare_v2(w->db, SQL("SELECT"
+					" spendheight "
+					"FROM utxoset "
+					"WHERE spendheight IS NOT NULL "
+					"ORDER BY spendheight ASC "
+					"LIMIT 1"));
+	db_query_prepared(stmt);
+
+	if (db_step(stmt))
+		height = db_col_int(stmt, "spendheight");
+	else
+		height = 0;
+	tal_free(stmt);
+	return height;
+}
+
 const struct short_channel_id *
 wallet_utxoset_get_created(const tal_t *ctx, struct wallet *w,
 			   u32 blockheight)
@@ -4659,9 +4709,10 @@ struct bitcoin_txid *wallet_transactions_by_height(const tal_t *ctx,
 	return txids;
 }
 
-void wallet_channeltxs_add(struct wallet *w, struct channel *chan,
-			   const int type, const struct bitcoin_txid *txid,
-			   const u32 input_num, const u32 blockheight)
+void wallet_insert_funding_spend(struct wallet *w,
+				 const struct channel *chan,
+				 const struct bitcoin_txid *txid,
+				 const u32 input_num, const u32 blockheight)
 {
 	struct db_stmt *stmt;
 	stmt = db_prepare_v2(w->db, SQL("INSERT INTO channeltxs ("
@@ -4672,70 +4723,43 @@ void wallet_channeltxs_add(struct wallet *w, struct channel *chan,
 					", blockheight"
 					") VALUES (?, ?, ?, ?, ?);"));
 	db_bind_int(stmt, chan->dbid);
-	db_bind_int(stmt, type);
-	db_bind_sha256(stmt, &txid->shad.sha);
+	/* FIXME: This is WIRE_ONCHAIND_INIT, accidentally leaked into db! */
+	db_bind_int(stmt, 5001);
+	db_bind_txid(stmt, txid);
 	db_bind_int(stmt, input_num);
 	db_bind_int(stmt, blockheight);
 
 	db_exec_prepared_v2(take(stmt));
 }
 
-u32 *wallet_onchaind_channels(const tal_t *ctx, struct wallet *w)
+struct bitcoin_tx *wallet_get_funding_spend(const tal_t *ctx,
+					    struct wallet *w,
+					    u64 channel_id,
+					    u32 *blockheight)
 {
 	struct db_stmt *stmt;
-	size_t count = 0;
-	u32 *channel_ids = tal_arr(ctx, u32, 0);
-	stmt = db_prepare_v2(
-	    w->db,
-	    SQL("SELECT DISTINCT(channel_id) FROM channeltxs WHERE type = ?;"));
+	struct bitcoin_tx *tx;
+
+	stmt = db_prepare_v2(w->db,
+			     SQL("SELECT"
+				 " t.blockheight"
+				 ", t.rawtx"
+				 " FROM channeltxs c"
+				 " JOIN transactions t ON t.id = c.transaction_id"
+				 " WHERE c.channel_id = ? AND t.blockheight IS NOT NULL AND c.type = ?"
+				 " ORDER BY c.id ASC;"));
+	db_bind_int(stmt, channel_id);
 	db_bind_int(stmt, WIRE_ONCHAIND_INIT);
 	db_query_prepared(stmt);
 
-	while (db_step(stmt)) {
-		count++;
-		tal_resize(&channel_ids, count);
-		channel_ids[count-1] = db_col_u64(stmt, "DISTINCT(channel_id)");
-	}
+	if (db_step(stmt)) {
+		tx = db_col_tx(ctx, stmt, "t.rawtx");
+		*blockheight = db_col_int(stmt, "t.blockheight");
+	} else
+		tx = NULL;
 	tal_free(stmt);
 
-	return channel_ids;
-}
-
-struct channeltx *wallet_channeltxs_get(const tal_t *ctx, struct wallet *w,
-					u32 channel_id)
-{
-	struct db_stmt *stmt;
-	size_t count = 0;
-	struct channeltx *res = tal_arr(ctx, struct channeltx, 0);
-	stmt = db_prepare_v2(
-	    w->db, SQL("SELECT"
-		       "  c.type"
-		       ", c.blockheight"
-		       ", t.rawtx"
-		       ", c.input_num"
-		       ", c.blockheight - t.blockheight + 1 AS depth"
-		       ", t.id as txid "
-		       "FROM channeltxs c "
-		       "JOIN transactions t ON t.id = c.transaction_id "
-		       "WHERE c.channel_id = ? "
-		       "ORDER BY c.id ASC;"));
-	db_bind_int(stmt, channel_id);
-	db_query_prepared(stmt);
-
-	while (db_step(stmt)) {
-		count++;
-		tal_resize(&res, count);
-
-		res[count-1].channel_id = channel_id;
-		res[count-1].type = db_col_int(stmt, "c.type");
-		res[count-1].blockheight = db_col_int(stmt, "c.blockheight");
-		res[count-1].tx = db_col_tx(ctx, stmt, "t.rawtx");
-		res[count-1].input_num = db_col_int(stmt, "c.input_num");
-		res[count-1].depth = db_col_int(stmt, "depth");
-		db_col_txid(stmt, "txid", &res[count-1].txid);
-	}
-	tal_free(stmt);
-	return res;
+	return tx;
 }
 
 static bool wallet_forwarded_payment_update(struct wallet *w,
@@ -6352,4 +6376,26 @@ struct local_anchor_info *wallet_get_local_anchors(const tal_t *ctx,
 	tal_free(stmt);
 
 	return anchors;
+}
+
+struct issued_address_type *wallet_list_addresses(const tal_t *ctx, struct wallet *wallet,
+						   u64 liststart, const u32 *listlimit)
+{
+	struct db_stmt *stmt;
+	struct issued_address_type *addresseslist = tal_arr(ctx, struct issued_address_type, 0);
+	stmt = db_prepare_v2(wallet->db, SQL("SELECT keyidx, addrtype FROM addresses WHERE keyidx >= ? ORDER BY keyidx LIMIT ?;"));
+	db_bind_u64(stmt, liststart);
+	if (listlimit)
+		db_bind_int(stmt, *listlimit);
+	else
+		db_bind_int(stmt, INT_MAX);
+	db_query_prepared(stmt);
+	while(db_step(stmt)) {
+		struct issued_address_type a;
+		a.keyidx = db_col_u64(stmt, "keyidx");
+		a.addrtype = wallet_addrtype_in_db(db_col_int(stmt, "addrtype"));
+		tal_arr_expand(&addresseslist, a);
+	}
+	tal_free(stmt);
+	return addresseslist;
 }

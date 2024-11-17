@@ -1683,10 +1683,10 @@ def test_funding_close_upfront(node_factory, bitcoind):
         """
         r = l1.rpc.close(l2.info['id'], destination=addr)
         assert r['type'] == 'mutual'
-        tx = bitcoind.rpc.decoderawtransaction(r['tx'])
+        tx = bitcoind.rpc.decoderawtransaction(only_one(r['txs']))
 
         addrs = [scriptpubkey_addr(vout['scriptPubKey']) for vout in tx['vout']]
-        bitcoind.generate_block(1, wait_for_mempool=[r['txid']])
+        bitcoind.generate_block(1, wait_for_mempool=[only_one(r['txids'])])
         sync_blockheight(bitcoind, [l1, l2])
         return addrs
 
@@ -4581,6 +4581,11 @@ def test_wss_proxy(node_factory):
             ret = self.recvbuf[:maxlen]
             self.recvbuf = self.recvbuf[maxlen:]
             return ret
+
+    # There can be a delay between the printing of "Websocket Secure Server Started"
+    # and actually binding the port.  There's no obvious way to delay that message
+    # it's done.  So we sleep here.
+    time.sleep(10)
 
     wss = BindWebSecureSocket('localhost', wss_port)
 

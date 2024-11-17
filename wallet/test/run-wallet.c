@@ -938,7 +938,7 @@ void report_subd_memleak(struct leak_detect *leak_detect UNNEEDED, struct subd *
 { fprintf(stderr, "report_subd_memleak called!\n"); abort(); }
 /* Generated stub for resolve_close_command */
 void resolve_close_command(struct lightningd *ld UNNEEDED, struct channel *channel UNNEEDED,
-			   bool cooperative UNNEEDED, const struct bitcoin_tx *close_tx UNNEEDED)
+			   bool cooperative UNNEEDED, struct bitcoin_tx **close_txs UNNEEDED)
 { fprintf(stderr, "resolve_close_command called!\n"); abort(); }
 /* Generated stub for rune_is_ours */
 const char *rune_is_ours(struct lightningd *ld UNNEEDED, const struct rune *rune UNNEEDED)
@@ -985,7 +985,7 @@ struct subd_req *subd_req_(const tal_t *ctx UNNEEDED,
 	       const u8 *msg_out UNNEEDED,
 	       int fd_out UNNEEDED, size_t num_fds_in UNNEEDED,
 	       void (*replycb)(struct subd * UNNEEDED, const u8 * UNNEEDED, const int * UNNEEDED, void *) UNNEEDED,
-	       void *replycb_data UNNEEDED)
+	       void *replycb_data TAKES UNNEEDED)
 { fprintf(stderr, "subd_req_ called!\n"); abort(); }
 /* Generated stub for subd_send_fd */
 void subd_send_fd(struct subd *sd UNNEEDED, int fd UNNEEDED)

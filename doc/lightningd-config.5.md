@@ -310,10 +310,15 @@ If there is no `hsm_secret` yet, `lightningd` will create a new encrypted secret
 If you have an unencrypted `hsm_secret` you want to encrypt on-disk, or vice versa,
 see lightning-hsmtool(8).
 
+
+* **grpc-host**=*HOST* [plugin `cln-grpc`]
+
+  Defines the GRPC server host. Default is 127.0.0.1.
+
 * **grpc-port**=*portnum* [plugin `cln-grpc`]
 
   The port number for the GRPC plugin to listen for incoming
-connections; default is not to activate the plugin at all.
+connections. Default is 9736.
 
 * **grpc-msg-buffer-size**=*number* [plugin `cln-grpc`]
 
@@ -696,6 +701,11 @@ authenticate to the Tor control port.
 * **wss-certs**=*PATH*  [plugin `wss-proxy.py`]
 
   Defines the path for WSS cert & key. Default path is same as RPC file path to utilize gRPC/clnrest's client certificate. If it is missing at the configured location, new identity (`client.pem` and `client-key.pem`) will be generated.
+
+* **exposesecret-passphrase**=*passphrase*  [plugin `exposesecret`]
+
+  Defines a passphrase which will let users extract the `hsm_secret` using the `exposesecret` command.  If this is not set, the `exposesecret` command always fails.
+
 
 ### Lightning Plugins
 

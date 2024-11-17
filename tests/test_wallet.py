@@ -1338,7 +1338,12 @@ def test_hsmtool_generatehsm(node_factory):
               "cake have wedding\n".encode("utf-8"))
     hsmtool.wait_for_log(r"Enter your passphrase:")
     write_all(master_fd, "This is actually not a passphrase\n".encode("utf-8"))
-    assert hsmtool.proc.wait(WAIT_TIMEOUT) == 0
+    if hsmtool.proc.wait(WAIT_TIMEOUT) != 0:
+        hsmtool.logs_catchup()
+        print("hsmtool failure! Logs:")
+        for l in hsmtool.logs:
+            print('  ' + l)
+        assert False
     hsmtool.is_in_log(r"New hsm_secret file created")
 
     # Check should pass.
@@ -1383,6 +1388,27 @@ def test_hsmtool_generatehsm(node_factory):
     # We can start the node with this hsm_secret
     l1.start()
     assert l1.info['id'] == '02244b73339edd004bc6dfbb953a87984c88e9e7c02ca14ef6ec593ca6be622ba7'
+    l1.stop()
+
+    # We can do the entire thing non-interactive!
+    os.remove(hsm_path)
+    subprocess.check_output(["tools/hsmtool",
+                             "generatehsm", hsm_path,
+                             "en",
+                             "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"])
+    assert open(hsm_path, "rb").read().hex() == "5eb00bbddcf069084889a8ab9155568165f5c453ccb85e70811aaed6f6da5fc1"
+
+    # Including passphrase
+    os.remove(hsm_path)
+    subprocess.check_output(["tools/hsmtool",
+                             "generatehsm", hsm_path,
+                             "en",
+                             "ritual idle hat sunny universe pluck key alpha wing cake have wedding",
+                             "This is actually not a passphrase"])
+
+    l1.start()
+    assert l1.info['id'] == '02244b73339edd004bc6dfbb953a87984c88e9e7c02ca14ef6ec593ca6be622ba7'
+    l1.stop()
 
 
 # this test does a 'listtransactions' on a yet unconfirmed channel

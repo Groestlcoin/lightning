@@ -2605,6 +2605,619 @@
         }
       ]
     },
+    "lightning-bkpr-editdescriptionbyoutpoint.json": {
+      "$schema": "../rpc-schema-draft.json",
+      "type": "object",
+      "additionalProperties": false,
+      "rpc": "bkpr-editdescriptionbyoutpoint",
+      "title": "Command to change the description for events with {outpoint} after they're made",
+      "description": [
+        "The **bkpr-editdescriptionbyoutpoint** RPC command updates all chain and channel events that match the {outpoint} with the provided {description}"
+      ],
+      "request": {
+        "required": [
+          "outpoint",
+          "description"
+        ],
+        "properties": {
+          "outpoint": {
+            "type": "string",
+            "description": [
+              "The outpoint to update the description for."
+            ]
+          },
+          "description": {
+            "type": "string",
+            "description": [
+              "The description to update to"
+            ]
+          }
+        }
+      },
+      "response": {
+        "required": [
+          "updated"
+        ],
+        "properties": {
+          "updated": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true,
+              "required": [
+                "account",
+                "type",
+                "tag",
+                "credit_msat",
+                "debit_msat",
+                "currency",
+                "timestamp",
+                "description"
+              ],
+              "properties": {
+                "account": {
+                  "type": "string",
+                  "description": [
+                    "The account name. If the account is a channel, the channel_id."
+                  ]
+                },
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "chain",
+                    "channel"
+                  ],
+                  "description": [
+                    "Coin movement type."
+                  ]
+                },
+                "tag": {
+                  "type": "string",
+                  "description": [
+                    "Description of movement."
+                  ]
+                },
+                "credit_msat": {
+                  "type": "msat",
+                  "description": [
+                    "Amount credited."
+                  ]
+                },
+                "debit_msat": {
+                  "type": "msat",
+                  "description": [
+                    "Amount debited."
+                  ]
+                },
+                "currency": {
+                  "type": "string",
+                  "description": [
+                    "Human-readable bech32 part for this coin type."
+                  ]
+                },
+                "timestamp": {
+                  "type": "u32",
+                  "description": [
+                    "Timestamp this event was recorded by the node. For consolidated events such as onchain_fees, the most recent timestamp."
+                  ]
+                },
+                "description": {
+                  "type": "string",
+                  "description": [
+                    "The description of this event"
+                  ]
+                }
+              },
+              "allOf": [
+                {
+                  "if": {
+                    "properties": {
+                      "type": {
+                        "type": "string",
+                        "enum": [
+                          "chain"
+                        ]
+                      }
+                    }
+                  },
+                  "then": {
+                    "properties": {
+                      "account": {},
+                      "type": {},
+                      "tag": {},
+                      "credit_msat": {},
+                      "debit_msat": {},
+                      "currency": {},
+                      "timestamp": {},
+                      "description": {
+                        "type": "string",
+                        "description": [
+                          "A description of this outpoint."
+                        ]
+                      },
+                      "outpoint": {
+                        "type": "string",
+                        "description": [
+                          "The txid:outnum for this event."
+                        ]
+                      },
+                      "blockheight": {
+                        "type": "u32",
+                        "description": [
+                          "For chain events, blockheight this occured at."
+                        ]
+                      },
+                      "origin": {
+                        "type": "string",
+                        "description": [
+                          "The account this movement originated from."
+                        ]
+                      },
+                      "payment_id": {
+                        "type": "hex",
+                        "description": [
+                          "Lightning payment identifier. For an htlc, this will be the preimage."
+                        ]
+                      },
+                      "txid": {
+                        "type": "txid",
+                        "description": [
+                          "The txid of the transaction that created this event."
+                        ]
+                      }
+                    },
+                    "required": [
+                      "outpoint",
+                      "blockheight"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "type": {
+                        "type": "string",
+                        "enum": [
+                          "onchain_fee"
+                        ]
+                      }
+                    }
+                  },
+                  "then": {
+                    "properties": {
+                      "account": {},
+                      "type": {},
+                      "tag": {},
+                      "credit_msat": {},
+                      "debit_msat": {},
+                      "currency": {},
+                      "timestamp": {},
+                      "description": {},
+                      "txid": {
+                        "type": "txid",
+                        "description": [
+                          "The txid of the transaction that created this event."
+                        ]
+                      }
+                    },
+                    "required": [
+                      "txid"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "type": {
+                        "type": "string",
+                        "enum": [
+                          "channel"
+                        ]
+                      }
+                    }
+                  },
+                  "then": {
+                    "properties": {
+                      "account": {},
+                      "type": {},
+                      "tag": {},
+                      "credit_msat": {},
+                      "debit_msat": {},
+                      "currency": {},
+                      "timestamp": {},
+                      "description": {},
+                      "fees_msat": {
+                        "type": "msat",
+                        "description": [
+                          "Amount paid in fees."
+                        ]
+                      },
+                      "is_rebalance": {
+                        "type": "boolean",
+                        "description": [
+                          "Is this payment part of a rebalance."
+                        ]
+                      },
+                      "payment_id": {
+                        "type": "hex",
+                        "description": [
+                          "Lightning payment identifier. For an htlc, this will be the preimage."
+                        ]
+                      },
+                      "part_id": {
+                        "type": "u32",
+                        "description": [
+                          "Counter for multi-part payments."
+                        ]
+                      }
+                    },
+                    "additionalProperties": false
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "author": [
+        "Lisa Neigut <<niftynei@gmail.com>> is mainly responsible."
+      ],
+      "see_also": [
+        "lightning-bkpr-editdescriptionbypaymentid(7)",
+        "lightning-bkpr-listaccountevents(7)",
+        "lightning-bkpr-listincome(7)"
+      ],
+      "resources": [
+        "Main web site: <https://github.com/ElementsProject/lightning>"
+      ],
+      "examples": [
+        {
+          "request": {
+            "id": "example:bkpr-editdescriptionbyoutpoint#1",
+            "method": "bkpr-editdescriptionbyoutpoint",
+            "params": {
+              "outpoint": "55edd73a01f08057e1f5f61788477c0d7551d5d1aa2f2907bf9d03b6370bbacf:1",
+              "description": "edited utxo description"
+            }
+          },
+          "response": {
+            "updated": [
+              {
+                "account": "wallet",
+                "type": "chain",
+                "tag": "deposit",
+                "credit_msat": 200000000000,
+                "debit_msat": 0,
+                "currency": "bcrt",
+                "outpoint": "55edd73a01f08057e1f5f61788477c0d7551d5d1aa2f2907bf9d03b6370bbacf:1",
+                "timestamp": 1724554221,
+                "blockheight": 105,
+                "description": "edited utxo description"
+              }
+            ]
+          }
+        },
+        {
+          "request": {
+            "id": "example:bkpr-editdescriptionbyoutpoint#2",
+            "method": "bkpr-editdescriptionbyoutpoint",
+            "params": {
+              "outpoint": "6472b4c9d39d8478ed9c848df7a62a512d953a4b2e6e7b09902d76a7bbb761ca:1",
+              "description": "edited utxo description"
+            }
+          },
+          "response": {
+            "updated": []
+          }
+        }
+      ]
+    },
+    "lightning-bkpr-editdescriptionbypaymentid.json": {
+      "$schema": "../rpc-schema-draft.json",
+      "type": "object",
+      "additionalProperties": false,
+      "rpc": "bkpr-editdescriptionbypaymentid",
+      "title": "Command to change the description for events with {payment_id} after they're made",
+      "description": [
+        "The **bkpr-editdescriptionbypaymentid** RPC command updates all chain and channel events that match the {payment_id} with the provided {description}"
+      ],
+      "request": {
+        "required": [
+          "payment_id",
+          "description"
+        ],
+        "properties": {
+          "payment_id": {
+            "type": "string",
+            "description": [
+              "The payment hash (payment_id) to update the description for."
+            ]
+          },
+          "description": {
+            "type": "string",
+            "description": [
+              "The description to update to"
+            ]
+          }
+        }
+      },
+      "response": {
+        "required": [
+          "updated"
+        ],
+        "properties": {
+          "updated": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true,
+              "required": [
+                "account",
+                "type",
+                "tag",
+                "credit_msat",
+                "debit_msat",
+                "currency",
+                "timestamp",
+                "description"
+              ],
+              "properties": {
+                "account": {
+                  "type": "string",
+                  "description": [
+                    "The account name. If the account is a channel, the channel_id."
+                  ]
+                },
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "chain",
+                    "channel"
+                  ],
+                  "description": [
+                    "Coin movement type."
+                  ]
+                },
+                "tag": {
+                  "type": "string",
+                  "description": [
+                    "Description of movement."
+                  ]
+                },
+                "credit_msat": {
+                  "type": "msat",
+                  "description": [
+                    "Amount credited."
+                  ]
+                },
+                "debit_msat": {
+                  "type": "msat",
+                  "description": [
+                    "Amount debited."
+                  ]
+                },
+                "currency": {
+                  "type": "string",
+                  "description": [
+                    "Human-readable bech32 part for this coin type."
+                  ]
+                },
+                "timestamp": {
+                  "type": "u32",
+                  "description": [
+                    "Timestamp this event was recorded by the node. For consolidated events such as onchain_fees, the most recent timestamp."
+                  ]
+                },
+                "description": {
+                  "type": "string",
+                  "description": [
+                    "The description of this event"
+                  ]
+                }
+              },
+              "allOf": [
+                {
+                  "if": {
+                    "properties": {
+                      "type": {
+                        "type": "string",
+                        "enum": [
+                          "chain"
+                        ]
+                      }
+                    }
+                  },
+                  "then": {
+                    "properties": {
+                      "account": {},
+                      "type": {},
+                      "tag": {},
+                      "credit_msat": {},
+                      "debit_msat": {},
+                      "currency": {},
+                      "timestamp": {},
+                      "outpoint": {
+                        "type": "string",
+                        "description": [
+                          "The txid:outnum for this event."
+                        ]
+                      },
+                      "blockheight": {
+                        "type": "u32",
+                        "description": [
+                          "For chain events, blockheight this occured at."
+                        ]
+                      },
+                      "origin": {
+                        "type": "string",
+                        "description": [
+                          "The account this movement originated from."
+                        ]
+                      },
+                      "payment_id": {
+                        "type": "hex",
+                        "description": [
+                          "Lightning payment identifier. For an htlc, this will be the preimage."
+                        ]
+                      },
+                      "txid": {
+                        "type": "txid",
+                        "description": [
+                          "The txid of the transaction that created this event."
+                        ]
+                      }
+                    },
+                    "required": [
+                      "outpoint",
+                      "blockheight"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "type": {
+                        "type": "string",
+                        "enum": [
+                          "onchain_fee"
+                        ]
+                      }
+                    }
+                  },
+                  "then": {
+                    "properties": {
+                      "account": {},
+                      "type": {},
+                      "tag": {},
+                      "credit_msat": {},
+                      "debit_msat": {},
+                      "currency": {},
+                      "timestamp": {},
+                      "description": {},
+                      "txid": {
+                        "type": "txid",
+                        "description": [
+                          "The txid of the transaction that created this event."
+                        ]
+                      }
+                    },
+                    "required": [
+                      "txid"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "type": {
+                        "type": "string",
+                        "enum": [
+                          "channel"
+                        ]
+                      }
+                    }
+                  },
+                  "then": {
+                    "properties": {
+                      "account": {},
+                      "type": {},
+                      "tag": {},
+                      "credit_msat": {},
+                      "debit_msat": {},
+                      "currency": {},
+                      "timestamp": {},
+                      "description": {},
+                      "fees_msat": {
+                        "type": "msat",
+                        "description": [
+                          "Amount paid in fees."
+                        ]
+                      },
+                      "is_rebalance": {
+                        "type": "boolean",
+                        "description": [
+                          "Is this payment part of a rebalance."
+                        ]
+                      },
+                      "payment_id": {
+                        "type": "hex",
+                        "description": [
+                          "Lightning payment identifier. For an htlc, this will be the preimage."
+                        ]
+                      },
+                      "part_id": {
+                        "type": "u32",
+                        "description": [
+                          "Counter for multi-part payments."
+                        ]
+                      }
+                    },
+                    "additionalProperties": false
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "author": [
+        "Lisa Neigut <<niftynei@gmail.com>> is mainly responsible."
+      ],
+      "see_also": [
+        "lightning-bkpr-editdescriptionbyoutpoint(7)",
+        "lightning-bkpr-listaccountevents(7)",
+        "lightning-bkpr-listincome(7)"
+      ],
+      "resources": [
+        "Main web site: <https://github.com/ElementsProject/lightning>"
+      ],
+      "examples": [
+        {
+          "request": {
+            "id": "example:bkpr-editdescriptionbypaymentid#1",
+            "method": "bkpr-editdescriptionbypaymentid",
+            "params": {
+              "payment_id": "6ff673c6ae3527726cf200274426db79f93054a3cbbc4b3787d1afc2d65565a7",
+              "description": "edited invoice description"
+            }
+          },
+          "response": {
+            "updated": [
+              {
+                "account": "a397dd9b3e44afcb67f3f3ce1d649b74a8ade63e35505985e4cc1828634f69a2",
+                "type": "channel",
+                "tag": "invoice",
+                "credit_msat": 500000000,
+                "debit_msat": 0,
+                "currency": "bcrt",
+                "payment_id": "6ff673c6ae3527726cf200274426db79f93054a3cbbc4b3787d1afc2d65565a7",
+                "part_id": 0,
+                "timestamp": 1724554257,
+                "description": "edited invoice description",
+                "is_rebalance": false
+              }
+            ]
+          }
+        },
+        {
+          "request": {
+            "id": "example:bkpr-editdescriptionbypaymentid#2",
+            "method": "bkpr-editdescriptionbypaymentid",
+            "params": {
+              "payment_id": "c97b61113636256111835c0204d70111c42f19069cefdc659849a6afc6b595a4",
+              "description": "edited invoice description"
+            }
+          },
+          "response": {
+            "updated": []
+          }
+        }
+      ]
+    },
     "lightning-bkpr-inspect.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
@@ -2999,6 +3612,12 @@
                       "debit_msat": {},
                       "currency": {},
                       "timestamp": {},
+                      "description": {
+                        "type": "string",
+                        "description": [
+                          "The description of this event."
+                        ]
+                      },
                       "outpoint": {
                         "type": "string",
                         "description": [
@@ -3027,12 +3646,6 @@
                         "type": "txid",
                         "description": [
                           "The txid of the transaction that created this event."
-                        ]
-                      },
-                      "description": {
-                        "type": "string",
-                        "description": [
-                          "The description of this event."
                         ]
                       }
                     },
@@ -4986,21 +5599,49 @@
             "then": {
               "additionalProperties": false,
               "required": [
-                "tx",
-                "txid"
+                "txs",
+                "txids"
               ],
               "properties": {
                 "type": {},
                 "tx": {
                   "type": "hex",
+                  "deprecated": [
+                    "v24.11",
+                    "v25.11"
+                  ],
                   "description": [
                     "The raw bitcoin transaction used to close the channel (if it was open)."
                   ]
                 },
                 "txid": {
                   "type": "txid",
+                  "deprecated": [
+                    "v24.11",
+                    "v25.11"
+                  ],
                   "description": [
                     "The transaction id of the *tx* field."
+                  ]
+                },
+                "txs": {
+                  "added": "v24.11",
+                  "type": "array",
+                  "items": {
+                    "type": "hex"
+                  },
+                  "description": [
+                    "The raw bitcoin transactions used to close the channel (if it was open)."
+                  ]
+                },
+                "txids": {
+                  "added": "v24.11",
+                  "type": "array",
+                  "items": {
+                    "type": "txid"
+                  },
+                  "description": [
+                    "The transaction ids of the *tx* field(s)."
                   ]
                 }
               }
@@ -9910,9 +10551,15 @@
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
       "added": "v23.05",
+      "depecated": [
+        "v24.11",
+        "v25.11"
+      ],
       "rpc": "decodepay",
       "title": "Command for decoding a bolt11 string (low-level)",
       "description": [
+        "WARNING: deprecated: use *decode* which also handles bolt12.",
+        "",
         "The **decodepay** RPC command checks and parses a *bolt11* string as specified by the BOLT 11 specification."
       ],
       "request": {
@@ -11265,6 +11912,438 @@
         }
       ]
     },
+    "lightning-dev-splice.json": {
+      "$schema": "../rpc-schema-draft.json",
+      "type": "object",
+      "additionalProperties": false,
+      "added": "v24.11",
+      "rpc": "dev-splice",
+      "title": "Command to initiate a channel to a peer",
+      "warning": "experimental-splicing only",
+      "description": [
+        "`splice` is the command to move funds into or out of a channel. Multiple actions can be combined together resulting in a single onchain transaction. Funds may be moved out of a channel and into another in a single batch enabling cross-channel movement."
+      ],
+      "request": {
+        "required": [
+          "script_or_json"
+        ],
+        "properties": {
+          "script_or_json": {
+            "type": "string",
+            "description": [
+              "The splice script to execute or json equivilent"
+            ]
+          },
+          "dryrun": {
+            "type": "boolean",
+            "description": [
+              "Don't execute any actions and output a transcript of what would have been done"
+            ]
+          },
+          "force_feerate": {
+            "type": "boolean",
+            "description": [
+              "By default splices will fail if the fee provided looks too high. This is to protect against accidentally setting your fee higher than intended. Set `force_feerate` to true to skip this saftey check"
+            ]
+          },
+          "debug_log": {
+            "type": "boolean",
+            "description": [
+              "Adds a verbose log of each splice calculation step to the result"
+            ]
+          },
+          "dev-wetrun": {
+            "type": "boolean",
+            "description": [
+              "Executes the splice up until the point signatures would be sent and then aborts"
+            ]
+          }
+        }
+      },
+      "response": {
+        "required": [],
+        "properties": {
+          "dryrun": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "description": [
+                "One action line of the splice script result"
+              ]
+            },
+            "description": [
+              "The transcript of what the script would have done"
+            ]
+          },
+          "psbt": {
+            "type": "string",
+            "description": [
+              "The final psbt"
+            ]
+          },
+          "tx": {
+            "type": "string",
+            "description": [
+              "The final transaction in hex"
+            ]
+          },
+          "txid": {
+            "type": "string",
+            "description": [
+              "The txid of the final transaction"
+            ]
+          },
+          "log": {
+            "type": "array",
+            "description": [
+              "A verbose log of each step of splice calcuations"
+            ],
+            "items": {
+              "type": "string",
+              "description": [
+                "A line of detail about splice calcuations"
+              ]
+            }
+          }
+        }
+      },
+      "usage": [
+        "The primary method is to make a `script` containing one or more splice actions",
+        "that will be merged into a single transaction. If possible the entire operation",
+        "will be completed and broadcast to the mempool.",
+        "",
+        "However if you specified your own inputs using `psbt`, then the command will",
+        "return a psbt that you must sign and then pass to `splice_signed`.",
+        "",
+        "It is required to pass `script_or_json`.",
+        "",
+        "It is recommended you first do a `dryrun` to confirm your script does what you",
+        "expect it to do.",
+        "",
+        "*script* The splice script to execute",
+        "",
+        "*dryrun* Don't execute any actions and output a transcript of what would have",
+        "been done",
+        "",
+        "*psbt* An initial psbt to begin the splice with",
+        "",
+        "*user\\_provided\\_sats* The amount of sats being contributed by the initial psbt",
+        "",
+        "*force\\_feerate* By default splices will fail if the fee provided looks too high.",
+        "This is to protect against accidentally setting your fee higher than intended.",
+        "Set to true to skip this saftey check",
+        "",
+        "*json* A json payload of instructions can be passed instead of script",
+        "",
+        "*debug\\_log* Adds a verbose log of each splice calculation step to the result",
+        "",
+        "*dev-wetrun* Executes the splice up until the point signatures would be sent and then aborts",
+        "",
+        "The primary purpose of splice script is to execute all types of splices using",
+        "a single command. You can perform all these actions manually using the lower",
+        "level api (see `splice_init`) however this splice command interface is much simpler to use",
+        "and it provides some security against signing maliciously inserted inputs.",
+        "",
+        "SCRIPT",
+        "-----",
+        "",
+        "A splice script is a series of 'segments' that are separated by newlines or ",
+        "semicolons. Each segment represents one splice action which is typically adding",
+        "to or removing from a channel. The funds are designated as going into the",
+        "channel or coming out of the channel by which side of an arrow \"->\" the channel",
+        "identifier is placed on. The amount of funds is placed on the other side of the",
+        "arrow.",
+        "",
+        "Take this example:",
+        "```shell",
+        "8338aef0 -> 10000sat",
+        "```",
+        "",
+        "This is how we take 10,000 sats out of channel 8338aef0.",
+        "",
+        "To put 10,000 sats into the channel, we make the arrow point into the channel",
+        "like so:",
+        "```shell",
+        "10000sat -> 8338aef0",
+        "```",
+        "",
+        "In the last two examples we specified the first 8 digits of the channel",
+        "identifier. You can specify as few as 4 digits of the beginning of the channel",
+        "identifier and it will be autocompleted to the matching channel. If the code",
+        "matches more than one channel or node id, the script will fail with an error.",
+        "",
+        "In order to put funds into a channel however, we need get the funds from",
+        "somewhere. The simplest place to get them is the built in onchain wallet. The",
+        "\"wallet\" operator can be placed just like channel identifiers. We can take funds",
+        "out of the wallet like so:",
+        "```shell",
+        "wallet -> 10000sat",
+        "```",
+        "",
+        "We can put funds back into the wallet like so:",
+        "```shell",
+        "10000sat -> wallet",
+        "```",
+        "",
+        "Now that we know how to take funds out of a wallet, let's combine them into an",
+        "individual script:",
+        "```shell",
+        "wallet -> 10000sat",
+        "10000sat -> 8338aef0",
+        "```",
+        "",
+        "The first line withdraws 10,000 sats from the wallet and puts them in the",
+        "script's \"general script funds.\" The second line takes 10,000 sats from the",
+        "\"general script funds\" and places them into channel 8338aef0. This example is",
+        "called a \"splice in.\"",
+        "",
+        "In order for this script to work, we need one more thing. Onchain fees must be",
+        "funded from somewhere. The simplest way to pay the fee from the \"general script",
+        "funds.\" If we change the amount going into the channel to a percentage, the fee",
+        "will automatically be taken from the \"general script funds\" like so:",
+        "```shell",
+        "wallet -> 10000sat",
+        "100% -> 8338aef0",
+        "```",
+        "",
+        "When specifying a percentage instead of an amount, it means take that percentage",
+        "out of the \"general script fund.\"",
+        "",
+        "This will take 10,000 sats from the onchain wallet and put that amount less any",
+        "onchain fees into channel 8338aef0. The feerate used will be the node's",
+        "standard opening feerate. In order to use your own feerate you must us the fee",
+        "operator.",
+        "",
+        "The fee operator is attached to an amount. If you want to take out extra to",
+        "cover the fee, use \"+fee\" and if you want to reduce the amount being sent",
+        "somewhere use the \"-fee\" suffix. Take this example:",
+        "```shell",
+        "wallet -> 10000sat+fee",
+        "10000sat -> 8338aef0",
+        "```",
+        "",
+        "In this example we add precisely 10,000 sats to channel 8338aef0 and withdraw",
+        "enough from the wallet to cover the 10,000 sats and the onchain fee.",
+        "",
+        "To control the amount of fee, you can specify a fee-rate with the use of the at",
+        "\"@\" symbol after fee. After the at symbol, specify a number of sats to pay per",
+        "kiloweight (aka. perkw) like so:",
+        "```shell",
+        "wallet -> 10000sat+fee@300",
+        "10000sat -> 8338aef0",
+        "```",
+        "",
+        "This example pays a fee rate of 300 sats per thousand weight units. To view this",
+        "amount in other units (ie. sats/vbyte) execute a `dryrun` of the script.",
+        "",
+        "Instead of withdrawing extra from the wallet, we can reduce the amount going to",
+        "channel 8338aef0 using the \"-fee\" operator like so:",
+        "```shell",
+        "wallet -> 10000sat",
+        "10000sat-fee -> 8338aef0",
+        "```",
+        "",
+        "This example withdraws 10,000 sats from the onchain wallet, pays the onchain",
+        "fee from that amount, and puts the rest into channel 8338aef0.",
+        "",
+        "You can also specify the feerate here like so:",
+        "```shell",
+        "wallet -> 10000sat",
+        "10000sat-fee@300 -> 8338aef0",
+        "```",
+        "",
+        "Now let's build a script that takes funds out of a channel and puts them into",
+        "the onchain wallet:",
+        "```shell",
+        "8338aef0 -> 10000sat",
+        "100% -> wallet",
+        "```",
+        "",
+        "By default however, scripts that leave sats in the \"general script fund,\" will",
+        "be automatically sent to the wallet. So the second line is not needed, we can",
+        "simplify the script to:",
+        "```shell",
+        "8338aef0 -> 10000sat",
+        "```",
+        "",
+        "We can can also move sats to a specific bitcoin address like so:",
+        "```shell",
+        "8338aef0 -> 10000sat+fee",
+        "100% -> 1JfbZRwdDHKZmuiZgYArJZhcuuzuw2HuMu",
+        "```",
+        "",
+        "This example pays 10,000 sats to the address 1JfbZRwdDHKZmuiZgYArJZhcuuzuw2HuMu",
+        "out of your channel balance in 8338aef0.",
+        "",
+        "Percentages on the right side take out that amount of available funds from a",
+        "channel. For example:",
+        "```shell",
+        "8338aef0 -> 100%",
+        "```",
+        "",
+        "This takes all available funds out of channel 8338aef0 and puts them into the",
+        "onchain wallet. Note that available funds is restricted by pending HTLCs and",
+        "the 1% reserve requirement. To get all the funds you need to close the channel.",
+        "More useful would be something like this:",
+        "```shell",
+        "8338aef0 -> 50%",
+        "100% -> 07bfddea",
+        "```",
+        "",
+        "This example takes half the available funds from channel 8338aef0 and puts them",
+        "into channel 07bfddea.",
+        "",
+        "We can also split this amount like so:",
+        "```shell",
+        "8338aef0 -> 50%",
+        "50% -> 07bfddea",
+        "50% -> 09ad6278",
+        "```",
+        "",
+        "This example takes half the funds in 8338aef0 and splits them between channels",
+        "07bfddea and 09ad6278.",
+        "",
+        "If we want to send funds to more channels calculating percentages can get",
+        "unwieldy so we can use the asterisk operator \"\\*\" which divides the \"general",
+        "script funds\" amongst all destinations using it, like so:",
+        "```shell",
+        "8338aef0 -> 50%",
+        "* -> 07bfddea",
+        "* -> 09ad6278",
+        "* -> efc2a7ff",
+        "```",
+        "",
+        "This example takes half the available funds in 8338aef0 and splits them evenly",
+        "among three achannels.",
+        "",
+        "Sats can be specified with multiple suffixes including sat, msat, btc, M, or K.",
+        "The M suffix is shorthand for a million satoshis and the K suffix is shorthand",
+        "for a thousand satoshis. These can be combined with a decimal point like so:",
+        "```shell",
+        "07bfddea -> 1.23M",
+        "09ad6278 -> 900K",
+        "efc2a7ff -> 0.01btc",
+        "```",
+        "",
+        "This example takes 1,230,000 sats from 07bfddea, 900,000 sats from 09ad6278, and",
+        "1,000,000 sats from efc2a7ff and puts them in the onchain wallet.",
+        "",
+        "Another way to specify channel ids is a channel query. These take the form of a",
+        "node id, a colon, and a number or symbol (ie. \"034645dc:0\") which results in",
+        "your first channel with the peer whose node id starts with 034645dc. Change the",
+        "number after the colon to get a different index like so:",
+        "```shell",
+        "034645dc:0 -> 10K",
+        "034645dc:1 -> 10K",
+        "034645dc:2 -> 10K",
+        "```",
+        "",
+        "This example takes 10,000 sats out of the first three channels with peer",
+        "034645dc and puts the total minus fees into the onchain wallet.",
+        "",
+        "In addition to index numbers, the symbol after the colon can be a question mark",
+        "\"?\" or an asterisk \"\\*\" which mean match the first unused channel or all the",
+        "remaining channels respectively like so:",
+        "```shell",
+        "* -> 034645dc:?",
+        "* -> 03e3d03e:0",
+        "03e3d03e:* -> 100%",
+        "```",
+        "",
+        "This example takes 100% of available funds from all of 03e3d03e's channels",
+        "except the first one and splits them between 03e3d03e's first channel and",
+        "034645dc's first channel.",
+        "",
+        "The node id prefix can also be replaced with the asterisk \"\\*\" which means match",
+        "all nodes. This can be combined with the asterisk \"\\*\" that matches all unused",
+        "channels like so:",
+        "```shell",
+        "wallet -> 10000sat",
+        "100% -> *:*",
+        "```",
+        "",
+        "This example takes 10,000 sats from the onchain wallet and divides them between",
+        "all channels.",
+        "",
+        "It is possible to request a peer to add funds to a channel with a lease request.",
+        "This is done using the pipe \"|\" symbol and optionally specifying the maximum fee",
+        "you authorize using the at \"@\" symbol. After the pipe you specify the amount of",
+        "sats you would like to lease, followed by the at symbol and a percentage value",
+        "like so:",
+        "```shell",
+        "wallet -> 10M+fee",
+        "100%|10M@1% -> 8338aef0",
+        "```",
+        "",
+        "This example splices 10,000,000 sats into channel and requests your peer also",
+        "add 10,000,000 sats to the channel. If they fee they demand is over 1% or the lease",
+        "amount is too small the operation will be aborted. Whatever lease fee they do",
+        "charge will come out of the 10,000,000 sats going into the channel balance. The",
+        "onchain fee will be paid by taking extra funds out of the onchain wallet.",
+        "",
+        "Lease requests do not need to combined with splicing in funds but you must pay",
+        "the onchain fee from somewhere. One simple location to take the fees from is",
+        "your existing channel balance. Doing so requires using two arrows since funds",
+        "are going into and out of the channel at the same time, like so:",
+        "```shell",
+        "|10M@1% -> 8338aef0 -> 0+fee",
+        "```",
+        "",
+        "This example makes a lease request from your peer on 8338aef0 for 10,000,000",
+        "sats and pays the onchain fee using the channel balance. This is a particularly",
+        "elegant way to pay the onchain fee without adding any inputs or outputs beyond",
+        "the channel funding itself.",
+        "",
+        "When passing via the command line using semicolons can be simpler instead of",
+        "newlines. Here are some command line examples:",
+        "",
+        "Splice out 10 million satoshis to the onchain wallet",
+        "```shell",
+        "lightning-cli splice \"8338aef0 -> 10M\"",
+        "```",
+        "",
+        "Splice in 10 thousand satoshis from the onchain wallet",
+        "```shell",
+        "lightning-cli splice \"wallet -> 10K; 100% -> 8338aef0\"",
+        "```",
+        "",
+        "Send 900 thousand satoshis from a channel to an onchain address",
+        "```shell",
+        "lightning-cli splice \"8338aef0 -> 0.9M+fee; 0.9M -> 1JfbZRwdDHKZmuiZgYArJZhcuuzuw2HuMu\"",
+        "```",
+        "",
+        "Move 1 bitcoin between two channels",
+        "```shell",
+        "lightning-cli splice \"8338aef0 -> 1btc; 100% -> 07bfddea\"",
+        "```",
+        "",
+        "Splice in 100 thousand sats to the first channel with peer id 034645dc",
+        "```shell",
+        "lightning-cli splice \"wallet -> 0.1M; 100% -> 034645dc:?\"",
+        "```",
+        "",
+        "Splice in 100 thousand sats split across *all* channels with peer id 034645dc",
+        "```shell",
+        "lightning-cli splice \"wallet -> 100000; 100% -> 034645dc:*\"",
+        "```",
+        "",
+        "Take the maximum out of one chanel and split the value across peer 034645dc's",
+        "channel plus one more channel",
+        "```shell",
+        "lightning-cli splice \"8338aef0 -> 100%; * -> 034645dc:*; * -> 07bfddea\"",
+        "```"
+      ],
+      "author": [
+        "Dusty <<@dusty_daemon>> is mainly responsible."
+      ],
+      "see_also": [
+        "lightning-splice_signed(7)",
+        "lightning-splice_update(7)"
+      ],
+      "resources": [
+        "Main web site: <https://github.com/ElementsProject/lightning>"
+      ]
+    },
     "lightning-disableinvoicerequest.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
@@ -11735,6 +12814,64 @@
             "used": false
           }
         }
+      ]
+    },
+    "lightning-exposesecret.json": {
+      "$schema": "../rpc-schema-draft.json",
+      "type": "object",
+      "additionalProperties": false,
+      "rpc": "exposesecret",
+      "title": "Command for extracting the hsm_secret file for backup",
+      "description": [
+        "The **exposesecret** RPC command allows you to read the HSM secret, and does not work with encrypted hsm secrets.  It only operates if the `exposesecret-passphrase` has been set in the configuration."
+      ],
+      "request": {
+        "required": [
+          "passphrase"
+        ],
+        "properties": {
+          "passphrase": {
+            "type": "string",
+            "description": [
+              "The passphrase, which must match the `exposesecret-passphrase` configuration parameter."
+            ]
+          },
+          "identifier": {
+            "type": "string",
+            "description": [
+              "A four-character, valid lowercase bech32 string (not 1, i, o or b) to use in the resulting BIP-93 output.  If not specified, this is generated from the node alias."
+            ]
+          }
+        }
+      },
+      "response": {
+        "required": [
+          "identifier",
+          "codex32"
+        ],
+        "properties": {
+          "identifier": {
+            "type": "string",
+            "description": [
+              "The four-character identifier used in the codex32 output.  Redundant, but presented separately for clarity."
+            ]
+          },
+          "codex32": {
+            "type": "string",
+            "description": [
+              "The full codex32-encoded (i.e. BIP-93 encoded) HSM secret."
+            ]
+          }
+        }
+      },
+      "author": [
+        "Rusty Russell <<rusty@rustcorp.com.au>> is mainly responsible."
+      ],
+      "see_also": [
+        "lightning-hsmtool(8)"
+      ],
+      "resources": [
+        "Main web site: <https://github.com/ElementsProject/lightning>"
       ]
     },
     "lightning-feerates.json": {
@@ -16132,6 +17269,134 @@
             "amount_sent_msat": 10001,
             "payment_preimage": "1cd3749122f3a1b8c1cbd9f4585ec820ec4e1b8f2aa3514a4dd9deda170bdf5d",
             "status": "complete"
+          }
+        }
+      ]
+    },
+    "lightning-listaddresses.json": {
+      "$schema": "../rpc-schema-draft.json",
+      "type": "object",
+      "added": "v24.11",
+      "rpc": "listaddresses",
+      "title": "Command to list all addresses issued by the node to date",
+      "description": [
+        "The **listaddresses** RPC command provides a detailed list of all Bitcoin addresses that have been generated and issued by the Core Lightning node up to the current date."
+      ],
+      "categories": [
+        "readonly"
+      ],
+      "request": {
+        "required": [],
+        "additionalProperties": false,
+        "properties": {
+          "address": {
+            "type": "string",
+            "description": [
+              "A Bitcoin accepted type, including a bech32, address for lookup in the list of addresses issued to date."
+            ]
+          },
+          "start": {
+            "type": "u64",
+            "description": [
+              "Starting key index for listing addresses or searching for a particular address."
+            ],
+            "default": 1
+          },
+          "limit": {
+            "type": "u32",
+            "description": [
+              "The maximum number of addresses to return or search for."
+            ],
+            "default": "Total number of addresses issued"
+          }
+        }
+      },
+      "response": {
+        "required": [
+          "addresses"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "addresses": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "keyidx"
+              ],
+              "properties": {
+                "keyidx": {
+                  "type": "u64",
+                  "description": [
+                    "The key index of the address issued."
+                  ]
+                },
+                "bech32": {
+                  "type": "string",
+                  "description": [
+                    "The bech32 (native segwit) address."
+                  ]
+                },
+                "p2tr": {
+                  "type": "string",
+                  "description": [
+                    "The taproot address."
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "author": [
+        "Shahana Farooqui <<sfarooqui@blockstream.com>> is mainly responsible."
+      ],
+      "see_also": [
+        "lightning-newaddr(7)",
+        "lightning-withdraw(7)"
+      ],
+      "resources": [
+        "Main web site: <https://github.com/ElementsProject/lightning>"
+      ],
+      "examples": [
+        {
+          "request": {
+            "id": "example:listaddresses#1",
+            "method": "listaddresses",
+            "params": [
+              "bcrt1phtprcvhz842sxe8qw0yryvc0g6n6dw2puweklcpnfye273kjpfhs0d6d2e"
+            ]
+          },
+          "response": {
+            "addresses": [
+              {
+                "keyidx": 13,
+                "p2tr": "bcrt1phtprcvhz842sxe8qw0yryvc0g6n6dw2puweklcpnfye273kjpfhs0d6d2e"
+              }
+            ]
+          }
+        },
+        {
+          "request": {
+            "id": "example:listaddresses#2",
+            "method": "listaddresses",
+            "params": {
+              "start": 6,
+              "limit": 2
+            }
+          },
+          "response": {
+            "addresses": [
+              {
+                "keyidx": 6,
+                "bech32": "bcrt1qkpw662yvzdy5ttdg8nw4eh4el0uc7m2ythw0h3"
+              },
+              {
+                "keyidx": 7,
+                "p2tr": "bcrt1pn45xgkyj54usdu98plm4zgcp4c5jvvfxmyexwcm5kc3gyfsrjmasd6ctsf"
+              }
+            ]
           }
         }
       ]
@@ -22539,7 +23804,7 @@
       "rpc": "listpays",
       "title": "Command for querying payment status",
       "description": [
-        "The **listpay** RPC command gets the status of all *pay* commands, or a single one if either *bolt11* or *payment_hash* was specified."
+        "The **listpays** RPC command gets the status of all *pay* commands (by combining results from listsendpays which lists every payment part), or a single one if either *bolt11* or *payment_hash* was specified."
       ],
       "categories": [
         "readonly"
@@ -22570,6 +23835,34 @@
               "complete",
               "failed"
             ]
+          },
+          "index": {
+            "type": "string",
+            "added": "v24.11",
+            "enum": [
+              "created",
+              "updated"
+            ],
+            "description": [
+              "If neither *in_channel* nor *out_channel* is specified, it controls ordering, by `created` or `updated`."
+            ]
+          },
+          "start": {
+            "type": "u64",
+            "added": "v24.11",
+            "description": [
+              "If `index` is specified, `start` may be specified to start from that value, which is generally returned from lightning-wait(7).",
+              "NOTE: if this is used, `amount_sent_msat` and `number_of_parts` fields may be lower than expected, as not all payment parts will be considered"
+            ]
+          },
+          "limit": {
+            "type": "u32",
+            "added": "v24.11",
+            "description": [
+              "If `index` is specified, `limit` can be used to specify the maximum number of entries to return.",
+              "NOTE: if this is used, `amount_sent_msat` and `number_of_parts` fields may be lower than expected, as not all payment parts will be considered",
+              "NOTE: the actual number returned may be less than the limit, as individual payment parts are combined together"
+            ]
           }
         }
       },
@@ -22587,7 +23880,8 @@
               "required": [
                 "payment_hash",
                 "status",
-                "created_at"
+                "created_at",
+                "created_index"
               ],
               "properties": {
                 "payment_hash": {
@@ -22648,6 +23942,20 @@
                   "description": [
                     "The bolt12 string (if supplied for pay: **experimental-offers** only)."
                   ]
+                },
+                "created_index": {
+                  "type": "u64",
+                  "added": "v24.11",
+                  "description": [
+                    "1-based index indicating order this payment was created in."
+                  ]
+                },
+                "updated_index": {
+                  "type": "u64",
+                  "added": "v24.11",
+                  "description": [
+                    "1-based index indicating order this payment was changed (only present if it has changed since creation)."
+                  ]
                 }
               },
               "allOf": [
@@ -22670,6 +23978,8 @@
                       "preimage"
                     ],
                     "properties": {
+                      "created_index": {},
+                      "updated_index": {},
                       "payment_hash": {},
                       "status": {},
                       "destination": {},
@@ -22724,6 +24034,8 @@
                       "amount_sent_msat"
                     ],
                     "properties": {
+                      "created_index": {},
+                      "updated_index": {},
                       "payment_hash": {},
                       "status": {},
                       "destination": {},
@@ -32578,7 +33890,7 @@
           "psbt": {
             "type": "string",
             "description": [
-              "The final version of the psbt to complete the splice with."
+              "The psbt of the resulting transaction after splice negotiation(s)"
             ]
           },
           "sign_first": {
@@ -32592,7 +33904,8 @@
       "response": {
         "required": [
           "tx",
-          "txid"
+          "txid",
+          "psbt"
         ],
         "additionalProperties": false,
         "properties": {
@@ -32606,6 +33919,12 @@
             "type": "txid",
             "description": [
               "The txid is of the final transaction."
+            ]
+          },
+          "psbt": {
+            "type": "string",
+            "description": [
+              "The psbt of the resulting transaction after splice negotiation(s)"
             ]
           },
           "outnum": {
@@ -32751,7 +34070,8 @@
       "response": {
         "required": [
           "psbt",
-          "commitments_secured"
+          "commitments_secured",
+          "signatures_secured"
         ],
         "additionalProperties": false,
         "properties": {
@@ -32765,6 +34085,13 @@
             "type": "boolean",
             "description": [
               "Whether or not the commitments were secured."
+            ]
+          },
+          "signatures_secured": {
+            "added": "v24.11",
+            "type": "boolean",
+            "description": [
+              "whether or not the peer sent us their signatures for this splice"
             ]
           }
         }
@@ -32846,7 +34173,8 @@
           },
           "response": {
             "psbt": "cHNidP8BAgQCAAAAAQMEkgAAAAEEAQIBBQECAQYBAwH7BAIAAAAAAQCJAgAAAAH5+Z9NssTFQhFzAFkPSrEKg0AcgN7uwR9geC5Lqd+SfgAAAAAA/f///wJAQg8AAAAAACIAIJPe3QwmW8qGhXbT7i5Z7ruyDrwpblj37cqT1e6uwImWgWzcCwAAAAAiUSBbtDt/2hcV0N0BQWgloYUiotfssWR1uIeA6Pr8HHPviY0AAAABASuBbNwLAAAAACJRIFu0O3/aFxXQ3QFBaCWhhSKi1+yxZHW4h4Do+vwcc++JAQ4g9iEmrLThqBE+s85A7YDjSknUmwNcudNkF7HBMzInESwBDwQBAAAAARAE/f///wz8CWxpZ2h0bmluZwEImfI55kWjFBwAAQCJAgAAAAH5+Z9NssTFQhFzAFkPSrEKg0AcgN7uwR9geC5Lqd+SfgAAAAAA/f///wJAQg8AAAAAACIAIJPe3QwmW8qGhXbT7i5Z7ruyDrwpblj37cqT1e6uwImWgWzcCwAAAAAiUSBbtDt/2hcV0N0BQWgloYUiotfssWR1uIeA6Pr8HHPviY0AAAABAStAQg8AAAAAACIAIJPe3QwmW8qGhXbT7i5Z7ruyDrwpblj37cqT1e6uwImWAQ4g9iEmrLThqBE+s85A7YDjSknUmwNcudNkF7HBMzInESwBDwQAAAAAARAEAAAAAAz8CWxpZ2h0bmluZwEIo0w+EfrhL4QAAQMIzrnaCwAAAAABBCJRII+O1EYnVX28zEKuAYqcVHSpkShXksTKiRwfWcVmXTRgDPwJbGlnaHRuaW5nAQiPzwRTPwtPWgABAwjgyBAAAAAAAAEEIgAgk97dDCZbyoaFdtPuLlnuu7IOvCluWPftypPV7q7AiZYM/AlsaWdodG5pbmcBCK3lpE4Vja7KAA==",
-            "commitments_secured": true
+            "commitments_secured": true,
+            "signatures_secured": true
           }
         },
         {
@@ -32860,7 +34188,8 @@
           },
           "response": {
             "psbt": "cHNidP8BAgQCAAAAAQMElAAAAAEEAQEBBQECAQYBAwH7BAIAAAAAAQCyAgAAAAL2ISastOGoET6zzkDtgONKSdSbA1y502QXscEzMicRLAEAAAAA/f////YhJqy04agRPrPOQO2A40pJ1JsDXLnTZBexwTMyJxEsAAAAAAAAAAAAAs652gsAAAAAIlEgj47URidVfbzMQq4BipxUdKmRKFeSxMqJHB9ZxWZdNGDgyBAAAAAAACIAIJPe3QwmW8qGhXbT7i5Z7ruyDrwpblj37cqT1e6uwImWkgAAAAEBK+DIEAAAAAAAIgAgk97dDCZbyoaFdtPuLlnuu7IOvCluWPftypPV7q7AiZYBDiCVuxWBeu80WsQES0HKNSpjl7RUGPMhcKRnsXRp4BRF+AEPBAEAAAABEAQAAAAADPwJbGlnaHRuaW5nAQheLXaEp+y8AgABAwi4Lg8AAAAAAAEEIgAgk97dDCZbyoaFdtPuLlnuu7IOvCluWPftypPV7q7AiZYM/AlsaWdodG5pbmcBCBkNULro+QrwAAEDCKCGAQAAAAAAAQQiUSDE0oJBX5qB0Y4IthmhnRFrhlbLG/ST5fVAu/e3oFhM2gz8CWxpZ2h0bmluZwEIuBcidnXj4BAA",
-            "commitments_secured": true
+            "commitments_secured": true,
+            "signatures_secured": true
           }
         }
       ]

@@ -23,8 +23,8 @@ PLUGIN_COMMANDO_OBJS := $(PLUGIN_COMMANDO_SRC:.c=.o)
 PLUGIN_KEYSEND_SRC := plugins/keysend.c
 PLUGIN_KEYSEND_OBJS := $(PLUGIN_KEYSEND_SRC:.c=.o)
 
-PLUGIN_LIB_SRC := plugins/libplugin.c
-PLUGIN_LIB_HEADER := plugins/libplugin.h
+PLUGIN_LIB_SRC := plugins/libplugin.c common/trace.c
+PLUGIN_LIB_HEADER := plugins/libplugin.h common/trace.h
 PLUGIN_LIB_OBJS := $(PLUGIN_LIB_SRC:.c=.o)
 
 PLUGIN_PAY_LIB_SRC := \
@@ -45,18 +45,24 @@ PLUGIN_SQL_SRC := plugins/sql.c
 PLUGIN_SQL_HEADER :=
 PLUGIN_SQL_OBJS := $(PLUGIN_SQL_SRC:.c=.o)
 
+PLUGIN_EXPOSESECRET_SRC := plugins/exposesecret.c
+PLUGIN_EXPOSESECRET_HEADER :=
+PLUGIN_EXPOSESECRET_OBJS := $(PLUGIN_EXPOSESECRET_SRC:.c=.o)
+
 PLUGIN_SPENDER_SRC :=				\
 	plugins/spender/fundchannel.c		\
 	plugins/spender/main.c			\
 	plugins/spender/multifundchannel.c	\
 	plugins/spender/multiwithdraw.c		\
-	plugins/spender/openchannel.c
+	plugins/spender/openchannel.c		\
+	plugins/spender/splice.c
 PLUGIN_SPENDER_HEADER :=			\
 	plugins/spender/multifundchannel.h	\
 	plugins/spender/multiwithdraw.h		\
 	plugins/spender/fundchannel.h		\
 	plugins/spender/multifundchannel.h	\
-	plugins/spender/openchannel.h
+	plugins/spender/openchannel.h		\
+	plugins/spender/splice.h
 PLUGIN_SPENDER_OBJS := $(PLUGIN_SPENDER_SRC:.c=.o)
 
 PLUGIN_RECOVER_SRC := plugins/recover.c
@@ -79,6 +85,7 @@ PLUGIN_ALL_SRC :=				\
 	$(PLUGIN_COMMANDO_SRC)			\
 	$(PLUGIN_FUNDER_SRC)			\
 	$(PLUGIN_TOPOLOGY_SRC)			\
+	$(PLUGIN_EXPOSESECRET_SRC)		\
 	$(PLUGIN_KEYSEND_SRC)			\
 	$(PLUGIN_TXPREPARE_SRC)			\
 	$(PLUGIN_LIB_SRC)			\
@@ -104,6 +111,7 @@ C_PLUGINS :=					\
 	plugins/commando			\
 	plugins/funder				\
 	plugins/topology			\
+	plugins/exposesecret			\
 	plugins/keysend				\
 	plugins/offers				\
 	plugins/pay				\
@@ -155,6 +163,7 @@ PLUGIN_COMMON_OBJS :=				\
 	bitcoin/signature.o			\
 	bitcoin/tx.o				\
 	bitcoin/varint.o			\
+	common/addr.o				\
 	common/amount.o				\
 	common/autodata.o			\
 	common/coin_mvt.o			\
@@ -181,6 +190,7 @@ PLUGIN_COMMON_OBJS :=				\
 	common/psbt_open.o			\
 	common/pseudorand.o			\
 	common/random_select.o			\
+	common/splice_script.o			\
 	common/setup.o				\
 	common/status_levels.o			\
 	common/utils.o				\
@@ -218,6 +228,8 @@ plugins/commando: $(PLUGIN_COMMANDO_OBJS) $(PLUGIN_LIB_OBJS) $(PLUGIN_COMMON_OBJ
 plugins/topology: common/route.o common/dijkstra.o common/gossmap.o common/sciddir_or_pubkey.o common/fp16.o wire/peer_wiregen.o wire/channel_type_wiregen.o bitcoin/block.o bitcoin/preimage.o common/gossmods_listpeerchannels.o  $(PLUGIN_TOPOLOGY_OBJS) $(PLUGIN_LIB_OBJS) $(PLUGIN_COMMON_OBJS) $(JSMN_OBJS)
 
 plugins/txprepare: $(PLUGIN_TXPREPARE_OBJS) $(PLUGIN_LIB_OBJS) $(PLUGIN_COMMON_OBJS) $(JSMN_OBJS)
+
+plugins/exposesecret: $(PLUGIN_EXPOSESECRET_OBJS) $(PLUGIN_LIB_OBJS) $(PLUGIN_COMMON_OBJS) $(JSMN_OBJS) common/hsm_encryption.o common/codex32.o
 
 plugins/bcli: $(PLUGIN_BCLI_OBJS) $(PLUGIN_LIB_OBJS) $(PLUGIN_COMMON_OBJS) $(JSMN_OBJS)
 
@@ -284,7 +296,7 @@ CLN_PLUGIN_EXAMPLES := \
 CLN_PLUGIN_SRC = $(shell find plugins/src -name "*.rs")
 CLN_GRPC_PLUGIN_SRC = $(shell find plugins/grpc-plugin/src -name "*.rs")
 
-target/${RUST_PROFILE}/cln-grpc: ${CLN_PLUGIN_SRC} ${CLN_GRPC_PLUGIN_SRC}
+target/${RUST_PROFILE}/cln-grpc: ${CLN_PLUGIN_SRC} ${CLN_GRPC_PLUGIN_SRC} $(MSGGEN_GEN_ALL)
 	cargo build ${CARGO_OPTS} --bin cln-grpc
 
 ifneq ($(RUST),0)

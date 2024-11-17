@@ -271,6 +271,30 @@ static inline enum channel_state channel_state_in_db(enum channel_state s)
 	fatal("%s: %u is invalid", __func__, s);
 }
 
+/* /!\ This is a DB ENUM, please do not change the numbering of any
+ * already defined elements (adding is ok) /!\ */
+enum addrtype {
+	ADDR_BECH32 = 2,
+	ADDR_P2TR = 4,
+	ADDR_ALL = (ADDR_BECH32 + ADDR_P2TR)
+};
+
+static inline enum addrtype wallet_addrtype_in_db(enum addrtype t)
+{
+	switch (t) {
+	case ADDR_BECH32:
+		BUILD_ASSERT(ADDR_BECH32 == 2);
+		return t;
+	case ADDR_P2TR:
+		BUILD_ASSERT(ADDR_P2TR == 4);
+		return t;
+	case ADDR_ALL:
+		BUILD_ASSERT(ADDR_ALL == 6);
+		return t;
+	}
+	fatal("%s: %u is invalid", __func__, t);
+}
+
 /* A database backed shachain struct. The datastructure is
  * writethrough, reads are performed from an in-memory version, all
  * writes are passed through to the DB. */
@@ -567,10 +591,18 @@ bool wallet_can_spend(struct wallet *w,
 /**
  * wallet_get_newindex - get a new index from the wallet.
  * @ld: (in) lightning daemon
+ * @addrtype: (in) addess types we will publish for this
  *
  * Returns -1 on error (key exhaustion).
  */
-s64 wallet_get_newindex(struct lightningd *ld);
+s64 wallet_get_newindex(struct lightningd *ld, enum addrtype addrtype);
+
+/**
+ * wallet_get_addrtype - get the address types for this key.
+ * @wallet: (in) wallet
+ * @keyidx: what address types we've published.
+ */
+enum addrtype wallet_get_addrtype(struct wallet *w, u64 keyidx);
 
 /**
  * wallet_shachain_add_hash -- wallet wrapper around shachain_add_hash
@@ -1135,6 +1167,12 @@ void wallet_utxoset_add(struct wallet *w,
 const struct short_channel_id *
 wallet_utxoset_get_spent(const tal_t *ctx, struct wallet *w, u32 blockheight);
 
+/* Prune all UTXO entries spent (far) below this block height */
+void wallet_utxoset_prune(struct wallet *w, u32 blockheight);
+
+/* Get oldest spendheight (or 0 if none), to catch up */
+u32 wallet_utxoset_oldest_spentheight(const tal_t *ctx, struct wallet *w);
+
 /**
  * Retrieve all UTXO entries that were created at a given blockheight.
  */
@@ -1181,22 +1219,21 @@ struct bitcoin_txid *wallet_transactions_by_height(const tal_t *ctx,
 						   const u32 blockheight);
 
 /**
- * Store transactions of interest in the database to replay on restart
+ * Store funding txid spend to start replay on restart
+ * Note that tx should already be saved by wallet_transaction_add!
  */
-void wallet_channeltxs_add(struct wallet *w, struct channel *chan,
-			    const int type, const struct bitcoin_txid *txid,
-			   const u32 input_num, const u32 blockheight);
+void wallet_insert_funding_spend(struct wallet *w,
+				 const struct channel *chan,
+				 const struct bitcoin_txid *txid,
+				 const u32 input_num, const u32 blockheight);
 
 /**
- * List channels for which we had an onchaind running
+ * Get the transaction which spend funding for this channel, if any.
  */
-u32 *wallet_onchaind_channels(const tal_t *ctx, struct wallet *w);
-
-/**
- * Get transactions that we'd like to replay for a channel.
- */
-struct channeltx *wallet_channeltxs_get(const tal_t *ctx, struct wallet *w,
-					u32 channel_id);
+struct bitcoin_tx *wallet_get_funding_spend(const tal_t *ctx,
+					    struct wallet *w,
+					    u64 channel_id,
+					    u32 *blockheight);
 
 /**
  * Add of update a forwarded_payment
@@ -1761,4 +1798,23 @@ void wallet_remove_local_anchors(struct wallet *w,
 struct local_anchor_info *wallet_get_local_anchors(const tal_t *ctx,
 						   struct wallet *w,
 						   u64 channel_id);
+
+/* Get the addresses addrtype */
+struct issued_address_type {
+	u64 keyidx;
+	enum addrtype addrtype;
+};
+
+/**
+ * wallet_list_addresses: get the list of addresses with addrtype
+ *
+ * @ctx: tal context for returned array
+ * @wallet: the wallet
+ * @liststart: first index to return (0 == all).
+ * @listlimit: limit on number of entries to return (NULL == no limit).
+ *
+ * Returns NULL if none, otherwise list of addresses with addrtype.
+ */
+struct issued_address_type *wallet_list_addresses(const tal_t *ctx, struct wallet *wallet,
+					 u64 liststart, const u32 *listlimit);
 #endif /* LIGHTNING_WALLET_WALLET_H */

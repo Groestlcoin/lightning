@@ -222,6 +222,10 @@ static void gossipd_new_blockheight_reply(struct subd *gossipd,
 
 	/* Now, finally update getinfo's blockheight */
 	gossipd->ld->gossip_blockheight = ptr2int(blockheight);
+
+	/* And use that to trim old entries in the UTXO set */
+	wallet_utxoset_prune(gossipd->ld->wallet,
+			     gossipd->ld->gossip_blockheight);
 }
 
 void gossip_notify_new_block(struct lightningd *ld, u32 blockheight)
@@ -247,9 +251,25 @@ static void gossipd_init_done(struct subd *gossipd,
 			      const int *fds,
 			      void *unused)
 {
+	struct lightningd *ld = gossipd->ld;
+	u32 oldspends;
+
 	/* Any channels without channel_updates, we populate now: gossipd
 	 * might have lost its gossip_store. */
-	channel_gossip_init_done(gossipd->ld);
+	channel_gossip_init_done(ld);
+
+	/* Tell it about any closures it might have missed! */
+	oldspends = wallet_utxoset_oldest_spentheight(tmpctx, ld->wallet);
+	if (oldspends) {
+		while (oldspends <= get_block_height(ld->topology)) {
+			const struct short_channel_id *scids;
+
+			scids = wallet_utxoset_get_spent(tmpctx, ld->wallet,
+							 oldspends);
+			gossipd_notify_spends(ld, oldspends, scids);
+			oldspends++;
+		}
+	}
 
 	/* Break out of loop, so we can begin */
 	log_debug(gossipd->ld->log, "io_break: %s", __func__);

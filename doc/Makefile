@@ -50,10 +50,12 @@ GENERATE_MARKDOWN := doc/lightning-addgossip.7 \
 	doc/lightning-delpay.7 \
 	doc/lightning-deprecations.7 \
 	doc/lightning-dev-forget-channel.7 \
+	doc/lightning-dev-splice.7 \
 	doc/lightning-disableinvoicerequest.7 \
 	doc/lightning-disableoffer.7 \
 	doc/lightning-disconnect.7 \
 	doc/lightning-emergencyrecover.7 \
+	doc/lightning-exposesecret.7 \
 	doc/lightning-feerates.7 \
 	doc/lightning-fetchinvoice.7 \
 	doc/lightning-fundchannel_cancel.7 \
@@ -72,6 +74,7 @@ GENERATE_MARKDOWN := doc/lightning-addgossip.7 \
 	doc/lightning-invoice.7 \
 	doc/lightning-invoicerequest.7 \
 	doc/lightning-keysend.7 \
+	doc/lightning-listaddresses.7 \
 	doc/lightning-listchannels.7 \
 	doc/lightning-listclosedchannels.7 \
 	doc/lightning-listconfigs.7 \

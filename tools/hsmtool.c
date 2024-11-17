@@ -43,7 +43,7 @@ static void show_usage(const char *progname)
 	       "<path/to/hsm_secret>\n");
 	printf("	- guesstoremote <P2WPKH address> <node id> <tries> "
 	       "<path/to/hsm_secret>\n");
-	printf("	- generatehsm <path/to/new/hsm_secret>\n");
+	printf("	- generatehsm <path/to/new/hsm_secret> [<language_id> <word list> [<password>]]\n");
 	printf("	- checkhsm <path/to/new/hsm_secret>\n");
 	printf("	- dumponchaindescriptors [--show-secrets] <path/to/hsm_secret> [network]\n");
 	printf("	- makerune <path/to/hsm_secret>\n");
@@ -105,7 +105,7 @@ static void get_encrypted_hsm_secret(struct secret *hsm_secret,
 {
 	struct secret key;
 	struct encrypted_hsm_secret encrypted_secret;
-	char *err;
+	const char *err;
 	int exit_code;
 
 	grab_hsm_file(hsm_secret_path,
@@ -184,7 +184,8 @@ static void get_hsm_secret(struct secret *hsm_secret,
 	/* This checks the file existence, too. */
 	if (hsm_secret_is_encrypted(hsm_secret_path)) {
 		int exit_code;
-		char *err, *passwd;
+		char *passwd;
+		const char *err;
 
 		printf("Enter hsm_secret password:\n");
 		fflush(stdout);
@@ -202,8 +203,8 @@ static int decrypt_hsm(const char *hsm_secret_path)
 {
 	int fd;
 	struct secret hsm_secret;
-	char *passwd, *err;
-	const char *dir, *backup;
+	char *passwd;
+	const char *dir, *backup, *err;
 	int exit_code = 0;
 	/* This checks the file existence, too. */
 	if (!hsm_secret_is_encrypted(hsm_secret_path))
@@ -293,8 +294,8 @@ static int encrypt_hsm(const char *hsm_secret_path)
 	int fd;
 	struct secret key, hsm_secret;
 	struct encrypted_hsm_secret encrypted_hsm_secret;
-	char *passwd, *passwd_confirmation, *err;
-	const char *dir, *backup;
+	char *passwd, *passwd_confirmation;
+	const char *err, *dir, *backup;
 	int exit_code = 0;
 
 	/* This checks the file existence, too. */
@@ -449,21 +450,31 @@ static int guess_to_remote(const char *address, struct node_id *node_id,
 	return 1;
 }
 
-static void get_words(struct words **words) {
-	struct wordlist_lang {
-		char *abbr;
-		char *name;
-	};
+struct wordlist_lang {
+	char *abbr;
+	char *name;
+};
 
-	struct wordlist_lang languages[] = {
-		{"en", "English"},
-		{"es", "Spanish"},
-		{"fr", "French"},
-		{"it", "Italian"},
-		{"jp", "Japanese"},
-		{"zhs", "Chinese Simplified"},
-		{"zht", "Chinese Traditional"},
-	};
+struct wordlist_lang languages[] = {
+	{"en", "English"},
+	{"es", "Spanish"},
+	{"fr", "French"},
+	{"it", "Italian"},
+	{"jp", "Japanese"},
+	{"zhs", "Chinese Simplified"},
+	{"zht", "Chinese Traditional"},
+};
+
+static bool check_lang(const char *abbr)
+{
+	for (size_t i = 0; i < ARRAY_SIZE(languages); i++) {
+		if (streq(abbr, languages[i].abbr))
+			return true;
+	}
+	return false;
+}
+
+static void get_words(struct words **words) {
 
 	printf("Select your language:\n");
 	for (size_t i = 0; i < ARRAY_SIZE(languages); i++) {
@@ -489,7 +500,7 @@ static void get_words(struct words **words) {
 	bip39_get_wordlist(languages[val].abbr, words);
 }
 
-static void get_mnemonic(char *mnemonic) {
+static char *get_mnemonic(void) {
 	char *line = NULL;
 	size_t line_size = 0;
 
@@ -499,41 +510,53 @@ static void get_mnemonic(char *mnemonic) {
 	if (characters < 0)
 		errx(ERROR_USAGE, "Could not read line from stdin.");
 	line[characters-1] = '\0';
-	strcpy(mnemonic, line);
-	free(line);
+	return line;
 }
 
-static void read_mnemonic(char *mnemonic) {
+static char *read_mnemonic(void) {
 	/* Get words for the mnemonic language */
 	struct words *words;
 	get_words(&words);
 
 	/* Get mnemonic */
-	get_mnemonic(mnemonic);
+	char *mnemonic;
+	mnemonic = get_mnemonic();
 
 	if (bip39_mnemonic_validate(words, mnemonic) != 0) {
 		errx(ERROR_USAGE, "Invalid mnemonic: \"%s\"", mnemonic);
 	}
+	return mnemonic;
 }
 
-static int generate_hsm(const char *hsm_secret_path)
+static int generate_hsm(const char *hsm_secret_path,
+			const char *lang_id,
+			char *mnemonic,
+			char *passphrase)
 {
-	char mnemonic[BIP39_WORDLIST_LEN];
-	char *passphrase, *err;
+	const char *err;
 	int exit_code = 0;
 
-	read_mnemonic(mnemonic);
-	printf("Warning: remember that different passphrases yield different "
-	       "groestlcoin wallets.\n");
-	printf("If left empty, no password is used (echo is disabled).\n");
-	printf("Enter your passphrase: \n");
-	fflush(stdout);
-	passphrase = read_stdin_pass_with_exit_code(&err, &exit_code);
-	if (!passphrase)
-		errx(exit_code, "%s", err);
-	if (strlen(passphrase) == 0) {
-		free(passphrase);
-		passphrase = NULL;
+	if (lang_id == NULL) {
+		mnemonic = read_mnemonic();
+		printf("Warning: remember that different passphrases yield different "
+		       "groestlcoin wallets.\n");
+		printf("If left empty, no password is used (echo is disabled).\n");
+		printf("Enter your passphrase: \n");
+		fflush(stdout);
+		passphrase = read_stdin_pass_with_exit_code(&err, &exit_code);
+		if (!passphrase)
+			errx(exit_code, "%s", err);
+		if (strlen(passphrase) == 0) {
+			free(passphrase);
+			passphrase = NULL;
+		}
+	} else {
+		struct words *words;
+
+		bip39_get_wordlist(lang_id, &words);
+
+		if (bip39_mnemonic_validate(words, mnemonic) != 0)
+			errx(ERROR_USAGE, "Invalid mnemonic: \"%s\"", mnemonic);
 	}
 
 	u8 bip32_seed[BIP39_SEED_LEN_512];
@@ -561,6 +584,7 @@ static int generate_hsm(const char *hsm_secret_path)
 	printf("New hsm_secret file created at %s\n", hsm_secret_path);
 	printf("Use the `encrypt` command to encrypt the BIP32 seed if needed\n");
 
+	free(mnemonic);
 	free(passphrase);
 	return 0;
 }
@@ -629,12 +653,13 @@ static int dumponchaindescriptors(const char *hsm_secret_path,
 
 static int check_hsm(const char *hsm_secret_path)
 {
-	char mnemonic[BIP39_WORDLIST_LEN];
+	char *mnemonic;
 	struct secret hsm_secret;
 	u8 bip32_seed[BIP39_SEED_LEN_512];
 	size_t bip32_seed_len;
 	int exit_code;
-	char *passphrase, *err;
+	char *passphrase;
+	const char *err;
 
 	get_hsm_secret(&hsm_secret, hsm_secret_path);
 
@@ -651,7 +676,7 @@ static int check_hsm(const char *hsm_secret_path)
 		passphrase = NULL;
 	}
 
-	read_mnemonic(mnemonic);
+	mnemonic = read_mnemonic();
 	if (bip39_mnemonic_to_seed(mnemonic, passphrase, bip32_seed, sizeof(bip32_seed), &bip32_seed_len) != WALLY_OK)
 		errx(ERROR_LIBWALLY, "Unable to derive BIP32 seed from BIP39 mnemonic");
 
@@ -661,6 +686,7 @@ static int check_hsm(const char *hsm_secret_path)
 
 	printf("OK\n");
 
+	free(mnemonic);
 	free(passphrase);
 	return 0;
 }
@@ -769,10 +795,12 @@ int main(int argc, char *argv[])
 	}
 
 	if (streq(method, "generatehsm")) {
-		if (argc != 3)
+		// argv[2] file, argv[3] lang_id, argv[4] word list, argv[5] passphrase
+		if (argc < 3 || argc > 6 || argc == 4)
 			show_usage(argv[0]);
 
 		char *hsm_secret_path = argv[2];
+		char *lang_id, *word_list, *passphrase;
 
 		/* if hsm_secret already exists we abort the process
 		 * we do not want to lose someone else's funds */
@@ -780,7 +808,15 @@ int main(int argc, char *argv[])
 		if (stat(hsm_secret_path, &st) == 0)
 			errx(ERROR_USAGE, "hsm_secret file at %s already exists", hsm_secret_path);
 
-		return generate_hsm(hsm_secret_path);
+		lang_id = (argc > 3 ? argv[3] : NULL);
+		if (lang_id && !check_lang(lang_id))
+			show_usage(argv[0]);
+
+		/* generate_hsm expects to free these, so use strdup */
+		word_list = (argc > 4 ? strdup(argv[4]) : NULL);
+		passphrase = (argc > 5 ? strdup(argv[5]) : NULL);
+
+		return generate_hsm(hsm_secret_path, lang_id, word_list, passphrase);
 	}
 
 	if (streq(method, "dumponchaindescriptors")) {

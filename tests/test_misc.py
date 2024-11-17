@@ -974,7 +974,7 @@ def test_cli(node_factory):
                                    .format(l1.daemon.lightning_dir),
                                    'help']).decode('utf-8')
     # Test some known output.
-    assert 'addgossip message\n\naddpsbtoutput' in out
+    assert 'addgossip message\n\naddpsbtinput' in out
 
     # Check JSON id is as expected
     l1.daemon.wait_for_log(r'jsonrpc#[0-9]*: "cli:help#[0-9]*"\[IN\]')
@@ -1178,7 +1178,7 @@ def test_cli_commando(node_factory):
                                    .format(l1.daemon.lightning_dir),
                                    'help']).decode('utf-8')
     # Test some known output.
-    assert 'addgossip message\n\naddpsbtoutput' in out
+    assert 'addgossip message\n\naddpsbtinput' in out
 
     # Check JSON id is as expected
     l1.daemon.wait_for_log(r'jsonrpc#[0-9]*: "cli:help#[0-9]*"\[IN\]')
@@ -1285,7 +1285,7 @@ def test_daemon_option(node_factory):
                                    '--lightning-dir={}'
                                    .format(l1.daemon.lightning_dir),
                                    'help']).decode('utf-8')
-    assert 'addgossip message\n\naddpsbtoutput' in out
+    assert 'addgossip message\n\naddpsbtinput' in out
 
     subprocess.run(['cli/lightning-cli',
                     '--network={}'.format(TEST_NETWORK),
@@ -3733,21 +3733,21 @@ def test_field_filter(node_factory, chainparams):
     inv = l1.rpc.invoice(123000, 'label', 'description', 3700, [addr1, addr2])
 
     # Simple case: single field
-    dec = l1.rpc.call('decodepay', {'bolt11': inv['bolt11']}, filter={"currency": True})
+    dec = l1.rpc.call('decode', {'string': inv['bolt11']}, filter={"currency": True})
     assert dec == {"currency": chainparams['bip173_prefix']}
 
     # Use context manager:
     with l1.rpc.reply_filter({"currency": True}):
-        dec = l1.rpc.decodepay(bolt11=inv['bolt11'])
+        dec = l1.rpc.decode(string=inv['bolt11'])
     assert dec == {"currency": chainparams['bip173_prefix']}
 
     # Two fields
-    dec = l1.rpc.call('decodepay', {'bolt11': inv['bolt11']}, filter={"currency": True, "payment_hash": True})
+    dec = l1.rpc.call('decode', {'string': inv['bolt11']}, filter={"currency": True, "payment_hash": True})
     assert dec == {"currency": chainparams['bip173_prefix'],
                    "payment_hash": inv['payment_hash']}
 
     # Nested fields
-    dec = l1.rpc.call('decodepay', {'bolt11': inv['bolt11']},
+    dec = l1.rpc.call('decode', {'string': inv['bolt11']},
                       filter={"currency": True,
                               "payment_hash": True,
                               "fallbacks": [{"type": True}]})
@@ -3756,12 +3756,12 @@ def test_field_filter(node_factory, chainparams):
                    "fallbacks": [{"type": 'P2WPKH'}, {"type": 'P2SH'}]}
 
     # Nonexistent fields.
-    dec = l1.rpc.call('decodepay', {'bolt11': inv['bolt11']},
+    dec = l1.rpc.call('decode', {'string': inv['bolt11']},
                       filter={"foobar": True})
     assert dec == {}
 
     # Bad filters
-    dec = l1.rpc.call('decodepay', {'bolt11': inv['bolt11']},
+    dec = l1.rpc.call('decode', {'string': inv['bolt11']},
                       filter={"currency": True,
                               "payment_hash": True,
                               "fallbacks": {'type': True}})
@@ -3996,7 +3996,7 @@ def test_setconfig(node_factory, bitcoind):
         l1.fundchannel(l2, 400000)
 
     l1.fundchannel(l2, 10**6)
-    txid = l1.rpc.close(l2.info['id'])['txid']
+    txid = only_one(l1.rpc.close(l2.info['id'])['txids'])
     # Make sure we're completely closed!
     bitcoind.generate_block(1, wait_for_mempool=txid)
     sync_blockheight(bitcoind, [l1, l2])
@@ -4325,3 +4325,84 @@ def test_badparam_discretion(node_factory):
         l1.rpc.check('checkrune', rune='THIS IS NOT ACTUALLY A RUNE')
 
     assert err.value.error['message'] == "rune: should be base64 string: invalid token '\"THIS IS NOT ACTUALLY A RUNE\"'"
+
+
+@unittest.skipIf(TEST_NETWORK == 'liquid-regtest', "P2TR not yet supported on Elements")
+def test_listaddresses(node_factory):
+    """Test listaddresses command."""
+    l1 = node_factory.get_node()
+    addr = []
+    for i in range(10):
+        if i % 3 == 0:
+            addr.append(l1.rpc.newaddr('all')['p2tr'])
+        elif i % 3 == 1:
+            addr.append(l1.rpc.newaddr('p2tr')['p2tr'])
+        else:
+            addr.append(l1.rpc.newaddr('bech32')['bech32'])
+
+    # Default start and limit (all)
+    addresses = l1.rpc.listaddresses()["addresses"]
+    assert len(addresses) == 10
+    assert addresses[0]['keyidx'] == 1
+    assert addresses[-1]['keyidx'] == 10
+
+    # Default limit (till end)
+    addresses = l1.rpc.listaddresses(start=5)["addresses"]
+    assert len(addresses) == 6
+    assert addresses[0]['keyidx'] == 5
+    assert addresses[-1]['keyidx'] == 10
+
+    # Default start
+    addresses = l1.rpc.listaddresses(limit=5)["addresses"]
+    assert len(addresses) == 5
+    assert addresses[0]['keyidx'] == 1
+    assert addresses[-1]['keyidx'] == 5
+
+    # Start and limit
+    addresses = l1.rpc.listaddresses(start=5, limit=2)["addresses"]
+    assert len(addresses) == 2
+    assert addresses[0]['keyidx'] == 5
+    assert addresses[-1]['keyidx'] == 6
+
+    # Invalid Address
+    with pytest.raises(RpcError, match='Could not parse destination address, address should be a valid address') as err:
+        l1.rpc.listaddresses(address="bcrt1q3p9jh7x0907wc0")
+
+    assert err.value.error['code'] == -1
+    assert err.value.error['message'] == "Could not parse destination address, address should be a valid address"
+
+    # Address search, default start=0, default limit is length of the list
+    addresses = l1.rpc.listaddresses(address=addr[7])["addresses"]
+    assert len(addresses) == 1
+    assert addresses[0]['keyidx'] == 8
+
+    # Address is between start and limit indices
+    addresses = l1.rpc.listaddresses(address=addr[4], start=2, limit=4)["addresses"]
+    assert len(addresses) == 1
+    assert addresses[0]['keyidx'] == 5
+
+    # Address is not between start and limit indices
+    addresses = l1.rpc.listaddresses(address=addr[9], start=5, limit=4)["addresses"]
+    assert len(addresses) == 0
+
+    # Not our Address
+    addresses = l1.rpc.listaddresses(address="bcrt1q3p9jh7x0mnx8tmx5meapksvcxytlxgwz907wc0")["addresses"]
+    assert len(addresses) == 0
+
+    # Check all fields are present in the response
+    addresses = l1.rpc.listaddresses(address=addr[0])["addresses"]
+    assert addresses[0]['keyidx'] == 1
+    assert addresses[0]['bech32'] == 'bcrt1qq8adjz4u6enf0cjey9j8yt0y490tact93fzgsf'
+    assert addresses[0]['p2tr'] == 'bcrt1pjaazqg6qgqpv2wxgdpg8hyj49wehrfgajqe2tyuzhcp7p50hachq7tkdxf'
+
+    # start > 10 (issued addresses till now)
+    addresses = l1.rpc.listaddresses(start=11, limit=2)["addresses"]
+    assert len(addresses) == 0
+
+    # limit > bip32_max_index (10)
+    addresses = l1.rpc.listaddresses(start=8, limit=15)["addresses"]
+    assert len(addresses) == 3
+
+    # start and limit from future
+    addresses = l1.rpc.listaddresses(start=21, limit=5)["addresses"]
+    assert len(addresses) == 0

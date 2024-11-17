@@ -317,6 +317,8 @@ def checkmessage2py(m):
 
 def close2py(m):
     return remove_default({
+        "txids": [hexlify(m.txids) for i in hexlify(m.txids)], # ArrayField[primitive] in generate_composite
+        "txs": [hexlify(m.txs) for i in hexlify(m.txs)], # ArrayField[primitive] in generate_composite
         "type": str(m.item_type),  # EnumField in generate_composite
         "tx": hexlify(m.tx),  # PrimitiveField in generate_composite
         "txid": hexlify(m.txid),  # PrimitiveField in generate_composite
@@ -1641,6 +1643,7 @@ def listpays_pays2py(m):
         "bolt12": m.bolt12,  # PrimitiveField in generate_composite
         "completed_at": m.completed_at,  # PrimitiveField in generate_composite
         "created_at": m.created_at,  # PrimitiveField in generate_composite
+        "created_index": m.created_index,  # PrimitiveField in generate_composite
         "description": m.description,  # PrimitiveField in generate_composite
         "destination": hexlify(m.destination),  # PrimitiveField in generate_composite
         "erroronion": hexlify(m.erroronion),  # PrimitiveField in generate_composite
@@ -1648,6 +1651,7 @@ def listpays_pays2py(m):
         "number_of_parts": m.number_of_parts,  # PrimitiveField in generate_composite
         "payment_hash": hexlify(m.payment_hash),  # PrimitiveField in generate_composite
         "preimage": hexlify(m.preimage),  # PrimitiveField in generate_composite
+        "updated_index": m.updated_index,  # PrimitiveField in generate_composite
     })
 
 
@@ -1970,6 +1974,7 @@ def splice_init2py(m):
 def splice_signed2py(m):
     return remove_default({
         "outnum": m.outnum,  # PrimitiveField in generate_composite
+        "psbt": m.psbt,  # PrimitiveField in generate_composite
         "tx": hexlify(m.tx),  # PrimitiveField in generate_composite
         "txid": hexlify(m.txid),  # PrimitiveField in generate_composite
     })
@@ -1979,6 +1984,7 @@ def splice_update2py(m):
     return remove_default({
         "commitments_secured": m.commitments_secured,  # PrimitiveField in generate_composite
         "psbt": m.psbt,  # PrimitiveField in generate_composite
+        "signatures_secured": m.signatures_secured,  # PrimitiveField in generate_composite
     })
 
 

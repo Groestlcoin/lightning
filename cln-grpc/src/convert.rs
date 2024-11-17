@@ -425,12 +425,18 @@ impl From<responses::CheckmessageResponse> for pb::CheckmessageResponse {
     }
 }
 
-#[allow(unused_variables)]
+#[allow(unused_variables,deprecated)]
 impl From<responses::CloseResponse> for pb::CloseResponse {
     fn from(c: responses::CloseResponse) -> Self {
         Self {
+            #[allow(deprecated)]
             tx: c.tx.map(|v| hex::decode(v).unwrap()), // Rule #2 for type hex?
+            #[allow(deprecated)]
             txid: c.txid.map(|v| hex::decode(v).unwrap()), // Rule #2 for type txid?
+            // Field: Close.txids[]
+            txids: c.txids.map(|arr| arr.into_iter().map(|i| i.into()).collect()).unwrap_or(vec![]), // Rule #3
+            // Field: Close.txs[]
+            txs: c.txs.map(|arr| arr.into_iter().map(|i| hex::decode(i).unwrap()).collect()).unwrap_or(vec![]), // Rule #3
             item_type: c.item_type as i32,
         }
     }
@@ -2041,6 +2047,7 @@ impl From<responses::ListpaysPays> for pb::ListpaysPays {
             bolt12: c.bolt12, // Rule #2 for type string?
             completed_at: c.completed_at, // Rule #2 for type u64?
             created_at: c.created_at, // Rule #2 for type u64
+            created_index: c.created_index, // Rule #2 for type u64?
             description: c.description, // Rule #2 for type string?
             destination: c.destination.map(|v| v.serialize().to_vec()), // Rule #2 for type pubkey?
             erroronion: c.erroronion.map(|v| hex::decode(v).unwrap()), // Rule #2 for type hex?
@@ -2049,6 +2056,7 @@ impl From<responses::ListpaysPays> for pb::ListpaysPays {
             payment_hash: <Sha256 as AsRef<[u8]>>::as_ref(&c.payment_hash).to_vec(), // Rule #2 for type hash
             preimage: c.preimage.map(|v| v.to_vec()), // Rule #2 for type secret?
             status: c.status as i32,
+            updated_index: c.updated_index, // Rule #2 for type u64?
         }
     }
 }
@@ -2505,6 +2513,7 @@ impl From<responses::Splice_signedResponse> for pb::SpliceSignedResponse {
     fn from(c: responses::Splice_signedResponse) -> Self {
         Self {
             outnum: c.outnum, // Rule #2 for type u32?
+            psbt: c.psbt, // Rule #2 for type string
             tx: hex::decode(&c.tx).unwrap(), // Rule #2 for type hex
             txid: hex::decode(&c.txid).unwrap(), // Rule #2 for type txid
         }
@@ -2517,6 +2526,7 @@ impl From<responses::Splice_updateResponse> for pb::SpliceUpdateResponse {
         Self {
             commitments_secured: c.commitments_secured, // Rule #2 for type boolean
             psbt: c.psbt, // Rule #2 for type string
+            signatures_secured: c.signatures_secured, // Rule #2 for type boolean?
         }
     }
 }
@@ -4821,7 +4831,10 @@ impl From<requests::ListpaysRequest> for pb::ListpaysRequest {
     fn from(c: requests::ListpaysRequest) -> Self {
         Self {
             bolt11: c.bolt11, // Rule #2 for type string?
+            index: c.index.map(|v| v as i32),
+            limit: c.limit, // Rule #2 for type u32?
             payment_hash: c.payment_hash.map(|v| <Sha256 as AsRef<[u8]>>::as_ref(&v).to_vec()), // Rule #2 for type hash?
+            start: c.start, // Rule #2 for type u64?
             status: c.status.map(|v| v as i32),
         }
     }
@@ -6198,7 +6211,10 @@ impl From<pb::ListpaysRequest> for requests::ListpaysRequest {
     fn from(c: pb::ListpaysRequest) -> Self {
         Self {
             bolt11: c.bolt11, // Rule #1 for type string?
+            index: c.index.map(|v| v.try_into().unwrap()),
+            limit: c.limit, // Rule #1 for type u32?
             payment_hash: c.payment_hash.map(|v| Sha256::from_slice(&v).unwrap()), // Rule #1 for type hash?
+            start: c.start, // Rule #1 for type u64?
             status: c.status.map(|v| v.try_into().unwrap()),
         }
     }

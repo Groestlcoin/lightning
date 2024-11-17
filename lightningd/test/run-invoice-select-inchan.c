@@ -919,7 +919,7 @@ void report_subd_memleak(struct leak_detect *leak_detect UNNEEDED, struct subd *
 { fprintf(stderr, "report_subd_memleak called!\n"); abort(); }
 /* Generated stub for resolve_close_command */
 void resolve_close_command(struct lightningd *ld UNNEEDED, struct channel *channel UNNEEDED,
-			   bool cooperative UNNEEDED, const struct bitcoin_tx *close_tx UNNEEDED)
+			   bool cooperative UNNEEDED, struct bitcoin_tx **close_txs UNNEEDED)
 { fprintf(stderr, "resolve_close_command called!\n"); abort(); }
 /* Generated stub for send_backtrace */
 void send_backtrace(const char *why UNNEEDED)
@@ -939,7 +939,7 @@ struct subd_req *subd_req_(const tal_t *ctx UNNEEDED,
 	       const u8 *msg_out UNNEEDED,
 	       int fd_out UNNEEDED, size_t num_fds_in UNNEEDED,
 	       void (*replycb)(struct subd * UNNEEDED, const u8 * UNNEEDED, const int * UNNEEDED, void *) UNNEEDED,
-	       void *replycb_data UNNEEDED)
+	       void *replycb_data TAKES UNNEEDED)
 { fprintf(stderr, "subd_req_ called!\n"); abort(); }
 /* Generated stub for subd_send_fd */
 void subd_send_fd(struct subd *sd UNNEEDED, int fd UNNEEDED)
@@ -1025,11 +1025,6 @@ const char *version(void)
 /* Generated stub for wallet_channel_save */
 void wallet_channel_save(struct wallet *w UNNEEDED, struct channel *chan UNNEEDED)
 { fprintf(stderr, "wallet_channel_save called!\n"); abort(); }
-/* Generated stub for wallet_channeltxs_add */
-void wallet_channeltxs_add(struct wallet *w UNNEEDED, struct channel *chan UNNEEDED,
-			    const int type UNNEEDED, const struct bitcoin_txid *txid UNNEEDED,
-			   const u32 input_num UNNEEDED, const u32 blockheight UNNEEDED)
-{ fprintf(stderr, "wallet_channeltxs_add called!\n"); abort(); }
 /* Generated stub for wallet_delete_peer_if_unused */
 void wallet_delete_peer_if_unused(struct wallet *w UNNEEDED, u64 peer_dbid UNNEEDED)
 { fprintf(stderr, "wallet_delete_peer_if_unused called!\n"); abort(); }
@@ -1053,6 +1048,12 @@ bool wallet_htlcs_load_out_for_channel(struct wallet *wallet UNNEEDED,
 /* Generated stub for wallet_init_channels */
 bool wallet_init_channels(struct wallet *w UNNEEDED)
 { fprintf(stderr, "wallet_init_channels called!\n"); abort(); }
+/* Generated stub for wallet_insert_funding_spend */
+void wallet_insert_funding_spend(struct wallet *w UNNEEDED,
+				 const struct channel *chan UNNEEDED,
+				 const struct bitcoin_txid *txid UNNEEDED,
+				 const u32 input_num UNNEEDED, const u32 blockheight UNNEEDED)
+{ fprintf(stderr, "wallet_insert_funding_spend called!\n"); abort(); }
 /* Generated stub for wallet_offer_find */
 char *wallet_offer_find(const tal_t *ctx UNNEEDED,
 			struct wallet *w UNNEEDED,

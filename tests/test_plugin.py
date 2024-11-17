@@ -724,7 +724,7 @@ def test_openchannel_hook(node_factory, bitcoind):
         assert l2.daemon.is_in_log('reject_odd_funding_amounts.py: {}={}'.format(k, v))
 
     # Close it.
-    txid = l1.rpc.close(l2.info['id'])['txid']
+    txid = only_one(l1.rpc.close(l2.info['id'])['txids'])
     bitcoind.generate_block(1, txid)
     wait_for(lambda: [c['state'] for c in l1.rpc.listpeerchannels(l2.info['id'])['channels']] == ['ONCHAIN'])
 
@@ -813,7 +813,7 @@ def test_channel_state_changed_bilateral(node_factory, bitcoind):
 
     # a helper that gives us the next channel_state_changed log entry
     def wait_for_event(node):
-        msg = node.daemon.wait_for_log("channel_state_changed.*new_state.*")
+        msg = node.daemon.wait_for_log("plugin-misc_notifications.py: channel_state_changed.*new_state.*")
         event = ast.literal_eval(re.findall(".*({.*}).*", msg)[0])
         return event
 
@@ -981,7 +981,7 @@ def test_channel_state_changed_unilateral(node_factory, bitcoind):
 
     # a helper that gives us the next channel_state_changed log entry
     def wait_for_event(node):
-        msg = node.daemon.wait_for_log("channel_state_changed.*new_state.*")
+        msg = node.daemon.wait_for_log("plugin-misc_notifications.py: channel_state_changed.*new_state.*")
         event = ast.literal_eval(re.findall(".*({.*}).*", msg)[0])
         return event
 
@@ -1540,7 +1540,7 @@ def test_rpc_command_hook(node_factory):
     # Both plugins will replace calls made for the "invoice" command
     # The first will win, for the second a warning should be logged
     invoice = l1.rpc.invoice(10**6, "test_side", "test_input")
-    decoded = l1.rpc.decodepay(invoice["bolt11"])
+    decoded = l1.rpc.decode(invoice["bolt11"])
     assert decoded["description"] == "rpc_command_1 modified this description"
     l1.daemon.wait_for_log("rpc_command hook 'invoice' already modified, ignoring.")
 
@@ -2239,7 +2239,7 @@ def test_important_plugin(node_factory):
     n = node_factory.get_node(options={"important-plugin": os.path.join(pluginsdir, "nonexistent")},
                               may_fail=True, expect_fail=True,
                               # Other plugins can complain as lightningd stops suddenly:
-                              broken_log='Plugin marked as important, shutting down lightningd|Reading JSON input: Connection reset by peer',
+                              broken_log='Plugin marked as important, shutting down lightningd|Reading JSON input: Connection reset by peer|Lost connection to the RPC socket',
                               start=False)
 
     n.daemon.start(wait_for_initialized=False, stderr_redir=True)
@@ -4054,6 +4054,8 @@ def test_sql(node_factory, bitcoind):
                          'type': 'string'},
                         {'name': 'timestamp',
                          'type': 'u32'},
+                        {'name': 'description',
+                         'type': 'string'},
                         {'name': 'outpoint',
                          'type': 'string'},
                         {'name': 'blockheight',
@@ -4064,8 +4066,6 @@ def test_sql(node_factory, bitcoind):
                          'type': 'hex'},
                         {'name': 'txid',
                          'type': 'txid'},
-                        {'name': 'description',
-                         'type': 'string'},
                         {'name': 'fees_msat',
                          'type': 'msat'},
                         {'name': 'is_rebalance',
@@ -4197,7 +4197,7 @@ def test_sql(node_factory, bitcoind):
     l3.daemon.wait_for_log("Refreshing channel: {}".format(scid))
 
     # This has to wait for the hold_invoice plugin to let go!
-    txid = l1.rpc.close(l2.info['id'])['txid']
+    txid = only_one(l1.rpc.close(l2.info['id'])['txids'])
     bitcoind.generate_block(13, wait_for_mempool=txid)
     wait_for(lambda: len(l3.rpc.listchannels(source=l1.info['id'])['channels']) == 0)
     assert len(l3.rpc.sql("SELECT * FROM channels WHERE source = X'{}';".format(l1.info['id']))['rows']) == 0
@@ -4448,3 +4448,83 @@ def test_listchannels_broken_message(node_factory):
     l1 = node_factory.get_node(options={'allow-deprecated-apis': True})
 
     l1.rpc.listchannels()
+
+
+@unittest.skipIf(VALGRIND, "It does not play well with prompt and key derivation.")
+def test_exposesecret(node_factory):
+    l1, l2 = node_factory.get_nodes(2, opts=[{'exposesecret-passphrase': "test_exposesecret"}, {}])
+
+    # listconfigs will conceal the value for us, even if we ask directly.
+    l1.rpc.listconfigs()['configs']['exposesecret-passphrase']['value_str'] == '...'
+    l1.rpc.listconfigs('exposesecret-passphrase')['configs']['exposesecret-passphrase']['value_str'] == '...'
+
+    # l2 won't expose the secret!
+    with pytest.raises(RpcError, match="exposesecrets-passphrase is not set"):
+        l2.rpc.exposesecret(passphrase='test_exposesecret')
+
+    # check command does the same.
+    with pytest.raises(RpcError, match="exposesecrets-passphrase is not set"):
+        l2.rpc.check('exposesecret', passphrase='test_exposesecret')
+
+    # l1, bad pass phrase
+    with pytest.raises(RpcError, match="passphrase does not match exposesecrets-passphrase"):
+        l1.rpc.exposesecret(passphrase='test_exposesecret2')
+
+    # Bad identifier length
+    for invalid in ('', 'x', 'xxxxx'):
+        with pytest.raises(RpcError, match="must be 4 characters"):
+            l1.rpc.exposesecret(passphrase='test_exposesecret', identifier=invalid)
+
+    # Bad case
+    for invalid in ('CLNX', 'Clnx', 'clnX'):
+        with pytest.raises(RpcError, match="must be lower-case"):
+            l1.rpc.exposesecret(passphrase='test_exposesecret', identifier=invalid)
+
+    # Bad identifier chars
+    for invalid in ('cln1', 'clno', 'clnb', 'clni'):
+        with pytest.raises(RpcError, match="must be valid bech32 string"):
+            l1.rpc.exposesecret(passphrase='test_exposesecret', identifier=invalid)
+
+    # As given by hsmtool:
+    # $ ./tools/hsmtool getcodexsecret /tmp/ltests-10uyxcnw/test_exposesecret_1/lightning-1/regtest/hsm_secret junr
+    # cl10junrsd35kw6r5de5kueedxyqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqj00m675kxffh
+    # $ ./tools/hsmtool getcodexsecret /tmp/ltests-10uyxcnw/test_exposesecret_1/lightning-1/regtest/hsm_secret junx
+    # cl10junxsd35kw6r5de5kueedxyqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq6mdtn5lql6p8m
+    # $ ./tools/hsmtool getcodexsecret /tmp/ltests-10uyxcnw/test_exposesecret_1/lightning-1/regtest/hsm_secret cln2
+    # cl10cln2sd35kw6r5de5kueedxyqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq2v3y60yxxn4mq
+    assert l1.rpc.exposesecret(passphrase='test_exposesecret') == {'codex32': 'cl10junrsd35kw6r5de5kueedxyqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqj00m675kxffh',
+                                                                   'identifier': 'junr'}
+
+    assert l1.rpc.exposesecret(passphrase='test_exposesecret', identifier='cln2') == {'codex32': 'cl10cln2sd35kw6r5de5kueedxyqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq2v3y60yxxn4mq',
+                                                                                      'identifier': 'cln2'}
+
+    # FIXME: runtime config for alias!!
+    l1.stop()
+    l1.daemon.opts["alias"] = 'J1U1IOBiobN'
+    l1.start()
+
+    assert l1.rpc.exposesecret(passphrase='test_exposesecret') == {'codex32': 'cl10junxsd35kw6r5de5kueedxyqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq6mdtn5lql6p8m',
+                                                                   'identifier': 'junx'}
+
+    # Test with encrypted-hsm (fails!)
+    password = 'test_exposesecret'
+    l1.stop()
+    # We need to simulate a terminal to use termios in `lightningd`.
+    master_fd, slave_fd = os.openpty()
+
+    def write_all(fd, bytestr):
+        """Wrapper, since os.write can do partial writes"""
+        off = 0
+        while off < len(bytestr):
+            off += os.write(fd, bytestr[off:])
+
+    l1.daemon.opts.update({"encrypted-hsm": None})
+    l1.daemon.start(stdin=slave_fd, wait_for_initialized=False)
+    l1.daemon.wait_for_log(r'Enter hsm_secret password')
+    write_all(master_fd, (password + '\n').encode("utf-8"))
+    l1.daemon.wait_for_log(r'Confirm hsm_secret password')
+    write_all(master_fd, (password + '\n').encode("utf-8"))
+    l1.daemon.wait_for_log("Server started with public key")
+
+    with pytest.raises(RpcError, match="maybe encrypted"):
+        l1.rpc.exposesecret(passphrase=password)

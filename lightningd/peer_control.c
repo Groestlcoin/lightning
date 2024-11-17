@@ -392,22 +392,27 @@ void drop_to_chain(struct lightningd *ld, struct channel *channel,
 			    "Not dropping our unilateral close onchain since "
 			    "we already saw theirs confirm.");
 	} else {
-		struct bitcoin_tx *tx COMPILER_WANTS_INIT("gcc 12.3.0");
+		struct bitcoin_tx **txs = tal_arr(tmpctx, struct bitcoin_tx*, 0);
 
 		/* We need to drop *every* commitment transaction to chain */
 		if (!cooperative && !list_empty(&channel->inflights)) {
 			list_for_each(&channel->inflights, inflight, list) {
 				if (!inflight->last_tx)
 					continue;
-				tx = sign_and_send_last(tmpctx, ld, channel, cmd_id,
-							inflight->last_tx,
-							&inflight->last_sig);
+				tal_arr_expand(&txs, sign_and_send_last(tmpctx,
+									ld,
+									channel,
+									cmd_id,
+									inflight->last_tx,
+									&inflight->last_sig));
 			}
 		} else
-			tx = sign_and_send_last(tmpctx, ld, channel, cmd_id, channel->last_tx,
-						&channel->last_sig);
+			tal_arr_expand(&txs, sign_and_send_last(tmpctx, ld,
+								channel, cmd_id,
+								channel->last_tx,
+								&channel->last_sig));
 
-		resolve_close_command(ld, channel, cooperative, tx);
+		resolve_close_command(ld, channel, cooperative, txs);
 	}
 
 	/* In cooperative mode, we're assuming that we closed the right one:
@@ -822,6 +827,7 @@ static void NON_NULL_ARGS(1, 2, 4, 5) json_add_channel(struct command *cmd,
 	struct amount_sat peer_funded_sats;
 	const struct peer_update *peer_update;
 	u32 feerate;
+	bool has_valid_inflights;
 
 	json_object_start(response, key);
 	json_add_node_id(response, "peer_id", &peer->id);
@@ -910,7 +916,15 @@ static void NON_NULL_ARGS(1, 2, 4, 5) json_add_channel(struct command *cmd,
 	json_add_txid(response, "funding_txid", &channel->funding.txid);
 	json_add_num(response, "funding_outnum", channel->funding.n);
 
+	has_valid_inflights = false;
 	if (!list_empty(&channel->inflights)) {
+		struct channel_inflight *inflight;
+		list_for_each(&channel->inflights, inflight, list)
+			if (!inflight->splice_locked_memonly)
+				has_valid_inflights = true;
+	}
+
+	if (has_valid_inflights) {
 		struct channel_inflight *initial, *inflight;
 		u32 last_feerate, next_feerate;
 
@@ -942,6 +956,8 @@ static void NON_NULL_ARGS(1, 2, 4, 5) json_add_channel(struct command *cmd,
 		json_array_start(response, "inflight");
 		list_for_each(&channel->inflights, inflight, list) {
 			struct bitcoin_txid txid;
+			if (inflight->splice_locked_memonly)
+				continue;
 
 			json_object_start(response, NULL);
 			json_add_txid(response, "funding_txid",
@@ -2197,8 +2213,8 @@ static enum watch_result funding_spent(struct channel *channel,
 		}
 	}
 
-	wallet_channeltxs_add(channel->peer->ld->wallet, channel,
-			      WIRE_ONCHAIND_INIT, &txid, 0, block->height);
+	wallet_insert_funding_spend(channel->peer->ld->wallet, channel,
+				    &txid, 0, block->height);
 
 	return onchaind_funding_spent(channel, tx, block->height);
 }
@@ -3214,6 +3230,8 @@ static struct command_result *json_sign_last_tx(struct command *cmd,
 
 		json_array_start(response, "inflights");
 		list_for_each(&channel->inflights, inflight, list) {
+			if (inflight->splice_locked_memonly)
+				continue;
 			tx = sign_last_tx(cmd, channel, inflight->last_tx,
 					  &inflight->last_sig);
 			json_object_start(response, NULL);
