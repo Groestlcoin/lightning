@@ -66,6 +66,9 @@ struct tlv_encrypted_data_tlv *decrypt_encrypted_data(const tal_t *ctx UNNEEDED,
 /* Generated stub for ecdh */
 void ecdh(const struct pubkey *point UNNEEDED, struct secret *ss UNNEEDED)
 { fprintf(stderr, "ecdh called!\n"); abort(); }
+/* Generated stub for fmt_amount_msat */
+char *fmt_amount_msat(const tal_t *ctx UNNEEDED, struct amount_msat msat UNNEEDED)
+{ fprintf(stderr, "fmt_amount_msat called!\n"); abort(); }
 /* Generated stub for fromwire_amount_msat */
 struct amount_msat fromwire_amount_msat(const u8 **cursor UNNEEDED, size_t *max UNNEEDED)
 { fprintf(stderr, "fromwire_amount_msat called!\n"); abort(); }
@@ -161,7 +164,8 @@ int main(int argc, char *argv[])
 	generate_tok = json_get_member(json, toks, "generate");
 	json_to_secret(json, json_get_member(json, generate_tok, "session_key"), &session_key);
 	assoc_data = json_tok_bin_from_hex(tmpctx, json, json_get_member(json, generate_tok, "associated_data"));
-	sp = sphinx_path_new_with_key(tmpctx, assoc_data, &session_key);
+	sp = sphinx_path_new_with_key(tmpctx, assoc_data, tal_bytelen(assoc_data),
+				      &session_key);
 	json_for_each_arr(i, t, json_get_member(json, generate_tok, "hops")) {
 		struct pubkey k;
 		const u8 *cursor;

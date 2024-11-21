@@ -33,7 +33,6 @@
 struct pubkey id;
 u32 blockheight;
 u16 cltv_final;
-bool offers_enabled;
 bool disable_connect;
 bool dev_invoice_bpath_scid;
 struct short_channel_id *dev_invoice_internal_scid;
@@ -200,9 +199,6 @@ static struct command_result *onion_message_recv(struct command *cmd,
 	struct blinded_path *reply_path = NULL;
  	struct secret *secret;
 
-	if (!offers_enabled)
-		return command_hook_success(cmd);
-
 	om = json_get_member(buf, params, "onion_message");
 	secrettok = json_get_member(buf, om, "pathsecret");
 	if (secrettok) {
@@ -355,8 +351,13 @@ static struct command_result *block_added_notify(struct command *cmd,
 						 const char *buf,
 						 const jsmntok_t *params)
 {
-	json_scan(cmd, buf, params, "{block:{height:%}}",
-		  JSON_SCAN(json_to_u32, &blockheight));
+	const char *err = json_scan(cmd, buf, params, "{block_added:{height:%}}",
+				    JSON_SCAN(json_to_u32, &blockheight));
+	if (err)
+		plugin_err(cmd->plugin, "Failed to parse block_added (%.*s): %s",
+			   json_tok_full_len(params),
+			   json_tok_full(buf, params),
+			   err);
 	return notification_handled(cmd);
 }
 
@@ -1409,10 +1410,8 @@ static const char *init(struct command *init_cmd,
 	rpc_scan(init_cmd, "listconfigs",
 		 take(json_out_obj(NULL, NULL, NULL)),
 		 "{configs:"
-		 "{cltv-final:{value_int:%},"
-		 "experimental-offers:{set:%}}}",
-		 JSON_SCAN(json_to_u16, &cltv_final),
-		 JSON_SCAN(json_to_bool, &offers_enabled));
+		 "{cltv-final:{value_int:%}}}",
+		 JSON_SCAN(json_to_u16, &cltv_final));
 
 	rpc_scan(init_cmd, "makesecret",
 		 take(json_out_obj(NULL, "string", BOLT12_ID_BASE_STRING)),

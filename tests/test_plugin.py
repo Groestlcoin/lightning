@@ -196,7 +196,7 @@ def test_rpc_passthrough(node_factory):
     assert(len(cmd) == 1)
 
     # Make sure usage message is present.
-    assert only_one(n.rpc.help('hello')['help'])['command'] == 'hello [name]'
+    assert only_one(n.rpc.help('hello')['help'])['command'].startswith('hello [name]')
     # While we're at it, let's check that helloworld.py is logging
     # correctly via the notifications plugin->lightningd
     assert n.daemon.is_in_log('Plugin helloworld.py initialized')
@@ -3229,7 +3229,8 @@ def test_autoclean(node_factory):
                 assert only_one(invs)['status'] == 'unpaid'
         time.sleep(1)
 
-    assert l3.rpc.autoclean_status()['autoclean']['expiredinvoices']['cleaned'] == 1
+    # We can actually race between the delete and this being updated!
+    wait_for(lambda: l3.rpc.autoclean_status()['autoclean']['expiredinvoices']['cleaned'] == 1)
 
     # Keeps settings across restarts
     l3.restart()
@@ -3466,8 +3467,7 @@ def test_block_added_notifications(node_factory, bitcoind):
 
 @unittest.skipIf(TEST_NETWORK != 'regtest', 'elementsd doesnt yet support PSBT features we need')
 def test_sql(node_factory, bitcoind):
-    opts = {'experimental-offers': None,
-            'experimental-dual-fund': None,
+    opts = {'experimental-dual-fund': None,
             'dev-allow-localhost': None,
             'may_reconnect': True}
     l2opts = {'lease-fee-basis': 50,
@@ -4448,6 +4448,15 @@ def test_listchannels_broken_message(node_factory):
     l1 = node_factory.get_node(options={'allow-deprecated-apis': True})
 
     l1.rpc.listchannels()
+
+
+def test_important_plugin_shutdown(node_factory):
+    """We can shutdown an important plugin (as long as it's dynamic) without dying"""
+
+    l1 = node_factory.get_node()
+
+    l1.rpc.plugin_stop("pay")
+    l1.rpc.plugin_start(os.path.join(os.getcwd(), 'plugins/pay'))
 
 
 @unittest.skipIf(VALGRIND, "It does not play well with prompt and key derivation.")

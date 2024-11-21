@@ -213,6 +213,7 @@ struct chain_coin_mvt *new_coin_wallet_deposit(const tal_t *ctx UNNEEDED,
 { fprintf(stderr, "new_coin_wallet_deposit called!\n"); abort(); }
 /* Generated stub for new_inflight */
 struct channel_inflight *new_inflight(struct channel *channel UNNEEDED,
+	     struct pubkey *remote_funding UNNEEDED,
 	     const struct bitcoin_outpoint *funding_outpoint UNNEEDED,
 	     u32 funding_feerate UNNEEDED,
 	     struct amount_sat funding_sat UNNEEDED,
@@ -325,12 +326,6 @@ u8 *towire_hsmd_get_output_scriptpubkey(const tal_t *ctx UNNEEDED, u64 channel_i
 /* Generated stub for towire_temporary_node_failure */
 u8 *towire_temporary_node_failure(const tal_t *ctx UNNEEDED)
 { fprintf(stderr, "towire_temporary_node_failure called!\n"); abort(); }
-/* Generated stub for trace_span_end */
-void trace_span_end(const void *key UNNEEDED)
-{ fprintf(stderr, "trace_span_end called!\n"); abort(); }
-/* Generated stub for trace_span_start */
-void trace_span_start(const char *name UNNEEDED, const void *key UNNEEDED)
-{ fprintf(stderr, "trace_span_start called!\n"); abort(); }
 /* Generated stub for txfilter_add_scriptpubkey */
 void txfilter_add_scriptpubkey(struct txfilter *filter UNNEEDED, const u8 *script TAKES UNNEEDED)
 { fprintf(stderr, "txfilter_add_scriptpubkey called!\n"); abort(); }

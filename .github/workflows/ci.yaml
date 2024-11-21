@@ -6,15 +6,15 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: ['Ubuntu-22.04', 'Ubuntu-20.04']
+        os: ['Ubuntu-22.04']
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Python 3.8
+      - name: Set up Python 3.10
         uses: actions/setup-python@v5
         with:
-          python-version: 3.8
+          python-version: '3.10'
 
       - name: Install dependencies
         run: |

@@ -121,7 +121,9 @@ def test_reserve(node_factory):
 
 def test_layers(node_factory):
     """Test manipulating information in layers"""
-    l1, l2, l3 = node_factory.line_graph(3, wait_for_announce=True)
+    # remove xpay, since it creates a layer!
+    l1, l2, l3 = node_factory.line_graph(3, wait_for_announce=True,
+                                         opts={'disable-plugin': 'cln-xpay'})
 
     assert l2.rpc.askrene_listlayers() == {'layers': []}
     with pytest.raises(RpcError, match="Unknown layer"):
@@ -292,7 +294,8 @@ def test_layers(node_factory):
 
 def test_layer_persistence(node_factory):
     """Test persistence of layers across restart"""
-    l1, l2 = node_factory.line_graph(2, wait_for_announce=True)
+    l1, l2 = node_factory.line_graph(2, wait_for_announce=True,
+                                     opts={'disable-plugin': 'cln-xpay'})
 
     assert l1.rpc.askrene_listlayers() == {'layers': []}
     with pytest.raises(RpcError, match="Unknown layer"):
@@ -554,16 +557,21 @@ def test_getroutes_fee_fallback(node_factory):
 
     # 0 -> 1 -> 3: high capacity, high fee (1%)
     # 0 -> 2 -> 3: low capacity, low fee.
+    # (We disable reverse, since it breaks median calc!)
     gsfile, nodemap = generate_gossip_store([GenChannel(0, 1,
                                                         capacity_sats=20000,
-                                                        forward=GenChannel.Half(propfee=10000)),
+                                                        forward=GenChannel.Half(propfee=10000),
+                                                        reverse=GenChannel.Half(enabled=False)),
                                              GenChannel(0, 2,
-                                                        capacity_sats=10000),
+                                                        capacity_sats=10000,
+                                                        reverse=GenChannel.Half(enabled=False)),
                                              GenChannel(1, 3,
                                                         capacity_sats=20000,
-                                                        forward=GenChannel.Half(propfee=10000)),
+                                                        forward=GenChannel.Half(propfee=10000),
+                                                        reverse=GenChannel.Half(enabled=False)),
                                              GenChannel(2, 3,
-                                                        capacity_sats=10000)])
+                                                        capacity_sats=10000,
+                                                        reverse=GenChannel.Half(enabled=False))])
     # Set up l1 with this as the gossip_store
     l1 = node_factory.get_node(gossip_store_file=gsfile.name)
 
@@ -1034,10 +1042,10 @@ def test_real_data(node_factory, bitcoind):
     # CI, it's slow.
     if SLOW_MACHINE:
         limit = 25
-        expected = (4, 25, 1533317, 143026, 91)
+        expected = (6, 25, 1544756, 142986, 91)
     else:
         limit = 100
-        expected = (8, 95, 6007785, 564997, 91)
+        expected = (9, 95, 6347877, 566288, 92)
 
     fees = {}
     for n in range(0, limit):
@@ -1151,10 +1159,10 @@ def test_real_biases(node_factory, bitcoind):
     # CI, it's slow.
     if SLOW_MACHINE:
         limit = 25
-        expected = ({1: 4, 2: 5, 4: 7, 8: 11, 16: 14, 32: 19, 64: 25, 100: 25}, 0)
+        expected = ({1: 5, 2: 7, 4: 7, 8: 11, 16: 14, 32: 19, 64: 25, 100: 25}, 0)
     else:
         limit = 100
-        expected = ({1: 19, 2: 25, 4: 36, 8: 51, 16: 66, 32: 81, 64: 96, 100: 96}, 0)
+        expected = ({1: 23, 2: 31, 4: 40, 8: 53, 16: 70, 32: 82, 64: 96, 100: 96}, 0)
 
     l1.rpc.askrene_create_layer('biases')
     num_changed = {}
@@ -1198,8 +1206,15 @@ def test_real_biases(node_factory, bitcoind):
             if route2 != route:
                 # It should have avoided biassed channel
                 amount_after = amount_through_chan(chan, route2['routes'])
-                assert amount_after < amount_before
-                num_changed[bias] += 1
+                if amount_after < amount_before:
+                    num_changed[bias] += 1
+                else:
+                    # We bias -4 against 83x88x31908/0 going to node 83, and this is violated.
+                    # Both routes contain three paths, all via 83x88x31908/0.
+                    # The first amounts  49490584, 1018832, 49490584,
+                    # The second amounts 25254708, 25254708, 49490584,
+                    # Due to fees and rounding, we actually spend 1msat more on the second case!
+                    assert (n, bias, chan) == (83, 4, '83x88x31908/0')
 
             # Undo bias
             l1.rpc.askrene_bias_channel(layer='biases', short_channel_id_dir=chan, bias=0)

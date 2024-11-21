@@ -742,7 +742,8 @@ struct onion_payload *onion_decode(const tal_t *ctx UNNEEDED,
 				   struct amount_msat amount_in UNNEEDED,
 				   u32 cltv_expiry UNNEEDED,
 				   u64 *failtlvtype UNNEEDED,
-				   size_t *failtlvpos UNNEEDED)
+				   size_t *failtlvpos UNNEEDED,
+				   const char **explanation UNNEEDED)
 { fprintf(stderr, "onion_decode called!\n"); abort(); }
 /* Generated stub for onion_final_hop */
 u8 *onion_final_hop(const tal_t *ctx UNNEEDED,
@@ -962,11 +963,13 @@ void sphinx_add_v0_hop(struct sphinx_path *path UNNEEDED, const struct pubkey *p
 { fprintf(stderr, "sphinx_add_v0_hop called!\n"); abort(); }
 /* Generated stub for sphinx_path_new */
 struct sphinx_path *sphinx_path_new(const tal_t *ctx UNNEEDED,
-				    const u8 *associated_data UNNEEDED)
+				    const u8 *associated_data UNNEEDED,
+				    size_t associated_data_len UNNEEDED)
 { fprintf(stderr, "sphinx_path_new called!\n"); abort(); }
 /* Generated stub for sphinx_path_new_with_key */
 struct sphinx_path *sphinx_path_new_with_key(const tal_t *ctx UNNEEDED,
 					     const u8 *associated_data UNNEEDED,
+					     size_t associated_data_len UNNEEDED,
 					     const struct secret *session_key UNNEEDED)
 { fprintf(stderr, "sphinx_path_new_with_key called!\n"); abort(); }
 /* Generated stub for sphinx_path_payloads_size */
@@ -1153,12 +1156,6 @@ u8 *towire_warningfmt(const tal_t *ctx UNNEEDED,
 		      const struct channel_id *channel UNNEEDED,
 		      const char *fmt UNNEEDED, ...)
 { fprintf(stderr, "towire_warningfmt called!\n"); abort(); }
-/* Generated stub for trace_span_end */
-void trace_span_end(const void *key UNNEEDED)
-{ fprintf(stderr, "trace_span_end called!\n"); abort(); }
-/* Generated stub for trace_span_start */
-void trace_span_start(const char *name UNNEEDED, const void *key UNNEEDED)
-{ fprintf(stderr, "trace_span_start called!\n"); abort(); }
 /* Generated stub for try_reconnect */
 void try_reconnect(const tal_t *ctx UNNEEDED,
 		   struct peer *peer UNNEEDED,
@@ -2022,7 +2019,7 @@ static bool test_channel_inflight_crud(struct lightningd *ld, const tal_t *ctx)
 	memset(&outpoint, 1, sizeof(outpoint));
 	mempat(&sig.s, sizeof(sig.s));
 
-	inflight = new_inflight(chan, &outpoint, 253,
+	inflight = new_inflight(chan, NULL, &outpoint, 253,
 				funding_sats,
 				our_sats,
 				funding_psbt,
@@ -2049,7 +2046,7 @@ static bool test_channel_inflight_crud(struct lightningd *ld, const tal_t *ctx)
 	our_sats = AMOUNT_SAT(555555);
 	memset(&outpoint, 2, sizeof(outpoint));
 	mempat(&sig.s, sizeof(sig.s));
-	inflight = new_inflight(chan, &outpoint, 300,
+	inflight = new_inflight(chan, NULL, &outpoint, 300,
 				funding_sats,
 				our_sats,
 				funding_psbt,

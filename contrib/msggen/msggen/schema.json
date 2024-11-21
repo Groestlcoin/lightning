@@ -7042,7 +7042,7 @@
           "invstring": {
             "type": "string",
             "description": [
-              "The bolt11 form, but the final signature is ignored. Minimal sanity checks are done. (Note: if **experimental-offers** is enabled, *invstring* can actually be an unsigned bolt12 invoice)."
+              "The bolt11/bolt12 invoice, but the final signature is ignored. Minimal sanity checks are done."
             ]
           },
           "label": {
@@ -7092,7 +7092,7 @@
           "bolt12": {
             "type": "string",
             "description": [
-              "The bolt12 string instead of **bolt11** (**experimental-offers** only)."
+              "The bolt12 string instead of **bolt11**"
             ]
           },
           "payment_hash": {
@@ -7192,7 +7192,7 @@
           "local_offer_id": {
             "type": "hex",
             "description": [
-              "The *id* of our offer which created this invoice (**experimental-offers** only)."
+              "The *id* of our offer which created this invoice."
             ],
             "maxLength": 64,
             "minLength": 64
@@ -7200,7 +7200,7 @@
           "invreq_payer_note": {
             "type": "string",
             "description": [
-              "The optional *invreq_payer_note* from invoice_request which created this invoice (**experimental-offers** only)."
+              "The optional *invreq_payer_note* from invoice_request which created this invoice."
             ]
           }
         },
@@ -11588,7 +11588,7 @@
                 "bolt12": {
                   "type": "string",
                   "description": [
-                    "The bolt12 string (if supplied for pay: **experimental-offers** only)."
+                    "The bolt12 string (if supplied for pay)."
                   ]
                 },
                 "erroronion": {
@@ -12350,7 +12350,6 @@
       "added": "v22.11",
       "rpc": "disableinvoicerequest",
       "title": "Command for removing an invoice request",
-      "warning": "experimental-offers only",
       "description": [
         "The **disableinvoicerequest** RPC command disables an invoice_request, so that no further invoices will be accepted (and thus, no further payments made)..",
         "",
@@ -12458,7 +12457,6 @@
       "type": "object",
       "rpc": "disableoffer",
       "title": "Command for removing an offer",
-      "warning": "experimental-offers only",
       "description": [
         "The **disableoffer** RPC command disables an offer, so that no further invoices will be given out.",
         "",
@@ -12708,7 +12706,6 @@
       "type": "object",
       "rpc": "disableoffer",
       "title": "Command for re-enabling an offer",
-      "warning": "experimental-offers only",
       "description": [
         "The **enableoffer** RPC command enables an offer, after it has been disabled."
       ],
@@ -13369,7 +13366,6 @@
       "type": "object",
       "rpc": "fetchinvoice",
       "title": "Command for fetch an invoice for an offer",
-      "warning": "experimental-offers only",
       "description": [
         "The **fetchinvoice** RPC command contacts the issuer of an *offer* to get an actual invoice that can be paid. It highlights any changes between the offer and the returned invoice.",
         "",
@@ -13428,6 +13424,13 @@
             "description": [
               "To ask the issuer to include in the fetched invoice."
             ]
+          },
+          "payer_metadata": {
+            "type": "string",
+            "description": [
+              "Derive the payer_id from the specified payer_metadata. Please be sure that `payer_metdata` can not be derived by anyone, so put some secret into it."
+            ],
+            "added": "v24.11"
           },
           "dev_reply_path": {
             "hidden": true
@@ -16441,7 +16444,7 @@
       "title": "Send a payment with a custom onion packet",
       "description": [
         "The **injectpaymentonion** RPC command causes the node to receive a payment attempt similar to the way it would receive one from a peer. The onion packet is unwrapped, then handled normally: either as a local payment, or forwarded to the next peer.",
-        "Compared to lightning-sendonion(7): the handling of blinded paths and self-payments is trivial, and the interface blocks until the payment succeeds or fails."
+        "Compared to lightning-sendonion(7): the handling of blinded paths and self-payments is trivial, and the interface blocks until the payment succeeds or fails.  The call also fails if this payment_hash has already been successfully paid."
       ],
       "request": {
         "required": [
@@ -16542,7 +16545,11 @@
         "",
         "- 218: injectpaymentonion failed",
         "",
-        "The *onionreply* is returned in the error details, which can be unwrapped to discover the error"
+        "The *onionreply* is returned in the error *data*, which can be unwrapped to discover the error",
+        "",
+        "- 219: injectpaymentonion already succeeded",
+        "",
+        "The *data* object contains the previous success, as per lightning-sendpay."
       ],
       "author": [
         "Rusty Russell <<rusty@rustcorp.com.au>> is mainly responsible."
@@ -16805,7 +16812,6 @@
       "added": "v22.11",
       "rpc": "invoicerequest",
       "title": "Command for offering payments",
-      "warning": "experimental-offers only",
       "description": [
         "The **invoicerequest** RPC command creates an `invoice_request` to send payments: it automatically enables the processing of an incoming invoice, and payment of it. The reader of the resulting `invoice_request` can use lightning-sendinvoice(7) to collect their payment."
       ],
@@ -18688,6 +18694,10 @@
                 }
               },
               "experimental-onion-messages": {
+                "deprecated": [
+                  "v24.08",
+                  "v25.02"
+                ],
                 "type": "object",
                 "additionalProperties": false,
                 "required": [
@@ -18712,6 +18722,10 @@
               "experimental-offers": {
                 "type": "object",
                 "additionalProperties": false,
+                "deprecated": [
+                  "v24.11",
+                  "v25.05"
+                ],
                 "required": [
                   "set",
                   "source"
@@ -23010,13 +23024,13 @@
                 "local_offer_id": {
                   "type": "hash",
                   "description": [
-                    "The *id* of our offer which created this invoice (**experimental-offers** only)."
+                    "The *id* of our offer which created this invoice."
                   ]
                 },
                 "invreq_payer_note": {
                   "type": "string",
                   "description": [
-                    "The optional *invreq_payer_note* from invoice_request which created this invoice (**experimental-offers** only)."
+                    "The optional *invreq_payer_note* from invoice_request which created this invoice."
                   ]
                 },
                 "created_index": {
@@ -23653,7 +23667,6 @@
       "type": "object",
       "rpc": "listoffers",
       "title": "Command for listing offers",
-      "warning": "experimental-offers only",
       "description": [
         "The **listoffers** RPC command list all offers, or with `offer_id`, only the offer with that offer_id (if it exists)."
       ],
@@ -23940,7 +23953,7 @@
                 "bolt12": {
                   "type": "string",
                   "description": [
-                    "The bolt12 string (if supplied for pay: **experimental-offers** only)."
+                    "The bolt12 string (if supplied for pay)."
                   ]
                 },
                 "created_index": {
@@ -28226,7 +28239,6 @@
       "type": "object",
       "rpc": "offer",
       "title": "Command for accepting payments",
-      "warning": "experimental-offers only",
       "description": [
         "The **offer** RPC command creates an offer (or returns an existing one), which is a precursor to creating one or more invoices. It automatically enables the processing of an incoming invoice_request, and issuing of invoices.",
         "",
@@ -29579,7 +29591,7 @@
           "bolt11": {
             "type": "string",
             "description": [
-              "Bolt11 invoice, if **experimental-offers** is enabled, it can actually be a bolt12 invoice, such as one received from lightningd-fetchinvoice(7). If it does not contain an amount, *amount_msat* is required, otherwise if it is specified it must be *null*."
+              "Bolt11 or bolt12 invoice (such as one received from lightningd-fetchinvoice(7)). For a bolt11 invoice, if it does not contain an amount, *amount_msat* is required, otherwise if it is specified it must be *null*."
             ]
           },
           "amount_msat": {
@@ -31498,7 +31510,6 @@
       "type": "object",
       "rpc": "sendinvoice",
       "title": "Command for send an invoice for an offer",
-      "warning": "experimental-offers only",
       "description": [
         "The **sendinvoice** RPC command creates and sends an invoice to the issuer of an *invoice_request* for it to pay: lightning-invoicerequest(7).",
         "",
@@ -31938,7 +31949,7 @@
           "bolt12": {
             "type": "string",
             "description": [
-              "The bolt12 string (if supplied: **experimental-offers** only)."
+              "The bolt12 string (if supplied)."
             ]
           },
           "partid": {
@@ -32323,7 +32334,7 @@
           "bolt12": {
             "type": "string",
             "description": [
-              "The bolt12 string (if supplied: **experimental-offers** only)."
+              "The bolt12 string (if supplied)."
             ]
           },
           "message": {},
@@ -36631,7 +36642,7 @@
           "bolt12": {
             "type": "string",
             "description": [
-              "The bolt12 string (if supplied for pay: **experimental-offers** only)."
+              "The bolt12 string (if supplied for pay)."
             ]
           },
           "message": {},
@@ -36877,6 +36888,129 @@
             "psbt": "cHNidP8BAgQCAAAAAQMEhwAAAAEEAQEBBQEBAQYBAwH7BAIAAAAAAQCJAgAAAAGxWGMGDX3aCdIKW4Vrs4nxXQD8LjoWZ2z3R6yqUp0MxAEAAAAA/f///wKSAA8AAAAAACJRIP2rfAH65wwI4LH5rKzKEQpTEh513FSiXnVCQW80Kur3QEIPAAAAAAAiACCWVeKnMwzYbcafjtGEWvVYDdBrFaeUA0yVceU9Vjmzl3oAAAABASuSAA8AAAAAACJRIP2rfAH65wwI4LH5rKzKEQpTEh513FSiXnVCQW80Kur3AQ4g9QYvuJ1SfNp3sCf8xVK0FrFWgUGG2X21o5Env33m9PIBDwQAAAAAARAE/f///wETQFj1/T/JtePk1+LfX9fAK4QBBwl1Xt1YmoE2cQOo/0hAvCLgwb5zSZCrDGAhxdSujHXyVo3a19wl+ayqa0/nckAhFr2SP8yeYDMCCkVocL4aDjUqc7hPoTIp/uS7zAf7okk6CQDK3xgoAAAAAAABAwgZ9w4AAAAAAAEEIlEgusI8MuI9VQNk4HPIMjMPRqemuUHjs2/gM0kyr0bSCm8hB6Jvzf+c2c5Qrvvj78smeIzuWAjjEtHW01YDo2je0daMCQBxtd2rDQAAAAz8CWxpZ2h0bmluZwQCAAEA"
           }
         }
+      ]
+    },
+    "lightning-xpay.json": {
+      "$schema": "../rpc-schema-draft.json",
+      "type": "object",
+      "additionalProperties": false,
+      "rpc": "xpay",
+      "title": "Command for sending a payment for an invoice",
+      "description": [
+        "The **xpay** RPC command attempts to find routes to the given destination, and send the funds it asks for.",
+        "",
+        "This plugin is simpler and more sophisticated than the older 'pay' plugin, but does not have all the same features."
+      ],
+      "request": {
+        "required": [
+          "invstring"
+        ],
+        "properties": {
+          "invstring": {
+            "type": "string",
+            "description": [
+              "bolt11 or bolt12 invoice"
+            ]
+          },
+          "amount_msat": {
+            "type": "msat",
+            "description": [
+              "Only possible for a bolt11 invoice which does not have an amount (in which case, it's compulsory).  *amount_msat* is in millisatoshi precision; it can be a whole number, or a whole number with suffix *msat* or *sat*, or a three decimal point number with suffix *sat*, or an 1 to 11 decimal point number suffixed by *btc*."
+            ]
+          },
+          "maxfee": {
+            "type": "msat",
+            "description": [
+              "*maxfee* creates an absolute limit on what fee we will pay."
+            ],
+            "default": "5000msat, or 1% (whatever is greater)"
+          },
+          "layers": {
+            "type": "array",
+            "description": [
+              "These are askrene layers to apply in addition to xpay's own: these can alter the topology or provide additional information on the lightning network.  See askrene-create-layer."
+            ],
+            "items": {
+              "type": "string",
+              "description": [
+                "name of an existing layer"
+              ]
+            }
+          },
+          "retry_for": {
+            "type": "u32",
+            "description": [
+              "Until *retry_for* seconds passes, the command will keep finding routes and retrying the payment."
+            ],
+            "default": "60 seconds"
+          },
+          "partial_msat": {
+            "type": "msat",
+            "description": [
+              "Explicitly state that you are only paying some part of the invoice.  Presumably someone else is paying the rest (otherwise the payment will time out at the recipient)."
+            ]
+          }
+        }
+      },
+      "response": {
+        "required": [
+          "payment_preimage",
+          "failed_parts",
+          "successful_parts",
+          "amount_msat",
+          "amount_sent_msat"
+        ],
+        "properties": {
+          "payment_preimage": {
+            "type": "secret",
+            "description": [
+              "The proof of payment: SHA256 of this **payment_hash**."
+            ]
+          },
+          "failed_parts": {
+            "type": "u64",
+            "description": [
+              "How many separate payment parts failed."
+            ]
+          },
+          "successful_parts": {
+            "type": "u64",
+            "description": [
+              "How many separate payment parts succeeded (or are anticipated to succeed).  This will be at least one."
+            ]
+          },
+          "amount_msat": {
+            "type": "msat",
+            "description": [
+              "Amount the recipient received."
+            ]
+          },
+          "amount_sent_msat": {
+            "type": "msat",
+            "description": [
+              "Total amount we sent (including fees)."
+            ]
+          }
+        }
+      },
+      "errors": [
+        "The following error codes may occur:",
+        "",
+        "- -1: Catchall nonspecific error.",
+        "- 203: Permanent failure from destination (e.g. it said it didn't recognize invoice)",
+        "- 205: Couldn't find, or find a way to, the destination.",
+        "- 219: Invoice has already been paid.",
+        "- 209: Other payment error."
+      ],
+      "author": [
+        "Rusty Russell <<rusty@rustcorp.com.au>> is mainly responsible."
+      ],
+      "see_also": [
+        "lightning-pay(7)",
+        "lightning-decodepay(7)"
+      ],
+      "resources": [
+        "Main web site: <https://github.com/ElementsProject/lightning>"
       ]
     }
   },

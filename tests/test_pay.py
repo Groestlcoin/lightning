@@ -4225,25 +4225,9 @@ def test_mpp_overload_payee(node_factory, bitcoind):
     l1.rpc.pay(inv)
 
 
-@unittest.skipIf(TEST_NETWORK != 'regtest', "Canned offer is network specific")
-def test_offer_needs_option(node_factory):
-    """Make sure we don't make offers without offer command"""
-    l1 = node_factory.get_node()
-    with pytest.raises(RpcError, match='experimental-offers not enabled'):
-        l1.rpc.call('offer', {'amount': '1msat', 'description': 'test'})
-    with pytest.raises(RpcError, match='experimental-offers not enabled'):
-        l1.rpc.call('invoicerequest', {'amount': '2msat',
-                                       'description': 'simple test'})
-    with pytest.raises(RpcError, match='experimental-offers not enabled'):
-        l1.rpc.call('fetchinvoice', {'offer': 'lno1qgsqvgnwgcg35z6ee2h3yczraddm72xrfua9uve2rlrm9deu7xyfzrcgqyqs5pr5v4ehg93pqfnwgkvdr57yzh6h92zg3qctvrm7w38djg67kzcm4yeg8vc4cq63s'})
-
-    # Decode still works though
-    assert l1.rpc.decode('lno1qgsqvgnwgcg35z6ee2h3yczraddm72xrfua9uve2rlrm9deu7xyfzrcgqyqs5pr5v4ehg93pqfnwgkvdr57yzh6h92zg3qctvrm7w38djg67kzcm4yeg8vc4cq63s')['valid']
-
-
 def test_offer(node_factory, bitcoind):
     plugin = os.path.join(os.path.dirname(__file__), 'plugins/currencyUSDAUD5000.py')
-    l1 = node_factory.get_node(options={'plugin': plugin, 'experimental-offers': None})
+    l1 = node_factory.get_node(options={'plugin': plugin})
 
     # Try empty description
     ret = l1.rpc.call('offer', [9, ''])
@@ -4427,8 +4411,7 @@ def test_offer(node_factory, bitcoind):
 
 
 def test_offer_deprecated_api(node_factory, bitcoind):
-    l1, l2 = node_factory.line_graph(2, opts={'experimental-offers': None,
-                                              'allow-deprecated-apis': True})
+    l1, l2 = node_factory.line_graph(2, opts={'allow-deprecated-apis': True})
 
     offer = l2.rpc.call('offer', {'amount': '2msat',
                                   'description': 'test_offer_deprecated_api'})
@@ -4441,8 +4424,7 @@ def test_offer_deprecated_api(node_factory, bitcoind):
 
 def test_fetchinvoice_3hop(node_factory, bitcoind):
     l1, l2, l3, l4 = node_factory.line_graph(4, wait_for_announce=True,
-                                             opts={'experimental-offers': None,
-                                                   'may_reconnect': True,
+                                             opts={'may_reconnect': True,
                                                    'dev-no-reconnect': None})
     offer1 = l4.rpc.call('offer', {'amount': '2msat',
                                    'description': 'simple test'})
@@ -4454,10 +4436,9 @@ def test_fetchinvoice_3hop(node_factory, bitcoind):
 def test_fetchinvoice(node_factory, bitcoind):
     # We remove the conversion plugin on l3, causing it to get upset.
     l1, l2, l3 = node_factory.line_graph(3, wait_for_announce=True,
-                                         opts=[{'experimental-offers': None},
-                                               {'experimental-offers': None},
-                                               {'experimental-offers': None,
-                                                'broken_log': "plugin-offers: Failed invreq.*Unknown command 'currencyconvert'"}])
+                                         opts=[{},
+                                               {},
+                                               {'broken_log': "plugin-offers: Failed invreq.*Unknown command 'currencyconvert'"}])
 
     # Simple offer first.
     offer1 = l3.rpc.call('offer', {'amount': '2msat',
@@ -4528,8 +4509,7 @@ def test_fetchinvoice(node_factory, bitcoind):
     l1.rpc.pay(inv1['invoice'])
 
     # We can't pay the other one now.
-    # FIXME: Even dummy blinded paths always return WIRE_INVALID_ONION_BLINDING!
-    with pytest.raises(RpcError, match="INVALID_ONION_BLINDING.*'erring_node': '{}'".format(l3.info['id'])):
+    with pytest.raises(RpcError, match="INCORRECT_OR_UNKNOWN_PAYMENT_DETAILS.*'erring_node': '{}'".format(l3.info['id'])):
         l1.rpc.pay(inv2['invoice'])
 
     # We can't reuse the offer, either.
@@ -4552,7 +4532,7 @@ def test_fetchinvoice(node_factory, bitcoind):
     # Check we can request invoice without a channel.
     offer3 = l2.rpc.call('offer', {'amount': '1msat',
                                    'description': 'offer3'})
-    l4 = node_factory.get_node(options={'experimental-offers': None})
+    l4 = node_factory.get_node()
     l4.rpc.connect(l2.info['id'], 'localhost', l2.port)
     # ... even if we can't find ourselves.
     l4.rpc.call('fetchinvoice', {'offer': offer3['bolt12']})
@@ -4590,8 +4570,7 @@ def test_fetchinvoice(node_factory, bitcoind):
 
 def test_fetchinvoice_recurrence(node_factory, bitcoind):
     """Test for our recurrence extension"""
-    l1, l2, l3 = node_factory.line_graph(3, wait_for_announce=True,
-                                         opts={'experimental-offers': None})
+    l1, l2, l3 = node_factory.line_graph(3, wait_for_announce=True)
 
     # Recurring offer.
     offer3 = l2.rpc.call('offer', {'amount': '1msat',
@@ -4688,10 +4667,9 @@ def test_fetchinvoice_autoconnect(node_factory, bitcoind):
     l1, l2 = node_factory.line_graph(2, wait_for_announce=True,
                                      # No onion_message support in l1
                                      opts=[{'dev-force-features': -39},
-                                           {'experimental-offers': None,
-                                            'dev-allow-localhost': None}])
+                                           {'dev-allow-localhost': None}])
 
-    l3 = node_factory.get_node(options={'experimental-offers': None})
+    l3 = node_factory.get_node()
     l3.rpc.connect(l1.info['id'], 'localhost', l1.port)
     wait_for(lambda: l3.rpc.listnodes(l2.info['id'])['nodes'] != [])
 
@@ -4728,8 +4706,7 @@ def test_fetchinvoice_autoconnect(node_factory, bitcoind):
 def test_fetchinvoice_disconnected_reply(node_factory, bitcoind):
     """We ask for invoice, but reply path doesn't lead directly from recipient"""
     l1, l2, l3 = node_factory.get_nodes(3,
-                                        opts={'experimental-offers': None,
-                                              'may_reconnect': True,
+                                        opts={'may_reconnect': True,
                                               'dev-no-reconnect': None,
                                               'dev-allow-localhost': None})
     l3.rpc.connect(l2.info['id'], 'localhost', l2.port)
@@ -4808,8 +4785,7 @@ def test_pay_waitblockheight_timeout(node_factory, bitcoind):
 
 
 def test_dev_rawrequest(node_factory):
-    l1, l2 = node_factory.line_graph(2, fundchannel=False,
-                                     opts={'experimental-offers': None})
+    l1, l2 = node_factory.line_graph(2, fundchannel=False)
 
     offer = l2.rpc.call('offer', {'amount': '2msat',
                                   'description': 'simple test'})
@@ -4824,10 +4800,7 @@ def test_dev_rawrequest(node_factory):
 
 
 def test_sendinvoice(node_factory, bitcoind):
-    l2opts = {'experimental-offers': None}
-    l1, l2 = node_factory.line_graph(2, wait_for_announce=True,
-                                     opts=[{'experimental-offers': None},
-                                           l2opts])
+    l1, l2 = node_factory.line_graph(2, wait_for_announce=True)
 
     # Simple offer to send money (balances channel a little)
     invreq = l1.rpc.call('invoicerequest', {'amount': '100000sat',
@@ -4889,11 +4862,9 @@ def test_sendinvoice(node_factory, bitcoind):
 
 
 def test_sendinvoice_blindedpath(node_factory, bitcoind):
-    l1, l2 = node_factory.line_graph(2, wait_for_announce=True,
-                                     opts=[{},
-                                           {'experimental-offers': None}])
+    l1, l2 = node_factory.line_graph(2, wait_for_announce=True)
     # We join l3->l1->l2 so l3 can pay invoice sent by l2.
-    l3 = node_factory.get_node(options={'experimental-offers': None})
+    l3 = node_factory.get_node()
     node_factory.join_nodes([l3, l1], announce_channels=False)
 
     # Make sure l3 knows l1, l2 is public, so it will create blinded path to it.
@@ -5354,8 +5325,7 @@ def test_fetchinvoice_with_no_quantity(node_factory):
     In particular, in the fetchinvoice we forget to map the
     quantity parameter with the invoice request quantity field.
     """
-    l1, l2 = node_factory.line_graph(2, wait_for_announce=True,
-                                     opts={'experimental-offers': None})
+    l1, l2 = node_factory.line_graph(2, wait_for_announce=True)
     offer1 = l2.rpc.call('offer', {'amount': '2msat',
                                    'description': 'simple test',
                                    'quantity_max': 10})
@@ -5648,10 +5618,8 @@ def test_pay_partial_msat(node_factory, executor):
 
 def test_blindedpath_privchan(node_factory, bitcoind):
     l1, l2 = node_factory.line_graph(2, wait_for_announce=True,
-                                     opts={'experimental-offers': None,
-                                           'may_reconnect': True})
-    l3 = node_factory.get_node(options={'experimental-offers': None,
-                                        'cltv-final': 120},
+                                     opts={'may_reconnect': True})
+    l3 = node_factory.get_node(options={'cltv-final': 120},
                                may_reconnect=True)
 
     # Private channel.
@@ -5693,8 +5661,7 @@ def test_blindedpath_privchan(node_factory, bitcoind):
 
 def test_blinded_reply_path_scid(node_factory):
     """Check that we handle a blinded path which begins with a scid instead of a nodeid"""
-    l1, l2 = node_factory.line_graph(2, wait_for_announce=True,
-                                     opts={'experimental-offers': None})
+    l1, l2 = node_factory.line_graph(2, wait_for_announce=True)
     offer = l2.rpc.offer(amount='2msat', description='test_blinded_reply_path_scid')
 
     chan = only_one(l1.rpc.listpeerchannels()['channels'])
@@ -5721,8 +5688,7 @@ def test_pay_while_opening_channel(node_factory, bitcoind, executor):
 
 
 def test_offer_paths(node_factory, bitcoind):
-    opts = {'experimental-offers': None,
-            'dev-allow-localhost': None}
+    opts = {'dev-allow-localhost': None}
 
     # Need to announce channels to use their scid in offers anyway!
     l1, l2, l3, l4 = node_factory.line_graph(4,
@@ -5807,8 +5773,7 @@ def test_pay_legacy_forward(node_factory, bitcoind, executor):
 @pytest.mark.slow_test
 def test_onionmessage_ratelimit(node_factory):
     l1, l2 = node_factory.line_graph(2, fundchannel=False,
-                                     opts={'experimental-offers': None,
-                                           'allow_warning': True})
+                                     opts={'allow_warning': True})
 
     offer = l2.rpc.call('offer', {'amount': '2msat',
                                   'description': 'simple test'})
@@ -5818,7 +5783,9 @@ def test_onionmessage_ratelimit(node_factory):
         for _ in range(8):
             l1.rpc.fetchinvoice(offer['bolt12'])
 
-    assert l1.daemon.is_in_log('WARNING: Ratelimited onion_message: exceeded one per 250msec')
+    # Normally l2 gets upset, but actually l1 can get upset with replies!
+    assert (l1.daemon.is_in_log('WARNING: Ratelimited onion_message: exceeded one per 250msec')
+            or l2.daemon.is_in_log('WARNING: Ratelimited onion_message: exceeded one per 250msec'))
 
     # It will recover though!
     time.sleep(0.250)
@@ -5828,8 +5795,7 @@ def test_onionmessage_ratelimit(node_factory):
 def test_offer_path_self(node_factory):
     """We can fetch an offer, and pay an invoice which uses a blinded path starting at us"""
     l1, l2, l3 = node_factory.line_graph(3, fundchannel=False,
-                                         opts={'experimental-offers': None,
-                                               'may_reconnect': True})
+                                         opts={'may_reconnect': True})
 
     # Private channel from l2->l3, makes l3 add a hint.
     node_factory.join_nodes([l1, l2], wait_for_announce=True)
@@ -5870,7 +5836,7 @@ def test_offer_path_self(node_factory):
 
 def test_offer_selfpay(node_factory):
     """We can fetch an pay our own offer"""
-    l1 = node_factory.get_node(options={'experimental-offers': None})
+    l1 = node_factory.get_node()
 
     offer = l1.rpc.offer(amount='2msat', description='test_offer_path_self')['bolt12']
     inv = l1.rpc.fetchinvoice(offer)['invoice']
@@ -5878,8 +5844,7 @@ def test_offer_selfpay(node_factory):
 
 
 def test_decryptencrypteddata(node_factory):
-    l1, l2, l3 = node_factory.line_graph(3, fundchannel=False,
-                                         opts={'experimental-offers': None})
+    l1, l2, l3 = node_factory.line_graph(3, fundchannel=False)
 
     # Private channel from l2->l3, makes l3 add a blinded path to invoice
     # (l1's existence makes sure l3 doesn't see l2 as a dead end!)
@@ -5908,7 +5873,7 @@ def test_decryptencrypteddata(node_factory):
 
 
 def test_offer_experimental_fields(node_factory):
-    l1, l2 = node_factory.line_graph(2, opts={'experimental-offers': None})
+    l1, l2 = node_factory.line_graph(2)
 
     # Append experimental type 1000000001, length 1
     offer = l1.rpc.offer(amount='2msat', description='test_offer_path_self')['bolt12']
@@ -5930,8 +5895,7 @@ def test_offer_experimental_fields(node_factory):
 
 def test_fetch_no_description_offer(node_factory):
     """Reproducing the issue: https://github.com/ElementsProject/lightning/issues/7405"""
-    l1, l2 = node_factory.line_graph(2, opts={'experimental-offers': None,
-                                              'allow-deprecated-apis': True})
+    l1, l2 = node_factory.line_graph(2, opts={'allow-deprecated-apis': True})
 
     # Deprecated fields make schema checker upset.
     offer = l2.rpc.call('offer', {'amount': 'any'})
@@ -5947,8 +5911,7 @@ def test_fetch_no_description_offer(node_factory):
 
 def test_fetch_no_description_with_amount(node_factory):
     """Reproducing the issue: https://github.com/ElementsProject/lightning/issues/7405"""
-    l1, l2 = node_factory.line_graph(2, opts={'experimental-offers': None,
-                                              'allow-deprecated-apis': True})
+    l1, l2 = node_factory.line_graph(2, opts={'allow-deprecated-apis': True})
 
     # Deprecated fields make schema checker upset.
     # BOLT-offers #12:
@@ -6000,7 +5963,7 @@ def test_decodepay(node_factory, chainparams):
 
 
 def test_enableoffer(node_factory):
-    l1, l2 = node_factory.line_graph(2, opts={'experimental-offers': None})
+    l1, l2 = node_factory.line_graph(2)
 
     # Normal offer, works as expected
     offer1 = l2.rpc.call('offer', {'amount': '2msat',
@@ -6027,6 +5990,21 @@ def test_enableoffer(node_factory):
     # Can't enable unknown.
     with pytest.raises(RpcError, match="Unknown offer"):
         l1.rpc.enableoffer(offer_id=offer1['offer_id'])
+
+
+def test_offer_with_private_channels_multyhop2(node_factory):
+    """We should be able to fetch an invoice through a private path and pay the invoice"""
+    l1, l2, l3, l4, l5 = node_factory.line_graph(5, fundchannel=False)
+
+    node_factory.join_nodes([l1, l2], wait_for_announce=True)
+    node_factory.join_nodes([l2, l3], wait_for_announce=True)
+    node_factory.join_nodes([l3, l4], wait_for_announce=True)
+    node_factory.join_nodes([l3, l5], announce_channels=False)
+    wait_for(lambda: ['alias' in n for n in l4.rpc.listnodes()['nodes']] == [True, True, True, True])
+
+    offer = l5.rpc.offer(amount='2msat', description='test_offer_with_private_channels_multyhop2')['bolt12']
+    invoice = l1.rpc.fetchinvoice(offer=offer)["invoice"]
+    l1.rpc.pay(invoice)
 
 
 def diamond_network(node_factory):
@@ -6137,6 +6115,19 @@ def test_injectpaymentonion_simple(node_factory, executor):
     assert lsp['payment_hash'] == inv1['payment_hash']
     assert lsp['status'] == 'complete'
 
+    # We FAIL on reattempt
+    with pytest.raises(RpcError, match="Already paid this invoice") as err:
+        l1.rpc.injectpaymentonion(onion=onion['onion'],
+                                  payment_hash=inv1['payment_hash'],
+                                  amount_msat=1000,
+                                  cltv_expiry=blockheight + 18 + 6,
+                                  partid=1,
+                                  groupid=0)
+    # PAY_INJECTPAYMENTONION_ALREADY_PAID
+    assert err.value.error['code'] == 219
+    assert 'onionreply' not in err.value.error['data']
+    assert err.value.error['data'] == lsp
+
 
 def test_injectpaymentonion_mpp(node_factory, executor):
     l1, l2 = node_factory.line_graph(2)
@@ -6218,7 +6209,7 @@ def test_injectpaymentonion_3hop(node_factory, executor):
 
 
 def test_injectpaymentonion_selfpay(node_factory, executor):
-    l1, l2 = node_factory.line_graph(2, opts={'experimental-offers': None})
+    l1, l2 = node_factory.line_graph(2)
 
     blockheight = l1.rpc.getinfo()['blockheight']
 
@@ -6381,8 +6372,7 @@ def test_injectpaymentonion_selfpay(node_factory, executor):
 
 def test_injectpaymentonion_blindedpath(node_factory, executor):
     l1, l2 = node_factory.line_graph(2,
-                                     wait_for_announce=True,
-                                     opts={'experimental-offers': None})
+                                     wait_for_announce=True)
     blockheight = l1.rpc.getinfo()['blockheight']
 
     # Test bolt12, with stub blinded path.
@@ -6459,7 +6449,7 @@ def test_injectpaymentonion_blindedpath(node_factory, executor):
     assert lsp['status'] == 'complete'
 
     # Now test bolt12 with real blinded path.
-    l4 = node_factory.get_node(options={'experimental-offers': None})
+    l4 = node_factory.get_node()
     # Private channel.
     node_factory.join_nodes([l2, l4], announce_channels=False)
 
@@ -6726,3 +6716,55 @@ def test_parallel_channels_reserve(node_factory, bitcoind):
     receipt = only_one(l3.rpc.listinvoices("inv")["invoices"])
     assert receipt["status"] == "paid"
     assert receipt["amount_received_msat"] == total_msat
+
+
+def test_fetchinvoice_with_payer_metadata(node_factory, bitcoind):
+    # We remove the conversion plugin on l3, causing it to get upset.
+    l1, l2 = node_factory.line_graph(2, wait_for_announce=True)
+
+    # Simple default offer first.
+    offer = l2.rpc.call('offer', {'amount': 'any'})
+    assert offer['created'] is True
+
+    # Fetch an invoice for a monthly payroll for two different people, one is macros and the other is vincenzopalazzo.
+    # Now the payroll software has a bug and injects the wrong payer_node description (this often happens with wire descriptions).
+    inv1 = l1.rpc.call('fetchinvoice', {'offer': offer['bolt12'], 'amount_msat': '1sat', 'payer_note': 'Payment For vincenzopalazzo', 'payer_metadata': b'macros'.hex()})['invoice']
+    inv2 = l1.rpc.call('fetchinvoice', {'offer': offer['bolt12'], 'amount_msat': '1sat', 'payer_note': 'Payment For vincenzopalazzo', 'payer_metadata': b'vincenzopalazzo'.hex()})['invoice']
+    assert inv1 != inv2
+    # At this point, macros noticed the bug in the payroll system and reported a
+    # 'not paid for the current month' issue. The payroll system can verify that
+    # there is a bug in the fetchinvoice, but it can also prove that the payment was sent
+    # to macros because the payroll system can generate the `payer_id` with the `macros` metadata.
+    decode1 = l1.rpc.call('decode', {'string': inv1})
+    decode2 = l1.rpc.call('decode', {'string': inv2})
+    assert decode1['invreq_payer_id'] != decode2['invreq_payer_id']
+
+    # Delay to avoid sending too many onion messages per second!
+    time.sleep(1)
+
+    inv3 = l1.rpc.call('fetchinvoice', {'offer': offer['bolt12'], 'amount_msat': '1sat', 'payer_note': 'Payment For vincenzopalazzo', 'payer_metadata': b'macros'.hex()})['invoice']
+    decode3 = l1.rpc.call('decode', {'string': inv3})
+    assert decode1['invreq_payer_id'] == decode3['invreq_payer_id']
+
+
+def test_pay_unannounced_routehint(node_factory, bitcoind):
+    """Tests whether sender can pay recipient through unannounced channels with
+    2 hops where the second hop uses a route hint."""
+
+    l1, l2, l3 = node_factory.get_nodes(3)
+
+    # l1 and l3 are connected with unannounced channels to l2
+    node_factory.join_nodes([l1, l2], announce_channels=False)
+    node_factory.join_nodes([l2, l3], announce_channels=False)
+    scid23 = l3.rpc.listpeerchannels(l2.info['id'])['channels'][0]['alias']['remote']
+    routel2l3 = [{'id': l2.info['id'],
+                  'short_channel_id': scid23,
+                  'fee_base_msat': 1000,
+                  'fee_proportional_millionths': 10,
+                  'cltv_expiry_delta': 6}]
+    inv = l3.dev_invoice(amount_msat=2100000,
+                         label='test_pay_unannounced_routehint',
+                         description='desc',
+                         dev_routes=[routel2l3])
+    result = l1.rpc.pay(inv['bolt11'])
+    assert result["status"] == "complete", f"pay result is {result}"

@@ -20,6 +20,9 @@
 #define GOSSIP_SEEKER_INTERVAL(seeker) \
 	DEV_FAST_GOSSIP((seeker)->daemon->dev_fast_gossip, 5, 60)
 
+#define GOSSIP_SEEKER_RESYNC_INTERVAL(seeker) \
+	DEV_FAST_GOSSIP((seeker)->daemon->dev_fast_gossip, 30, 3600)
+
 enum seeker_state {
 	/* Still streaming gossip from single peer. */
 	STARTING_UP,
@@ -49,6 +52,9 @@ struct seeker {
 	/* Timer which checks on progress every minute */
 	struct oneshot *check_timer;
 
+	/* Full sync gossip from one peer every hour */
+	struct oneshot *sync_timer;
+
 	/* Channels we've heard about, but don't know (by scid). */
 	UINTMAP(bool) unknown_scids;
 
@@ -62,6 +68,9 @@ struct seeker {
 	/* During startup, we ask a single peer for gossip (set to NULL if peer dies)*/
 	struct peer *random_peer;
 
+	/* The last peer we requested a full gossip sync from. */
+	struct peer *last_full_sync_peer;
+
 	/* This checks progress of our random peer */
 	size_t prev_gossip_count;
 
@@ -74,10 +83,13 @@ struct seeker {
 	bool unknown_nodes;
 
 	/* Peers we've asked to stream us gossip (set to NULL if peer dies) */
-	struct peer *gossiper[5];
+	struct peer *gossiper[10];
 
 	/* A peer that told us about unknown gossip (set to NULL if peer dies). */
 	struct peer *preferred_peer;
+
+	/* check_timer cycles since streaming began from the last new gossiper. */
+	u8 new_gossiper_elapsed;
 };
 
 /* Mutual recursion */
@@ -104,7 +116,7 @@ static bool selected_peer(struct seeker *seeker, struct peer *peer)
 
 	/* Give it some grace in case we immediately hit timer */
 	seeker->prev_gossip_count
-		= peer->gossip_counter - GOSSIP_SEEKER_INTERVAL(seeker);
+		= peer->query_reply_counter - GOSSIP_SEEKER_INTERVAL(seeker);
 	return true;
 }
 
@@ -142,8 +154,11 @@ struct seeker *new_seeker(struct daemon *daemon)
 		seeker->gossiper[i] = NULL;
 	seeker->preferred_peer = NULL;
 	seeker->unknown_nodes = false;
+	seeker->last_full_sync_peer = NULL;
+	seeker->new_gossiper_elapsed = 0;
 	set_state(seeker, STARTING_UP, NULL, "New seeker");
 	begin_check_timer(seeker);
+	seeker->sync_timer = NULL;
 	return seeker;
 }
 
@@ -186,9 +201,9 @@ static bool peer_made_progress(struct seeker *seeker, const struct peer *peer)
 	/* Has it made progress (at least one valid update per second)?  If
 	 * not, we assume it's finished, and if it hasn't, we'll end up
 	 * querying backwards in next steps. */
-	if (peer->gossip_counter
+	if (peer->query_reply_counter
 	    >= seeker->prev_gossip_count + GOSSIP_SEEKER_INTERVAL(seeker)) {
-		seeker->prev_gossip_count = peer->gossip_counter;
+		seeker->prev_gossip_count = peer->query_reply_counter;
 		return true;
 	}
 
@@ -856,7 +871,7 @@ static void check_probe(struct seeker *seeker,
 
 	status_peer_debug(&peer->id,
 			  "has only moved gossip %zu->%zu for probe, giving up on it",
-			  seeker->prev_gossip_count, peer->gossip_counter);
+			  seeker->prev_gossip_count, peer->query_reply_counter);
 	seeker->random_peer = NULL;
 	restart(seeker);
 }
@@ -879,39 +894,63 @@ static bool peer_is_not_gossipper(const struct peer *peer)
 	return true;
 }
 
-/* FIXME: We should look at gossip performance and replace the underperforming
- * peers in preference. */
+/* Allows evaluation of least useful gossip streamer. */
+static void reset_gossip_performance_metrics(struct seeker *seeker)
+{
+	seeker->new_gossiper_elapsed = 0;
+	for (int i = 0; i < ARRAY_SIZE(seeker->gossiper); i++) {
+		seeker->gossiper[i]->gossip_counter = 0;
+	}
+}
+
 static void maybe_rotate_gossipers(struct seeker *seeker)
 {
 	struct peer *peer;
-	size_t i;
+	size_t i, lowest_idx;
+
+	seeker->new_gossiper_elapsed++;
 
 	/* If all (usable) peers are gossiping, we're done */
 	peer = random_seeker(seeker, peer_is_not_gossipper);
 	if (!peer)
 		return;
 
-	/* If we have a slot free, or ~ 1 per hour */
+	/* If we have a slot free, fill it. */
 	for (i = 0; i < ARRAY_SIZE(seeker->gossiper); i++) {
 		if (!seeker->gossiper[i]) {
 			status_peer_debug(&peer->id, "seeker: filling slot %zu",
 					  i);
+			lowest_idx = i;
 			goto set_gossiper;
 		}
-		if (pseudorand(ARRAY_SIZE(seeker->gossiper) * 60) == 0) {
-			status_peer_debug(&peer->id,
-					  "seeker: replacing slot %zu",
-					  i);
-			goto disable_gossiper;
+	}
+	/* Otherwise, rotate out worst gossiper every 30 minutes on average. */
+	if (pseudorand(25) != 0)
+		return;
+	/* Don't evaluate gossip performance at a faster rate than
+	 * new gossip is periodically emitted. */
+	if (seeker->new_gossiper_elapsed < 5)
+		return;
+	u32 lowest_count = UINT_MAX;
+	for (int j = 0; j < ARRAY_SIZE(seeker->gossiper); j++) {
+		if (seeker-> gossiper[j]->gossip_counter < lowest_count) {
+			lowest_count = seeker-> gossiper[j]->gossip_counter;
+			lowest_idx = j;
 		}
 	}
-	return;
+	status_debug("seeker: ejecting worst gossiper %s - slot %zu: "
+		     "novel gossip count %zu over %u minutes",
+		     fmt_node_id(tmpctx, &seeker->gossiper[lowest_idx]->id),
+		     lowest_idx, seeker->gossiper[lowest_idx]->gossip_counter,
+		     seeker->new_gossiper_elapsed);
+	status_peer_debug(&peer->id, "seeker: replacing slot %zu",
+			  lowest_idx);
+	disable_gossip_stream(seeker, seeker->gossiper[lowest_idx]);
 
-disable_gossiper:
-	disable_gossip_stream(seeker, seeker->gossiper[i]);
 set_gossiper:
-	seeker->gossiper[i] = peer;
+	seeker->gossiper[lowest_idx] = peer;
 	enable_gossip_stream(seeker, peer, false);
+	reset_gossip_performance_metrics(seeker);
 }
 
 static bool seek_any_unknown_nodes(struct seeker *seeker)
@@ -948,6 +987,7 @@ static void seeker_check(struct seeker *seeker)
 		check_probe(seeker, peer_gossip_probe_nannounces);
 		break;
 	case NORMAL:
+		/* FIXME: maybe_get_more_peers(seeker); */
 		maybe_rotate_gossipers(seeker);
 		if (!seek_any_unknown_scids(seeker)
 		    && !seek_any_stale_scids(seeker))
@@ -957,6 +997,51 @@ static void seeker_check(struct seeker *seeker)
 
 out:
 	begin_check_timer(seeker);
+}
+
+/* Mutual recursion */
+static void begin_sync_timer(struct seeker *seeker);
+
+/* Periodically ask for a full sync from a random peer to backfill anything
+ * we might have missed. */
+static void full_sync_random_peer(struct seeker *seeker)
+{
+	/* Select random peer */
+	struct peer *random_peer;
+	struct peer_node_id_map_iter it;
+	random_peer = first_random_peer(seeker->daemon, &it);
+	if (!random_peer) {
+		begin_sync_timer(seeker);
+		return;
+	}
+	/* Don't repeatedly resync from the same node. */
+	if (seeker->last_full_sync_peer && seeker->last_full_sync_peer == random_peer) {
+		struct peer *new_peer;
+		new_peer = next_random_peer(seeker->daemon, random_peer, &it);
+		if (new_peer)
+			random_peer = new_peer;
+		else {
+			begin_sync_timer(seeker);
+			return;
+		}
+	}
+	status_peer_debug(&random_peer->id,
+			  "seeker: chosen for periodic full sync");
+	normal_gossip_start(seeker,random_peer, true);
+	seeker->last_full_sync_peer = random_peer;
+	begin_sync_timer(seeker);
+}
+
+static void begin_sync_timer(struct seeker *seeker)
+{
+	if (seeker->sync_timer)
+		tal_free(seeker->sync_timer);
+	const u32 polltime = GOSSIP_SEEKER_RESYNC_INTERVAL(seeker);
+
+	seeker->sync_timer = new_reltimer(&seeker->daemon->timers,
+					  seeker,
+					  time_from_sec(polltime),
+					  full_sync_random_peer, seeker);
 }
 
 /* We get this when we have a new peer. */
@@ -972,8 +1057,11 @@ void seeker_setup_peer_gossip(struct seeker *seeker, struct peer *peer)
 
 	switch (seeker->state) {
 	case STARTING_UP:
-		if (seeker->random_peer == NULL)
+		if (seeker->random_peer == NULL) {
 			peer_gossip_startup(seeker, peer, true);
+			/* Get another full gossip sync later. */
+			begin_sync_timer(seeker);
+		}
 		/* Waiting for seeker_check to release us */
 		return;
 

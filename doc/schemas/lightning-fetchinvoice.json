@@ -3,7 +3,6 @@
   "type": "object",
   "rpc": "fetchinvoice",
   "title": "Command for fetch an invoice for an offer",
-  "warning": "experimental-offers only",
   "description": [
     "The **fetchinvoice** RPC command contacts the issuer of an *offer* to get an actual invoice that can be paid. It highlights any changes between the offer and the returned invoice.",
     "",
@@ -62,6 +61,13 @@
         "description": [
           "To ask the issuer to include in the fetched invoice."
         ]
+      },
+      "payer_metadata": {
+        "type": "string",
+        "description": [
+          "Derive the payer_id from the specified payer_metadata. Please be sure that `payer_metdata` can not be derived by anyone, so put some secret into it."
+        ],
+        "added": "v24.11"
       },
       "dev_reply_path": {
         "hidden": true

@@ -55,6 +55,9 @@ struct amount_asset amount_sat_to_asset(struct amount_sat *sat UNNEEDED, const u
 /* Generated stub for amount_tx_fee */
 struct amount_sat amount_tx_fee(u32 fee_per_kw UNNEEDED, size_t weight UNNEEDED)
 { fprintf(stderr, "amount_tx_fee called!\n"); abort(); }
+/* Generated stub for fmt_amount_msat */
+char *fmt_amount_msat(const tal_t *ctx UNNEEDED, struct amount_msat msat UNNEEDED)
+{ fprintf(stderr, "fmt_amount_msat called!\n"); abort(); }
 /* Generated stub for fromwire_amount_msat */
 struct amount_msat fromwire_amount_msat(const u8 **cursor UNNEEDED, size_t *max UNNEEDED)
 { fprintf(stderr, "fromwire_amount_msat called!\n"); abort(); }
@@ -235,7 +238,7 @@ int main(int argc, char *argv[])
 	pubkey_from_privkey(&path_key[DAVE], &path_key_pub[DAVE]);
 
 	/* Create an onion which encodes this. */
-	sphinx_path = sphinx_path_new(tmpctx, NULL);
+	sphinx_path = sphinx_path_new(tmpctx, NULL, 0);
 	for (size_t i = 0; i < 4; i++) {
 		struct tlv_onionmsg_tlv *payload
 			= tlv_onionmsg_tlv_new(tmpctx);

@@ -860,7 +860,7 @@ static void dev_register_opts(struct lightningd *ld)
 	clnopt_noarg("--dev-fast-gossip-prune", OPT_DEV,
 		     opt_set_bool,
 		     &ld->dev_fast_gossip_prune,
-		     "Make gossip pruning 30 seconds");
+		     "Make gossip pruning 120 seconds");
 	clnopt_witharg("--dev-gossip-time", OPT_DEV|OPT_SHOWINT,
 		       opt_set_u32, opt_show_u32,
 		       &ld->dev_gossip_time,
@@ -1031,8 +1031,6 @@ static const struct config testnet_config = {
 	/* 1 minute should be enough for anyone! */
 	.connection_timeout_secs = 60,
 
-	.exp_offers = false,
-
 	.allowdustreserve = false,
 
 	.require_confirmed_inputs = false,
@@ -1110,8 +1108,6 @@ static const struct config mainnet_config = {
 
 	/* 1 minute should be enough for anyone! */
 	.connection_timeout_secs = 60,
-
-	.exp_offers = false,
 
 	.allowdustreserve = false,
 
@@ -1271,7 +1267,7 @@ static char *opt_set_splicing(struct lightningd *ld)
 {
 	feature_set_or(ld->our_features,
 		       take(feature_set_for_feature(NULL,
-						    OPTIONAL_FEATURE(OPT_EXPERIMENTAL_SPLICE))));
+						    OPTIONAL_FEATURE(OPT_SPLICE))));
 	return NULL;
 }
 
@@ -1320,7 +1316,10 @@ static char *opt_set_anchor_zero_fee_htlc_tx(struct lightningd *ld)
 
 static char *opt_set_offers(struct lightningd *ld)
 {
-	ld->config.exp_offers = true;
+	if (!opt_deprecated_ok(ld, "experimental-offers", NULL,
+			       "v24.11", "v25.05"))
+		return "--experimental-offers has been deprecated (now the default)";
+
 	return NULL;
 }
 
@@ -1507,7 +1506,7 @@ static void register_opts(struct lightningd *ld)
 				 opt_hidden);
 	opt_register_early_noarg("--experimental-offers",
 				 opt_set_offers, ld,
-				 "EXPERIMENTAL: enable send and receive of offers");
+				 opt_hidden);
 	opt_register_early_noarg("--experimental-shutdown-wrong-funding",
 				 opt_set_shutdown_wrong_funding, ld,
 				 "EXPERIMENTAL: allow shutdown with alternate txids");
@@ -2063,14 +2062,14 @@ void add_config_deprecated(struct lightningd *ld,
 			json_add_bool(response, name0,
 				      feature_offered(ld->our_features
 						      ->bits[INIT_FEATURE],
-						      OPT_EXPERIMENTAL_SPLICE));
+						      OPT_SPLICE));
 		} else if (opt->cb == (void *)opt_set_onion_messages) {
 			json_add_bool(response, name0,
 				      feature_offered(ld->our_features
 						      ->bits[INIT_FEATURE],
 						      OPT_ONION_MESSAGES));
 		} else if (opt->cb == (void *)opt_set_offers) {
-			json_add_bool(response, name0, ld->config.exp_offers);
+			json_add_bool(response, name0, true);
 		} else if (opt->cb == (void *)opt_set_shutdown_wrong_funding) {
 			json_add_bool(response, name0,
 				      feature_offered(ld->our_features

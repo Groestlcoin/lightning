@@ -292,6 +292,7 @@ static struct onion_payload *decode_onion(const tal_t *ctx,
 	struct privkey pk;
 	struct pubkey current_pubkey;
 	struct node_id current_node_id;
+	const char *explanation;
 
 	op = parse_onionpacket(tmpctx, onion_routing_packet,
 			       TOTAL_PACKET_SIZE(ROUTING_INFO_SIZE),
@@ -335,11 +336,11 @@ static struct onion_payload *decode_onion(const tal_t *ctx,
 			       rs, path_key,
 			       NULL,
 			       amount,
-			       cltv, &failtlvtype, &failtlvpos);
+			       cltv, &failtlvtype, &failtlvpos, &explanation);
 	if (!payload) {
 		status_failed(STATUS_FAIL_INTERNAL_ERROR,
-			      "Failed tlvtype %"PRIu64" at %zu",
-			      failtlvtype, failtlvpos);
+			      "Failed tlvtype %"PRIu64" at %zu: %s",
+			      failtlvtype, failtlvpos, explanation);
 	}
 
 	/* Find ourselves in the gossmap, so we know our channels */
@@ -767,6 +768,11 @@ found_next:
 			      fmt_short_channel_id_dir(tmpctx, &scidd));
 	}
 	if (payload->outgoing_cltv + c->half[scidd.dir].delay < cltv_expiry) {
+		status_broken("%s: incoming cltv %u (delay=%u), but outgoing %u",
+			      fmt_short_channel_id_dir(tmpctx, &scidd),
+			      cltv_expiry,
+			      c->half[scidd.dir].delay,
+			      payload->outgoing_cltv);
 		fail(info, htlc, payload, WIRE_INCORRECT_CLTV_EXPIRY);
 		return;
 	}
@@ -776,6 +782,13 @@ found_next:
 				 c->half[scidd.dir].proportional_fee))
 		abort();
 	if (amount_msat_less(amount, amt_expected)) {
+		status_broken("%s: expected %s (base=%u, prop=%u), but got %s to fwd %s",
+			      fmt_short_channel_id_dir(tmpctx, &scidd),
+			      fmt_amount_msat(tmpctx, amt_expected),
+			      c->half[scidd.dir].base_fee,
+			      c->half[scidd.dir].proportional_fee,
+			      fmt_amount_msat(tmpctx, amount),
+			      fmt_amount_msat(tmpctx, payload->amt_to_forward));
 		fail(info, htlc, payload, WIRE_FEE_INSUFFICIENT);
 		return;
 	}
