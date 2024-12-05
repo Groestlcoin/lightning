@@ -48,7 +48,11 @@ struct anchor_details {
 };
 
 struct deadline_value {
+	/* If false, don't stress about this target, always treat it as >= 12 blocks away */
+	bool important;
+	/* Target we want this in block by */
 	u32 block;
+	/* Amount this is worth to us */
 	struct amount_msat msat;
 };
 
@@ -77,9 +81,14 @@ static bool find_anchor_output(struct channel *channel,
 	return false;
 }
 
-static bool merge_deadlines(struct channel *channel, struct anchor_details *adet)
+/* Sorts deadlines into increasing block order, merges dups */
+static void merge_deadlines(struct channel *channel, struct anchor_details *adet)
 {
 	size_t dst;
+
+	/* Below requires len >= 1 */
+	if (tal_count(adet->vals) == 0)
+		return;
 
 	/* Sort into block-ascending order */
 	asort(adet->vals, tal_count(adet->vals), cmp_deadline_value, NULL);
@@ -87,6 +96,7 @@ static bool merge_deadlines(struct channel *channel, struct anchor_details *adet
 	/* Merge deadlines. */
 	dst = 0;
 	for (size_t i = 1; i < tal_count(adet->vals); i++) {
+		assert(adet->vals[i].important);
 		if (adet->vals[i].block != adet->vals[dst].block) {
 			dst = i;
 			continue;
@@ -97,11 +107,9 @@ static bool merge_deadlines(struct channel *channel, struct anchor_details *adet
 				   "Cannot add deadlines %s + %s!",
 				   fmt_amount_msat(tmpctx, adet->vals[dst].msat),
 				   fmt_amount_msat(tmpctx, adet->vals[i].msat));
-			return false;
 		}
 	}
 	tal_resize(&adet->vals, dst+1);
-	return true;
 }
 
 static void add_one_anchor(struct anchor_details *adet,
@@ -128,6 +136,8 @@ struct anchor_details *create_anchor_details(const tal_t *ctx,
 	struct htlc_out_map_iter outi;
 	struct anchor_details *adet = tal(ctx, struct anchor_details);
 	struct local_anchor_info *infos, local_anchor;
+	struct deadline_value v;
+	u32 final_deadline;
 
 	/* If we don't have an anchor, we can't do anything. */
 	if (!channel_type_has_anchors(channel->type))
@@ -157,6 +167,9 @@ struct anchor_details *create_anchor_details(const tal_t *ctx,
 		add_one_anchor(adet, &local_anchor, LOCAL);
 	}
 
+	log_debug(channel->log, "We have %zu anchor points to use",
+		  tal_count(adet->anchors));
+
 	/* This happens in several cases:
 	 * 1. Mutual close tx.
 	 * 2. There's no to-us output and no HTLCs */
@@ -172,13 +185,15 @@ struct anchor_details *create_anchor_details(const tal_t *ctx,
 	for (hin = htlc_in_map_first(ld->htlcs_in, &ini);
 	     hin;
 	     hin = htlc_in_map_next(ld->htlcs_in, &ini)) {
-		struct deadline_value v;
-
 		if (hin->key.channel != channel)
+			continue;
+
+		if (!hin->preimage)
 			continue;
 
 		v.msat = hin->msat;
 		v.block = hin->cltv_expiry;
+		v.important = true;
 		tal_arr_expand(&adet->vals, v);
 	}
 
@@ -187,32 +202,35 @@ struct anchor_details *create_anchor_details(const tal_t *ctx,
 	     hout = htlc_out_map_next(ld->htlcs_out, &outi)) {
 		if (hout->key.channel != channel)
 			continue;
-		struct deadline_value v;
-
-		if (hout->key.channel != channel)
-			continue;
 
 		v.msat = hout->msat;
 		v.block = hout->cltv_expiry;
+		v.important = true;
 		tal_arr_expand(&adet->vals, v);
 	}
 
-	/* No htlcs in flight?  No reason to boost. */
+	merge_deadlines(channel, adet);
+
+	/* Include final "unimportant" one, to make sure we eventually boost */
+	assert(channel->close_attempt_height);
 	if (tal_count(adet->vals) == 0)
-		return tal_free(adet);
+		final_deadline = channel->close_attempt_height;
+	else
+		final_deadline = adet->vals[tal_count(adet->vals) - 1].block;
 
-	if (!merge_deadlines(channel, adet))
-		return tal_free(adet);
+	/* "Two weeks later" */
+	v.block = final_deadline + ld->dev_low_prio_anchor_blocks;
+	v.msat = AMOUNT_MSAT(0);
+	v.important = false;
+	tal_arr_expand(&adet->vals, v);
 
-	log_debug(channel->log, "We have %zu anchor points to use",
-		  tal_count(adet->anchors));
 	return adet;
 }
 
 /* total_weight includes the commitment tx we're trying to push! */
 static struct wally_psbt *anchor_psbt(const tal_t *ctx,
 				      struct channel *channel,
-				      struct one_anchor *anch,
+				      const struct one_anchor *anch,
 				      struct utxo **utxos,
 				      u32 feerate_target,
 				      size_t total_weight)
@@ -256,21 +274,60 @@ static struct wally_psbt *anchor_psbt(const tal_t *ctx,
 	return psbt;
 }
 
+/* Get UTXOs, create a PSBT to spend this */
+static struct wally_psbt *try_anchor_psbt(const tal_t *ctx,
+					  struct channel *channel,
+					  const struct one_anchor *anch,
+					  u32 feerate_target,
+					  size_t base_weight,
+					  size_t *total_weight,
+					  struct amount_sat *fee_spent,
+					  u32 *feerate,
+					  struct utxo ***utxos)
+{
+	struct lightningd *ld = channel->peer->ld;
+	struct wally_psbt *psbt;
+	struct amount_sat fee;
+
+	/* Ask for some UTXOs which could meet this feerate */
+	*total_weight = base_weight;
+	*utxos = wallet_utxo_boost(ctx,
+				   ld->wallet,
+				   get_block_height(ld->topology),
+				   anch->info.commitment_fee,
+				   feerate_target,
+				   total_weight);
+
+	/* Create a new candidate PSBT */
+	psbt = anchor_psbt(ctx, channel, anch, *utxos, feerate_target,
+			   *total_weight);
+	*fee_spent = psbt_compute_fee(psbt);
+
+	/* Add in base commitment fee to calculate *overall* package feerate */
+	if (!amount_sat_add(&fee, *fee_spent, anch->info.commitment_fee))
+		abort();
+	if (!amount_feerate(feerate, fee, *total_weight))
+		abort();
+
+	return psbt;
+}
+
 /* If it's possible and worth it, return signed tx.  Otherwise NULL. */
 static struct bitcoin_tx *spend_anchor(const tal_t *ctx,
 				       struct channel *channel,
 				       struct one_anchor *anch)
 {
 	struct lightningd *ld = channel->peer->ld;
-	struct utxo **utxos COMPILER_WANTS_INIT("gcc -O3 CI");
-	size_t base_weight, weight;
-	struct amount_sat fee, diff;
+	size_t base_weight, psbt_weight;
+	struct amount_sat psbt_fee, diff;
 	struct bitcoin_tx *tx;
+	struct utxo **psbt_utxos;
 	struct wally_psbt *psbt, *signed_psbt;
 	struct amount_msat total_value;
+	const struct deadline_value *unimportant_deadline;
 	const u8 *msg;
 
-	/* Estimate weight of spend tx plus commitment_tx (not including any UTXO we add) */
+	/* Estimate weight of anchorspend tx plus commitment_tx (not including any UTXO we add) */
 	base_weight = bitcoin_tx_core_weight(2, 1)
 		+ bitcoin_tx_input_weight(false,
 					  bitcoin_tx_input_sig_weight()
@@ -280,33 +337,34 @@ static struct bitcoin_tx *spend_anchor(const tal_t *ctx,
 
 	total_value = AMOUNT_MSAT(0);
 	psbt = NULL;
+	unimportant_deadline = NULL;
+
 	for (int i = tal_count(anch->adet->vals) - 1; i >= 0; --i) {
 		const struct deadline_value *val = &anch->adet->vals[i];
 		u32 feerate, feerate_target;
+		size_t weight;
+		struct amount_sat fee;
 		struct wally_psbt *candidate_psbt;
+		struct utxo **utxos;
 
-		/* Calculate the total value for the current deadline
-		 * and all the following */
+		/* We only cover important deadlines here */
+		if (!val->important) {
+			unimportant_deadline = val;
+			continue;
+		}
+
+
 		if (!amount_msat_accumulate(&total_value, val->msat))
-			return NULL;
+			abort();
 
 		feerate_target = feerate_for_target(ld->topology, val->block);
-
-		/* Ask for some UTXOs which could meet this feerate */
-		weight = base_weight;
-		utxos = wallet_utxo_boost(tmpctx,
-					  ld->wallet,
-					  get_block_height(ld->topology),
-					  anch->info.commitment_fee,
-					  feerate_target,
-					  &weight);
-
-		/* Create a new candidate PSBT */
-		candidate_psbt = anchor_psbt(tmpctx, channel, anch, utxos, feerate_target, weight);
-		if (!candidate_psbt)
-			continue;
-
-		fee = psbt_compute_fee(candidate_psbt);
+		candidate_psbt = try_anchor_psbt(tmpctx, channel, anch,
+						 feerate_target,
+						 base_weight,
+						 &weight,
+						 &fee,
+						 &feerate,
+						 &utxos);
 
 		/* Is it even worth spending this fee to meet the deadline? */
 		if (!amount_msat_greater_sat(total_value, fee)) {
@@ -318,13 +376,6 @@ static struct bitcoin_tx *spend_anchor(const tal_t *ctx,
 				  val->block, feerate_target);
 			break;
 		}
-
-		/* Add in base commitment fee */
-		if (!amount_sat_add(&fee,
-				    fee, anch->info.commitment_fee))
-			abort();
-		if (!amount_feerate(&feerate, fee, weight))
-			abort();
 
 		if (feerate < feerate_target) {
 			/* We might have had lower feerates which worked: only complain if
@@ -340,6 +391,9 @@ static struct bitcoin_tx *spend_anchor(const tal_t *ctx,
 				    "We want to bump commit_tx to feerate %uperkw, but can only bump to %uperkw with %zu UTXOs!",
 				    feerate_target, feerate, tal_count(utxos));
 			psbt = candidate_psbt;
+			psbt_fee = fee;
+			psbt_weight = weight;
+			psbt_utxos = utxos;
 			/* We don't expect to do any better at higher feerates */
 			break;
 		}
@@ -350,6 +404,39 @@ static struct bitcoin_tx *spend_anchor(const tal_t *ctx,
 			  fmt_amount_msat(tmpctx, val->msat),
 			  val->block, feerate);
 		psbt = candidate_psbt;
+		psbt_fee = fee;
+		psbt_weight = weight;
+		psbt_utxos = utxos;
+	}
+
+	/* No psbt, but only have an unimportant deadline? */
+	if (!psbt && unimportant_deadline == &anch->adet->vals[0]) {
+		u32 block_target, feerate_target, feerate;
+
+		/* We're not in a hurry.  Never aim for < 12 blocks away */
+		block_target = unimportant_deadline->block;
+		if (block_target < get_block_height(ld->topology) + 12)
+			block_target = get_block_height(ld->topology) + 12;
+		feerate_target = feerate_for_target(ld->topology, block_target);
+
+		log_debug(channel->log,
+			  "Low-priority anchorspend aiming for block %u (feerate %u)",
+			  block_target, feerate_target);
+		psbt = try_anchor_psbt(tmpctx, channel, anch,
+				       feerate_target,
+				       base_weight,
+				       &psbt_weight,
+				       &psbt_fee,
+				       &feerate,
+				       &psbt_utxos);
+		/* Don't bother with anchor if we don't add UTXOs */
+		if (tal_count(psbt_utxos) == 0) {
+			if (!psbt)
+				log_unusual(channel->log,
+					    "No utxos to bump commit_tx to feerate %uperkw!",
+					    feerate_target);
+			psbt = tal_free(psbt);
+		}
 	}
 
 	/* No psbt was worth it? */
@@ -358,27 +445,27 @@ static struct bitcoin_tx *spend_anchor(const tal_t *ctx,
 
 	/* Higher enough than previous to be valid RBF?
 	 * We assume 1 sat per vbyte as minrelayfee */
-	if (!amount_sat_sub(&diff, fee, anch->anchor_spend_fee)
-	    || amount_sat_less(diff, amount_sat(weight / 4)))
+	if (!amount_sat_sub(&diff, psbt_fee, anch->anchor_spend_fee)
+	    || amount_sat_less(diff, amount_sat(psbt_weight / 4)))
 		return NULL;
 
 	log_debug(channel->log,
 		  "Anchorspend for %s commit tx fee %s (w=%zu), commit_tx fee %s (w=%u):"
 		  " package feerate %"PRIu64" perkw",
 		  anch->commit_side == LOCAL ? "local" : "remote",
-		  fmt_amount_sat(tmpctx, fee),
-		  weight - anch->info.commitment_weight,
+		  fmt_amount_sat(tmpctx, psbt_fee),
+		  psbt_weight - anch->info.commitment_weight,
 		  fmt_amount_sat(tmpctx, anch->info.commitment_fee),
 		  anch->info.commitment_weight,
-		  (fee.satoshis + anch->info.commitment_fee.satoshis) /* Raw: debug log */
-		  * 1000 / weight);
+		  (psbt_fee.satoshis + anch->info.commitment_fee.satoshis) /* Raw: debug log */
+		  * 1000 / psbt_weight);
 
 	/* OK, HSM, sign it! */
 	msg = towire_hsmd_sign_anchorspend(NULL,
 					   &channel->peer->id,
 					   channel->dbid,
 					   cast_const2(const struct utxo **,
-						       utxos),
+						       psbt_utxos),
 					   psbt);
 	msg = hsm_sync_req(tmpctx, ld, take(msg));
 	if (!fromwire_hsmd_sign_anchorspend_reply(tmpctx, msg, &signed_psbt))
@@ -390,14 +477,14 @@ static struct bitcoin_tx *spend_anchor(const tal_t *ctx,
 			   fmt_wally_psbt(tmpctx, signed_psbt));
 		log_broken(channel->log, "Before signing PSBT was %s",
 			   fmt_wally_psbt(tmpctx, psbt));
-		for (size_t i = 0; i < tal_count(utxos); i++) {
-			const struct unilateral_close_info *ci = utxos[i]->close_info;
+		for (size_t i = 0; i < tal_count(psbt_utxos); i++) {
+			const struct unilateral_close_info *ci = psbt_utxos[i]->close_info;
 
 			log_broken(channel->log, "UTXO %zu: %s amt=%s keyidx=%u",
 				   i,
-				   fmt_bitcoin_outpoint(tmpctx, &utxos[i]->outpoint),
-				   fmt_amount_sat(tmpctx, utxos[i]->amount),
-				   utxos[i]->keyindex);
+				   fmt_bitcoin_outpoint(tmpctx, &psbt_utxos[i]->outpoint),
+				   fmt_amount_sat(tmpctx, psbt_utxos[i]->amount),
+				   psbt_utxos[i]->keyindex);
 			if (ci) {
 				log_broken(channel->log,
 					   "... close from channel %"PRIu64" peer %s (%s) commitment %s csv %u",
@@ -412,7 +499,7 @@ static struct bitcoin_tx *spend_anchor(const tal_t *ctx,
 	}
 
 	/* Update fee so we know for next time */
-	anch->anchor_spend_fee = fee;
+	anch->anchor_spend_fee = psbt_fee;
 
 	tx = tal(ctx, struct bitcoin_tx);
 	tx->chainparams = chainparams;

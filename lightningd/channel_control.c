@@ -363,7 +363,7 @@ static void handle_splice_abort(struct lightningd *ld,
 								 peer->connectd_counter,
 								 error)));
 		subd_send_msg(ld->connectd,
-			      take(towire_connectd_discard_peer(NULL,
+			      take(towire_connectd_disconnect_peer(NULL,
 								&peer->id,
 								peer->connectd_counter)));
 		return;
@@ -1251,7 +1251,7 @@ static void peer_got_shutdown(struct channel *channel, const u8 *msg)
 								 channel->peer->connectd_counter,
 								 warning)));
 		subd_send_msg(ld->connectd,
-			      take(towire_connectd_discard_peer(NULL,
+			      take(towire_connectd_disconnect_peer(NULL,
 								&channel->peer->id,
 								channel->peer->connectd_counter)));
 		channel_fail_transient(channel, true, "Bad shutdown scriptpubkey %s",
@@ -2576,7 +2576,8 @@ static struct command_result *json_dev_feerate(struct command *cmd,
 	if (!peer)
 		return command_fail(cmd, LIGHTNINGD, "Peer not connected");
 
-	channel = peer_any_channel(peer, channel_state_can_add_htlc, &more_than_one);
+	channel = peer_any_channel_bystate(peer, channel_state_can_add_htlc,
+					   &more_than_one);
 	if (!channel || !channel->owner)
 		return command_fail(cmd, LIGHTNINGD, "Peer bad state");
 	/* This is a dev command: fix the api if you need this! */
@@ -2628,7 +2629,7 @@ static struct command_result *json_dev_peer_shachain(struct command *cmd,
 	if (!peer)
 		return command_fail(cmd, LIGHTNINGD, "Peer not connected");
 
-	channel = peer_any_channel(peer, channel_state_can_add_htlc, &more_than_one);
+	channel = peer_any_channel_bystate(peer, channel_state_can_add_htlc, &more_than_one);
 	if (!channel || !channel->owner)
 		return command_fail(cmd, LIGHTNINGD, "Peer bad state");
 	/* This is a dev command: fix the api if you need this! */
@@ -2683,7 +2684,8 @@ static struct command_result *json_dev_quiesce(struct command *cmd,
 		return command_fail(cmd, LIGHTNINGD, "Peer not connected");
 
 	/* FIXME: If this becomes a real API, check for OPT_QUIESCE! */
-	channel = peer_any_channel(peer, channel_state_wants_peercomms, &more_than_one);
+	channel = peer_any_channel_bystate(peer, channel_state_wants_peercomms,
+					   &more_than_one);
 	if (!channel || !channel->owner)
 		return command_fail(cmd, LIGHTNINGD, "Peer bad state");
 	/* This is a dev command: fix the api if you need this! */

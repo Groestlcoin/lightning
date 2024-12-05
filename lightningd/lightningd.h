@@ -173,9 +173,6 @@ struct lightningd {
 	/* Do we want to reconnect to other peers having only unannouced channels with us? */
 	bool reconnect_private;
 
-	/* How many outstanding startup connection attempts? */
-	size_t num_startup_connects;
-
 	/* Do we want to listen for other peers? */
 	bool listen;
 
@@ -210,8 +207,6 @@ struct lightningd {
 
 	/* Daemon looking after peers during init / before channel. */
 	struct subd *connectd;
-	/* Reconnection attempts */
-	struct delayed_reconnect_map *delayed_reconnect_map;
 
 	/* All peers we're tracking (by node_id) */
 	struct peer_node_id_map *peers;
@@ -312,6 +307,9 @@ struct lightningd {
 	bool dev_throttle_gossip;
 	bool dev_suppress_gossip;
 
+	/* How long to aim for low-priority commitment closes */
+	u32 dev_low_prio_anchor_blocks;
+
 	/* Speedup reconnect delay, for testing. */
 	bool dev_fast_reconnect;
 
@@ -362,6 +360,9 @@ struct lightningd {
 	/* Remove the freedom to choose select between parallel channels to
 	 * forward a payment. */
 	bool dev_strict_forwarding;
+
+	/* Tell connectd to block more than 1 simultanous connection attempt */
+	bool dev_limit_connections_inflight;
 
 	/* tor support */
 	struct wireaddr *proxyaddr;
@@ -419,6 +420,9 @@ struct lightningd {
 
 	/* Explicitly re-enabled deprecated APIs. */
 	const char **api_begs;
+
+	/* Minimum number of peers seeker should maintain. */
+	u32 autoconnect_seeker_peers;
 };
 
 /* Turning this on allows a tal allocation to return NULL, rather than aborting.

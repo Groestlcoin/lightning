@@ -550,6 +550,7 @@ static char *opt_set_offline(struct lightningd *ld)
 	ld->reconnect = false;
 	ld->listen = false;
 	log_info(ld->log, "Started in offline mode!");
+	ld->autoconnect_seeker_peers=0;
 	return NULL;
 }
 
@@ -965,6 +966,18 @@ static void dev_register_opts(struct lightningd *ld)
 		     opt_set_bool,
 		     &ld->dev_throttle_gossip,
 		     "Throttle gossip right down, for testing");
+	clnopt_noarg("--dev-limit-connections-inflight", OPT_DEV,
+		     opt_set_bool,
+		     &ld->dev_limit_connections_inflight,
+		     "Throttle connection limiting down for testing.");
+	clnopt_witharg("--autoconnect-seeker-peers", OPT_SHOWINT,
+		       opt_set_u32, opt_show_u32,
+		       &ld->autoconnect_seeker_peers,
+		       "Seeker autoconnects to maintain this minimum number of gossip peers");
+	clnopt_witharg("--dev-low-prio-anchor-blocks", OPT_DEV|OPT_SHOWINT,
+		       opt_set_u32, opt_show_u32,
+		       &ld->dev_low_prio_anchor_blocks,
+		       "How many blocks to aim for low-priority anchor closes (default: 2016)");
 	/* This is handled directly in daemon_developer_mode(), so we ignore it here */
 	clnopt_noarg("--dev-debug-self", OPT_DEV,
 		     opt_ignore,

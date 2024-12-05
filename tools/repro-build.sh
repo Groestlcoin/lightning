@@ -53,6 +53,7 @@ else
     VER=$(uname -r)
 fi
 
+ARCH=$(dpkg --print-architecture)
 PLATFORM="$OS"-"$VER"
 VERSION=${FORCE_VERSION:-$(git describe --tags --always --dirty=-modded --abbrev=7 2>/dev/null || pwd | sed -n 's,.*/clightning-\(v[0-9.rc\-]*\)$,\1,p')}
 
@@ -163,4 +164,4 @@ make PYTHON_VERSION=3 #VERSION="$VERSION"
 make install DESTDIR=inst/
 
 cd inst && tar --sort=name \
-      --owner=0 --group=0 --numeric-owner -cvaf ../clightning-"$VERSION-$PLATFORM".tar.xz .
+      --owner=0 --group=0 --numeric-owner -cvaf ../clightning-"$VERSION-$PLATFORM-$ARCH".tar.xz .

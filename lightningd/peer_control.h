@@ -53,6 +53,9 @@ struct peer {
 	struct wireaddr_internal addr;
 	bool connected_incoming;
 
+	/* If we ever successfully connected out to an address, this is non-NULL */
+	struct wireaddr *last_known_addr;
+
 	/* They send what they see as our address as remote_addr */
 	struct wireaddr *remote_addr;
 
@@ -71,6 +74,7 @@ struct peer *find_peer_by_dbid(struct lightningd *ld, u64 dbid);
 struct peer *new_peer(struct lightningd *ld, u64 dbid,
 		      const struct node_id *id,
 		      const struct wireaddr_internal *addr,
+		      const struct wireaddr *last_known_addr,
 		      const u8 *their_features TAKES,
 		      bool connected_incoming);
 
@@ -109,16 +113,12 @@ void peer_set_dbid(struct peer *peer, u64 dbid);
 /* At startup, re-send any transactions we want bitcoind to have */
 void resend_closing_transactions(struct lightningd *ld);
 
-/**
- * Initiate the close of a channel.
- *
- * @param rebroadcast: Whether we should be broadcasting our
- *   commitment transaction in order to close the channel, or not.
- */
-void drop_to_chain(struct lightningd *ld,
-		   struct channel *channel,
+/* Initiate the close of a channel, maybe broadcast.  If we've seen a
+ * unilateral close, pass it here (means we don't need to broadcast
+ * our own, or any anchors). */
+void drop_to_chain(struct lightningd *ld, struct channel *channel,
 		   bool cooperative,
-		   bool rebroadcast);
+		   const struct bitcoin_tx *unilateral_tx);
 
 void update_channel_from_inflight(struct lightningd *ld,
 				  struct channel *channel,

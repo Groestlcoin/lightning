@@ -1011,10 +1011,11 @@ static struct peer *wallet_peer_load(struct wallet *w, const u64 dbid)
 	struct peer *peer = NULL;
 	struct node_id id;
 	struct wireaddr_internal addr;
+	struct wireaddr *last_known_addr;
 	struct db_stmt *stmt;
 
 	stmt = db_prepare_v2(
-	    w->db, SQL("SELECT id, node_id, address, feature_bits FROM peers WHERE id=?;"));
+	    w->db, SQL("SELECT id, node_id, address, feature_bits, last_known_address FROM peers WHERE id=?;"));
 	db_bind_u64(stmt, dbid);
 	db_query_prepared(stmt);
 
@@ -1025,6 +1026,7 @@ static struct peer *wallet_peer_load(struct wallet *w, const u64 dbid)
 		db_col_ignore(stmt, "address");
 		db_col_ignore(stmt, "id");
 		db_col_ignore(stmt, "feature_bits");
+		db_col_ignore(stmt, "last_known_address");
 		goto done;
 	}
 
@@ -1041,8 +1043,18 @@ static struct peer *wallet_peer_load(struct wallet *w, const u64 dbid)
 		assert(!err);
 	}
 
-	/* FIXME: save incoming in db! */
-	peer = new_peer(w->ld, db_col_u64(stmt, "id"), &id, &addr, db_col_arr(stmt, stmt, "feature_bits", u8), false);
+	if (db_col_is_null(stmt, "last_known_address")) {
+		last_known_addr = NULL;
+	} else {
+		last_known_addr = db_col_wireaddr(tmpctx, stmt, "last_known_address");
+		if (!last_known_addr) {
+			log_broken(w->log, "Unparsable lastknown address %s: ignoring",
+				   tal_hex(tmpctx, db_col_arr(tmpctx, stmt, "last_known_address", u8)));
+		}
+	}
+
+	peer = new_peer(w->ld, db_col_u64(stmt, "id"), &id, &addr, last_known_addr,
+			db_col_arr(stmt, stmt, "feature_bits", u8), false);
 
 done:
 	tal_free(stmt);
@@ -1862,6 +1874,7 @@ static struct channel *wallet_stmt2channel(struct wallet *w, struct db_stmt *stm
 			   db_col_u64(stmt, "remote_static_remotekey_start"),
 			   type,
 			   db_col_int(stmt, "closer"),
+			   db_col_int(stmt, "close_attempt_height"),
 			   state_change_in_db(db_col_int(stmt, "state_change_reason")),
 			   shutdown_wrong_funding,
 			   take(height_states),
@@ -2077,6 +2090,7 @@ static bool wallet_channels_load_active(struct wallet *w)
 					", out_payments_fulfilled"
 					", out_msatoshi_offered"
 					", out_msatoshi_fulfilled"
+					", close_attempt_height"
 					" FROM channels"
                                         " WHERE state != ?;")); //? 0
 	db_bind_int(stmt, CLOSED);
@@ -2325,8 +2339,9 @@ void wallet_channel_save(struct wallet *w, struct channel *chan)
 					"  remote_htlc_minimum_msat=?," // 50
 					"  remote_htlc_maximum_msat=?," // 51
 					"  last_stable_connection=?," // 52
-					"  require_confirm_inputs_remote=?" // 53
-					" WHERE id=?")); // 54
+					"  require_confirm_inputs_remote=?," // 53
+					"  close_attempt_height=?" // 54
+					" WHERE id=?")); // 55
 	db_bind_u64(stmt, chan->their_shachain.id);
 	if (chan->scid)
 		db_bind_short_channel_id(stmt, *chan->scid);
@@ -2425,6 +2440,7 @@ void wallet_channel_save(struct wallet *w, struct channel *chan)
 	db_bind_u64(stmt, chan->last_stable_connection);
 
 	db_bind_int(stmt, chan->req_confirmed_ins[REMOTE]);
+	db_bind_int(stmt, chan->close_attempt_height);
 	db_bind_u64(stmt, chan->dbid);
 	db_exec_prepared_v2(take(stmt));
 
@@ -2582,6 +2598,16 @@ static void wallet_peer_save(struct wallet *w, struct peer *peer)
 		db_bind_talarr(stmt, peer->their_features);
 		db_exec_prepared_v2(stmt);
 		peer_set_dbid(peer, db_last_insert_id_v2(take(stmt)));
+	}
+
+	if (peer->last_known_addr) {
+		u8 *wire = tal_arr(tmpctx, u8, 0);
+		towire_wireaddr(&wire, peer->last_known_addr);
+		stmt = db_prepare_v2(w->db,
+				     SQL("UPDATE peers SET last_known_address = ? WHERE id = ?;"));
+		db_bind_talarr(stmt, wire);
+		db_bind_u64(stmt, peer->dbid);
+		db_exec_prepared_v2(take(stmt));
 	}
 }
 

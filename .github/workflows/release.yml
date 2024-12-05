@@ -1,28 +1,189 @@
-name: ALL release
-
-on: [push, pull_request]
+---
+# https://docs.corelightning.org/docs/release-checklist
+name: "Release 🚀"
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+      - 'v[0-9]+.[0-9]+[0-9a-z]+'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version'
+        required: true
+      create_release:
+        description: Create a draft release
+        default: no
+        type: choice
+        options:
+          - yes
+          - no
 
 jobs:
-  release:
-    runs-on: ubuntu-latest
+  check:
+    name: Check
+    outputs:
+      version: ${{ steps.capture.outputs.version }}
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - name: Builder focal image setup
-        run: sudo docker build -t cl-repro-focal - < contrib/reprobuild/Dockerfile.focal
-      - name: Builder jammy image setup
-        run: sudo docker build -t cl-repro-jammy - < contrib/reprobuild/Dockerfile.jammy
-      - name: Builder noble image setup
-        run: sudo docker build -t cl-repro-noble - < contrib/reprobuild/Dockerfile.noble
-      - name: Building using the builder image
-        run: ./tools/build-release.sh bin-Fedora-28-amd64 bin-Ubuntu
-      - name: Upload Artifact
+      - name: Git checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-tags: true
+
+      - name: Determine version
+        run: |
+          if [[ "${{ github.event.inputs.version }}" != "" ]]; then
+            VERSION="${{ github.event.inputs.version }}"
+          elif [ "${{ github.ref_type }}" == "tag" ]; then
+            VERSION="${{ github.ref_name }}"
+          else
+            echo "No release version provided and no tag found."
+            exit 1
+          fi
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "Determined version: $VERSION"
+
+      - name: Validate release
+        run: tools/check-release.sh --version=${VERSION}
+
+      - name: Catpure version output
+        id: capture
+        run: echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+  releases:
+    name: Releases
+    needs: check
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false    # Let each build finish.
+      matrix:
+        target:
+          - 'bin-Fedora-28-amd64'
+          - 'bin-Ubuntu-focal'
+          - 'bin-Ubuntu-jammy'
+          - 'bin-Ubuntu-noble'
+    steps:
+      - name: Git checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-tags: true
+
+      # tools/build-release.sh requires lowdown
+      - name: Prepare base environment
+        run: |
+          sudo apt-get install -y lowdown
+          ./configure
+
+      - name: Build environment setup
+        run: |
+          distribution=$(echo ${{ matrix.target }} | cut -d'-' -f3)
+          echo "Building base image for ${distribution}"
+          sudo docker run --rm -v $(pwd):/build ubuntu:${distribution} bash -c "\
+              apt-get update && \
+              apt-get install -y debootstrap && \
+              debootstrap ${distribution} /build/${distribution}"
+          sudo tar -C ${distribution} -c . | docker import - ${distribution}
+
+          # Build Docker image
+          docker build -t cl-repro-${distribution} - < contrib/reprobuild/Dockerfile.${distribution}
+        if: contains(matrix.target, 'Ubuntu')
+
+      - name: Build release
+        run: tools/build-release.sh ${{ matrix.target }}
+
+      - name: Upload target artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: clightning-${{ github.sha }}-all-releases
-          path: release/*.*
+          path: release/
+          name: ${{ matrix.target }}
           if-no-files-found: error
-          retention-days: 7
-      - name: Download artifacts
+
+  artifact:
+    name: Construct release artifact
+    needs:
+      - check
+      - releases
+    env:
+      version: ${{ needs.check.outputs.version }}
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Merge artifacts
+        uses: actions/upload-artifact/merge@v4
+        with:
+          name: c-lightning-${{ env.version }}
+          pattern: bin-*
+          delete-merged: true
+
+  release:
+    name: Sign and prepare release draft
+    needs:
+      - check
+      - artifact
+    env:
+      version: ${{ needs.check.outputs.version }}
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Git checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-tags: true
+
+      - name: Download artifact
         uses: actions/download-artifact@v4
         with:
-          name: clightning-${{ github.sha }}-all-releases
+          name: c-lightning-${{ env.version }}
+          path: release/
+
+      - name: Import GPG keys
+        id: gpg
+        uses: crazy-max/ghaction-import-gpg@v6
+        with:
+          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
+          passphrase: ${{ secrets.GPG_PASSPHRASE }}
+          trust_level: 5
+
+      - name: Set default GPG key
+        run: echo "default-key ${{ steps.gpg.outputs.keyid }}" >> ~/.gnupg/gpg.conf
+
+      - name: Sign release
+        run: |
+          sudo apt-get install -y lowdown
+          ./configure
+          tools/build-release.sh --without-zip sign
+          mv release/SHA256SUMS.asc${{ steps.gpg.outputs.keyid  }} release/SHA256SUMS.asc
+
+      - name: Upload signed artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: c-lightning-${{ env.version }}
+          overwrite: true
+          path: release/
+
+      - name: Determine release data
+        id: release_data
+        run: |
+          VERSION=${{ env.version }}
+          CHANGELOG_VERSION=${VERSION#v}
+          echo "CHANGELOG_VERSION=$CHANGELOG_VERSION"
+          echo "changelog_version=$CHANGELOG_VERSION" >> "$GITHUB_OUTPUT"
+
+          CHANGELOG_TITLE=$(grep "## \[${CHANGELOG_VERSION}\]" CHANGELOG.md)
+          echo "CHANGELOG_TITLE=$CHANGELOG_TITLE"
+          echo "changelog_title=$CHANGELOG_TITLE" >> "$GITHUB_OUTPUT"
+
+          RELEASE_TITLE=$(echo $CHANGELOG_TITLE | cut -d'"' -f2)
+          echo "RELEASE_TITLE=$RELEASE_TITLE"
+          echo "release_title=$RELEASE_TITLE" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare release draft
+        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.create_release == 'yes')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "${{ env.version }} ${{ steps.release_data.outputs.release_title }}"
+          tag_name: ${{ env.version }}
+          draft: true
+          prerelease: contains(env.version, "-rc")
+          files: release/*
+          fail_on_unmatched_files: true

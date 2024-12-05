@@ -72,6 +72,11 @@ else
 	# This mirrors "type" output above.
 fi
 
+# Test for cln-gprc
+if "$LIGHTNINGD" --help | grep -q grpc; then
+    HAVE_GRPC=1
+fi
+
 if [ -z "$LIGHTNING_DIR" ]; then
     # Default is to use the /tmp directory
     LIGHTNING_DIR=/tmp
@@ -140,8 +145,8 @@ wait_for_lightningd() {
 
 clnrest_status() {
 	logfile="$1"
-	active_str="plugin-clnrest.py: REST Server is starting"
-	disabled_str="plugin-clnrest.py: Killing plugin: disabled itself"
+	active_str="plugin-clnrest: REST Server is starting"
+	disabled_str="plugin-clnrest: Killing plugin: disabled itself"
 
 	if grep -q "$active_str" "$logfile"; then
 		echo "active"
@@ -190,7 +195,6 @@ start_nodes() {
 		dev-groestlcoind-poll=5
 		experimental-dual-fund
 		experimental-splicing
-		experimental-offers
 		funder-policy=match
 		funder-policy-mod=100
 		funder-min-their-funding=10000
@@ -205,6 +209,11 @@ funder-lease-requests-only=false
 		# If clnrest loads, add the port so it will run
 		if [ -n "$ACTIVATE_CLNREST" ]; then
 			echo "clnrest-port=$((3109+i))" >> "$LIGHTNING_DIR/l$i/config"
+		fi
+
+		# Grpc port too
+		if [ -n "$HAVE_GRPC" ]; then
+		    echo "grpc-port=$((9736+i))" >> "$LIGHTNING_DIR/l$i/config"
 		fi
 
 		# Start the lightning nodes

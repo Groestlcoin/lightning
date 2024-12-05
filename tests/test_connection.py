@@ -506,8 +506,10 @@ def test_disconnect_opener(node_factory):
                        '=WIRE_TX_COMPLETE']
 
     l1 = node_factory.get_node(disconnect=disconnects,
-                               may_reconnect=EXPERIMENTAL_DUAL_FUND)
-    l2 = node_factory.get_node(may_reconnect=EXPERIMENTAL_DUAL_FUND)
+                               may_reconnect=EXPERIMENTAL_DUAL_FUND,
+                               options={'dev-no-reconnect': None})
+    l2 = node_factory.get_node(may_reconnect=EXPERIMENTAL_DUAL_FUND,
+                               options={'dev-no-reconnect': None})
 
     l1.fundwallet(2000000)
 
@@ -4183,13 +4185,16 @@ def test_ping_timeout(node_factory):
     # Disconnects after this, but doesn't know it.
     l1_disconnects = ['xWIRE_PING']
 
+    # We remove the gossip_queries feature: otherwise the peer can try to do
+    # a gossip sync, and so we never get the period of no-traffic required to
+    # trigger a ping!
     l1, l2 = node_factory.get_nodes(2, opts=[{'dev-no-reconnect': None,
+                                              'dev-force-features': -7,
                                               'disconnect': l1_disconnects},
-                                             {'dev-no-ping-timer': None}])
+                                             {'dev-no-ping-timer': None,
+                                              'dev-force-features': -7}])
     l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
 
-    # This can take 10 seconds (dev-fast-gossip means timer fires every 5 seconds)
-    l1.daemon.wait_for_log('seeker: startup peer finished', timeout=15)
     # Ping timers runs at 15-45 seconds, *but* only fires if also 60 seconds
     # after previous traffic.
     l1.daemon.wait_for_log('dev_disconnect: xWIRE_PING', timeout=60 + 45 + 5)
@@ -4672,3 +4677,72 @@ def test_connect_transient_pending(node_factory, bitcoind, executor):
             fut1.result(TIMEOUT)
         else:
             fut2.result(TIMEOUT)
+
+
+def test_injectonionmessage(node_factory):
+    """Test for injectonionmessage API"""
+    l1, l2 = node_factory.line_graph(2)
+
+    # This is deterministic, so the onion message created by fetchinvoice can be replayed here
+    # manually
+    l2.rpc.offer("any")
+    # We saved the output from `l1.rpc.fetchinvoice(offer['bolt12'], 200)` with some logging.
+    l1.rpc.injectonionmessage(message='0002cb7cd2001e3c670d64135542dcefdf4a3f590eb142cee9277b317848471906caeabe4afeae7f4e31f6ca9c119b643d5369c5e55f892f205469a185f750697124a2bb7ccea1245ec12d76340bcf7371ba6d1c9ddfe09b4153fce524417c14a594fdbb5e7c698a5daffe77db946727a38711be2ecdebdd347d2a9f990810f2795b3c39b871d7c72a11534bd388ca2517630263d96d8cc72d146bae800638066175c85a8e8665160ea332ed7d27efc31c960604d61c3f83801c25cbb69ae3962c2ef13b1fa9adc8dcbe3dc8d9a5e27ff5669e076b02cafef8f2c88fc548e03642180d57606386ad6ce27640339747d40f26eb5b9e93881fc8c16d5896122032b64bb5f1e4be6f41f5fa4dbd7851989aeccd80b2d5f6f25427f171964146185a8eaa57891d91e49a4d378743231e19edd5994c3118c9a415958a5d9524a6ecc78c0205f5c0059a7fbcf1abad706a189b712476d112521c9a4650d0ff09890536acae755a2b07d00811044df28b288d3dc2d5ae3f8bf3cf7a2950e2167105dfad0fb8398ef08f36abcdb1bfd6aca3241c33810f0750f35bdfb7c60b1759275b7704ab1bc8f3ea375b3588eab10e4f948f12fe0a3c77b67bebeedbcced1de0f0715f9959e5497cda5f8f6ab76c15b3dcc99956465de1bf2855338930650f8e8e8c391d9bb8950125dd60d8289dade0556d9dc443761983e26adcc223412b756e2fd9ad64022859b6cab20e8ffc3cf39ae6045b2c3338b1145ee3719a098e58c425db764d7f9a5034dbb730c20202f79bc3c53fab78ecd530aa0e8f7698c9ea53cb96dc9c639282c362d31177c5b81979f46f2db6090b8e171db47287523f28c462e35ef489b51426387f2709c342083968153b5f8a51cd5716b38106bb0f21c5ccfc28dd7c74b71c8367ae8ca348f66a7996bbc535076a1f65d9109658ec042257ca7523488fb1807dc8bec42739ccae066739cf58083b4e2c65e52e1747a6ec2aa26338bb6f2c3195a2b160e26dec70a2cfde269fa7c10c45d346a8bcc313bb618324edadc0291d15f4dc00ca3a7ad7131045fdf6978ba52178f4699525efcb8d96561630e2f28eaa97c66c38c66301b6c6f0124b550db620b09f35b9d45d1441cab7d93be5e3c39b9becfab7f8d05dd3a7a6e27a1d3f23f1dd01e967f5206600619f75439181848f7f4148216c11314b4eaf64c28c268ad4b33ea821d57728e9a9e9e1b6c4bcf35d14958295fc5f92bd6846f33c46f5fa20f569b25bc916b94e554f27a37448f873497e13baef8c740a7587828cc4136dd21b8584e6983e376e91663f8f91559637738b400fb49940fc2df299dfd448604b63c2f5d1f1ec023636f3baf2be5730364afd38191726a7c0d9477b1f231da4d707aabc6ad8036488181dbdb16b48500f2333036629004504d3524f87ece6afb04c4ba03ea6fce069e98b1ab7bf51f237d7c0f40756744dd703c6023b6461b90730f701404e8dddfaff40a9a60e670be7729556241fc9cc8727a586e38b71616bff8772c873b37d920d51a6ad31219a24b12f268545e2cfeb9e662236ab639fd4ecf865612678471ff7b320c934a13ca1f2587fc6a90f839c3c81c0ff84b51330820431418918e8501844893b53c1e0de46d51a64cb769974a996c58ff06683ebdc46fd4bb8e857cecebab785a351c64fd486fb648d25936cb09327b70d22c243035d4343fa3d2d148e2df5cd928010e34ae42b0333e698142050d9405b39f3aa69cecf8a388afbc7f199077b911cb829480f0952966956fe57d815f0d2467f7b28af11f8820645b601c0e1ad72a4684ebc60287d23ec3502f4c65ca44f5a4a0d79e3a5718cd23e7538cb35c57673fb9a1173e5526e767768117c7fefc2e3718f44f790b27e61995fecc6aef05107e75355be301ebe1500c147bb655a159f', path_key='03ccf3faa19e8d124f27d495e3359f4002a6622b9a02df9a51b609826d354cda52')
+
+    # We should get a reply!
+    l1.daemon.wait_for_log('lightningd: Got onionmsg with pathsecret')
+
+
+def test_connect_ratelimit(node_factory, bitcoind):
+    """l1 has 5 peers, restarts, make sure we limit"""
+    nodes = node_factory.get_nodes(6,
+                                   opts=[{'dev-limit-connections-inflight': None, 'may_reconnect': True}] + [{'may_reconnect': True}] * 5)
+
+    l1 = nodes[0]
+    nodes = nodes[1:]
+
+    addr = l1.rpc.newaddr()['bech32']
+    for n in nodes:
+        bitcoind.rpc.sendtoaddress(addr, (FUNDAMOUNT + 1000000) / 10**8)
+    bitcoind.generate_block(1, wait_for_mempool=len(nodes))
+    sync_blockheight(bitcoind, [l1])
+
+    for n in nodes:
+        l1.rpc.connect(n.info['id'], 'localhost', n.port)
+        l1.rpc.fundchannel(n.info['id'], FUNDAMOUNT)
+
+    # Make sure all channels are established and announced.
+    bitcoind.generate_block(6, wait_for_mempool=len(nodes))
+    wait_for(lambda: len(l1.rpc.listchannels()['channels']) == len(nodes) * 2)
+
+    assert not l1.daemon.is_in_log('Unblocking for')
+
+    l1.restart()
+
+    # The first will be ok, but others should block and be unblocked.
+    l1.daemon.wait_for_logs((['Unblocking for ']
+                             + ['Too many connections, waiting'])
+                            * (len(nodes) - 1))
+
+    # And now they're all connected
+    wait_for(lambda: [p['connected'] for p in l1.rpc.listpeers()['peers']] == [True] * len(nodes))
+
+
+def test_onionmessage_forward_fail(node_factory, bitcoind):
+    # The plugin will try to connect to l3, so it needs an advertized address.
+    l1, l2, l3 = node_factory.line_graph(3, wait_for_announce=True,
+                                         opts=[{},
+                                               {'dev-allow-localhost': None,
+                                                'may_reconnect': True,
+                                                'plugin': os.path.join(os.getcwd(), 'tests/plugins/onionmessage_forward_fail_notification.py'),
+                                                },
+                                               {'dev-allow-localhost': None,
+                                                'may_reconnect': True}])
+
+    offer = l3.rpc.offer(300, "test_onionmessage_forward_fail")
+    l2.rpc.disconnect(l3.info['id'], force=True)
+
+    # The plugin in l2 fixes up the connection, so this works!
+    l1.rpc.fetchinvoice(offer['bolt12'])
+
+    l2.daemon.is_in_log('plugin-onionmessage_forward_fail_notification.py: Received onionmessage_forward_fail')

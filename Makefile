@@ -232,6 +232,20 @@ ALL_C_HEADERS :=
 # Extra (non C) targets that should be built by default.
 DEFAULT_TARGETS :=
 
+# Installation directories
+exec_prefix = $(PREFIX)
+bindir = $(exec_prefix)/bin
+libexecdir = $(exec_prefix)/libexec
+pkglibexecdir = $(libexecdir)/$(PKGNAME)
+plugindir = $(pkglibexecdir)/plugins
+datadir = $(PREFIX)/share
+docdir = $(datadir)/doc/$(PKGNAME)
+mandir = $(datadir)/man
+man1dir = $(mandir)/man1
+man5dir = $(mandir)/man5
+man7dir = $(mandir)/man7
+man8dir = $(mandir)/man8
+
 # M1 macos machines with homebrew will install the native libraries in
 # /opt/homebrew instead of /usr/local, most likely because they
 # emulate x86_64 compatibility via Rosetta, and wanting to keep the
@@ -563,8 +577,25 @@ check-amount-access:
 	@! (git grep -nE "(->|\.)(milli)?satoshis" -- "*.c" "*.h" ":(exclude)common/amount.*" ":(exclude)*/test/*" | grep -v '/* Raw:')
 	@! git grep -nE "\\(struct amount_(m)?sat\\)" -- "*.c" "*.h" ":(exclude)common/amount.*" ":(exclude)*/test/*" | grep -vE "sizeof.struct amount_(m)?sat."
 
+repeat-doc-examples:
+	@for i in $$(seq 1 $(n)); do \
+		echo "----------------------------------" >> tests/autogenerate-examples-repeat.log; \
+		echo "Iteration $$i" >> tests/autogenerate-examples-repeat.log; \
+		echo "----------------------------------" >> tests/autogenerate-examples-repeat.log; \
+		VALGRIND=0 TIMEOUT=40 TEST_DEBUG=1 GENERATE_EXAMPLES=1 pytest -vvv tests/autogenerate-rpc-examples.py; \
+		git diff >> tests/autogenerate-examples-repeat.log; \
+		git reset --hard; \
+		echo "----------------------------------" >> tests/autogenerate-examples-repeat.log; \
+	done
+
+update-doc-examples:
+	TEST_DEBUG=1 VALGRIND=0 GENERATE_EXAMPLES=1 $(PYTEST) $(PYTEST_OPTS) --timeout=1200 tests/autogenerate-rpc-examples.py && $(MAKE) $(MSGGEN_GEN_ALL)
+
+check-doc-examples: update-doc-examples
+	git diff --exit-code HEAD
+
 # For those without working cppcheck
-check-source-no-cppcheck: check-makefile check-source-bolt check-whitespace check-spelling check-python check-includes check-shellcheck check-setup_locale check-tmpctx check-discouraged-functions check-amount-access
+check-source-no-cppcheck: check-makefile check-source-bolt check-whitespace check-spelling check-python check-includes check-shellcheck check-setup_locale check-tmpctx check-discouraged-functions check-amount-access check-doc-examples
 
 check-source: check-source-no-cppcheck
 
@@ -716,7 +747,7 @@ clean: obsclean
 
 PYLNS=client proto testing
 # See doc/contribute-to-core-lightning/contributor-workflow.md
-update-versions: update-pyln-versions update-clnrest-version update-wss-proxy-version update-poetry-lock update-dot-version
+update-versions: update-pyln-versions update-clnrest-version update-wss-proxy-version update-poetry-lock update-dot-version update-doc-examples
 
 update-pyln-versions: $(PYLNS:%=update-pyln-version-%)
 
@@ -757,20 +788,6 @@ update-mocks/%: % $(ALL_GEN_HEADERS) $(ALL_GEN_SOURCES)
 
 unittest/%: % bolt-precheck
 	BOLTDIR=$(LOCAL_BOLTDIR) $(VG) $(VG_TEST_ARGS) $* > /dev/null
-
-# Installation directories
-exec_prefix = $(PREFIX)
-bindir = $(exec_prefix)/bin
-libexecdir = $(exec_prefix)/libexec
-pkglibexecdir = $(libexecdir)/$(PKGNAME)
-plugindir = $(pkglibexecdir)/plugins
-datadir = $(PREFIX)/share
-docdir = $(datadir)/doc/$(PKGNAME)
-mandir = $(datadir)/man
-man1dir = $(mandir)/man1
-man5dir = $(mandir)/man5
-man7dir = $(mandir)/man7
-man8dir = $(mandir)/man8
 
 # Commands
 MKDIR_P = mkdir -p

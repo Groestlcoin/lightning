@@ -38,7 +38,7 @@ BITCOIND_CONFIG = {
 
 
 LIGHTNINGD_CONFIG = OrderedDict({
-    "log-level": "debug",
+    "log-level": "trace",
     "cltv-delta": 6,
     "cltv-final": 5,
     "watchtime-blocks": 5,
@@ -80,6 +80,7 @@ DEPRECATED_APIS = env("DEPRECATED_APIS", "0") == "1"
 TIMEOUT = int(env("TIMEOUT", 180 if SLOW_MACHINE else 60))
 EXPERIMENTAL_DUAL_FUND = env("EXPERIMENTAL_DUAL_FUND", "0") == "1"
 EXPERIMENTAL_SPLICING = env("EXPERIMENTAL_SPLICING", "0") == "1"
+GENERATE_EXAMPLES = env("GENERATE_EXAMPLES", "0") == "1"
 
 
 def wait_for(success, timeout=TIMEOUT):
@@ -816,6 +817,8 @@ class LightningNode(object):
             self.daemon.opts["experimental-dual-fund"] = None
         if EXPERIMENTAL_SPLICING:
             self.daemon.opts["experimental-splicing"] = None
+        # Avoid test flakes cause by this option unless explicitly set.
+        self.daemon.opts.update({"autoconnect-seeker-peers": 0})
 
         if options is not None:
             self.daemon.opts.update(options)

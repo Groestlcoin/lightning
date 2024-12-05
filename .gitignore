@@ -69,6 +69,9 @@ tests/node_pb2.py
 tests/node_pb2_grpc.py
 tests/primitives_pb2.py
 tests/primitives_pb2_grpc.py
+tests/autogenerate-examples-status.log
+tests/autogenerate-examples.json
+tests/autogenerate-examples-repeat.log
 
 # Ignore unrelated stuff
 .DS_Store

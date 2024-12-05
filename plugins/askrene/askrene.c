@@ -1090,11 +1090,8 @@ static struct command_result *json_askrene_create_layer(struct command *cmd,
 	if (command_check_only(cmd))
 		return command_check_done(cmd);
 
-	if (!layer) {
+	if (!layer)
 		layer = new_layer(askrene, layername, *persistent);
-		if (*persistent)
-			save_new_layer(layer);
-	}
 
 	response = jsonrpc_stream_success(cmd);
 	json_add_layers(response, askrene, "layers", layer);
@@ -1242,9 +1239,10 @@ static const char *init(struct command *init_cmd,
 	plugin_set_data(plugin, askrene);
 	plugin_set_memleak_handler(plugin, askrene_markmem);
 
-	/* Layer needs its own command to access datastore */
+	load_layers(askrene, init_cmd);
+
+	/* Layer needs its own command to write to the datastore */
 	askrene->layer_cmd = aux_command(init_cmd);
-	load_layers(askrene);
 	return NULL;
 }
 

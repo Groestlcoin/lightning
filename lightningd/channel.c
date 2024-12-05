@@ -5,7 +5,6 @@
 #include <common/fee_states.h>
 #include <common/json_command.h>
 #include <common/wire_error.h>
-#include <connectd/connectd_wiregen.h>
 #include <errno.h>
 #include <hsmd/hsmd_wiregen.h>
 #include <lightningd/channel.h>
@@ -296,6 +295,7 @@ struct channel *new_unsaved_channel(struct peer *peer,
 	channel->old_feerate_timeout.ts.tv_nsec = 0;
 	/* closer not yet known */
 	channel->closer = NUM_SIDES;
+	channel->close_attempt_height = 0;
 	channel->close_blockheight = NULL;
 	/* In case someone looks at channels before open negotiation,
 	 * initialize this with default */
@@ -438,6 +438,7 @@ struct channel *new_channel(struct peer *peer, u64 dbid,
 			    u64 remote_static_remotekey_start,
 			    const struct channel_type *type STEALS,
 			    enum side closer,
+			    u32 close_attempt_height,
 			    enum state_change reason,
 			    /* NULL or stolen */
 			    const struct bitcoin_outpoint *shutdown_wrong_funding,
@@ -487,6 +488,9 @@ struct channel *new_channel(struct peer *peer, u64 dbid,
 		channel->scb = tal(channel, struct scb_chan);
 		channel->scb->id = dbid;
 		channel->scb->unused = 0;
+		/* More useful to have last_known_addr, if avail */
+		if (peer->last_known_addr)
+			channel->scb->addr = *peer->last_known_addr;
 		channel->scb->addr = peer->addr.u.wireaddr.wireaddr;
 		channel->scb->node_id = peer->id;
 		channel->scb->funding = *funding;
@@ -605,6 +609,7 @@ struct channel *new_channel(struct peer *peer, u64 dbid,
 	list_head_init(&channel->inflights);
 
 	channel->closer = closer;
+	channel->close_attempt_height = close_attempt_height;
 	channel->close_blockheight = NULL;
 	channel->state_change_cause = reason;
 	channel->ignore_fee_limits = ignore_fee_limits;
@@ -653,26 +658,54 @@ const char *channel_state_str(enum channel_state state)
 	return "unknown";
 }
 
-struct channel *peer_any_channel(struct peer *peer,
-				 bool (*channel_state_filter)(enum channel_state),
-				 bool *others)
+#define peer_any_channel(peer, filter, arg, others)		\
+	peer_any_channel_((peer),				\
+			  typesafe_cb_preargs(bool, void *,		\
+					      (filter), (arg),		\
+					      const struct channel *),	\
+			  (arg),					\
+			  others)
+
+struct channel *peer_any_channel_(struct peer *peer,
+				  bool (*filter)(const struct channel *,
+						 void *arg),
+				  void *arg,
+				  bool *others)
 {
 	struct channel *channel, *ret = NULL;
 
 	list_for_each(&peer->channels, channel, list) {
-		if (channel_state_filter && !channel_state_filter(channel->state))
+		if (filter && !filter(channel, arg))
 			continue;
 		/* Already found one? */
 		if (ret) {
-			if (others)
-				*others = true;
+			*others = true;
 		} else {
 			if (others)
 				*others = false;
 			ret = channel;
 		}
+
+		/* Don't keep searching if others is NULL (they don't care). */
+		if (!others)
+			break;
 	}
 	return ret;
+}
+
+static bool filter_by_state(const struct channel *c,
+			    bool (*channel_state_filter)(enum channel_state))
+{
+	return channel_state_filter(c->state);
+}
+
+struct channel *peer_any_channel_bystate(struct peer *peer,
+					 bool (*channel_state_filter)(enum channel_state),
+					 bool *others)
+{
+	return peer_any_channel(peer,
+				filter_by_state, channel_state_filter,
+				others);
 }
 
 struct channel_inflight *channel_inflight_find(struct channel *channel,
@@ -855,12 +888,37 @@ struct channel_state_change *new_channel_state_change(const tal_t *ctx,
 	return c;
 }
 
+bool channel_important_filter(const struct channel *channel, void *unused)
+{
+	/* Wants to talk */
+	if (!channel_state_wants_peercomms(channel->state))
+		return false;
+
+	/* If nothing is committed yet, only maintain connection if
+	 * we're the opener */
+	if (channel_state_pre_open(channel->state) && channel->opener == REMOTE)
+		return false;
+
+	/* If we don't reconnect for private channels. */
+	if (!channel->peer->ld->reconnect_private
+	    && !(channel->channel_flags & CHANNEL_FLAGS_ANNOUNCE_CHANNEL))
+		return false;
+
+	return true;
+}
+
 void channel_set_state(struct channel *channel,
 		       enum channel_state old_state,
 		       enum channel_state state,
 		       enum state_change reason,
-		       char *why)
+		       const char *why)
 {
+	bool was_important;
+
+	/* Does peer currently have an important channel? */
+	was_important = peer_any_channel(channel->peer,
+					 channel_important_filter, NULL, NULL);
+
 	/* set closer, if known */
 	if (channel_state_closing(state) && channel->closer == NUM_SIDES) {
 		if (reason == REASON_LOCAL)   channel->closer = LOCAL;
@@ -915,6 +973,8 @@ void channel_set_state(struct channel *channel,
 					     reason,
 					     why);
 	}
+
+	tell_connectd_peer_importance(channel->peer, was_important);
 }
 
 const char *channel_change_state_reason_str(enum state_change reason)
@@ -930,27 +990,17 @@ const char *channel_change_state_reason_str(enum state_change reason)
 	abort();
 }
 
-void channel_fail_permanent(struct channel *channel,
-			    enum state_change reason,
-			    const char *fmt,
-			    ...)
+static void channel_fail_perm(struct channel *channel,
+			      enum state_change reason,
+			      const char *why,
+			      const struct bitcoin_tx *spent_by)
 {
+	struct lightningd *ld = channel->peer->ld;
+
 	/* Don't do anything if it's an stub channel because
 	 * peer has already closed it unilatelrally. */
 	if (channel->scid && is_stub_scid(*channel->scid))
 		return;
-
-	struct lightningd *ld = channel->peer->ld;
-	va_list ap;
-	char *why;
-	/* Do we want to rebroadcast close transactions? If we're
-	 * witnessing the close on-chain there is no point in doing
-	 * this. */
-	bool rebroadcast;
-
-	va_start(ap, fmt);
-	why = tal_vfmt(tmpctx, fmt, ap);
-	va_end(ap);
 
 	log_unusual(channel->log,
 		    "Peer permanent failure in %s: %s (reason=%s)",
@@ -964,15 +1014,6 @@ void channel_fail_permanent(struct channel *channel,
 
 	channel_set_owner(channel, NULL);
 
-	/* Drop non-cooperatively (unilateral) to chain. If we detect
-	 * the close from the blockchain (i.e., reason is
-	 * REASON_ONCHAIN, or FUNDING_SPEND_SEEN) then we can observe
-	 * passively, and not broadcast our own unilateral close, as
-	 * it doesn't stand a chance anyway. */
-	rebroadcast = !(channel->state == ONCHAIN ||
-			channel->state == FUNDING_SPEND_SEEN);
-	drop_to_chain(ld, channel, false, rebroadcast);
-
 	if (channel_state_wants_onchain_fail(channel->state))
 		channel_set_state(channel,
 				  channel->state,
@@ -980,10 +1021,50 @@ void channel_fail_permanent(struct channel *channel,
 				  reason,
 				  why);
 
+	/* Drop non-cooperatively (unilateral) to chain. If we detect
+	 * the close from the blockchain, then we can observe
+	 * passively, and not broadcast our own unilateral close, as
+	 * it doesn't stand a chance anyway. */
+	drop_to_chain(ld, channel, false, spent_by);
+
 	if (channel_state_open_uncommitted(channel->state))
 		delete_channel(channel);
+}
 
-	tal_free(why);
+void channel_fail_permanent(struct channel *channel,
+			    enum state_change reason,
+			    const char *fmt,
+			    ...)
+{
+	va_list ap;
+	char *why;
+
+	va_start(ap, fmt);
+	why = tal_vfmt(tmpctx, fmt, ap);
+	va_end(ap);
+
+	channel_fail_perm(channel, reason, why, NULL);
+}
+
+void channel_fail_saw_onchain(struct channel *channel,
+			      enum state_change reason,
+			      const struct bitcoin_tx *tx,
+			      const char *fmt,
+			      ...)
+{
+	va_list ap;
+	char *why;
+	struct bitcoin_txid txid;
+
+	va_start(ap, fmt);
+	why = tal_vfmt(tmpctx, fmt, ap);
+	va_end(ap);
+
+	bitcoin_txid(tx, &txid);
+	tal_append_fmt(&why, ": onchain txid %s",
+		       fmt_bitcoin_txid(tmpctx, &txid));
+
+	channel_fail_perm(channel, reason, why, tx);
 }
 
 void channel_fail_forget(struct channel *channel, const char *fmt, ...)

@@ -178,6 +178,7 @@ struct channel *new_channel(struct peer *peer UNNEEDED, u64 dbid UNNEEDED,
 			    u64 remote_static_remotekey_start UNNEEDED,
 			    const struct channel_type *type STEALS UNNEEDED,
 			    enum side closer UNNEEDED,
+			    u32 close_attempt_height UNNEEDED,
 			    enum state_change reason UNNEEDED,
 			    /* NULL or stolen */
 			    const struct bitcoin_outpoint *shutdown_wrong_funding STEALS UNNEEDED,
@@ -213,7 +214,7 @@ struct chain_coin_mvt *new_coin_wallet_deposit(const tal_t *ctx UNNEEDED,
 { fprintf(stderr, "new_coin_wallet_deposit called!\n"); abort(); }
 /* Generated stub for new_inflight */
 struct channel_inflight *new_inflight(struct channel *channel UNNEEDED,
-	     struct pubkey *remote_funding UNNEEDED,
+	     struct pubkey *remote_funding STEALS UNNEEDED,
 	     const struct bitcoin_outpoint *funding_outpoint UNNEEDED,
 	     u32 funding_feerate UNNEEDED,
 	     struct amount_sat funding_sat UNNEEDED,
@@ -239,6 +240,7 @@ struct logger *new_logger(const tal_t *ctx UNNEEDED, struct log_book *record UNN
 struct peer *new_peer(struct lightningd *ld UNNEEDED, u64 dbid UNNEEDED,
 		      const struct node_id *id UNNEEDED,
 		      const struct wireaddr_internal *addr UNNEEDED,
+		      const struct wireaddr *last_known_addr UNNEEDED,
 		      const u8 *their_features TAKES UNNEEDED,
 		      bool connected_incoming UNNEEDED)
 { fprintf(stderr, "new_peer called!\n"); abort(); }

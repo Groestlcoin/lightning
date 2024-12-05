@@ -1859,7 +1859,9 @@ def test_onchaind_replay(node_factory, bitcoind):
     _, txid, blocks = l1.wait_for_onchaind_tx('OUR_DELAYED_RETURN_TO_WALLET',
                                               'OUR_UNILATERAL/DELAYED_OUTPUT_TO_US')
     assert blocks == 200
-    bitcoind.generate_block(200)
+
+    # We already mined 100
+    bitcoind.generate_block(100)
     # Could be RBF!
     l1.mine_txid_or_rbf(txid)
 
@@ -2397,35 +2399,45 @@ def test_onchain_their_unilateral_out(node_factory, bitcoind, chainparams, ancho
     assert account_balance(l2, channel_id) == 0
     assert account_balance(l1, channel_id) == 0
 
-    # Graph of coin_move events we expect
-    expected_1 = {
-        '0': [('wallet', ['deposit'], ['withdrawal'], 'A')],
-        # This is ugly, but this wallet deposit is either unspent or used
-        # in the next channel open
-        'A': [('wallet', ['deposit'], None, None), ('cid1', ['channel_open', 'opener'], ['channel_close'], 'B')],
-        'B': [('wallet', ['deposit'], None, None), ('cid1', ['htlc_timeout'], ['to_wallet'], 'C')],
-        'C': [('wallet', ['deposit'], None, None)],
-    }
-
-    expected_2 = {
-        'A': [('cid1', ['channel_open'], ['channel_close'], 'B')],
-        'B': [('external', ['to_them'], None, None), ('external', ['htlc_timeout'], None, None)],
-    }
-
+    # Graph of coin_move events we expect!
     if anchors:
-        expected_1['B'].append(('external', ['anchor'], None, None))
-        expected_2['B'].append(('external', ['anchor'], None, None))
-        expected_1['B'].append(('wallet', ['anchor', 'ignored'], None, None))
-        expected_2['B'].append(('wallet', ['anchor', 'ignored'], None, None))
+        expected_1 = {
+            # Initial wallet deposit
+            '0': [('wallet', ['deposit'], ['withdrawal'], 'A')],
+            # Funding tx
+            'A': [('wallet', ['deposit'], None, None), ('cid1', ['channel_open', 'opener'], ['channel_close'], 'B')],
+            # Commitment tx
+            'B': [('wallet', ['deposit'], None, None), ('cid1', ['htlc_timeout'], ['to_wallet'], 'C'), ('external', ['anchor'], None, None), ('wallet', ['anchor', 'ignored'], None, None)],
+            # HTLC timeout tx
+            'C': [('wallet', ['deposit'], None, None)],
+        }
 
-    # FIXME: Why does this fail?
-    if not anchors:
-        tags = check_utxos_channel(l1, [channel_id], expected_1)
-        check_utxos_channel(l2, [channel_id], expected_2, tags)
+        expected_2 = {
+            # Funding tx
+            'A': [('cid1', ['channel_open'], ['channel_close'], 'B')],
+            # Commitment tx
+            'B': [('external', ['to_them'], None, None), ('external', ['htlc_timeout'], None, None), ('external', ['anchor'], None, None), ('wallet', ['anchor', 'ignored'], None, None)],
+        }
+    else:
+        expected_1 = {
+            '0': [('wallet', ['deposit'], ['withdrawal'], 'A')],
+            # This is ugly, but this wallet deposit is either unspent or used
+            # in the next channel open
+            'A': [('wallet', ['deposit'], None, None), ('cid1', ['channel_open', 'opener'], ['channel_close'], 'B')],
+            'B': [('wallet', ['deposit'], None, None), ('cid1', ['htlc_timeout'], ['to_wallet'], 'C')],
+            'C': [('wallet', ['deposit'], None, None)],
+        }
+
+        expected_2 = {
+            'A': [('cid1', ['channel_open'], ['channel_close'], 'B')],
+            'B': [('external', ['to_them'], None, None), ('external', ['htlc_timeout'], None, None)],
+        }
+
+    tags = check_utxos_channel(l1, [channel_id], expected_1)
+    check_utxos_channel(l2, [channel_id], expected_2, tags)
 
     # Check 'bkpr-inspect' and 'bkpr-listbalances'
-    # The wallet events aren't in the channel's events
-    del expected_1['0']
+    del expected_1['0']  # Tx '0' was the initial deposit, its not in channel's events
     expected_1['A'] = expected_1['A'][1:]
     check_inspect_channel(l1, channel_id, expected_1)
 
@@ -4186,3 +4198,53 @@ def test_onchain_reestablish_reply(node_factory, bitcoind, executor):
     # Then we get the error, close.
     l3.daemon.wait_for_log("peer_in WIRE_ERROR")
     wait_for(lambda: only_one(l3.rpc.listpeerchannels(l2.info['id'])['channels'])['state'] == 'AWAITING_UNILATERAL')
+
+
+@unittest.skipIf(TEST_NETWORK != 'regtest', 'elementsd anchors not supportd')
+def test_onchain_slow_anchor(node_factory, bitcoind):
+    """We still use anchors for non-critical closes"""
+    l1, l2 = node_factory.line_graph(2)
+
+    # Don't let l1 succeed in sending commit tx
+    def censoring_sendrawtx(r):
+        return {'id': r['id'], 'result': {}}
+
+    l1.daemon.rpcproxy.mock_rpc('sendrawtransaction', censoring_sendrawtx)
+
+    close_start_depth = bitcoind.rpc.getblockchaininfo()['blocks']
+
+    # Make l1 close unilaterally.
+    l1.rpc.disconnect(l2.info['id'], force=True)
+    l1.rpc.close(l2.info['id'], unilateraltimeout=1)
+
+    # We will have a super-low-prio anchor spend.
+    l1.daemon.wait_for_log(r"Low-priority anchorspend aiming for block {} \(feerate 253\)".format(close_start_depth + 2016))
+
+    # Restart with reduced block time.
+    l1.stop()
+    l1.daemon.opts['dev-low-prio-anchor-blocks'] = 20
+    l1.start()
+
+    l1.daemon.wait_for_log("Low-priority anchorspend aiming for block {}".format(close_start_depth + 20))
+    l1.daemon.wait_for_log("Anchorspend for local commit tx")
+
+    # Won't go under 12 blocks though.
+
+    # Make sure it sees all these blocks at once, to avoid test flakes!
+    l1.stop()
+    bitcoind.generate_block(7)
+    l1.start()
+
+    height = bitcoind.rpc.getblockchaininfo()['blocks']
+    l1.daemon.wait_for_log(r"Low-priority anchorspend aiming for block {} \(feerate 7458\)".format(height + 13))
+    l1.daemon.wait_for_log(r"Anchorspend for local commit tx fee 12335sat \(w=714\), commit_tx fee 4545sat \(w=768\): package feerate 11390 perkw")
+    assert not l1.daemon.is_in_log("Low-priority anchorspend aiming for block {}".format(height + 12))
+
+    bitcoind.generate_block(1)
+    height = bitcoind.rpc.getblockchaininfo()['blocks']
+    l1.daemon.wait_for_log(r"Low-priority anchorspend aiming for block {} \(feerate 7500\)".format(height + 12))
+    # Note: fee is too similar, so won't try to RBF, so no "Anchorspend for local commit tx"
+
+    bitcoind.generate_block(1)
+    height = bitcoind.rpc.getblockchaininfo()['blocks']
+    l1.daemon.wait_for_log(r"Low-priority anchorspend aiming for block {} \(feerate 7500\)".format(height + 12))

@@ -187,6 +187,11 @@ void connect_succeeded(struct lightningd *ld UNNEEDED, const struct peer *peer U
 		       bool incoming UNNEEDED,
 		       const struct wireaddr_internal *addr UNNEEDED)
 { fprintf(stderr, "connect_succeeded called!\n"); abort(); }
+/* Generated stub for connectd_connect_to_peer */
+void connectd_connect_to_peer(struct lightningd *ld UNNEEDED,
+			      const struct peer *peer UNNEEDED,
+			      bool is_important UNNEEDED)
+{ fprintf(stderr, "connectd_connect_to_peer called!\n"); abort(); }
 /* Generated stub for create_anchor_details */
 struct anchor_details *create_anchor_details(const tal_t *ctx UNNEEDED,
 					     struct channel *channel UNNEEDED,
@@ -939,7 +944,7 @@ void report_subd_memleak(struct leak_detect *leak_detect UNNEEDED, struct subd *
 { fprintf(stderr, "report_subd_memleak called!\n"); abort(); }
 /* Generated stub for resolve_close_command */
 void resolve_close_command(struct lightningd *ld UNNEEDED, struct channel *channel UNNEEDED,
-			   bool cooperative UNNEEDED, struct bitcoin_tx **close_txs UNNEEDED)
+			   bool cooperative UNNEEDED, const struct bitcoin_tx **close_txs UNNEEDED)
 { fprintf(stderr, "resolve_close_command called!\n"); abort(); }
 /* Generated stub for rune_is_ours */
 const char *rune_is_ours(struct lightningd *ld UNNEEDED, const struct rune *rune UNNEEDED)
@@ -1001,6 +1006,10 @@ void subkey_from_hmac(const char *prefix UNNEEDED,
 		      const struct secret *base UNNEEDED,
 		      struct secret *key UNNEEDED)
 { fprintf(stderr, "subkey_from_hmac called!\n"); abort(); }
+/* Generated stub for tell_connectd_peer_importance */
+void tell_connectd_peer_importance(struct peer *peer UNNEEDED,
+				   bool was_important UNNEEDED)
+{ fprintf(stderr, "tell_connectd_peer_importance called!\n"); abort(); }
 /* Generated stub for tlv_hsmd_dev_preinit_tlvs_new */
 struct tlv_hsmd_dev_preinit_tlvs *tlv_hsmd_dev_preinit_tlvs_new(const tal_t *ctx UNNEEDED)
 { fprintf(stderr, "tlv_hsmd_dev_preinit_tlvs_new called!\n"); abort(); }
@@ -1044,9 +1053,9 @@ u8 *towire_channeld_offer_htlc(const tal_t *ctx UNNEEDED, struct amount_msat amo
 /* Generated stub for towire_channeld_sending_commitsig_reply */
 u8 *towire_channeld_sending_commitsig_reply(const tal_t *ctx UNNEEDED)
 { fprintf(stderr, "towire_channeld_sending_commitsig_reply called!\n"); abort(); }
-/* Generated stub for towire_connectd_discard_peer */
-u8 *towire_connectd_discard_peer(const tal_t *ctx UNNEEDED, const struct node_id *id UNNEEDED, u64 counter UNNEEDED)
-{ fprintf(stderr, "towire_connectd_discard_peer called!\n"); abort(); }
+/* Generated stub for towire_connectd_disconnect_peer */
+u8 *towire_connectd_disconnect_peer(const tal_t *ctx UNNEEDED, const struct node_id *id UNNEEDED, u64 counter UNNEEDED)
+{ fprintf(stderr, "towire_connectd_disconnect_peer called!\n"); abort(); }
 /* Generated stub for towire_connectd_peer_connect_subd */
 u8 *towire_connectd_peer_connect_subd(const tal_t *ctx UNNEEDED, const struct node_id *id UNNEEDED, u64 counter UNNEEDED, const struct channel_id *channel_id UNNEEDED)
 { fprintf(stderr, "towire_connectd_peer_connect_subd called!\n"); abort(); }
@@ -1156,11 +1165,6 @@ u8 *towire_warningfmt(const tal_t *ctx UNNEEDED,
 		      const struct channel_id *channel UNNEEDED,
 		      const char *fmt UNNEEDED, ...)
 { fprintf(stderr, "towire_warningfmt called!\n"); abort(); }
-/* Generated stub for try_reconnect */
-void try_reconnect(const tal_t *ctx UNNEEDED,
-		   struct peer *peer UNNEEDED,
-		   const struct wireaddr_internal *addrhint UNNEEDED)
-{ fprintf(stderr, "try_reconnect called!\n"); abort(); }
 /* Generated stub for unsigned_channel_update */
 u8 *unsigned_channel_update(const tal_t *ctx UNNEEDED,
 			    const struct channel *channel UNNEEDED,
@@ -1441,7 +1445,7 @@ static bool test_wallet_outputs(struct lightningd *ld, const tal_t *ctx)
 
 	/* Add another utxo that's CSV-locked for 5 blocks */
 	assert(parse_wireaddr_internal(tmpctx, "localhost:1234", 0, false, &addr) == NULL);
-	channel.peer = new_peer(ld, 0, &id, &addr, NULL, false);
+	channel.peer = new_peer(ld, 0, &id, &addr, NULL, NULL, false);
 	channel.dbid = 1;
 	channel.type = channel_type_anchors_zero_fee_htlc(tmpctx);
 	memset(&u.outpoint, 3, sizeof(u.outpoint));
@@ -1767,7 +1771,7 @@ static bool test_channel_crud(struct lightningd *ld, const tal_t *ctx)
 	c1.first_blocknum = 1;
 	assert(parse_wireaddr_internal(tmpctx, "localhost:1234", 0, false, &addr) == NULL);
 	c1.final_key_idx = 1337;
-	p = new_peer(ld, 0, &id, &addr, NULL, false);
+	p = new_peer(ld, 0, &id, &addr, NULL, NULL, false);
 	c1.peer = p;
 	c1.dbid = wallet_get_channel_dbid(w);
 	c1.state = CHANNELD_NORMAL;
@@ -1935,7 +1939,7 @@ static bool test_channel_inflight_crud(struct lightningd *ld, const tal_t *ctx)
 	assert(parse_wireaddr_internal(tmpctx, "localhost:1234", 0, false, &addr) == NULL);
 
 	/* new channel! */
-	p = new_peer(ld, 0, &id, &addr, NULL, false);
+	p = new_peer(ld, 0, &id, &addr, NULL, NULL, false);
 
 	funding_sats = AMOUNT_SAT(4444444);
 	our_sats = AMOUNT_SAT(3333333);
@@ -1995,7 +1999,7 @@ static bool test_channel_inflight_crud(struct lightningd *ld, const tal_t *ctx)
 			   &pk, NULL,
 			   1000, 100,
 			   NULL, 0, 0, channel_type_static_remotekey(NULL),
-			   LOCAL, REASON_UNKNOWN,
+			   LOCAL, 0, REASON_UNKNOWN,
 			   NULL,
 			   new_height_states(w, LOCAL,
 					     &lease_blockheight_start),

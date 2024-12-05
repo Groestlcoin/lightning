@@ -749,6 +749,25 @@ static struct amount_msat total_being_sent(const struct payment *payment)
 	return sum;
 }
 
+static struct amount_msat total_fees_being_sent(const struct payment *payment)
+{
+	struct attempt *attempt;
+	struct amount_msat sum = AMOUNT_MSAT(0);
+
+	list_for_each(&payment->current_attempts, attempt, list) {
+		struct amount_msat fee;
+		if (tal_count(attempt->hops) == 0)
+			continue;
+		if (!amount_msat_sub(&fee,
+				     attempt->hops[0].amount_in,
+				     attempt->delivers))
+			abort();
+		if (!amount_msat_accumulate(&sum, fee))
+			abort();
+	}
+	return sum;
+}
+
 static struct command_result *injectpaymentonion_succeeded(struct command *aux_cmd,
 							   const char *method,
 							   const char *buf,
@@ -777,11 +796,11 @@ static struct command_result *injectpaymentonion_succeeded(struct command *aux_c
 
 static void append_blinded_payloads(struct sphinx_path *sp,
 				    const struct attempt *attempt,
+				    u32 effective_bheight,
 				    size_t path_num)
 {
 	const struct blinded_path *path = attempt->payment->paths[path_num];
-	struct xpay *xpay = xpay_of(attempt->payment->plugin);
-	u32 final_cltv = attempt->payment->final_cltv + xpay->blockheight;
+	u32 final_cltv = attempt->payment->final_cltv + effective_bheight;
 
 	for (size_t i = 0; i < tal_count(path->path); i++) {
 		bool first = (i == 0);
@@ -813,7 +832,9 @@ static void append_blinded_payloads(struct sphinx_path *sp,
 	}
 }
 
-static const u8 *create_onion(const tal_t *ctx, struct attempt *attempt)
+static const u8 *create_onion(const tal_t *ctx,
+			      struct attempt *attempt,
+			      u32 effective_bheight)
 {
 	struct xpay *xpay = xpay_of(attempt->payment->plugin);
 	bool blinded_path = false;
@@ -834,7 +855,8 @@ static const u8 *create_onion(const tal_t *ctx, struct attempt *attempt)
 		if (pubkey_eq(&hop->next_node, &xpay->fakenode)
 		    && hop->scidd.scid.u64 < tal_count(attempt->payment->paths)) {
 			blinded_path = true;
-			append_blinded_payloads(sp, attempt, hop->scidd.scid.u64);
+			append_blinded_payloads(sp, attempt, effective_bheight,
+						hop->scidd.scid.u64);
 			/* This must be at the end, unless they put the fake nodeid
 			 * in a layer, in which case it doesn't matter what we put
 			 * in the rest of the onion. */
@@ -842,7 +864,7 @@ static const u8 *create_onion(const tal_t *ctx, struct attempt *attempt)
 		}
 		/* We tell it how much to send *out* */
 		payload = onion_nonfinal_hop(NULL, &hop->scidd.scid, hop->amount_out,
-					     hop->cltv_value_out + xpay->blockheight);
+					     hop->cltv_value_out + effective_bheight);
 		sphinx_add_hop_has_length(sp, node, take(payload));
 		node = &hop->next_node;
 	}
@@ -853,7 +875,7 @@ static const u8 *create_onion(const tal_t *ctx, struct attempt *attempt)
 		sphinx_add_hop_has_length(sp, node,
 					  take(onion_final_hop(NULL,
 							       attempt->delivers,
-							       attempt->payment->final_cltv + xpay->blockheight,
+							       attempt->payment->final_cltv + effective_bheight,
 							       attempt->payment->full_amount,
 							       attempt->payment->payment_secret,
 							       attempt->payment->payment_metadata)));
@@ -876,8 +898,10 @@ static struct command_result *do_inject(struct command *aux_cmd,
 	struct out_req *req;
 	const u8 *onion;
 	struct xpay *xpay = xpay_of(attempt->payment->plugin);
+	/* In case a block comes in, we give CLTVs an extra 1. */
+	u32 effective_bheight = xpay->blockheight + 1;
 
-	onion = create_onion(tmpctx, attempt);
+	onion = create_onion(tmpctx, attempt, effective_bheight);
 	/* FIXME: Handle this better! */
 	if (!onion) {
 		payment_failed(aux_cmd, attempt->payment, PAY_UNSPECIFIED_ERROR,
@@ -894,7 +918,7 @@ static struct command_result *do_inject(struct command *aux_cmd,
 	json_add_sha256(req->js, "payment_hash", &attempt->payment->payment_hash);
 	/* If no route, its the same as delivery (self-pay) */
 	json_add_amount_msat(req->js, "amount_msat", initial_sent(attempt));
-	json_add_u32(req->js, "cltv_expiry", initial_cltv_delta(attempt) + xpay->blockheight);
+	json_add_u32(req->js, "cltv_expiry", initial_cltv_delta(attempt) + effective_bheight);
 	json_add_u64(req->js, "partid", attempt->partid);
 	json_add_u64(req->js, "groupid", attempt->payment->group_id);
 	json_add_string(req->js, "invstring", attempt->payment->invstring);
@@ -1070,6 +1094,9 @@ static struct command_result *getroutes_done_err(struct command *aux_cmd,
 		return command_still_pending(aux_cmd);
 	}
 
+	/* FIXME: If we fail due to exceeding maxfee, we *could* try waiting for
+	 * any outstanding payments to fail and then try again? */
+
 	/* More elaborate explanation. */
 	if (amount_msat_eq(payment->amount_being_routed, payment->amount))
 		complaint = "Then routing failed";
@@ -1092,6 +1119,7 @@ static struct command_result *getroutes_for(struct command *aux_cmd,
 	struct xpay *xpay = xpay_of(aux_cmd->plugin);
 	struct out_req *req;
 	const struct pubkey *dst;
+	struct amount_msat maxfee;
 
 	/* If we get injectpaymentonion responses, they can wait */
 	payment->amount_being_routed = deliver;
@@ -1105,6 +1133,13 @@ static struct command_result *getroutes_for(struct command *aux_cmd,
 	if (pubkey_eq(&xpay->local_id, dst)) {
 		struct attempt *attempt = new_attempt(payment, deliver, NULL);
 		return do_inject(aux_cmd, attempt);
+	}
+
+	if (!amount_msat_sub(&maxfee, payment->maxfee, total_fees_being_sent(payment))) {
+		payment_log(payment, LOG_BROKEN, "more fees (%s) in flight than allowed (%s)!",
+			    fmt_amount_msat(tmpctx, total_fees_being_sent(payment)),
+			    fmt_amount_msat(tmpctx, payment->maxfee));
+		maxfee = AMOUNT_MSAT(0);
 	}
 
 	req = jsonrpc_request_start(aux_cmd, "getroutes",
@@ -1134,7 +1169,7 @@ static struct command_result *getroutes_for(struct command *aux_cmd,
 	for (size_t i = 0; i < tal_count(payment->layers); i++)
 		json_add_string(req->js, NULL, payment->layers[i]);
 	json_array_end(req->js);
-	json_add_amount_msat(req->js, "maxfee_msat", payment->maxfee);
+	json_add_amount_msat(req->js, "maxfee_msat", maxfee);
 	json_add_u32(req->js, "final_cltv", payment->final_cltv);
 
 	return send_payment_req(aux_cmd, payment, req);
@@ -1409,6 +1444,7 @@ static struct command_result *json_xpay(struct command *cmd,
 	struct payment *payment = tal(cmd, struct payment);
 	unsigned int *retryfor;
 	struct out_req *req;
+	u64 now, invexpiry;
 	char *err;
 
 	if (!param_check(cmd, buffer, params,
@@ -1443,6 +1479,7 @@ static struct command_result *json_xpay(struct command *cmd,
 			return command_fail(cmd, JSONRPC2_INVALID_PARAMS,
 					    "Invalid bolt12 invoice: %s", err);
 
+		invexpiry = invoice_expiry(b12inv);
 		payment->full_amount = amount_msat(*b12inv->invoice_amount);
 		if (msat)
 			return command_fail(cmd, JSONRPC2_INVALID_PARAMS,
@@ -1512,7 +1549,15 @@ static struct command_result *json_xpay(struct command *cmd,
 			payment->full_amount = *b11->msat;
 		else
 			payment->full_amount = *msat;
+
+		invexpiry = b11->timestamp + b11->expiry;
 	}
+
+	now = time_now().ts.tv_sec;
+	if (now > invexpiry)
+		return command_fail(cmd, PAY_INVOICE_EXPIRED,
+				    "Invoice expired %"PRIu64" seconds ago",
+				    now - invexpiry);
 
 	if (partial) {
 		payment->amount = *partial;

@@ -143,6 +143,7 @@ static struct lightningd *new_lightningd(const tal_t *ctx)
 	ld->dev_no_htlc_timeout = false;
 	ld->dev_no_version_checks = false;
 	ld->dev_max_funding_unconfirmed = 2016;
+	ld->dev_low_prio_anchor_blocks = 2016;
 	ld->dev_ignore_modern_onion = false;
 	ld->dev_disable_commit = -1;
 	ld->dev_no_ping_timer = false;
@@ -152,6 +153,7 @@ static struct lightningd *new_lightningd(const tal_t *ctx)
 	ld->dev_hsmd_fail_preapprove = false;
 	ld->dev_handshake_no_reply = false;
 	ld->dev_strict_forwarding = false;
+	ld->dev_limit_connections_inflight = false;
 
 	/*~ We try to ensure enough fds for twice the number of channels
 	 * we start with.  We have a developer option to change that factor
@@ -258,7 +260,6 @@ static struct lightningd *new_lightningd(const tal_t *ctx)
 	ld->try_reexec = false;
 	ld->recover_secret = NULL;
 	ld->db_upgrade_ok = NULL;
-	ld->num_startup_connects = 0;
 
 	/* --experimental-upgrade-protocol */
 	ld->experimental_upgrade_protocol = false;
@@ -369,6 +370,9 @@ static struct lightningd *new_lightningd(const tal_t *ctx)
 	 * the final step is to make *users* explicitly re-enable each API
 	 * which is due for complete removal. */
 	ld->api_begs = tal_arr(ld, const char *, 0);
+
+	/* The gossip seeker automatically connects to a this many peers */
+	ld->autoconnect_seeker_peers = 10;
 
 	return ld;
 }
@@ -1409,6 +1413,14 @@ int main(int argc, char *argv[])
 	/*~ Now handle sigchld, so we can clean up appropriately. */
 	sigchld_conn = notleak(io_new_conn(ld, sigchld_rfd, sigchld_rfd_in, ld));
 
+	/* This span was started before handing control to `io_loop`
+	 * which suspends active spans in-between processing
+	 * events. Depending on how the `io_loop` was interrupted, the
+	 * current context span may have been suspended. We need to
+	 * manually resume it for this case. Notice that resuming is
+	 * idempotent, and doing so repeatedly is safe.
+	 */
+	trace_span_resume(argv);
 	trace_span_end(argv);
 
 	/*~ Mark ourselves live.

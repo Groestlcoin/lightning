@@ -30,7 +30,8 @@ def test_gossip_pruning(node_factory, bitcoind):
     """ Create channel and see it being updated in time before pruning
     """
     l1, l2, l3 = node_factory.get_nodes(3, opts={'dev-fast-gossip-prune': None,
-                                                 'allow_bad_gossip': True})
+                                                 'allow_bad_gossip': True,
+                                                 'autoconnect-seeker-peers': 0})
 
     l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
     l2.rpc.connect(l3.info['id'], 'localhost', l3.port)
@@ -69,7 +70,8 @@ def test_gossip_pruning(node_factory, bitcoind):
     # We check every 120/4 seconds, and takes 120 seconds since last update.
     l1.daemon.wait_for_log("Pruning channel {} from network view".format(scid2),
                            timeout=150)
-    l3.daemon.wait_for_log("Pruning channel {} from network view".format(scid1))
+    l3.daemon.wait_for_log("Pruning channel {} from network view".format(scid1),
+                           timeout=150)
 
     assert scid2 not in [c['short_channel_id'] for c in l1.rpc.listchannels()['channels']]
     assert scid1 not in [c['short_channel_id'] for c in l3.rpc.listchannels()['channels']]
@@ -2310,7 +2312,7 @@ def test_gossip_force_broadcast_channel_msgs(node_factory, bitcoind):
                             '--no-gossip',
                             '--hex',
                             '--network={}'.format(TEST_NETWORK),
-                            '--max-messages={}'.format(7),
+                            '--max-messages={}'.format(10),
                             '--timeout-after={}'.format(120),
                             '{}@localhost:{}'.format(l1.info['id'], l1.port)],
                            check=True,
@@ -2320,10 +2322,42 @@ def test_gossip_force_broadcast_channel_msgs(node_factory, bitcoind):
     for l in lines:
         tally[types[l[0:4]]] += 1
 
+    assert tally['gossip_filter'] >= 1
     del tally['query_short_channel_ids']
     del tally['query_channel_range']
     del tally['ping']
-    assert tally == {'channel_announce': 1,
-                     'channel_update': 3,
-                     'node_announce': 1,
-                     'gossip_filter': 1}
+    del tally['gossip_filter']
+
+    # We can actually get *4* channel_updates, if timing is right.  Allow it.
+    assert tally in ({'channel_announce': 1,
+                      'channel_update': 3,
+                      'node_announce': 1},
+                     {'channel_announce': 1,
+                      'channel_update': 4,
+                      'node_announce': 1})
+
+
+def test_gossip_seeker_autoconnect(node_factory):
+    """Seeker should connect to additional peers and initiate connections if
+    necessary."""
+
+    port = node_factory.get_unused_port()
+    opts = [{'may_reconnect': True,
+             'autoconnect-seeker-peers': 0},
+            {'may_reconnect': True},
+            {'bind-addr': f'127.0.0.1:{port}',
+             'announce-addr': f'127.0.0.1:{port}'}]
+    l1, l2, l3 = node_factory.line_graph(3, opts=opts, wait_for_announce=True)
+    l1.daemon.wait_for_log('seeker: chosen for periodic full sync')
+    time.sleep(10)
+    # The seeker wants more peers, but l1 should not autoconnect due to option.
+    assert not l1.daemon.is_in_log(r'lightningd: attempting connection to ')
+
+    # Try again with default settings.
+    del l1.daemon.opts['autoconnect-seeker-peers']
+    l1.restart()
+    # L1 and L3 should autoconnect with valid node announcement connection addresses.
+    l1.daemon.wait_for_log(r'lightningd: attempting connection to '
+                           rf'{l3.info["id"]} for additional gossip')
+    l1.daemon.wait_for_log('gossipd: seeker: starting gossip')
+    assert l3.info['id'] in [n['id'] for n in l1.rpc.listpeers()['peers']]

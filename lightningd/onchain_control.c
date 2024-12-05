@@ -342,7 +342,7 @@ static void handle_onchain_log_coin_move(struct channel *channel, const u8 *msg)
 		return;
 	}
 
-	/* Any 'ignored' payments get registed to the wallet */
+	/* Any 'ignored' payments get registered to the wallet */
 	if (!mvt->account_name)
 		mvt->account_name = fmt_channel_id(mvt,
 						   &channel->cid);
@@ -1708,8 +1708,9 @@ enum watch_result onchaind_funding_spent(struct channel *channel,
 	if (channel->closer != NUM_SIDES)
 		reason = REASON_UNKNOWN;  /* will use last cause as reason */
 
-	channel_fail_permanent(channel, reason,
-			       "Funding transaction spent");
+	channel_fail_saw_onchain(channel, reason,
+				 tx,
+				 "Funding transaction spent");
 
 	/* If we haven't posted the open event yet, post an open */
 	if (!channel->scid || !channel->remote_channel_ready) {

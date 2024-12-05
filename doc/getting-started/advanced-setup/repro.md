@@ -5,7 +5,7 @@ hidden: false
 createdAt: "2023-01-25T10:37:03.476Z"
 updatedAt: "2023-07-12T13:26:52.005Z"
 ---
-Reproducible builds close the final gap in the lifecycle of open-source projects by allowing maintainers to verify and certify that a given binary was indeed produced by compiling an unmodified version of the publicly available source. In particular the maintainer certifies that the binary corresponds a) to the exact version of the and b) that no malicious changes have been applied before or after the compilation.
+[Reproducible builds](https://reproducible-builds.org/) close the final gap in the lifecycle of open-source projects by allowing anyone to verify that a given binary was produced by compiling publicly available source code.
 
 Core Lightning has provided a manifest of the binaries included in a release, along with signatures from the maintainers since version 0.6.2.
 
@@ -14,16 +14,20 @@ The steps involved in creating reproducible builds are:
 - Creation of a known environment in which to build the source code
 - Removal of variance during the compilation (randomness, timestamps, etc)
 - Packaging of binaries
-- Creation of a manifest (`SHA256SUMS` file containing the crytographic hashes of the binaries and packages)
+- Creation of a manifest (`SHA256SUMS` file containing the cryptographic hashes of the binaries and packages)
 - Signing of the manifest by maintainers and volunteers that have reproduced the files in the manifest starting from the source.
 
-The bulk of these operations is handled by the [`repro-build.sh`](https://github.com/Groestlcoin/lightning/blob/master/tools/repro-build.sh) script, but some manual operations are required to setup the build environment. Since a binary is built against platorm specific libraries we also need to replicate the steps once for each OS distribution and architecture, so the majority of this guide will describe how to set up those starting from a minimal trusted base. This minimal trusted base in most cases is the official installation medium from the OS provider.
+The bulk of these operations are handled by the [`repro-build.sh`](https://github.com/Groestlcoin/lightning/blob/master/tools/repro-build.sh) script, but some manual operations are required to setup the build environment. Since a binary is built against platform specific libraries we also need to replicate the steps once for each OS distribution and architecture, so the majority of this guide will describe how to set up those starting from a minimal trusted base. This minimal trusted base in most cases is the official installation medium from the OS provider.
 
-Note: Since your signature certifies the integrity of the resulting binaries, please familiarize youself with both the [`repro-build.sh`](https://github.com/Groestlcoin/lightning/blob/master/tools/repro-build.sh) script, as well as with the setup instructions for the build environments before signing anything.
+Note: Since your signature certifies the integrity of the resulting binaries, please familiarize yourself with both the [`repro-build.sh`](https://github.com/Groestlcoin/lightning/blob/master/tools/repro-build.sh) script, as well as with the setup instructions for the build environments before signing anything.
 
 # Build Environment Setup
 
 The build environments are a set of docker images that are created directly from the installation mediums and repositories from the OS provider. The following sections describe how to create those images. Don't worry, you only have to create each image once and can then reuse the images for future builds.
+
+## Script cl-repro
+
+The script `contrib/cl-repro.sh` covers below `Base image creation` and `Builder image setup` steps. You can skip these steps by simply running the `contrib/cl-repro.sh` script.
 
 ## Base image creation
 
@@ -53,16 +57,16 @@ Depending on your host OS release you might not have `debootstrap` manifests for
 ```shell
 for v in focal jammy noble; do
   echo "Building base image for $v"
-  sudo docker run --rm -v $(pwd):/build ubuntu:$v \
+  docker run --rm -v $(pwd):/build ubuntu:$v \
 	bash -c "apt-get update && apt-get install -y debootstrap && debootstrap $v /build/$v"
-  sudo tar -C $v -c . | sudo docker import - $v
+  tar -C $v -c . | docker import - $v
 done
 ```
 
 Verify that the image corresponds to our expectation and is runnable:
 
 ```shell
-sudo docker run ubuntu:noble cat /etc/lsb-release
+docker run ubuntu:noble cat /etc/lsb-release
 ```
 
 Which should result in the following output for `noble`:
@@ -83,9 +87,9 @@ For this purpose we have a number of Dockerfiles in the [`contrib/reprobuild`](h
 We can then build the builder image by calling `docker build` and passing it the `Dockerfile`:
 
 ```shell
-sudo docker build -t cl-repro-focal - < contrib/reprobuild/Dockerfile.focal
-sudo docker build -t cl-repro-jammy - < contrib/reprobuild/Dockerfile.jammy
-sudo docker build -t cl-repro-noble - < contrib/reprobuild/Dockerfile.noble
+docker build -t cl-repro-focal - < contrib/reprobuild/Dockerfile.focal
+docker build -t cl-repro-jammy - < contrib/reprobuild/Dockerfile.jammy
+docker build -t cl-repro-noble - < contrib/reprobuild/Dockerfile.noble
 ```
 
 Since we pass the `Dockerfile` through `stdin` the build command will not create a context, i.e., the current directory is not passed to `docker` and it'll be independent of the currently checked out version. This also means that you will be able to reuse the docker image for future builds, and don't have to repeat this dance every time. Verifying the `Dockerfile` therefore is  
@@ -93,19 +97,15 @@ sufficient to ensure that the resulting `cl-repro-<codename>` image is reproduci
 
 The dockerfiles assume that the base image has the codename as its image name.
 
-## Script cl-repro
-
-The script `contrib/cl-repro.sh` covers above `Base image creation` and `Builder image setup` steps. You can skip these steps by simply running the `contrib/cl-repro.sh` script.
-
 # Building using the builder image
 
-Finally, after building enviornment setup we can perform the actual build.  At this point we have a container image that has been prepared to build reproducibly. As you can see from the `Dockerfile` above we assume the source git repository gets mounted as `/repo` in the docker container. The container will clone the repository to an internal path, in order to keep the repository clean, build the artifacts there, and then copy them back to `/repo/release`.  
+Finally, after finishing the environment setup we can perform the actual build. At this point we have a container image that has been prepared to build reproducibly. As you can see from the `Dockerfile` above we assume the source git repository gets mounted as `/repo` in the docker container. The container will clone the repository to an internal path, in order to keep the repository clean, build the artifacts there, and then copy them back to `/repo/release`.  
 We'll need the release directory available for this, so create it now if it doesn't exist:`mkdir release`, then we can simply execute the following command inside the git repository (remember to checkout the tag you are trying to build):
 
 ```bash
-sudo docker run --rm -v $(pwd):/repo -ti cl-repro-focal
-sudo docker run --rm -v $(pwd):/repo -ti cl-repro-jammy
-sudo docker run --rm -v $(pwd):/repo -ti cl-repro-noble
+docker run --rm -v $(pwd):/repo -ti cl-repro-focal
+docker run --rm -v $(pwd):/repo -ti cl-repro-jammy
+docker run --rm -v $(pwd):/repo -ti cl-repro-noble
 ```
 
 The last few lines of output also contain the `sha256sum` hashes of all artifacts, so if you're just verifying the build those are the lines that are of interest to you:
@@ -144,7 +144,7 @@ gpg -sb --armor SHA256SUMS
 
 2: Copy above files in the lightning directory.
 
-3: Run `tools/build-release.sh --verify` script. It will build bineries for Ubuntu (Focal, Jammy & Noble), verify zip & ubuntu builds while copying Fedora checksums from the release captain's file.
+3: Run `tools/build-release.sh --verify` script. It will build binaries for Ubuntu (Focal, Jammy & Noble), verify zip & Ubuntu builds while copying Fedora checksums from the release captain's file.
 
 4. Then send the resulting `release/SHA256SUMS.asc` file to the release captain so it can be merged with the other signatures into `SHASUMS.asc`.
 

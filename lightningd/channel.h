@@ -305,6 +305,9 @@ struct channel {
 	/* the one that initiated a bilateral close, NUM_SIDES if unknown. */
 	enum side closer;
 
+	/* Block height we tried to close at (0 = not tried) */
+	u32 close_attempt_height;
+
 	/* Block height we saw closing tx at */
 	u32 *close_blockheight;
 
@@ -413,6 +416,7 @@ struct channel *new_channel(struct peer *peer, u64 dbid,
 			    u64 remote_static_remotekey_start,
 			    const struct channel_type *type STEALS,
 			    enum side closer,
+			    u32 close_attempt_height,
 			    enum state_change reason,
 			    /* NULL or stolen */
 			    const struct bitcoin_outpoint *shutdown_wrong_funding STEALS,
@@ -752,6 +756,14 @@ void channel_fail_permanent(struct channel *channel,
 			    enum state_change reason,
 			    const char *fmt,
 			    ...);
+
+/* Channel has failed, give up on it, specifically because we saw this tx spend it. */
+void channel_fail_saw_onchain(struct channel *channel,
+			      enum state_change reason,
+			      const struct bitcoin_tx *tx,
+			      const char *fmt,
+			      ...);
+
 /* Forget the channel. This is only used for the case when we "receive" error
  * during CHANNELD_AWAITING_LOCKIN if we are "fundee". */
 void channel_fail_forget(struct channel *channel, const char *fmt, ...);
@@ -765,15 +777,30 @@ void channel_set_state(struct channel *channel,
 		       enum channel_state old_state,
 		       enum channel_state state,
 		       enum state_change reason,
-		       char *why);
+		       const char *why);
 
 const char *channel_change_state_reason_str(enum state_change reason);
 
 /* Find a channel which is passes filter, if any: sets *others if there
  * is more than one. */
-struct channel *peer_any_channel(struct peer *peer,
-				 bool (*channel_state_filter)(enum channel_state),
-				 bool *others);
+#define peer_any_channel(peer, filter, arg, others)		\
+	peer_any_channel_((peer),				\
+			  typesafe_cb_preargs(bool, void *,		\
+					      (filter), (arg),		\
+					      const struct channel *),	\
+			  (arg),					\
+			  others)
+
+struct channel *peer_any_channel_(struct peer *peer,
+				  bool (*filter)(const struct channel *,
+						 void *arg),
+				  void *arg,
+				  bool *others);
+
+/* More common version for filtering by state */
+struct channel *peer_any_channel_bystate(struct peer *peer,
+					 bool (*channel_state_filter)(enum channel_state),
+					 bool *others);
 
 struct channel *channel_by_dbid(struct lightningd *ld, const u64 dbid);
 
@@ -803,6 +830,10 @@ struct channel *find_channel_by_alias(const struct peer *peer,
 /* Do we have any channel with option_anchors_zero_fee_htlc_tx?  (i.e. we
  * might need to CPFP the fee if it force closes!) */
 bool have_anchor_channel(struct lightningd *ld);
+
+/* Do we consider this channel "important" for connectd to maintain
+ * connection to peer? */
+bool channel_important_filter(const struct channel *channel, void *unused);
 
 void channel_set_last_tx(struct channel *channel,
 			 struct bitcoin_tx *tx,

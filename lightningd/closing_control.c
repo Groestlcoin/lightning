@@ -52,7 +52,7 @@ struct close_command {
 /* Resolve a single close command. */
 static void
 resolve_one_close_command(struct close_command *cc, bool cooperative,
-			  struct bitcoin_tx **close_txs)
+			  const struct bitcoin_tx **close_txs)
 {
 	assert(tal_count(close_txs));
 	struct json_stream *result = json_stream_success(cc->cmd);
@@ -107,7 +107,7 @@ const char *cmd_id_from_close_command(const tal_t *ctx,
 
 /* Resolve a close command for a channel that will be closed soon. */
 void resolve_close_command(struct lightningd *ld, struct channel *channel,
-			   bool cooperative, struct bitcoin_tx **close_txs)
+			   bool cooperative, const struct bitcoin_tx **close_txs)
 {
 	struct close_command *cc;
 	struct close_command *n;
@@ -324,13 +324,14 @@ static void peer_closing_complete(struct channel *channel, const u8 *msg)
 	if (channel->state != CLOSINGD_SIGEXCHANGE)
 		return;
 
-	/* Channel gets dropped to chain cooperatively. */
-	drop_to_chain(channel->peer->ld, channel, true, true /* rebroadcast */);
 	channel_set_state(channel,
 			  CLOSINGD_SIGEXCHANGE,
 			  CLOSINGD_COMPLETE,
 			  REASON_UNKNOWN,
 			  "Closing complete");
+
+	/* Channel gets dropped to chain cooperatively. */
+	drop_to_chain(channel->peer->ld, channel, true, NULL);
 }
 
 static void peer_closing_notify(struct channel *channel, const u8 *msg)
@@ -608,7 +609,7 @@ static struct command_result *param_channel_or_peer(struct command *cmd,
 	(*sc)->uc = NULL;
 
 	if (peer) {
-		(*sc)->channel = peer_any_channel(peer, channel_state_can_close, &more_than_one);
+		(*sc)->channel = peer_any_channel_bystate(peer, channel_state_can_close, &more_than_one);
 		if ((*sc)->channel) {
 			if (more_than_one)
 				goto more_than_one;
@@ -632,7 +633,7 @@ static struct command_result *param_channel_or_peer(struct command *cmd,
 	if ((*sc)->uc)
 		return NULL;
 
-	(*sc)->unsaved_channel = peer_any_channel(peer, channel_state_uncommitted, &more_than_one);
+	(*sc)->unsaved_channel = peer_any_channel_bystate(peer, channel_state_uncommitted, &more_than_one);
 	if ((*sc)->unsaved_channel) {
 		if (more_than_one)
 			goto more_than_one;

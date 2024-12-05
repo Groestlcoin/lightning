@@ -90,14 +90,14 @@
         "id": "example:listaddresses#1",
         "method": "listaddresses",
         "params": [
-          "bcrt1phtprcvhz842sxe8qw0yryvc0g6n6dw2puweklcpnfye273kjpfhs0d6d2e"
+          "bcrt1p2gppccw6ywewmg74qqxxmqfdpjds3rpr0mf22y9tm9xcc0muggwsea9nkf"
         ]
       },
       "response": {
         "addresses": [
           {
-            "keyidx": 13,
-            "p2tr": "bcrt1phtprcvhz842sxe8qw0yryvc0g6n6dw2puweklcpnfye273kjpfhs0d6d2e"
+            "keyidx": 14,
+            "p2tr": "bcrt1p2gppccw6ywewmg74qqxxmqfdpjds3rpr0mf22y9tm9xcc0muggwsea9nkf"
           }
         ]
       }
