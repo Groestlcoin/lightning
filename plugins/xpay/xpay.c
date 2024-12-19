@@ -111,6 +111,11 @@ struct payment {
 
 	/* Requests currently outstanding */
 	struct out_req **requests;
+
+	/* Are we pretending to be "pay"? */
+	bool pay_compat;
+	/* When did we start? */
+	struct timeabs start_time;
 };
 
 /* One step in a path. */
@@ -374,11 +379,20 @@ static void payment_succeeded(struct payment *payment,
 	if (payment->cmd) {
 		js = jsonrpc_stream_success(payment->cmd);
 		json_add_preimage(js, "payment_preimage", preimage);
-		json_add_u64(js, "failed_parts", payment->num_failures);
-		json_add_u64(js, "successful_parts",
-			     payment->total_num_attempts - payment->num_failures);
 		json_add_amount_msat(js, "amount_msat", payment->amount);
 		json_add_amount_msat(js, "amount_sent_msat", total_sent(payment, attempt));
+		/* Pay's schema expects these fields */
+		if (payment->pay_compat) {
+			json_add_u64(js, "parts", payment->total_num_attempts);
+			json_add_pubkey(js, "destination", &payment->destination);
+			json_add_sha256(js, "payment_hash", &payment->payment_hash);
+			json_add_string(js, "status", "complete");
+			json_add_timeabs(js, "created_at", payment->start_time);
+		} else {
+			json_add_u64(js, "failed_parts", payment->num_failures);
+			json_add_u64(js, "successful_parts",
+				     payment->total_num_attempts - payment->num_failures);
+		}
 		was_pending(command_finished(payment->cmd, js));
 		payment->cmd = NULL;
 	}
@@ -922,6 +936,7 @@ static struct command_result *do_inject(struct command *aux_cmd,
 	json_add_u64(req->js, "partid", attempt->partid);
 	json_add_u64(req->js, "groupid", attempt->payment->group_id);
 	json_add_string(req->js, "invstring", attempt->payment->invstring);
+	json_add_amount_msat(req->js, "destination_msat", attempt->delivers);
 	return send_payment_req(aux_cmd, attempt->payment, req);
 }
 
@@ -1435,9 +1450,10 @@ preapproveinvoice_succeed(struct command *cmd,
 	return populate_private_layer(cmd, payment);
 }
 
-static struct command_result *json_xpay(struct command *cmd,
-					const char *buffer,
-					const jsmntok_t *params)
+static struct command_result *json_xpay_core(struct command *cmd,
+					     const char *buffer,
+					     const jsmntok_t *params,
+					     bool as_pay)
 {
 	struct xpay *xpay = xpay_of(cmd->plugin);
 	struct amount_msat *msat, *maxfee, *partial;
@@ -1467,6 +1483,8 @@ static struct command_result *json_xpay(struct command *cmd,
 	payment->requests = tal_arr(payment, struct out_req *, 0);
 	payment->prior_results = tal_strdup(payment, "");
 	payment->deadline = timemono_add(time_mono(), time_from_sec(*retryfor));
+	payment->start_time = time_now();
+	payment->pay_compat = as_pay;
 
 	if (bolt12_has_prefix(payment->invstring)) {
 		struct gossmap *gossmap = get_gossmap(xpay);
@@ -1592,6 +1610,20 @@ static struct command_result *json_xpay(struct command *cmd,
 	}
 	json_add_string(req->js, "bolt11", payment->invstring);
 	return send_outreq(req);
+}
+
+static struct command_result *json_xpay(struct command *cmd,
+					const char *buffer,
+					const jsmntok_t *params)
+{
+	return json_xpay_core(cmd, buffer, params, false);
+}
+
+static struct command_result *json_xpay_as_pay(struct command *cmd,
+					       const char *buffer,
+					       const jsmntok_t *params)
+{
+	return json_xpay_core(cmd, buffer, params, true);
 }
 
 static struct command_result *getchaininfo_done(struct command *aux_cmd,
@@ -1726,6 +1758,10 @@ static const struct plugin_command commands[] = {
 		"xpay",
 		json_xpay,
 	},
+	{
+		"xpay-as-pay",
+		json_xpay_as_pay,
+	},
 };
 
 static struct command_result *handle_block_added(struct command *cmd,
@@ -1757,14 +1793,99 @@ static const struct plugin_notification notifications[] = {
 	},
 };
 
+/* xpay doesn't have maxfeepercent or exemptfee, so we convert them to
+ * an absolute restriction here.  If we can't, fail and let pay handle
+ * it. */
+static bool calc_maxfee(struct command *cmd,
+			const char **maxfeestr,
+			const char *buf,
+			const jsmntok_t *invstringtok,
+			const jsmntok_t *amount_msattok,
+			const jsmntok_t *exemptfeetok,
+			const jsmntok_t *maxfeepercenttok)
+{
+	u64 maxfeepercent_ppm;
+	struct amount_msat amount, maxfee, exemptfee;
+
+	if (!exemptfeetok && !maxfeepercenttok)
+		return true;
+
+	/* Can't have both */
+	if (*maxfeestr)
+		return false;
+
+	/* If they specify amount easy, otherwise take from invoice */
+	if (amount_msattok) {
+		if (!parse_amount_msat(&amount, buf + amount_msattok->start,
+				       amount_msattok->end - amount_msattok->start))
+			return false;
+	} else {
+		const struct bolt11 *b11;
+		char *fail;
+		const char *invstr;
+
+		/* We need to know total amount to calc fee */
+		if (!invstringtok)
+			return false;
+
+		invstr = json_strdup(tmpctx, buf, invstringtok);
+		b11 = bolt11_decode(tmpctx, invstr, NULL, NULL, NULL, &fail);
+		if (b11 != NULL) {
+			if (b11->msat == NULL)
+				return false;
+			amount = *b11->msat;
+		} else {
+			const struct tlv_invoice *b12;
+			b12 = invoice_decode(tmpctx, invstr, strlen(invstr),
+					     NULL, NULL, &fail);
+			if (b12 == NULL || b12->invoice_amount == NULL)
+				return false;
+			amount = amount_msat(*b12->invoice_amount);
+		}
+	}
+
+	if (maxfeepercenttok) {
+		if (!json_to_millionths(buf,
+					maxfeepercenttok,
+					&maxfeepercent_ppm))
+			return false;
+	} else
+		maxfeepercent_ppm = 500000;
+
+	if (!amount_msat_fee(&maxfee, amount, 0, maxfeepercent_ppm / 100))
+		return false;
+
+	if (exemptfeetok) {
+		if (!parse_amount_msat(&exemptfee, buf + exemptfeetok->start,
+				       exemptfeetok->end - exemptfeetok->start))
+			return false;
+	} else
+		exemptfee = AMOUNT_MSAT(5000);
+
+	if (amount_msat_less(maxfee, exemptfee))
+		maxfee = exemptfee;
+
+	*maxfeestr = fmt_amount_msat(cmd, maxfee);
+	plugin_log(cmd->plugin, LOG_DBG,
+		   "Converted maxfeepercent=%.*s, exemptfee=%.*s to maxfee %s",
+		   maxfeepercenttok ? json_tok_full_len(maxfeepercenttok) : 5,
+		   maxfeepercenttok ? json_tok_full(buf, maxfeepercenttok) : "UNSET",
+		   exemptfeetok ? json_tok_full_len(exemptfeetok) : 5,
+		   exemptfeetok ? json_tok_full(buf, exemptfeetok) : "UNSET",
+		   *maxfeestr);
+
+	return true;
+}
+
 static struct command_result *handle_rpc_command(struct command *cmd,
 						 const char *buf,
 						 const jsmntok_t *params)
 {
 	struct xpay *xpay = xpay_of(cmd->plugin);
 	const jsmntok_t *rpc_tok, *method_tok, *params_tok, *id_tok,
-		*bolt11 = NULL, *amount_msat = NULL, *maxfee = NULL,
+		*bolt11 = NULL, *amount_msat = NULL,
 		*partial_msat = NULL, *retry_for = NULL;
+	const char *maxfee = NULL;
 	struct json_stream *response;
 
 	if (!xpay->take_over_pay)
@@ -1774,7 +1895,7 @@ static struct command_result *handle_rpc_command(struct command *cmd,
 	method_tok = json_get_member(buf, rpc_tok, "method");
 	params_tok = json_get_member(buf, rpc_tok, "params");
 	id_tok = json_get_member(buf, rpc_tok, "id");
-	plugin_log(cmd->plugin, LOG_INFORM, "Got command %s",
+	plugin_log(cmd->plugin, LOG_DBG, "Got command %s",
 		   json_strdup(tmpctx, buf, method_tok));
 
 	if (!json_tok_streq(buf, method_tok, "pay"))
@@ -1794,7 +1915,7 @@ static struct command_result *handle_rpc_command(struct command *cmd,
 		if (params_tok->size == 2)
 			amount_msat = json_next(bolt11);
 	} else if (params_tok->type == JSMN_OBJECT) {
-		const jsmntok_t *t;
+		const jsmntok_t *t, *maxfeepercent = NULL, *exemptfee = NULL;
 		size_t i;
 
 		json_for_each_obj(i, t, params_tok) {
@@ -1805,9 +1926,13 @@ static struct command_result *handle_rpc_command(struct command *cmd,
 			else if (json_tok_streq(buf, t, "retry_for"))
 				retry_for = t + 1;
 			else if (json_tok_streq(buf, t, "maxfee"))
-				maxfee = t + 1;
+				maxfee = json_strdup(cmd, buf, t + 1);
 			else if (json_tok_streq(buf, t, "partial_msat"))
 				partial_msat = t + 1;
+			else if (json_tok_streq(buf, t, "maxfeepercent"))
+				maxfeepercent = t + 1;
+			else if (json_tok_streq(buf, t, "exemptfee"))
+				exemptfee = t + 1;
 			else {
 				plugin_log(cmd->plugin, LOG_INFORM,
 					   "Not redirecting pay (unknown arg %.*s)",
@@ -1821,6 +1946,14 @@ static struct command_result *handle_rpc_command(struct command *cmd,
 				   "Not redirecting pay (missing bolt11 parameter)");
 			goto dont_redirect;
 		}
+		/* If this returns NULL, we let pay handle the weird case */
+		if (!calc_maxfee(cmd, &maxfee, buf,
+				 bolt11, amount_msat,
+				 exemptfee, maxfeepercent)) {
+			plugin_log(cmd->plugin, LOG_INFORM,
+				   "Not redirecting pay (weird maxfee params)");
+			goto dont_redirect;
+		}
 	} else {
 		plugin_log(cmd->plugin, LOG_INFORM,
 			   "Not redirecting pay (unexpected params type)");
@@ -1832,15 +1965,17 @@ static struct command_result *handle_rpc_command(struct command *cmd,
 	json_object_start(response, "replace");
 	json_add_string(response, "jsonrpc", "2.0");
 	json_add_tok(response, "id", id_tok, buf);
-	json_add_string(response, "method", "xpay");
+	json_add_string(response, "method", "xpay-as-pay");
 	json_object_start(response, "params");
 	json_add_tok(response, "invstring", bolt11, buf);
 	if (amount_msat)
 		json_add_tok(response, "amount_msat", amount_msat, buf);
 	if (retry_for)
 		json_add_tok(response, "retry_for", retry_for, buf);
+	/* Even if this was a number token, handing it as a string is
+	 * allowed by parse_msat */
 	if (maxfee)
-		json_add_tok(response, "maxfee", maxfee, buf);
+		json_add_string(response, "maxfee", maxfee);
 	if (partial_msat)
 		json_add_tok(response, "partial_msat", partial_msat, buf);
 	json_object_end(response);

@@ -1782,13 +1782,14 @@ static struct command_result *param_u64_nonzero(struct command *cmd,
 static void register_payment_and_waiter(struct command *cmd,
 					const struct sha256 *payment_hash,
 					u64 partid, u64 groupid,
-					struct amount_msat msat,
+					struct amount_msat destination_msat,
 					struct amount_msat msat_sent,
 					struct amount_msat total_msat,
 					const char *label,
 					const char *invstring,
 					struct sha256 *local_invreq_id,
-					const struct secret *shared_secret)
+					const struct secret *shared_secret,
+					const struct node_id *destination TAKES)
 {
 	wallet_add_payment(cmd,
 			   cmd->ld->wallet,
@@ -1798,8 +1799,8 @@ static void register_payment_and_waiter(struct command *cmd,
 			   partid,
 			   groupid,
 			   PAYMENT_PENDING,
-			   NULL,
-			   msat,
+			   destination,
+			   destination_msat,
 			   msat_sent,
 			   total_msat,
 			   NULL,
@@ -1829,7 +1830,7 @@ static struct command_result *json_injectpaymentonion(struct command *cmd,
 	struct lightningd *ld = cmd->ld;
 	const char *label, *invstring;
 	struct pubkey *blinding, *next_path_key;
-	struct amount_msat *msat;
+	struct amount_msat *destination_msat, *msat;
 	u32 *cltv;
 	u64 *partid, *groupid;
 	struct sha256 *local_invreq_id;
@@ -1845,6 +1846,7 @@ static struct command_result *json_injectpaymentonion(struct command *cmd,
 	struct htlc_out *hout;
 	const struct wallet_payment *prev_payment;
 	const char *explanation;
+	struct node_id *destination;
 
 	if (!param_check(cmd, buffer, params,
 			 p_req("onion", param_bin_from_hex, &onion),
@@ -1857,12 +1859,13 @@ static struct command_result *json_injectpaymentonion(struct command *cmd,
 			 p_opt("label", param_escaped_string, &label),
 			 p_opt("invstring", param_invstring, &invstring),
 			 p_opt("localinvreqid", param_sha256, &local_invreq_id),
+			 p_opt_def("destination_msat", param_msat, &destination_msat, AMOUNT_MSAT(0)),
 			 NULL))
 		return command_param_failed();
 
 	/* Safety check: reconcile this with previous attempts, check
-	 * partid/groupid uniqueness: we don't know amount or total. */
-	ret = check_progress(cmd->ld, cmd, payment_hash, AMOUNT_MSAT(0),
+	 * partid/groupid uniqueness: we don't know total. */
+	ret = check_progress(cmd->ld, cmd, payment_hash, *destination_msat,
 			     AMOUNT_MSAT(0),
 			     *partid, *groupid, NULL, &prev_payment);
 	if (ret)
@@ -1925,6 +1928,28 @@ static struct command_result *json_injectpaymentonion(struct command *cmd,
 				    failtlvtype, failtlvpos, explanation);
 	}
 
+	/* If we have and can decode invstring, we extract destination for listsendpays */
+	if (invstring) {
+		struct bolt11 *b11;
+		char *fail;
+
+		b11 = bolt11_decode(cmd, invstring, NULL, NULL, NULL, &fail);
+		if (b11) {
+			destination = &b11->receiver_id;
+		} else {
+			struct tlv_invoice *b12;
+
+			b12 = invoice_decode(cmd, invstring, strlen(invstring),
+					     NULL, NULL, &fail);
+			if (b12 && b12->invoice_node_id) {
+				destination = tal(cmd, struct node_id);
+				node_id_from_pubkey(destination, b12->invoice_node_id);
+			} else
+				destination = NULL;
+		}
+	} else
+		destination = NULL;
+
 	if (payload->final) {
 		struct selfpay *selfpay;
 
@@ -1938,15 +1963,13 @@ static struct command_result *json_injectpaymentonion(struct command *cmd,
 		selfpay->groupid = *groupid;
 		selfpay->payment_hash = *payment_hash;
 
-		/* We actually *do* know msat delivered and total msat, but
-		 * then check_progress will complain on the next part, because
-		 * we don't know it then, so leave them 0 */
 		register_payment_and_waiter(cmd,
 					    payment_hash,
 					    *partid, *groupid,
-					    AMOUNT_MSAT(0), *msat, AMOUNT_MSAT(0),
+					    *destination_msat, *msat, AMOUNT_MSAT(0),
 					    label, invstring, local_invreq_id,
-					    &shared_secret);
+					    &shared_secret,
+					    destination);
 
 		/* Mark it pending now, though htlc_set_add might
 		 * not resolve immediately */
@@ -1962,7 +1985,7 @@ static struct command_result *json_injectpaymentonion(struct command *cmd,
 	if (payload->forward_channel) {
 		next = any_channel_by_scid(cmd->ld,
 					   *payload->forward_channel,
-					   false);
+					   true);
 		if (!next)
 			return command_fail(cmd, JSONRPC2_INVALID_PARAMS,
 					    "Unknown scid %s",
@@ -2058,14 +2081,16 @@ static struct command_result *json_injectpaymentonion(struct command *cmd,
 	register_payment_and_waiter(cmd,
 				    payment_hash,
 				    *partid, *groupid,
-				    AMOUNT_MSAT(0), *msat, AMOUNT_MSAT(0),
+				    *destination_msat, *msat, AMOUNT_MSAT(0),
 				    label, invstring, local_invreq_id,
-				    &shared_secret);
+				    &shared_secret,
+				    destination);
 
+	/* If unknown, we set this equal (so accounting logs 0 fees) */
+	if (amount_msat_eq(*destination_msat, AMOUNT_MSAT(0)))
+		*destination_msat = *msat;
 	failmsg = send_htlc_out(tmpctx, next, *msat,
-				/* We set final_msat to the same, so fees == 0
-				 * (in fact, we don't know!) */
-				*cltv, *msat,
+				*cltv, *destination_msat,
 				payment_hash,
 				next_path_key, *partid, *groupid,
 				serialize_onionpacket(tmpctx, rs->next),

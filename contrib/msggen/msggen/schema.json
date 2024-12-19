@@ -16143,7 +16143,6 @@
     "lightning-injectpaymentonion.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "additionalProperties": false,
       "rpc": "injectpaymentonion",
       "title": "Send a payment with a custom onion packet",
       "description": [
@@ -16151,6 +16150,7 @@
         "Compared to lightning-sendonion(7): the handling of blinded paths and self-payments is trivial, and the interface blocks until the payment succeeds or fails.  The call also fails if this payment_hash has already been successfully paid."
       ],
       "request": {
+        "additionalProperties": false,
         "required": [
           "onion",
           "payment_hash",
@@ -16175,7 +16175,7 @@
           "amount_msat": {
             "type": "msat",
             "description": [
-              "The amount for the first HTLC in millisatoshis.  This is also the amount which will be forwarded to the first peer (if any) as we do not charge fees on our own payments."
+              "The amount for the first HTLC in millisatoshis.  This is also the amount which will be forwarded to the first peer (if any) as we do not charge fees on our own payments.  Note: this is shown in listsendpays as `amount_sent_msat`."
             ]
           },
           "cltv_expiry": {
@@ -16213,10 +16213,18 @@
             "description": [
               "`localinvreqid` is used by offers to link a payment attempt to a local `invoice_request` offer created by lightningd-invoicerequest(7)."
             ]
+          },
+          "destination_msat": {
+            "type": "msat",
+            "added": "v24.11.1",
+            "description": [
+              "Amount that is actually delivered to the destination (i.e. `amount_msat` minus fees), for showing in listsendpays (confusingly, as `amount_msat`)."
+            ]
           }
         }
       },
       "response": {
+        "additionalProperties": false,
         "required": [
           "created_index",
           "created_at",
@@ -16240,6 +16248,13 @@
             "type": "u64",
             "description": [
               "1-based index indicating order this payment was created in."
+            ]
+          },
+          "payment_preimage": {
+            "added": "v24.11",
+            "type": "secret",
+            "description": [
+              "The proof of payment: SHA256 of this is the invoice's **payment_hash**."
             ]
           }
         }
@@ -36413,10 +36428,10 @@
           },
           "response": {
             "payment_preimage": "paymentpreimgxp1010101010101010101010101010101010101010101010101",
-            "failed_parts": 0,
-            "successful_parts": 1,
             "amount_msat": 10000,
-            "amount_sent_msat": 10002
+            "amount_sent_msat": 10002,
+            "failed_parts": 0,
+            "successful_parts": 1
           }
         },
         {
@@ -36429,10 +36444,10 @@
           },
           "response": {
             "payment_preimage": "paymentpreimgxp2020202020202020202020202020202020202020202020202",
-            "failed_parts": 0,
-            "successful_parts": 1,
             "amount_msat": 1000,
-            "amount_sent_msat": 1000
+            "amount_sent_msat": 1000,
+            "failed_parts": 0,
+            "successful_parts": 1
           }
         }
       ]

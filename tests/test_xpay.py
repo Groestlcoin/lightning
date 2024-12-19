@@ -11,6 +11,7 @@ import pytest
 import subprocess
 import sys
 from hashlib import sha256
+from pathlib import Path
 import tempfile
 import unittest
 
@@ -368,10 +369,6 @@ def test_xpay_takeover(node_factory, executor):
     l1, l2, l3 = node_factory.line_graph(3, wait_for_announce=True,
                                          opts={'xpay-handle-pay': True})
 
-    # xpay does NOT look like pay!
-    l1.rpc.jsonschemas = {}
-    l2.rpc.jsonschemas = {}
-
     # Simple bolt11/bolt12 payment.
     inv = l3.rpc.invoice(100000, "test_xpay_takeover1", "test_xpay_takeover1")['bolt11']
     l1.rpc.pay(inv)
@@ -436,31 +433,56 @@ def test_xpay_takeover(node_factory, executor):
     l1.rpc.pay(inv['bolt11'], amount_msat=10000, riskfactor=1)
     l1.daemon.wait_for_log(r'Not redirecting pay \(unknown arg \\"riskfactor\\"\)')
 
-    inv = l3.rpc.invoice('any', "test_xpay_takeover9", "test_xpay_takeover9")
-    l1.rpc.pay(inv['bolt11'], amount_msat=10000, maxfeepercent=1)
-    l1.daemon.wait_for_log(r'Not redirecting pay \(unknown arg \\"maxfeepercent\\"\)')
-
     inv = l3.rpc.invoice('any', "test_xpay_takeover10", "test_xpay_takeover10")
     l1.rpc.pay(inv['bolt11'], amount_msat=10000, maxdelay=200)
     l1.daemon.wait_for_log(r'Not redirecting pay \(unknown arg \\"maxdelay\\"\)')
-
-    inv = l3.rpc.invoice('any', "test_xpay_takeover11", "test_xpay_takeover11")
-    l1.rpc.pay(inv['bolt11'], amount_msat=10000, exemptfee=1)
-    l1.daemon.wait_for_log(r'Not redirecting pay \(unknown arg \\"exemptfee\\"\)')
 
     # Test that it's really dynamic.
     l1.rpc.setconfig('xpay-handle-pay', False)
 
     # There's no log for this though!
     inv = l3.rpc.invoice(100000, "test_xpay_takeover12", "test_xpay_takeover12")['bolt11']
-    l1.rpc.pay(inv)
+    realpay = l1.rpc.pay(inv)
     assert not l1.daemon.is_in_log('Redirecting pay->xpay',
                                    start=l1.daemon.logsearch_start)
 
     l1.rpc.setconfig('xpay-handle-pay', True)
     inv = l3.rpc.invoice(100000, "test_xpay_takeover13", "test_xpay_takeover13")['bolt11']
-    l1.rpc.pay(inv)
+    xpay = l1.rpc.pay(inv)
     l1.daemon.wait_for_log('Redirecting pay->xpay')
+
+    # They should look the same!  Same keys, same types
+    assert {k: type(v) for k, v in realpay.items()} == {k: type(v) for k, v in xpay.items()}
+    for f in ('created_at', 'payment_hash', 'payment_preimage'):
+        del realpay[f]
+        del xpay[f]
+    assert xpay == {'amount_msat': 100000,
+                    'amount_sent_msat': 100002,
+                    'destination': l3.info['id'],
+                    'parts': 1,
+                    'status': 'complete'}
+    assert realpay == xpay
+
+    # We get destination and amount_msat in listsendpays and listpays.
+    ret = only_one(l1.rpc.listsendpays(inv)['payments'])
+    assert ret['destination'] == l3.info['id']
+    assert ret['amount_msat'] == 100000
+    assert ret['amount_sent_msat'] > 100000
+
+    ret = only_one(l1.rpc.listpays(inv)['pays'])
+    assert ret['destination'] == l3.info['id']
+    assert ret['amount_msat'] == 100000
+    assert ret['amount_sent_msat'] > 100000
+
+    # Test maxfeepercent.
+    inv = l3.rpc.invoice(100000, "test_xpay_takeover14", "test_xpay_takeover14")['bolt11']
+    with pytest.raises(RpcError, match=r"Could not find route without excessive cost"):
+        l1.rpc.pay(bolt11=inv, maxfeepercent=0.001, exemptfee=0)
+    l1.daemon.wait_for_log('plugin-cln-xpay: Converted maxfeepercent=0.001, exemptfee=0 to maxfee 1msat')
+
+    # Exemptfee default more than covers it.
+    l1.rpc.pay(bolt11=inv, maxfeepercent=0.25)
+    l1.daemon.wait_for_log('Converted maxfeepercent=0.25, exemptfee=UNSET to maxfee 5000msat')
 
 
 def test_xpay_preapprove(node_factory):
@@ -521,3 +543,47 @@ def test_xpay_maxfee(node_factory, bitcoind, chainparams):
     ret = l1.rpc.xpay(invstring=inv, maxfee=maxfee)
     fee = ret['amount_sent_msat'] - ret['amount_msat']
     assert fee <= maxfee
+
+
+def test_xpay_unannounced(node_factory):
+    l1, l2 = node_factory.line_graph(2, announce_channels=False)
+
+    # BOLT 11, direct peer
+    b11 = l2.rpc.invoice('10000msat', 'test_xpay_unannounced', 'test_xpay_unannounced bolt11')['bolt11']
+    ret = l1.rpc.xpay(b11)
+    assert ret['failed_parts'] == 0
+    assert ret['successful_parts'] == 1
+    assert ret['amount_msat'] == 10000
+    assert ret['amount_sent_msat'] == 10000
+
+    # BOLT 12, direct peer
+    offer = l2.rpc.offer('any')['bolt12']
+    b12 = l1.rpc.fetchinvoice(offer, '100000msat')['invoice']
+    l1.rpc.xpay(b12)
+
+
+def test_xpay_zeroconf(node_factory):
+    zeroconf_plugin = Path(__file__).parent / "plugins" / "zeroconf-selective.py"
+    l1, l2 = node_factory.get_nodes(2,
+                                    opts=[{},
+                                          {'plugin': zeroconf_plugin,
+                                           'zeroconf-allow': 'any'}])
+
+    l1.fundwallet(FUNDAMOUNT * 2)
+    l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
+    l1.rpc.fundchannel(l2.info['id'], amount=FUNDAMOUNT, announce=False, mindepth=0)
+
+    wait_for(lambda: all([c['state'] == 'CHANNELD_NORMAL' for c in l1.rpc.listpeerchannels()['channels'] + l2.rpc.listpeerchannels()['channels']]))
+
+    # BOLT 11, direct peer
+    b11 = l2.rpc.invoice('10000msat', 'test_xpay_unannounced', 'test_xpay_unannounced bolt11')['bolt11']
+    ret = l1.rpc.xpay(b11)
+    assert ret['failed_parts'] == 0
+    assert ret['successful_parts'] == 1
+    assert ret['amount_msat'] == 10000
+    assert ret['amount_sent_msat'] == 10000
+
+    # BOLT 12, direct peer
+    offer = l2.rpc.offer('any')['bolt12']
+    b12 = l1.rpc.fetchinvoice(offer, '100000msat')['invoice']
+    l1.rpc.xpay(b12)

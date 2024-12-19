@@ -6114,6 +6114,7 @@ def test_injectpaymentonion_simple(node_factory, executor):
     assert lsp['partid'] == 1
     assert lsp['payment_hash'] == inv1['payment_hash']
     assert lsp['status'] == 'complete'
+    assert 'amount_msat' not in lsp
 
     # We FAIL on reattempt
     with pytest.raises(RpcError, match="Already paid this invoice") as err:
@@ -6175,6 +6176,7 @@ def test_injectpaymentonion_mpp(node_factory, executor):
         assert lsp['partid'] == 1 or lsp['partid'] == 2
         assert lsp['payment_hash'] == inv2['payment_hash']
         assert lsp['status'] == 'complete'
+        assert 'amount_msat' not in lsp
     assert len(lsps) == 2
 
 
@@ -6198,7 +6200,8 @@ def test_injectpaymentonion_3hop(node_factory, executor):
                                     amount_msat=1001,
                                     cltv_expiry=blockheight + 18 + 6 + 6,
                                     partid=1,
-                                    groupid=0)
+                                    groupid=0,
+                                    destination_msat=1000)
     assert sha256(bytes.fromhex(ret['payment_preimage'])).hexdigest() == inv3['payment_hash']
     assert only_one(l3.rpc.listinvoices("test_injectpaymentonion3")['invoices'])['status'] == 'paid'
     lsp = only_one(l1.rpc.listsendpays(inv3['bolt11'])['payments'])
@@ -6206,6 +6209,9 @@ def test_injectpaymentonion_3hop(node_factory, executor):
     assert lsp['partid'] == 1
     assert lsp['payment_hash'] == inv3['payment_hash']
     assert lsp['status'] == 'complete'
+    assert lsp['amount_msat'] == 1000
+    # We didn't give it an invstring, so it doesn't know destination
+    assert 'destination' not in lsp
 
 
 def test_injectpaymentonion_selfpay(node_factory, executor):
@@ -6223,6 +6229,7 @@ def test_injectpaymentonion_selfpay(node_factory, executor):
 
     ret = l1.rpc.injectpaymentonion(onion=onion['onion'],
                                     payment_hash=inv4['payment_hash'],
+                                    invstring=inv4['bolt11'],
                                     amount_msat=1000,
                                     cltv_expiry=blockheight + 18,
                                     partid=1,
@@ -6234,6 +6241,7 @@ def test_injectpaymentonion_selfpay(node_factory, executor):
     assert lsp['partid'] == 1
     assert lsp['payment_hash'] == inv4['payment_hash']
     assert lsp['status'] == 'complete'
+    assert lsp['destination'] == l1.info['id']
 
     # Test self-pay with MPP.
     inv5 = l1.rpc.invoice(1000, "test_injectpaymentonion5", "test_injectpaymentonion5")
@@ -6274,6 +6282,7 @@ def test_injectpaymentonion_selfpay(node_factory, executor):
         assert lsp['partid'] == 1 or lsp['partid'] == 2
         assert lsp['payment_hash'] == inv5['payment_hash']
         assert lsp['status'] == 'complete'
+        assert 'destination' not in lsp
     assert len(lsps) == 2
 
     # Check listpays gives a reasonable result!
@@ -6358,7 +6367,8 @@ def test_injectpaymentonion_selfpay(node_factory, executor):
                                     amount_msat=1000,
                                     cltv_expiry=blockheight + 18,
                                     partid=1,
-                                    groupid=0)
+                                    groupid=0,
+                                    invstring=inv10['invoice'])
     assert sha256(bytes.fromhex(ret['payment_preimage'])).hexdigest() == decoded['invoice_payment_hash']
     # The label for the invoice is deterministic.
     label = f"{decoded['offer_id']}-{decoded['invreq_payer_id']}-0"
@@ -6368,6 +6378,7 @@ def test_injectpaymentonion_selfpay(node_factory, executor):
     assert lsp['partid'] == 1
     assert lsp['payment_hash'] == inv4['payment_hash']
     assert lsp['status'] == 'complete'
+    assert lsp['destination'] == l1.info['id']
 
 
 def test_injectpaymentonion_blindedpath(node_factory, executor):
@@ -6436,7 +6447,8 @@ def test_injectpaymentonion_blindedpath(node_factory, executor):
                                     amount_msat=1000,
                                     cltv_expiry=blockheight + 18 + 6,
                                     partid=1,
-                                    groupid=0)
+                                    groupid=0,
+                                    invstring=inv7['invoice'])
     assert sha256(bytes.fromhex(ret['payment_preimage'])).hexdigest() == decoded['invoice_payment_hash']
     # The label for l2's invoice is deterministic.
     label = f"{decoded['offer_id']}-{decoded['invreq_payer_id']}-0"
@@ -6488,7 +6500,8 @@ def test_injectpaymentonion_blindedpath(node_factory, executor):
                                     amount_msat=1001,
                                     cltv_expiry=blockheight + 18 + 6,
                                     partid=1,
-                                    groupid=0)
+                                    groupid=0,
+                                    invstring=inv8['invoice'])
     assert sha256(bytes.fromhex(ret['payment_preimage'])).hexdigest() == decoded['invoice_payment_hash']
     # The label for l4's invoice is deterministic.
     label = f"{decoded['offer_id']}-{decoded['invreq_payer_id']}-0"
@@ -6498,6 +6511,7 @@ def test_injectpaymentonion_blindedpath(node_factory, executor):
     assert lsp['partid'] == 1
     assert lsp['payment_hash'] == decoded['invoice_payment_hash']
     assert lsp['status'] == 'complete'
+    assert lsp['destination'] == decoded['invoice_node_id']
 
     # Finally, with blinded path which starts with us.
     offer = l4.rpc.offer('any')
@@ -6531,7 +6545,8 @@ def test_injectpaymentonion_blindedpath(node_factory, executor):
                                     amount_msat=1001,
                                     cltv_expiry=blockheight + 18 + 6,
                                     partid=1,
-                                    groupid=0)
+                                    groupid=0,
+                                    invstring=inv9['invoice'])
     assert sha256(bytes.fromhex(ret['payment_preimage'])).hexdigest() == decoded['invoice_payment_hash']
     # The label for the invoice is deterministic.
     label = f"{decoded['offer_id']}-{decoded['invreq_payer_id']}-0"
@@ -6541,6 +6556,7 @@ def test_injectpaymentonion_blindedpath(node_factory, executor):
     assert lsp['partid'] == 1
     assert lsp['payment_hash'] == decoded['invoice_payment_hash']
     assert lsp['status'] == 'complete'
+    assert lsp['destination'] == decoded['invoice_node_id']
 
 
 def test_injectpaymentonion_failures(node_factory, executor):
