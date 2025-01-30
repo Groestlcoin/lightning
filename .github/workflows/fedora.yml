@@ -8,7 +8,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Building using the builder image
-        run: ./tools/build-release.sh bin-Fedora-28-amd64
+        run: ./tools/build-release.sh bin-Fedora
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
