@@ -21,6 +21,7 @@ import re
 import time
 import unittest
 import websocket
+import signal
 import ssl
 
 
@@ -653,13 +654,12 @@ def test_disconnect_half_signed_v2(node_factory):
 @pytest.mark.openchannel('v2')
 def test_reconnect_signed(node_factory):
     # This will fail *after* both sides consider channel opening.
-    disconnects = ['+WIRE_FUNDING_SIGNED']
+    disconnects = ['<WIRE_FUNDING_SIGNED']
     if EXPERIMENTAL_DUAL_FUND:
-        disconnects = ['+WIRE_COMMITMENT_SIGNED']
+        disconnects = ['<WIRE_COMMITMENT_SIGNED']
 
-    l1 = node_factory.get_node(may_reconnect=True)
-    l2 = node_factory.get_node(disconnect=disconnects,
-                               may_reconnect=True)
+    l1 = node_factory.get_node(may_reconnect=True, disconnect=disconnects)
+    l2 = node_factory.get_node(may_reconnect=True)
 
     l1.fundwallet(2000000)
 
@@ -990,7 +990,8 @@ def test_reconnect_remote_sends_no_sigs(node_factory):
     # Make sure we get all the msgs!
     time.sleep(5)
 
-    l1.daemon.wait_for_log('peer_out WIRE_ANNOUNCEMENT_SIGNATURES')
+    l1.daemon.wait_for_logs(['peer_out WIRE_ANNOUNCEMENT_SIGNATURES',
+                             'peer_in WIRE_ANNOUNCEMENT_SIGNATURES'])
     l2.daemon.wait_for_log('peer_out WIRE_ANNOUNCEMENT_SIGNATURES')
 
     l1msgs = [l.split()[4] for l in l1.daemon.logs[l1needle:] if 'WIRE_ANNOUNCEMENT_SIGNATURES' in l]
@@ -4433,7 +4434,7 @@ def test_no_reconnect_awating_unilateral(node_factory, bitcoind):
     wait_for(lambda: only_one(l1.rpc.listpeerchannels(l2.info['id'])['channels'])['state'] == 'AWAITING_UNILATERAL')
 
     # After switching to AWAITING_UNILATERAL it will *not* try to reconnect.
-    l1.daemon.wait_for_log("State changed from CHANNELD_SHUTTING_DOWN to AWAITING_UNILATERAL")
+    l1.daemon.wait_for_log("{}-connectd: peer_downgrade".format(l2.info['id']))
     time.sleep(10)
 
     assert not l1.daemon.is_in_log('Will try reconnect', start=l1.daemon.logsearch_start)
@@ -4717,12 +4718,20 @@ def test_connect_ratelimit(node_factory, bitcoind):
 
     assert not l1.daemon.is_in_log('Unblocking for')
 
-    l1.restart()
+    l1.stop()
+    # Suspend the others, to make sure they cannot respond too fast.
+    for n in nodes:
+        os.kill(n.daemon.proc.pid, signal.SIGSTOP)
+    l1.start()
 
     # The first will be ok, but others should block and be unblocked.
     l1.daemon.wait_for_logs((['Unblocking for ']
                              + ['Too many connections, waiting'])
                             * (len(nodes) - 1))
+
+    # Resume them
+    for n in nodes:
+        os.kill(n.daemon.proc.pid, signal.SIGCONT)
 
     # And now they're all connected
     wait_for(lambda: [p['connected'] for p in l1.rpc.listpeers()['peers']] == [True] * len(nodes))

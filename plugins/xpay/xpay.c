@@ -7,6 +7,7 @@
 #include <ccan/tal/str/str.h>
 #include <common/bolt11.h>
 #include <common/bolt12.h>
+#include <common/daemon.h>
 #include <common/dijkstra.h>
 #include <common/gossmap.h>
 #include <common/gossmods_listpeerchannels.h>
@@ -73,6 +74,8 @@ struct payment {
 	struct amount_msat full_amount;
 	/* Maximum fee we're prepare to pay */
 	struct amount_msat maxfee;
+	/* Maximum delay on the route we're ok with */
+	u32 *maxdelay;
 	/* BOLT11 payment secret (NULL for BOLT12, it uses blinded paths) */
 	const struct secret *payment_secret;
 	/* BOLT11 payment metadata (NULL for BOLT12, it uses blinded paths) */
@@ -1136,6 +1139,12 @@ static struct command_result *getroutes_for(struct command *aux_cmd,
 	const struct pubkey *dst;
 	struct amount_msat maxfee;
 
+	/* I would normally assert here, but we have reports of this happening... */
+	if (amount_msat_is_zero(deliver)) {
+		payment_log(payment, LOG_BROKEN, "getroutes for 0msat!");
+		send_backtrace("getroutes for 0msat!");
+	}
+
 	/* If we get injectpaymentonion responses, they can wait */
 	payment->amount_being_routed = deliver;
 
@@ -1186,6 +1195,7 @@ static struct command_result *getroutes_for(struct command *aux_cmd,
 	json_array_end(req->js);
 	json_add_amount_msat(req->js, "maxfee_msat", maxfee);
 	json_add_u32(req->js, "final_cltv", payment->final_cltv);
+	json_add_u32(req->js, "maxdelay", *payment->maxdelay);
 
 	return send_payment_req(aux_cmd, payment, req);
 }
@@ -1470,6 +1480,7 @@ static struct command_result *json_xpay_core(struct command *cmd,
 			 p_opt("layers", param_string_array, &payment->layers),
 			 p_opt_def("retry_for", param_number, &retryfor, 60),
 			 p_opt("partial_msat", param_msat, &partial),
+			 p_opt_def("maxdelay", param_u32, &payment->maxdelay, 2016),
 			 NULL))
 		return command_param_failed();
 
@@ -1502,6 +1513,13 @@ static struct command_result *json_xpay_core(struct command *cmd,
 		if (msat)
 			return command_fail(cmd, JSONRPC2_INVALID_PARAMS,
 					    "Cannot override amount for bolt12 invoices");
+		/* FIXME: This is actually spec legal, since invoice_amount is
+		 * the *minumum* it will accept.  We could change this to
+		 * 1msat if required. */
+ 		if (amount_msat_is_zero(payment->full_amount))
+			return command_fail(cmd, JSONRPC2_INVALID_PARAMS,
+					    "Invalid bolt12 invoice with zero amount");
+
 		payment->route_hints = NULL;
 		payment->payment_secret = NULL;
 		payment->payment_metadata = NULL;
@@ -1568,6 +1586,9 @@ static struct command_result *json_xpay_core(struct command *cmd,
 		else
 			payment->full_amount = *msat;
 
+ 		if (amount_msat_is_zero(payment->full_amount))
+			return command_fail(cmd, JSONRPC2_INVALID_PARAMS,
+					    "Cannot pay bolt11 invoice with zero amount");
 		invexpiry = b11->timestamp + b11->expiry;
 	}
 
@@ -1583,6 +1604,9 @@ static struct command_result *json_xpay_core(struct command *cmd,
 			return command_fail(cmd, JSONRPC2_INVALID_PARAMS,
 					    "partial_msat must be less or equal to total amount %s",
 					    fmt_amount_msat(tmpctx, payment->full_amount));
+		if (amount_msat_is_zero(payment->amount))
+			return command_fail(cmd, JSONRPC2_INVALID_PARAMS,
+					    "partial_msat must be non-zero");
 	} else {
 		payment->amount = payment->full_amount;
 	}
@@ -1884,7 +1908,7 @@ static struct command_result *handle_rpc_command(struct command *cmd,
 	struct xpay *xpay = xpay_of(cmd->plugin);
 	const jsmntok_t *rpc_tok, *method_tok, *params_tok, *id_tok,
 		*bolt11 = NULL, *amount_msat = NULL,
-		*partial_msat = NULL, *retry_for = NULL;
+		*partial_msat = NULL, *retry_for = NULL, *maxdelay = NULL;
 	const char *maxfee = NULL;
 	struct json_stream *response;
 
@@ -1933,6 +1957,8 @@ static struct command_result *handle_rpc_command(struct command *cmd,
 				maxfeepercent = t + 1;
 			else if (json_tok_streq(buf, t, "exemptfee"))
 				exemptfee = t + 1;
+			else if (json_tok_streq(buf, t, "maxdelay"))
+				maxdelay = t + 1;
 			else {
 				plugin_log(cmd->plugin, LOG_INFORM,
 					   "Not redirecting pay (unknown arg %.*s)",
@@ -1978,6 +2004,8 @@ static struct command_result *handle_rpc_command(struct command *cmd,
 		json_add_string(response, "maxfee", maxfee);
 	if (partial_msat)
 		json_add_tok(response, "partial_msat", partial_msat, buf);
+	if (maxdelay)
+		json_add_tok(response, "maxdelay", maxdelay, buf);
 	json_object_end(response);
 	json_object_end(response);
 	return command_finished(cmd, response);

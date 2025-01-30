@@ -44,11 +44,11 @@ static inline bool per_htlc_cost_eq_key(const struct per_htlc_cost *phc,
 	return short_channel_id_dir_eq(scidd, &phc->scidd);
 }
 
-HTABLE_DEFINE_TYPE(struct per_htlc_cost,
-		   per_htlc_cost_key,
-		   hash_scidd,
-		   per_htlc_cost_eq_key,
-		   additional_cost_htable);
+HTABLE_DEFINE_NODUPS_TYPE(struct per_htlc_cost,
+			  per_htlc_cost_key,
+			  hash_scidd,
+			  per_htlc_cost_eq_key,
+			  additional_cost_htable);
 
 static bool have_layer(const char **layers, const char *name)
 {
@@ -265,18 +265,12 @@ static const char *fmt_route(const tal_t *ctx,
 	return str;
 }
 
-static const char *fmt_flow_full(const tal_t *ctx,
-				 const struct route_query *rq,
-				 const struct flow *flow,
-				 struct amount_msat total_delivered,
-				 double delay_feefactor)
+const char *fmt_flow_full(const tal_t *ctx,
+			  const struct route_query *rq,
+			  const struct flow *flow)
 {
 	struct amount_msat amt = flow->delivers;
-	char *str = tal_fmt(ctx, "%s (linear cost %s)",
-			    fmt_amount_msat(tmpctx, amt),
-			    fmt_amount_msat(tmpctx, linear_flow_cost(flow,
-								     total_delivered,
-								     delay_feefactor)));
+	char *str = fmt_amount_msat(ctx, flow->delivers);
 
 	for (int i = tal_count(flow->path) - 1; i >= 0; i--) {
 		struct short_channel_id_dir scidd;
@@ -323,6 +317,7 @@ static const char *get_routes(const tal_t *ctx,
 			      struct amount_msat amount,
 			      struct amount_msat maxfee,
 			      u32 finalcltv,
+			      u32 maxdelay,
 			      const char **layers,
 			      struct gossmap_localmods *localmods,
 			      const struct layer *local_layer,
@@ -418,18 +413,11 @@ static const char *get_routes(const tal_t *ctx,
 	}
 
 	/* Too much delay? */
-	/* BOLT #4:
-	 * ## `max_htlc_cltv` Selection
-	 *
-	 * This ... value is defined as 2016 blocks, based on historical value
-	 * deployed by Lightning implementations.
-	 */
-	/* FIXME: Typo in spec for CLTV in descripton!  But it breaks our spelling check, so we omit it above */
-	while (finalcltv + flows_worst_delay(flows) > 2016) {
+	while (finalcltv + flows_worst_delay(flows) > maxdelay) {
 		delay_feefactor *= 2;
 		rq_log(tmpctx, rq, LOG_UNUSUAL,
 		       "The worst flow delay is %"PRIu64" (> %i), retrying with delay_feefactor %f...",
-		       flows_worst_delay(flows), 2016 - finalcltv, delay_feefactor);
+		       flows_worst_delay(flows), maxdelay - finalcltv, delay_feefactor);
 		flows = minflow(rq, rq, srcnode, dstnode, amount,
 				mu, delay_feefactor);
 		if (!flows || delay_feefactor > 10) {
@@ -471,15 +459,21 @@ too_expensive:
 				       fmt_amount_msat(tmpctx, old_cost));
 				for (size_t i = 0; i < tal_count(flows); i++) {
 					rq_log(tmpctx, rq, LOG_BROKEN,
-					       "Flow %zu/%zu: %s", i, tal_count(flows),
-					       fmt_flow_full(tmpctx, rq, flows[i], amount, delay_feefactor));
+					       "Flow %zu/%zu: %s (linear cost %s)", i, tal_count(flows),
+					       fmt_flow_full(tmpctx, rq, flows[i]),
+					       fmt_amount_msat(tmpctx, linear_flow_cost(flows[i],
+											amount,
+											delay_feefactor)));
 				}
 				rq_log(tmpctx, rq, LOG_BROKEN, "Old flows cost %s:",
 				       fmt_amount_msat(tmpctx, new_cost));
 				for (size_t i = 0; i < tal_count(new_flows); i++) {
 					rq_log(tmpctx, rq, LOG_BROKEN,
-					       "Flow %zu/%zu: %s", i, tal_count(new_flows),
-					       fmt_flow_full(tmpctx, rq, new_flows[i], amount, delay_feefactor));
+					       "Flow %zu/%zu: %s (linear cost %s)", i, tal_count(new_flows),
+					       fmt_flow_full(tmpctx, rq, new_flows[i]),
+					       fmt_amount_msat(tmpctx, linear_flow_cost(new_flows[i],
+											amount,
+											delay_feefactor)));
 				}
 			}
 		}
@@ -487,7 +481,7 @@ too_expensive:
 		flows = new_flows;
 	}
 
-	if (finalcltv + flows_worst_delay(flows) > 2016) {
+	if (finalcltv + flows_worst_delay(flows) > maxdelay) {
 		ret = rq_log(ctx, rq, LOG_UNUSUAL,
 			     "Could not find route without excessive cost or delays");
 		goto fail;
@@ -601,7 +595,7 @@ struct getroutes_info {
 	struct command *cmd;
 	struct node_id *source, *dest;
 	struct amount_msat *amount, *maxfee;
-	u32 *finalcltv;
+	u32 *finalcltv, *maxdelay;
 	const char **layers;
 	struct additional_cost_htable *additional_costs;
 	/* Non-NULL if we are told to use "auto.localchans" */
@@ -621,7 +615,7 @@ static struct command_result *do_getroutes(struct command *cmd,
 	err = get_routes(cmd, cmd,
 			 info->source, info->dest,
 			 *info->amount, *info->maxfee, *info->finalcltv,
-			 info->layers, localmods, info->local_layer,
+			 *info->maxdelay, info->layers, localmods, info->local_layer,
 			 &routes, &amounts, info->additional_costs, &probability);
 	if (err)
 		return command_fail(cmd, PAY_ROUTE_NOT_FOUND, "%s", err);
@@ -751,17 +745,41 @@ static struct command_result *json_getroutes(struct command *cmd,
 					     const char *buffer,
 					     const jsmntok_t *params)
 {
+	/* BOLT #4:
+	 * ## `max_htlc_cltv` Selection
+	 *
+	 * This ... value is defined as 2016 blocks, based on
+	 * historical value deployed by Lightning implementations.
+	 */
+	/* FIXME: Typo in spec for CLTV in descripton! But it breaks our spelling check, so we omit it above */
+	const u32 maxdelay_allowed = 2016;
 	struct getroutes_info *info = tal(cmd, struct getroutes_info);
 
-	if (!param(cmd, buffer, params,
-		   p_req("source", param_node_id, &info->source),
-		   p_req("destination", param_node_id, &info->dest),
-		   p_req("amount_msat", param_msat, &info->amount),
-		   p_req("layers", param_layer_names, &info->layers),
-		   p_req("maxfee_msat", param_msat, &info->maxfee),
-		   p_req("final_cltv", param_u32, &info->finalcltv),
-		   NULL))
+	if (!param_check(cmd, buffer, params,
+			 p_req("source", param_node_id, &info->source),
+			 p_req("destination", param_node_id, &info->dest),
+			 p_req("amount_msat", param_msat, &info->amount),
+			 p_req("layers", param_layer_names, &info->layers),
+			 p_req("maxfee_msat", param_msat, &info->maxfee),
+			 p_req("final_cltv", param_u32, &info->finalcltv),
+			 p_opt_def("maxdelay", param_u32, &info->maxdelay,
+				   maxdelay_allowed),
+			 NULL))
 		return command_param_failed();
+
+	if (amount_msat_is_zero(*info->amount)) {
+		return command_fail(cmd, JSONRPC2_INVALID_PARAMS,
+				    "amount must be non-zero");
+	}
+
+	if (command_check_only(cmd))
+		return command_check_done(cmd);
+
+	if (*info->maxdelay > maxdelay_allowed) {
+		return command_fail(cmd, PAY_USER_ERROR,
+				    "maximum delay allowed is %d",
+				    maxdelay_allowed);
+	}
 
 	info->cmd = cmd;
 	info->additional_costs = tal(info, struct additional_cost_htable);

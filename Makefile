@@ -263,7 +263,7 @@ LIBRARY_PATH := /usr/local/lib
 endif
 
 CPPFLAGS += -DCLN_NEXT_VERSION="\"$(CLN_NEXT_VERSION)\"" -DPKGLIBEXECDIR="\"$(pkglibexecdir)\"" -DBINDIR="\"$(bindir)\"" -DPLUGINDIR="\"$(plugindir)\"" -DCCAN_TAL_NEVER_RETURN_NULL=1
-CFLAGS = $(CPPFLAGS) $(CWARNFLAGS) $(CDEBUGFLAGS) $(COPTFLAGS) -I $(CCANDIR) $(EXTERNAL_INCLUDE_FLAGS) -I . -I$(CPATH) $(SQLITE3_CFLAGS) $(POSTGRES_INCLUDE) $(FEATURES) $(COVFLAGS) $(DEV_CFLAGS) -DSHACHAIN_BITS=48 -DJSMN_PARENT_LINKS $(PIE_CFLAGS) $(COMPAT_CFLAGS) $(CSANFLAGS)
+CFLAGS = $(CPPFLAGS) $(CWARNFLAGS) $(CDEBUGFLAGS) $(COPTFLAGS) -I $(CCANDIR) $(EXTERNAL_INCLUDE_FLAGS) -I . -I$(CPATH) $(SQLITE3_CFLAGS) $(SODIUM_CFLAGS) $(POSTGRES_INCLUDE) $(FEATURES) $(COVFLAGS) $(DEV_CFLAGS) -DSHACHAIN_BITS=48 -DJSMN_PARENT_LINKS $(PIE_CFLAGS) $(COMPAT_CFLAGS) $(CSANFLAGS)
 
 # If CFLAGS is already set in the environment of make (to whatever value, it
 # does not matter) then it would export it to subprocesses with the above value
@@ -377,6 +377,7 @@ ifneq ($(FUZZING),0)
 endif
 ifneq ($(RUST),0)
 	include cln-rpc/Makefile
+	include plugins/cln-rest/Makefile
 endif
 include cln-grpc/Makefile
 
@@ -595,7 +596,7 @@ check-doc-examples: update-doc-examples
 	git diff --exit-code HEAD
 
 # For those without working cppcheck
-check-source-no-cppcheck: check-makefile check-source-bolt check-whitespace check-spelling check-python check-includes check-shellcheck check-setup_locale check-tmpctx check-discouraged-functions check-amount-access check-doc-examples
+check-source-no-cppcheck: check-makefile check-source-bolt check-whitespace check-spelling check-python check-includes check-shellcheck check-setup_locale check-tmpctx check-discouraged-functions check-amount-access
 
 check-source: check-source-no-cppcheck
 
@@ -747,7 +748,7 @@ clean: obsclean
 
 PYLNS=client proto testing
 # See doc/contribute-to-core-lightning/contributor-workflow.md
-update-versions: update-pyln-versions update-clnrest-version update-wss-proxy-version update-poetry-lock update-dot-version update-doc-examples
+update-versions: update-pyln-versions update-wss-proxy-version update-poetry-lock update-dot-version update-doc-examples
 
 update-pyln-versions: $(PYLNS:%=update-pyln-version-%)
 
@@ -760,16 +761,12 @@ pyln-release:  $(PYLNS:%=pyln-release-%)
 pyln-release-%:
 	cd contrib/pyln-$* && $(MAKE) prod-release
 
-update-clnrest-version:
-	@if [ -z "$(NEW_VERSION)" ]; then echo "Set NEW_VERSION!" >&2; exit 1; fi
-	cd plugins/clnrest && $(MAKE) upgrade-version
-
 update-wss-proxy-version:
 	@if [ -z "$(NEW_VERSION)" ]; then echo "Set NEW_VERSION!" >&2; exit 1; fi
 	cd plugins/wss-proxy && $(MAKE) upgrade-version
 
 update-poetry-lock:
-	poetry update clnrest wss-proxy pyln-client pyln-proto pyln-testing update-reckless-version
+	poetry update wss-proxy pyln-client pyln-proto pyln-testing update-reckless-version
 
 update-reckless-version:
 	@if [ -z "$(NEW_VERSION)" ]; then echo "Set NEW_VERSION!" >&2; exit 1; fi
