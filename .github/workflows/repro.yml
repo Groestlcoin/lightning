@@ -86,28 +86,3 @@ jobs:
           name: release-${{ matrix.version }}
           path: release
           retention-days: 3 # Automatically delete after 3 days
-
-      - name: Send email on failure
-        if: ${{ failure() }}
-        uses: dawidd6/action-send-mail@v3
-        with:
-          server_address: smtp.gmail.com
-          server_port: 587
-          username: ${{ secrets.EMAIL_USERNAME }}
-          password: ${{ secrets.EMAIL_PASSWORD }}
-          from: ${{ secrets.EMAIL_USERNAME }}
-          to: ${{ vars.DISTRIBUTION_LIST }}
-          subject: "CI Failure: Step ${{ env.STEP }} failed for distro ${{ matrix.version }}"
-          convert_markdown: true
-          html_body: |
-            <html>
-              <body>
-                <p>GitHub Workflow ${{ github.workflow }} Failed! For more details, click on the action below.</p>
-                <strong>Failure Details:</strong><br/>
-                <strong>Event: </strong>${{ github.event_name }}<br/>
-                <strong>Job: </strong>${{ github.job }}<br/>
-                <strong>Distro: </strong>${{ matrix.version }}<br/>
-                <strong>Step: </strong>${{ env.STEP }}<br/>
-                <strong>Action: </strong><a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}</a><br/>
-              </body>
-            </html>
