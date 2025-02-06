@@ -409,6 +409,39 @@ def test_blacklistrune(node_factory):
     blacklisted_rune = l1.rpc.showrunes(rune='geZmO6U7yqpHn-moaX93FVMVWrDRfSNY4AXx9ypLcqg9MQ==')['runes'][0]['blacklisted']
     assert blacklisted_rune is True
 
+    # Sigh.  Someone blacklisted too much, so we added this!
+    blacklist = l1.rpc.blacklistrune(start=10, relist=True)
+    assert blacklist == {'blacklist': [{'start': 0, 'end': 6},
+                                       {'start': 9, 'end': 9}]}
+
+    with pytest.raises(RpcError, match='Cannot blacklist beyond'):
+        l1.rpc.blacklistrune(start=100_000_000, relist=True)
+
+    blacklist = l1.rpc.blacklistrune(start=9, end=9, relist=True)
+    assert blacklist == {'blacklist': [{'start': 0, 'end': 6}]}
+
+    blacklist = l1.rpc.blacklistrune(start=1, end=2, relist=True)
+    assert blacklist == {'blacklist': [{'start': 0, 'end': 0},
+                                       {'start': 3, 'end': 6}]}
+
+    blacklist = l1.rpc.blacklistrune(start=4, relist=True)
+    assert blacklist == {'blacklist': [{'start': 0, 'end': 0},
+                                       {'start': 3, 'end': 3},
+                                       {'start': 5, 'end': 6}]}
+
+    blacklist = l1.rpc.blacklistrune(start=0, end=3, relist=True)
+    assert blacklist == {'blacklist': [{'start': 5, 'end': 6}]}
+
+    # Database should be persistent
+    l1.restart()
+
+    blacklist = l1.rpc.blacklistrune()
+    assert blacklist == {'blacklist': [{'start': 5, 'end': 6}]}
+
+    # Last deletion.
+    blacklist = l1.rpc.blacklistrune(start=0, end=99_999_999, relist=True)
+    assert blacklist == {'blacklist': []}
+
 
 def test_badrune(node_factory):
     """Test invalid UTF-8 encodings in rune: used to make us kill the offers plugin which implements decode, as it gave bad utf8!"""
@@ -507,50 +540,6 @@ def test_rune_pay_amount(node_factory):
                            method='pay',
                            params={'bolt11': inv2, 'amount_msat': 9999})
     assert res['valid'] is True
-
-
-@unittest.skipIf(os.getenv('TEST_DB_PROVIDER', 'sqlite3') != 'sqlite3', "Depends on canned sqlite3 db")
-@unittest.skipIf(TEST_NETWORK != 'regtest', 'canned sqlite3 db is regtest')
-def test_commando_rune_migration(node_factory):
-    """Test migration from commando's datastore using db from test_commando_listrunes"""
-    l1 = node_factory.get_node(dbfile='commando_listrunes.sqlite3.xz',
-                               options={'database-upgrade': True})
-
-    # This happens really early in logs!
-    l1.daemon.logsearch_start = 0
-    l1.daemon.wait_for_logs(['Transferring commando rune to db: '] * 2)
-
-    # datastore should be empty:
-    assert l1.rpc.listdatastore(['commando']) == {'datastore': []}
-
-    # Should match commando results!
-    assert l1.rpc.showrunes() == {'runes': [{'rune':
-                                             'OSqc7ixY6F-gjcigBfxtzKUI54uzgFSA6YfBQoWGDV89MA==',
-                                             'unique_id': '0', 'restrictions':
-                                             [], 'restrictions_as_english': ''},
-                                            {'rune':
-                                             'geZmO6U7yqpHn-moaX93FVMVWrDRfSNY4AXx9ypLcqg9MQ==',
-                                             'unique_id': '1', 'restrictions':
-                                             [], 'restrictions_as_english': ''}]}
-
-
-@unittest.skipIf(os.getenv('TEST_DB_PROVIDER', 'sqlite3') != 'sqlite3', "Depends on canned sqlite3 db")
-@unittest.skipIf(TEST_NETWORK != 'regtest', 'canned sqlite3 db is regtest')
-def test_commando_blacklist_migration(node_factory):
-    """Test migration from commando's datastore using db from test_commando_blacklist"""
-    l1 = node_factory.get_node(dbfile='commando_blacklist.sqlite3.xz',
-                               options={'database-upgrade': True})
-
-    # This happens really early in logs!
-    l1.daemon.logsearch_start = 0
-    l1.daemon.wait_for_logs(['Transferring commando blacklist to db: '] * 2)
-
-    # datastore should be empty:
-    assert l1.rpc.listdatastore(['commando']) == {'datastore': []}
-
-    # Should match commando results!
-    assert l1.rpc.blacklistrune() == {'blacklist': [{'start': 0, 'end': 6},
-                                                    {'start': 9, 'end': 9}]}
 
 
 def test_missing_method_or_nodeid(node_factory):
