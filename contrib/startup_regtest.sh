@@ -247,7 +247,7 @@ start_ln() {
 		"$GROESTLCOIND" -datadir="$GROESTLCOIN_DIR" -regtest -txindex -fallbackfee=0.00000253 -daemon
 
 	# Wait for it to start.
-	while ! "$GCLI" -datadir="$GROESTLCOIN_DIR" -regtest ping 2> /tmp/null; do echo "awaiting groestlcoind..." && sleep 1; done
+  while ! "$BCLI" -datadir="$GROESTLCOIN_DIR" -regtest ping 2> /dev/null; do echo "awaiting groestlcoind..." && sleep 1; done
 
 	# Check if default wallet exists
 	if ! "$GCLI" -datadir="$GROESTLCOIN_DIR" -regtest listwalletdir | jq -r '.wallets[] | .name' | grep -wqe 'default' ; then
@@ -445,7 +445,7 @@ start_elem() {
 		elementsd -chain=liquid-regtest -printtoconsole -logtimestamps -nolisten -validatepegin=0 -con_blocksubsidy=5000000000 -daemon
 
 	# Wait for it to start.
-	while ! elements-cli -chain=liquid-regtest ping 2> /tmp/null; do echo "awaiting elementsd..." && sleep 1; done
+	while ! elements-cli -chain=liquid-regtest ping 2> /dev/null; do echo "awaiting elementsd..." && sleep 1; done
 
 	# Kick it out of initialblockdownload if necessary
 	if elements-cli -chain=liquid-regtest getblockchaininfo | grep -q 'initialblockdownload.*true'; then

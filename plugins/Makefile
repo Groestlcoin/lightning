@@ -137,6 +137,9 @@ endif
 # This is non-python plugins (PY_PLUGINS need their whole directory!)
 PLUGINS := $(C_PLUGINS)
 
+# Remove clnrest directory if exists which is the old python plugin code
+$(shell test -d plugins/clnrest && $(RM) -r plugins/clnrest || true)
+
 ifneq ($(RUST),0)
 # Builtin plugins must be in this plugins dir to work when we're executed
 # *without* make install.
@@ -298,11 +301,11 @@ CLN_PLUGIN_EXAMPLES := \
 
 CLN_PLUGIN_SRC = $(shell find plugins/src -name "*.rs")
 CLN_GRPC_PLUGIN_SRC = $(shell find plugins/grpc-plugin/src -name "*.rs")
-CLNREST_PLUGIN_SRC = $(shell find plugins/cln-rest/src -name "*.rs")
+CLN_REST_PLUGIN_SRC = $(shell find plugins/rest-plugin/src -name "*.rs")
 
 target/${RUST_PROFILE}/cln-grpc: ${CLN_PLUGIN_SRC} ${CLN_GRPC_PLUGIN_SRC} $(MSGGEN_GENALL) $(MSGGEN_GEN_ALL)
 	cargo build ${CARGO_OPTS} --bin cln-grpc
-target/${RUST_PROFILE}/clnrest: ${CLNREST_PLUGIN_SRC}
+target/${RUST_PROFILE}/clnrest: ${CLN_REST_PLUGIN_SRC}
 	cargo build ${CARGO_OPTS} --bin clnrest
 
 ifneq ($(RUST),0)
