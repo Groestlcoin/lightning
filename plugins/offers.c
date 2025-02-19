@@ -43,18 +43,14 @@ static struct gossmap *global_gossmap;
 
 static void init_gossmap(struct plugin *plugin)
 {
-	size_t num_cupdates_rejected;
 	global_gossmap
 		= notleak_with_children(gossmap_load(plugin,
 						     GOSSIP_STORE_FILENAME,
-						     &num_cupdates_rejected));
+						     plugin_gossmap_logcb,
+						     plugin));
 	if (!global_gossmap)
 		plugin_err(plugin, "Could not load gossmap %s: %s",
 			   GOSSIP_STORE_FILENAME, strerror(errno));
-	if (num_cupdates_rejected)
-		plugin_log(plugin, LOG_DBG,
-			   "gossmap ignored %zu channel updates",
-			   num_cupdates_rejected);
 }
 
 struct gossmap *get_gossmap(struct plugin *plugin)
@@ -62,8 +58,51 @@ struct gossmap *get_gossmap(struct plugin *plugin)
 	if (!global_gossmap)
 		init_gossmap(plugin);
 	else
-		gossmap_refresh(global_gossmap, NULL);
+		gossmap_refresh(global_gossmap);
 	return global_gossmap;
+}
+
+/* BOLT #12:
+ *   - if it is connected only by private channels:
+ *     - MUST include `offer_paths` containing one or more paths to the node
+ *       from publicly reachable nodes.
+ */
+bool we_want_blinded_path(struct plugin *plugin)
+{
+	struct node_id local_nodeid;
+	const struct gossmap_node *node;
+	const u8 *nannounce;
+	const struct gossmap *gossmap = get_gossmap(plugin);
+	struct node_id our_id;
+	secp256k1_ecdsa_signature signature;
+	u32 timestamp;
+	u8 *addresses, *features;
+	u8 rgb_color[3], alias[32];
+	struct tlv_node_ann_tlvs *na_tlvs;
+
+	node_id_from_pubkey(&local_nodeid, &id);
+
+	node = gossmap_find_node(gossmap, &local_nodeid);
+	if (!node)
+		return true;
+
+	/* Matt Corallo also suggests we do this (for now) if we don't
+	 * advertize an address to connect to. */
+
+	/* We expect to know our own node announcements, but just in case. */
+	nannounce = gossmap_node_get_announce(tmpctx, gossmap, node);
+	if (!nannounce)
+		return true;
+
+	if (!fromwire_node_announcement(tmpctx, nannounce,
+					&signature, &features,
+					&timestamp,
+					&our_id, rgb_color, alias,
+					&addresses,
+					&na_tlvs))
+		return true;
+
+	return tal_count(fromwire_wireaddr_array(tmpctx, addresses)) == 0;
 }
 
 static struct command_result *finished(struct command *cmd,
@@ -588,7 +627,7 @@ static bool json_add_blinded_paths(struct command *cmd,
 	}
 	json_array_end(js);
 
-	/* BOLT-offers #12:
+	/* BOLT #12:
 	 * - MUST reject the invoice if `invoice_blindedpay` does not contain
 	 *   exactly one `blinded_payinfo` per `invoice_paths`.`blinded_path`.
 	 */
@@ -599,7 +638,7 @@ static bool json_add_blinded_paths(struct command *cmd,
 		return false;
 	}
 
-	/* BOLT-offers #12:
+	/* BOLT #12:
 	 *  - if `num_hops` is 0 in any `blinded_path` in `offer_paths`:
 	 *    - MUST NOT respond to the offer.
 	 */
@@ -617,7 +656,7 @@ static bool json_add_blinded_paths(struct command *cmd,
 
 static const char *recurrence_time_unit_name(u8 time_unit)
 {
-	/* BOLT-offers-recurrence #12:
+	/* BOLT-recurrence #12:
 	 * `time_unit` defining 0 (seconds), 1 (days), 2 (months), 3 (years).
 	 */
 	switch (time_unit) {
@@ -685,7 +724,7 @@ static bool json_add_offer_fields(struct command *cmd,
 	} else if (offer_amount)
 		json_add_amount_msat(js, "offer_amount_msat",
 				     amount_msat(*offer_amount));
-	/* BOLT-offers #12:
+	/* BOLT #12:
 	 *
 	 * - if `offer_amount` is set and `offer_description` is not set:
 	 *    - MUST NOT respond to the offer.
@@ -796,7 +835,7 @@ static void json_add_offer(struct command *cmd, struct json_stream *js, const st
 				       offer->offer_recurrence_paywindow,
 				       offer->offer_recurrence_limit,
 				       offer->offer_recurrence_base);
-	/* BOLT-offers #12:
+	/* BOLT #12:
 	 * - if neither `offer_issuer_id` nor `offer_paths` are set:
 	 *   - MUST NOT respond to the offer.
 	 */
@@ -819,13 +858,14 @@ static bool json_add_invreq_fields(struct command *cmd,
 				   const struct pubkey *invreq_payer_id,
 				   const utf8 *invreq_payer_note,
 				   struct blinded_path **invreq_paths,
+				   struct tlv_invoice_request_invreq_bip_353_name *bip353,
 				   const u32 *invreq_recurrence_counter,
 				   const u32 *invreq_recurrence_start)
 {
 	bool valid = true;
 
-	/* BOLT-offers #12:
-	 *   - MUST fail the request if `invreq_payer_id` or `invreq_metadata` are not present.
+	/* BOLT #12:
+	 *   - MUST reject the invoice request if `invreq_payer_id` or `invreq_metadata` are not present.
 	 */
 	if (invreq_metadata)
 		json_add_hex_talarr(js, "invreq_metadata",
@@ -855,6 +895,35 @@ static bool json_add_invreq_fields(struct command *cmd,
 	if (invreq_paths)
 		valid &= json_add_blinded_paths(cmd, js, "invreq_paths",
 						invreq_paths, NULL);
+
+	if (bip353) {
+		json_object_start(js, "invreq_bip_353_name");
+		if (bip353->name) {
+			json_add_str_fmt(js, "name", "%.*s",
+					 (int)tal_bytelen(bip353->name),
+					 (char *)bip353->name);
+		}
+		if (bip353->domain) {
+			json_add_str_fmt(js, "domain", "%.*s",
+					 (int)tal_bytelen(bip353->domain),
+					 (char *)bip353->domain);
+		}
+		json_object_end(js);
+
+		if (!bolt12_bip353_valid_string(bip353->name,
+						tal_bytelen(bip353->name))) {
+			valid = false;
+			json_add_string(js, "warning_invreq_bip_353_name_name_invalid",
+					"bip353 name field contains invalid characters");
+		}
+		if (!bolt12_bip353_valid_string(bip353->domain,
+						tal_bytelen(bip353->domain))) {
+			valid = false;
+			json_add_string(js, "warning_invreq_bip_353_name_domain_invalid",
+					"bip353 domain field contains invalid characters");
+		}
+	}
+
 	if (invreq_recurrence_counter) {
 		json_add_u32(js, "invreq_recurrence_counter",
 			     *invreq_recurrence_counter);
@@ -907,7 +976,7 @@ static bool json_add_fallbacks(struct json_stream *js,
 		json_add_u32(js, "version", fallbacks[i]->version);
 		json_add_hex_talarr(js, "hex", fallbacks[i]->address);
 
-		/* BOLT-offers #12:
+		/* BOLT #12:
 		 * - for the bitcoin chain, if the invoice specifies `invoice_fallbacks`:
 		 *   - MUST ignore any `fallback_address` for which `version` is
 		 *     greater than 16.
@@ -977,11 +1046,12 @@ static void json_add_invoice_request(struct command *cmd,
 					invreq->invreq_payer_id,
 					invreq->invreq_payer_note,
 					invreq->invreq_paths,
+					invreq->invreq_bip_353_name,
 					invreq->invreq_recurrence_counter,
 					invreq->invreq_recurrence_start);
 
-	/* BOLT-offers #12:
-	 *   - MUST fail the request if `invreq_payer_id` or `invreq_metadata` are not present.
+	/* BOLT #12:
+	 *   - MUST reject the invoice request if `invreq_payer_id` or `invreq_metadata` are not present.
 	 */
 	if (!invreq->invreq_payer_id) {
 		json_add_string(js, "warning_missing_invreq_payer_id",
@@ -989,8 +1059,8 @@ static void json_add_invoice_request(struct command *cmd,
 		valid = false;
 	}
 
-	/* BOLT-offers #12:
-	 * - MUST fail the request if `signature` is not correct as detailed
+	/* BOLT #12:
+	 * - MUST reject the invoice request if `signature` is not correct as detailed
 	 *   in [Signature Calculation](#signature-calculation) using the
 	 *  `invreq_payer_id`.
 	 */
@@ -1022,6 +1092,16 @@ static void json_add_b12_invoice(struct command *cmd,
 				 const struct tlv_invoice *invoice)
 {
 	bool valid = true;
+	/* FIXME: Technically, different types! */
+	struct tlv_invoice_request_invreq_bip_353_name *bip353;
+
+	if (invoice->invreq_bip_353_name) {
+		bip353 = tal(tmpctx, struct tlv_invoice_request_invreq_bip_353_name);
+		bip353->name = invoice->invreq_bip_353_name->name;
+		bip353->domain = invoice->invreq_bip_353_name->domain;
+	} else {
+		bip353 = NULL;
+	}
 
 	/* If there's an offer_issuer_id or offer_paths, then there's an offer. */
 	if (invoice->offer_issuer_id || invoice->offer_paths) {
@@ -1056,10 +1136,11 @@ static void json_add_b12_invoice(struct command *cmd,
 					invoice->invreq_payer_id,
 					invoice->invreq_payer_note,
 					invoice->invreq_paths,
+					bip353,
 					invoice->invreq_recurrence_counter,
 					invoice->invreq_recurrence_start);
 
-	/* BOLT-offers #12:
+	/* BOLT #12:
 	 * - MUST reject the invoice if `invoice_paths` is not present
 	 *   or is empty.
 	 * - MUST reject the invoice if `num_hops` is 0 in any `blinded_path` in `invoice_paths`.
@@ -1090,7 +1171,7 @@ static void json_add_b12_invoice(struct command *cmd,
 		valid = false;
 	}
 
-	/* BOLT-offers #12:
+	/* BOLT #12:
 	 *
 	 * - if `invoice_relative_expiry` is present:
 	 *   - MUST reject the invoice if the current time since 1970-01-01 UTC
@@ -1112,7 +1193,7 @@ static void json_add_b12_invoice(struct command *cmd,
 		valid = false;
 	}
 
-	/* BOLT-offers #12:
+	/* BOLT #12:
 	 * - MUST reject the invoice if `invoice_amount` is not present.
 	 */
 	if (invoice->invoice_amount)
@@ -1130,7 +1211,7 @@ static void json_add_b12_invoice(struct command *cmd,
 					    invoice->invoice_fallbacks);
 
 	if (invoice->invoice_features)
-		json_add_hex_talarr(js, "features", invoice->invoice_features);
+		json_add_hex_talarr(js, "invoice_features", invoice->invoice_features);
 
 	if (invoice->invoice_node_id)
 		json_add_pubkey(js, "invoice_node_id", invoice->invoice_node_id);
@@ -1140,7 +1221,7 @@ static void json_add_b12_invoice(struct command *cmd,
 		valid = false;
 	}
 
-	/* BOLT-offers-recurrence #12:
+	/* BOLT-recurrence #12:
 	 * - if the offer contained `recurrence`:
 	 *   - MUST reject the invoice if `recurrence_basetime` is not
 	 *     set.

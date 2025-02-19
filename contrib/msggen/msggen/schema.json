@@ -8918,6 +8918,30 @@
                     }
                   }
                 },
+                "invreq_bip_353_name": {
+                  "type": "object",
+                  "added": "v25.02",
+                  "description": [
+                    "BIP 353 name which this invoice request is for."
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "added": "v25.02",
+                      "description": [
+                        "The name (part before the @)."
+                      ]
+                    },
+                    "domain": {
+                      "type": "string",
+                      "added": "v25.02",
+                      "description": [
+                        "The domain (part after the @)."
+                      ]
+                    }
+                  }
+                },
                 "invreq_recurrence_counter": {
                   "type": "u32",
                   "description": [
@@ -9023,6 +9047,7 @@
                 "invreq_quantity": {},
                 "invreq_payer_note": {},
                 "invreq_paths": {},
+                "invreq_bip_353_name": {},
                 "invreq_recurrence_counter": {},
                 "invreq_recurrence_start": {},
                 "warning_invalid_offer_description": {
@@ -9065,6 +9090,20 @@
                   "type": "string",
                   "description": [
                     "`invreq_payer_note` is not valid UTF8."
+                  ]
+                },
+                "warning_invreq_bip_353_name_name_invalid": {
+                  "type": "string",
+                  "added": "v25.02",
+                  "description": [
+                    "`invreq_bip_353_name` name field contains unusual characters."
+                  ]
+                },
+                "warning_invreq_bip_353_name_domain_invalid": {
+                  "type": "string",
+                  "added": "v25.02",
+                  "description": [
+                    "`invreq_bip_353_name` domain field contains unusual characters."
                   ]
                 },
                 "warning_missing_invoice_request_signature": {
@@ -9517,6 +9556,30 @@
                     }
                   }
                 },
+                "invreq_bip_353_name": {
+                  "type": "object",
+                  "added": "v25.02",
+                  "description": [
+                    "BIP 353 name which this invoice request is for."
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "added": "v25.02",
+                      "description": [
+                        "The name (part before the @)."
+                      ]
+                    },
+                    "domain": {
+                      "type": "string",
+                      "added": "v25.02",
+                      "description": [
+                        "The domain (part after the @)."
+                      ]
+                    }
+                  }
+                },
                 "invreq_recurrence_counter": {
                   "type": "u32",
                   "description": [
@@ -9818,6 +9881,7 @@
                 "invreq_quantity": {},
                 "invreq_payer_note": {},
                 "invreq_paths": {},
+                "invreq_bip_353_name": {},
                 "invreq_node_id": {},
                 "invreq_recurrence_counter": {},
                 "invreq_recurrence_start": {},
@@ -13333,6 +13397,13 @@
             ],
             "added": "v24.11"
           },
+          "bip353": {
+            "type": "string",
+            "description": [
+              "BIP353 string (optionally with \u20bf) indicating where we fetched the offer from"
+            ],
+            "added": "v25.02"
+          },
           "dev_reply_path": {
             "hidden": true
           },
@@ -16046,7 +16117,7 @@
         "",
         "Layers are generally maintained by plugins, either to contain persistent information about capacities which have been discovered, or to contain transient information for this particular payment (such as blinded paths or routehints).",
         "",
-        "There are two automatic layers: *auto.localchans* contains information on local channels from this node (including non-public ones), and their exact current spendable capacities, and *auto.sourcefree* overrides all channels (including those from previous layers) leading out of the *source* to be zero fee and zero delay.  These are both useful in the case where the source is the current node."
+        "There are three automatic layers: *auto.localchans* contains information on local channels from this node (including non-public ones), and their exact current spendable capacities. *auto.sourcefree* overrides all channels (including those from previous layers) leading out of the *source* to be zero fee and zero delay.  These are both useful in the case where the source is the current node.  And *auto.no_mpp_support* forces getroutes to return a single flow, though only basic checks are done that the result is useful."
       ],
       "categories": [
         "readonly"
@@ -25517,6 +25588,7 @@
                   "perkw": 3750,
                   "perkb": 15000
                 },
+                "owner": "onchaind",
                 "direction": 0,
                 "channel_id": "channelid1100011000110001100011000110001100011000110001100011000",
                 "funding_txid": "channeltxid01050000500005000050000500005000050000500005000050000",
@@ -25619,7 +25691,7 @@
                 "status": [
                   "CLOSINGD_SIGEXCHANGE:We agreed on a closing fee of 2250 satoshi for tx:scratchid2030303030303030303030303030303030303030303030303030303",
                   "ONCHAIN:Tracking mutual close transaction",
-                  "ONCHAIN:All outputs resolved: waiting 99 more blocks before forgetting channel"
+                  "ONCHAIN:All outputs resolved: waiting 96 more blocks before forgetting channel"
                 ],
                 "in_payments_offered": 0,
                 "in_offered_msat": 0,

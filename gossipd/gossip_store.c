@@ -70,7 +70,11 @@ static bool append_msg(int fd, const u8 *msg, u32 timestamp, u64 *len)
 	/* Don't ever overwrite the version header! */
 	assert(*len);
 
+	/* Never NULL */
+	assert(msg);
 	msglen = tal_count(msg);
+	/* All messages begin with a 16-bit type */
+	assert(msglen >= 2);
 	hdr.len = cpu_to_be16(msglen);
 	hdr.flags = 0;
 	hdr.crc = cpu_to_be32(crc32c(timestamp, msg, msglen));
@@ -187,7 +191,7 @@ static bool upgrade_field(u8 oldversion,
  * validity, but this code is written as simply and robustly as
  * possible!
  *
- * Returns fd of new store.
+ * Returns fd of new store, or -1 if it was grossly invalid.
  */
 static int gossip_store_compact(struct daemon *daemon,
 				u64 *total_len,
@@ -200,7 +204,6 @@ static int gossip_store_compact(struct daemon *daemon,
 	struct gossip_hdr hdr;
 	u8 oldversion, version = GOSSIP_STORE_VER;
 	struct stat st;
-	bool prev_chan_ann = false;
 	struct timeabs start = time_now();
 	const char *bad;
 
@@ -309,18 +312,8 @@ static int gossip_store_compact(struct daemon *daemon,
 		}
 
 		switch (fromwire_peektype(msg)) {
-		case WIRE_GOSSIP_STORE_CHANNEL_AMOUNT:
-			/* Previous channel_announcement may have been deleted */
-			if (prev_chan_ann)
-				cannounces++;
-			prev_chan_ann = false;
-			break;
 		case WIRE_CHANNEL_ANNOUNCEMENT:
-			if (prev_chan_ann) {
-				bad = "channel_announcement without amount";
-				goto badmsg;
-			}
-			prev_chan_ann = true;
+			cannounces++;
 			break;
 		case WIRE_GOSSIP_STORE_CHAN_DYING: {
 			struct chan_dying cd;
@@ -342,9 +335,6 @@ static int gossip_store_compact(struct daemon *daemon,
 		case WIRE_NODE_ANNOUNCEMENT:
 			nannounces++;
 			break;
-		default:
-			bad = "Unknown message";
-			goto badmsg;
 		}
 
 		if (!write_all(new_fd, &hdr, sizeof(hdr))
@@ -358,12 +348,6 @@ static int gossip_store_compact(struct daemon *daemon,
 	}
 
 	assert(*total_len == lseek(new_fd, 0, SEEK_END));
-
-	/* Unlikely, but a channel_announcement without an amount: we just truncate. */
-	if (prev_chan_ann) {
-		bad = "channel_announcement without amount";
-		goto badmsg;
-	}
 
 	/* If we have any contents, and the file is less than 1 hour
 	 * old, say "seems good" */
@@ -394,19 +378,18 @@ rename_new:
 	return new_fd;
 
 badmsg:
-	/* We truncate */
-	status_broken("gossip_store: %s (offset %"PRIu64"). Moving to %s.corrupt and truncating",
-		      bad, cur_off, GOSSIP_STORE_FILENAME);
+	/* Caller will presumably try gossip_store_reset. */
+	status_broken("gossip_store: %s (offset %"PRIu64").", bad, cur_off);
+	close(old_fd);
+	close(new_fd);
+	return -1;
+}
 
+void gossip_store_corrupt(void)
+{
+	status_broken("gossip_store: Moving to %s.corrupt",
+		      GOSSIP_STORE_FILENAME);
 	rename(GOSSIP_STORE_FILENAME, GOSSIP_STORE_FILENAME ".corrupt");
-	if (lseek(new_fd, 0, SEEK_SET) != 0
-	    || !write_all(new_fd, &version, sizeof(version))) {
-		status_failed(STATUS_FAIL_INTERNAL_ERROR,
-			      "Overwriting new gossip_store file: %s",
-			      strerror(errno));
-	}
-	*total_len = sizeof(version);
-	goto rename_new;
 }
 
 struct gossip_store *gossip_store_new(const tal_t *ctx,
@@ -419,23 +402,43 @@ struct gossip_store *gossip_store_new(const tal_t *ctx,
 	gs->daemon = daemon;
 	*dying = tal_arr(ctx, struct chan_dying, 0);
 	gs->fd = gossip_store_compact(daemon, &gs->len, populated, dying);
+	if (gs->fd < 0)
+		return tal_free(gs);
 	tal_add_destructor(gs, gossip_store_destroy);
 	return gs;
 }
 
-int gossip_store_get_fd(const struct gossip_store *gs)
+void gossip_store_fsync(const struct gossip_store *gs)
 {
-	return gs->fd;
+	if (fsync(gs->fd) != 0)
+		status_failed(STATUS_FAIL_INTERNAL_ERROR,
+			      "gossmap fsync failed: %s", strerror(errno));
 }
 
 u64 gossip_store_add(struct gossip_store *gs, const u8 *gossip_msg, u32 timestamp)
 {
-	u64 off = gs->len;
+	u64 off = gs->len, filelen;
+
+	/* Double check: this should always be EOF! */
+	filelen = lseek(gs->fd, 0, SEEK_END);
+	if (filelen != off) {
+		status_broken("gossip_store: file was len %"PRIu64
+			      ", expected %"PRIu64", trying fsync!",
+			      filelen, off);
+
+		gossip_store_fsync(gs);
+		filelen = lseek(gs->fd, 0, SEEK_END);
+		if (filelen != off)
+			status_failed(STATUS_FAIL_INTERNAL_ERROR,
+				      "gossip_store: file was len %"PRIu64
+				      ", expected %"PRIu64,
+				      filelen, off);
+	}
 
 	if (!append_msg(gs->fd, gossip_msg, timestamp, &gs->len)) {
-		status_broken("Failed writing to gossip store: %s",
+		status_failed(STATUS_FAIL_INTERNAL_ERROR,
+			      "Failed writing to gossip store: %s",
 			      strerror(errno));
-		return 0;
 	}
 
 	/* By gossmap convention, offset is *after* hdr */

@@ -5,7 +5,7 @@
 
 struct feature_set;
 
-/* BOLT-offers #12:
+/* BOLT #12:
  * - if `invoice_relative_expiry` is present:
  *   - MUST reject the invoice if the current time since 1970-01-01 UTC
  *     is greater than `invoice_created_at` plus `seconds_from_creation`.
@@ -161,7 +161,7 @@ struct tlv_invoice_request *invoice_request_for_offer(const tal_t *ctx,
 struct tlv_invoice *invoice_for_invreq(const tal_t *ctx,
 				       const struct tlv_invoice_request *invreq);
 
-/* BOLT-offers #12:
+/* BOLT #12:
  * Each form is signed using one or more *signature TLV elements*: TLV
  * types 240 through 1000 (inclusive). */
 bool is_bolt12_signature_field(u64 typenum);
@@ -175,4 +175,11 @@ const struct tlv_field *any_field_outside_range(const struct tlv_field *fields,
 						size_t r2_start, size_t r2_end);
 
 
+/* BOLT #12:
+ * - if `invreq_bip_353_name` is present:
+ *   - MUST reject the invoice request if `name` or `domain`
+ *     contain any bytes which are not `0`-`9`, `a`-`z`,
+ *     `A`-`Z`, `-`, `_` or `.`.
+ */
+bool bolt12_bip353_valid_string(const u8 *str, size_t strlen);
 #endif /* LIGHTNING_COMMON_BOLT12_H */

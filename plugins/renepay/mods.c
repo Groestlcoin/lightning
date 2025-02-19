@@ -1,4 +1,5 @@
 #include "config.h"
+#include <ccan/asort/asort.h>
 #include <ccan/bitmap/bitmap.h>
 #include <common/amount.h>
 #include <common/bolt11.h>
@@ -13,8 +14,7 @@
 #include <plugins/renepay/routebuilder.h>
 #include <plugins/renepay/routetracker.h>
 #include <unistd.h>
-
-#define INVALID_ID UINT32_MAX
+#include <wire/bolt12_wiregen.h>
 
 #define OP_NULL NULL
 #define OP_CALL (void *)1
@@ -91,6 +91,13 @@ static struct command_result *payment_rpc_failure(struct command *cmd,
 	    json_tok_full_len(toks), json_tok_full(buffer, toks));
 }
 
+static void add_hintchan(struct payment *payment, const struct node_id *src,
+			 const struct node_id *dst, u16 cltv_expiry_delta,
+			 const struct short_channel_id scid, u32 fee_base_msat,
+			 u32 fee_proportional_millionths,
+			 const struct amount_msat *chan_htlc_min,
+			 const struct amount_msat *chan_htlc_max);
+
 /*****************************************************************************
  * previoussuccess
  *
@@ -99,7 +106,7 @@ static struct command_result *payment_rpc_failure(struct command *cmd,
  */
 
 struct success_data {
-	u32 parts, created_at, groupid;
+	u64 parts, created_at, groupid;
 	struct amount_msat deliver_msat, sent_msat;
 	struct preimage preimage;
 };
@@ -122,7 +129,7 @@ static bool success_data_from_listsendpays(const char *buf,
 
 	json_for_each_arr(i, t, arr)
 	{
-		u32 groupid;
+		u64 groupid;
 		struct amount_msat this_msat, this_sent;
 
 		const jsmntok_t *status_tok = json_get_member(buf, t, "status");
@@ -150,10 +157,10 @@ static bool success_data_from_listsendpays(const char *buf,
 			    ",amount_sent_msat:%"
 			    ",created_at:%"
 			    ",payment_preimage:%}",
-			    JSON_SCAN(json_to_u32, &groupid),
+			    JSON_SCAN(json_to_u64, &groupid),
 			    JSON_SCAN(json_to_msat, &this_msat),
 			    JSON_SCAN(json_to_msat, &this_sent),
-			    JSON_SCAN(json_to_u32, &success->created_at),
+			    JSON_SCAN(json_to_u64, &success->created_at),
 			    JSON_SCAN(json_to_preimage, &success->preimage));
 
 			if (err)
@@ -248,79 +255,23 @@ REGISTER_PAYMENT_MODIFIER(initial_sanity_checks, initial_sanity_checks_cb);
 
 /*****************************************************************************
  * selfpay
- *
- * Checks if the payment destination is the sender's node and perform a self
- * payment.
  */
-
-static struct command_result *selfpay_success(struct command *cmd,
-					      const char *method UNUSED,
-					      const char *buf,
-					      const jsmntok_t *tok,
-					      struct route *route)
-{
-	tal_steal(tmpctx, route); // discard this route when tmpctx clears
-	struct payment *payment =
-		    payment_map_get(pay_plugin->payment_map, route->key.payment_hash);
-	assert(payment);
-
-	struct preimage preimage;
-	const char *err;
-	err = json_scan(tmpctx, buf, tok, "{payment_preimage:%}",
-			JSON_SCAN(json_to_preimage, &preimage));
-	if (err)
-		plugin_err(
-		    cmd->plugin, "selfpay didn't have payment_preimage: %.*s",
-		    json_tok_full_len(tok), json_tok_full(buf, tok));
-
-
-	payment_note(payment, LOG_DBG, "Paid with self-pay.");
-	return payment_success(payment, &preimage);
-}
-static struct command_result *selfpay_failure(struct command *cmd,
-					      const char *method UNUSED,
-					      const char *buf,
-					      const jsmntok_t *tok,
-					      struct route *route)
-{
-	tal_steal(tmpctx, route); // discard this route when tmpctx clears
-	struct payment *payment =
-		    payment_map_get(pay_plugin->payment_map, route->key.payment_hash);
-	assert(payment);
-	struct payment_result *result = tal_sendpay_result_from_json(tmpctx, buf, tok);
-	if (result == NULL)
-		plugin_err(pay_plugin->plugin,
-			   "Unable to parse sendpay failure: %.*s",
-			   json_tok_full_len(tok), json_tok_full(buf, tok));
-
-	return payment_fail(payment, result->code, "%s", result->message);
-}
 
 static struct command_result *selfpay_cb(struct payment *payment)
 {
-	if (!node_id_eq(&pay_plugin->my_id,
-			&payment->payment_info.destination)) {
-		return payment_continue(payment);
+	/* A different approach to self-pay: create a fake channel from the
+	 * bolt11 destination to the routing_destination (a fake node_id). */
+	if (!payment->payment_info.blinded_paths) {
+		struct amount_msat htlc_min = AMOUNT_MSAT(0);
+		struct amount_msat htlc_max = AMOUNT_MSAT((u64)1000*100000000);
+		struct short_channel_id scid = {.u64 = 0};
+		add_hintchan(payment, &payment->payment_info.destination,
+			     payment->routing_destination,
+			     /* cltv delta = */ 0, scid,
+			     /* base fee = */ 0,
+			     /* ppm = */ 0, &htlc_min, &htlc_max);
 	}
-
-	struct command *cmd = payment_command(payment);
-	if (!cmd)
-		plugin_err(pay_plugin->plugin,
-			   "Selfpay: cannot get a valid cmd.");
-
-	struct payment_info *pinfo = &payment->payment_info;
-	/* Self-payment routes are not part of the routetracker, we build them
-	 * on-the-fly here and release them on success or failure. */
-	struct route *route =
-	    new_route(payment, payment->groupid,
-		      /*partid=*/0, pinfo->payment_hash,
-		      pinfo->amount, pinfo->amount);
-	struct out_req *req;
-	req = jsonrpc_request_start(cmd, "sendpay",
-				    selfpay_success, selfpay_failure, route);
-	route->hops = tal_arr(route, struct route_hop, 0);
-	json_add_route(req->js, route, payment);
-	return send_outreq(req);
+	return payment_continue(payment);
 }
 
 REGISTER_PAYMENT_MODIFIER(selfpay, selfpay_cb);
@@ -476,14 +427,7 @@ static struct command_result *refreshgossmap_cb(struct payment *payment)
 	assert(payment);
 	assert(payment->local_gossmods);
 
-	size_t num_channel_updates_rejected = 0;
-	bool gossmap_changed =
-	    gossmap_refresh(pay_plugin->gossmap, &num_channel_updates_rejected);
-
-	if (gossmap_changed && num_channel_updates_rejected)
-		plugin_log(pay_plugin->plugin, LOG_DBG,
-			   "gossmap ignored %zu channel updates",
-			   num_channel_updates_rejected);
+	bool gossmap_changed = gossmap_refresh(pay_plugin->gossmap);
 
 	if (gossmap_changed) {
 		gossmap_apply_localmods(pay_plugin->gossmap,
@@ -510,24 +454,37 @@ REGISTER_PAYMENT_MODIFIER(refreshgossmap, refreshgossmap_cb);
  * Use route hints from the invoice to update the local gossmods and uncertainty
  * network.
  */
-// TODO check how this is done in pay.c
+
+static void uncertainty_remove_channel(struct chan_extra *ce,
+				       struct uncertainty *uncertainty)
+{
+	chan_extra_map_del(uncertainty->chan_extra_map, ce);
+}
 
 static void add_hintchan(struct payment *payment, const struct node_id *src,
 			 const struct node_id *dst, u16 cltv_expiry_delta,
 			 const struct short_channel_id scid, u32 fee_base_msat,
-			 u32 fee_proportional_millionths)
+			 u32 fee_proportional_millionths,
+			 const struct amount_msat *chan_htlc_min,
+			 const struct amount_msat *chan_htlc_max)
 {
 	assert(payment);
 	assert(payment->local_gossmods);
 
 	const char *errmsg;
-	const struct chan_extra *ce =
+	struct chan_extra *ce =
 	    uncertainty_find_channel(pay_plugin->uncertainty, scid);
 
 	if (!ce) {
 		struct short_channel_id_dir scidd;
 		/* We assume any HTLC is allowed */
 		struct amount_msat htlc_min = AMOUNT_MSAT(0), htlc_max = MAX_CAPACITY;
+
+		if (chan_htlc_min)
+			htlc_min = *chan_htlc_min;
+		if (chan_htlc_max)
+			htlc_max = *chan_htlc_max;
+
 		struct amount_msat fee_base = amount_msat(fee_base_msat);
 		bool enabled = true;
 		scidd.scid = scid;
@@ -562,6 +519,15 @@ static void add_hintchan(struct payment *payment, const struct node_id *src,
 			    fmt_short_channel_id(tmpctx, scid));
 			goto function_error;
 		}
+		/* We want these channel hints destroyed when the local_gossmods
+		 * are freed. */
+		/* FIXME: these hints are global in the uncertainty network if
+		 * two payments happen concurrently we will have race
+		 * conditions. The best way to avoid this is to use askrene and
+		 * it's layered API. */
+		tal_steal(payment->local_gossmods, ce);
+		tal_add_destructor2(ce, uncertainty_remove_channel,
+				    pay_plugin->uncertainty);
 	} else {
 		/* The channel is pubic and we already keep track of it in the
 		 * gossmap and uncertainty network. It would be wrong to assume
@@ -591,7 +557,7 @@ static struct command_result *routehints_done(struct command *cmd UNUSED,
 	assert(payment->local_gossmods);
 
 	const struct node_id *destination = &payment->payment_info.destination;
-	const struct route_info **routehints = payment->payment_info.routehints;
+	struct route_info **routehints = payment->payment_info.routehints;
 	assert(routehints);
 	const size_t nhints = tal_count(routehints);
 	/* Hints are added to the local_gossmods. */
@@ -604,7 +570,8 @@ static struct command_result *routehints_done(struct command *cmd UNUSED,
 			add_hintchan(payment, &r[j].pubkey, end,
 				     r[j].cltv_expiry_delta,
 				     r[j].short_channel_id, r[j].fee_base_msat,
-				     r[j].fee_proportional_millionths);
+				     r[j].fee_proportional_millionths,
+				     NULL, NULL);
 			end = &r[j].pubkey;
 		}
 	}
@@ -625,6 +592,8 @@ static struct command_result *routehints_done(struct command *cmd UNUSED,
 
 static struct command_result *routehints_cb(struct payment *payment)
 {
+	if (payment->payment_info.routehints == NULL)
+		return payment_continue(payment);
 	struct command *cmd = payment_command(payment);
 	assert(cmd);
 	struct out_req *req = jsonrpc_request_start(
@@ -635,6 +604,44 @@ static struct command_result *routehints_cb(struct payment *payment)
 }
 
 REGISTER_PAYMENT_MODIFIER(routehints, routehints_cb);
+
+
+/*****************************************************************************
+ * blindedhints
+ *
+ * Similar to routehints but for bolt12 invoices: create fake channel that
+ * connect the blinded path entry point to the destination node.
+ */
+
+static struct command_result *blindedhints_cb(struct payment *payment)
+{
+	if (payment->payment_info.blinded_paths == NULL)
+		return payment_continue(payment);
+
+	struct payment_info *pinfo = &payment->payment_info;
+	struct short_channel_id scid;
+	struct node_id src;
+
+	for (size_t i = 0; i < tal_count(pinfo->blinded_paths); i++) {
+		const struct blinded_payinfo *payinfo =
+		    pinfo->blinded_payinfos[i];
+		const struct blinded_path *path = pinfo->blinded_paths[i];
+
+		scid.u64 = i; // a fake scid
+		node_id_from_pubkey(&src, &path->first_node_id.pubkey);
+
+		add_hintchan(payment, &src, payment->routing_destination,
+			     payinfo->cltv_expiry_delta, scid,
+			     payinfo->fee_base_msat,
+			     payinfo->fee_proportional_millionths,
+			     &payinfo->htlc_minimum_msat,
+			     &payinfo->htlc_maximum_msat);
+	}
+	return payment_continue(payment);
+}
+
+REGISTER_PAYMENT_MODIFIER(blindedhints, blindedhints_cb);
+
 
 /*****************************************************************************
  * compute_routes
@@ -694,6 +701,10 @@ static struct command_result *compute_routes_cb(struct payment *payment)
 	 * better to pass computed_routes as a reference? */
 	routetracker->computed_routes = tal_free(routetracker->computed_routes);
 
+	/* Send get_routes a note that it should discard the last hop because we
+	 * are actually solving a multiple destinations problem. */
+	bool blinded_destination = true;
+
 	// TODO: add an algorithm selector here
 	/* We let this return an unlikely path, as it's better to try  once than
 	 * simply refuse.  Plus, models are not truth! */
@@ -701,7 +712,7 @@ static struct command_result *compute_routes_cb(struct payment *payment)
 					    routetracker,
 					    &payment->payment_info,
 					    &pay_plugin->my_id,
-					    &payment->payment_info.destination,
+					    payment->routing_destination,
 					    pay_plugin->gossmap,
 					    pay_plugin->uncertainty,
 					    payment->disabledmap,
@@ -709,8 +720,10 @@ static struct command_result *compute_routes_cb(struct payment *payment)
 					    feebudget,
 					    &payment->next_partid,
 					    payment->groupid,
+					    blinded_destination,
 					    &errcode,
 					    &err_msg);
+
 	/* Otherwise the error message remains a child of the routetracker. */
 	err_msg = tal_steal(tmpctx, err_msg);
 
@@ -918,6 +931,15 @@ REGISTER_PAYMENT_MODIFIER(checktimeout, checktimeout_cb);
  * we should return payment_success inmediately.
  */
 
+static int cmp_u64(const u64 *a, const u64 *b, void *unused)
+{
+	if (*a < *b)
+		return -1;
+	if (*a > *b)
+		return 1;
+	return 0;
+}
+
 static struct command_result *pendingsendpays_done(struct command *cmd,
 						   const char *method UNUSED,
 						   const char *buf,
@@ -927,12 +949,13 @@ static struct command_result *pendingsendpays_done(struct command *cmd,
 	size_t i;
 	const char *err;
 	const jsmntok_t *t, *arr;
-	u32 max_group_id = 0;
 
 	/* Data for pending payments, this will be the one
 	 * who's result gets replayed if we end up suspending. */
-	u32 pending_group_id = INVALID_ID;
-	u32 max_pending_partid = 0;
+	bool has_pending = false;
+	u64 unused_groupid;
+	u64 pending_group_id COMPILER_WANTS_INIT("12.3.0-17ubuntu1 -O3");
+	u64 max_pending_partid = 0;
 	struct amount_msat pending_sent = AMOUNT_MSAT(0),
 			   pending_msat = AMOUNT_MSAT(0);
 
@@ -961,17 +984,19 @@ static struct command_result *pendingsendpays_done(struct command *cmd,
 		return payment_success(payment, &success.preimage);
 	}
 
+	u64 *groupid_arr = tal_arr(tmpctx, u64, 0);
+
 	// find if there is one pending group
 	json_for_each_arr(i, t, arr)
 	{
-		u32 groupid;
+		u64 groupid;
 		const char *status;
 
 		err = json_scan(tmpctx, buf, t,
 				"{status:%"
 				",groupid:%}",
 				JSON_SCAN_TAL(tmpctx, json_strdup, &status),
-				JSON_SCAN(json_to_u32, &groupid));
+				JSON_SCAN(json_to_u64, &groupid));
 
 		if (err)
 			plugin_err(pay_plugin->plugin,
@@ -980,16 +1005,18 @@ static struct command_result *pendingsendpays_done(struct command *cmd,
 				   __func__, err);
 
 		if (streq(status, "pending")) {
+			has_pending = true;
 			pending_group_id = groupid;
-			break;
 		}
+		tal_arr_expand(&groupid_arr, groupid);
 	}
+	assert(tal_count(groupid_arr) == arr->size);
 
 	/* We need two loops to get the highest partid for a groupid that has
 	 * pending sendpays. */
 	json_for_each_arr(i, t, arr)
 	{
-		u32 partid = 0, groupid;
+		u64 partid = 0, groupid;
 		struct amount_msat this_msat, this_sent;
 		const char *status;
 
@@ -1003,8 +1030,8 @@ static struct command_result *pendingsendpays_done(struct command *cmd,
 				",amount_msat:%"
 				",amount_sent_msat:%}",
 				JSON_SCAN_TAL(tmpctx, json_strdup, &status),
-				JSON_SCAN(json_to_u32, &partid),
-				JSON_SCAN(json_to_u32, &groupid),
+				JSON_SCAN(json_to_u64, &partid),
+				JSON_SCAN(json_to_u64, &groupid),
 				JSON_SCAN(json_to_msat, &this_msat),
 				JSON_SCAN(json_to_msat, &this_sent));
 
@@ -1014,12 +1041,8 @@ static struct command_result *pendingsendpays_done(struct command *cmd,
 				   "following error: %s",
 				   __func__, err);
 
-		/* If we decide to create a new group, we base it on
-		 * max_group_id */
-		if (groupid > max_group_id)
-			max_group_id = groupid;
-
-		if (groupid == pending_group_id && partid > max_pending_partid)
+		if (has_pending && groupid == pending_group_id &&
+		    partid > max_pending_partid)
 			max_pending_partid = partid;
 
 		/* status could be completed, pending or failed */
@@ -1043,7 +1066,17 @@ static struct command_result *pendingsendpays_done(struct command *cmd,
 		assert(!streq(status, "complete"));
 	}
 
-	if (pending_group_id != INVALID_ID) {
+	/* find the first unused groupid */
+	unused_groupid = 1;
+	asort(groupid_arr, tal_count(groupid_arr), cmp_u64, NULL);
+	for (i = 0; i < tal_count(groupid_arr); i++) {
+		if (unused_groupid < groupid_arr[i])
+			break;
+		if (unused_groupid == groupid_arr[i])
+			unused_groupid++;
+	}
+
+	if (has_pending) {
 		/* Continue where we left off? */
 		payment->groupid = pending_group_id;
 		payment->next_partid = max_pending_partid + 1;
@@ -1052,16 +1085,16 @@ static struct command_result *pendingsendpays_done(struct command *cmd,
 
 		plugin_log(pay_plugin->plugin, LOG_DBG,
 			   "There are pending sendpays to this invoice. "
-			   "groupid = %" PRIu32 " "
+			   "groupid = %" PRIu64 " "
 			   "delivering = %s, "
-			   "last_partid = %" PRIu32,
+			   "last_partid = %" PRIu64,
 			   pending_group_id,
 			   fmt_amount_msat(tmpctx, payment->total_delivering),
 			   max_pending_partid);
 	} else {
 		/* There are no pending nor completed sendpays, get me the last
 		 * sendpay group. */
-		payment->groupid = max_group_id + 1;
+		payment->groupid = unused_groupid;
 		payment->next_partid = 1;
 		payment->total_sent = AMOUNT_MSAT(0);
 		payment->total_delivering = AMOUNT_MSAT(0);
@@ -1225,25 +1258,26 @@ REGISTER_PAYMENT_CONDITION(retry, retry_cb);
 // add check pre-approved invoice
 void *payment_virtual_program[] = {
     /*0*/ OP_CALL, &previoussuccess_pay_mod,
-    /*2*/ OP_CALL, &selfpay_pay_mod,
-    /*4*/ OP_CALL, &knowledgerelax_pay_mod,
-    /*6*/ OP_CALL, &getmychannels_pay_mod,
+    /*2*/ OP_CALL, &knowledgerelax_pay_mod,
+    /*4*/ OP_CALL, &getmychannels_pay_mod,
+    /*6*/ OP_CALL, &selfpay_pay_mod,
     /*8*/ OP_CALL, &refreshgossmap_pay_mod,
     /*10*/ OP_CALL, &routehints_pay_mod,
-    /*12*/OP_CALL, &channelfilter_pay_mod,
+    /*12*/ OP_CALL, &blindedhints_pay_mod,
+    /*14*/OP_CALL, &channelfilter_pay_mod,
     // TODO shadow_additions
     /* do */
-	    /*14*/ OP_CALL, &pendingsendpays_pay_mod,
-	    /*16*/ OP_CALL, &checktimeout_pay_mod,
-	    /*18*/ OP_CALL, &refreshgossmap_pay_mod,
-	    /*20*/ OP_CALL, &compute_routes_pay_mod,
-	    /*22*/ OP_CALL, &send_routes_pay_mod,
+	    /*16*/ OP_CALL, &pendingsendpays_pay_mod,
+	    /*18*/ OP_CALL, &checktimeout_pay_mod,
+	    /*20*/ OP_CALL, &refreshgossmap_pay_mod,
+	    /*22*/ OP_CALL, &compute_routes_pay_mod,
+	    /*24*/ OP_CALL, &send_routes_pay_mod,
 	    /*do*/
-		    /*24*/ OP_CALL, &sleep_pay_mod,
-		    /*26*/ OP_CALL, &collect_results_pay_mod,
+		    /*26*/ OP_CALL, &sleep_pay_mod,
+		    /*28*/ OP_CALL, &collect_results_pay_mod,
 	    /*while*/
-	    /*28*/ OP_IF, &nothaveresults_pay_cond, (void *)24,
+	    /*30*/ OP_IF, &nothaveresults_pay_cond, (void *)26,
     /* while */
-    /*31*/ OP_IF, &retry_pay_cond, (void *)14,
-    /*34*/ OP_CALL, &end_pay_mod, /* safety net, default failure if reached */
-    /*36*/ NULL};
+    /*33*/ OP_IF, &retry_pay_cond, (void *)16,
+    /*36*/ OP_CALL, &end_pay_mod, /* safety net, default failure if reached */
+    /*38*/ NULL};

@@ -1,9 +1,9 @@
 #include "config.h"
 #include <plugins/renepay/route.h>
 
-struct route *new_route(const tal_t *ctx, u32 groupid,
-			u32 partid, struct sha256 payment_hash,
-			struct amount_msat amount,
+struct route *new_route(const tal_t *ctx, u64 groupid,
+			u64 partid, struct sha256 payment_hash,
+			struct amount_msat amount_deliver,
 			struct amount_msat amount_sent)
 {
 	struct route *route = tal(ctx, struct route);
@@ -17,8 +17,10 @@ struct route *new_route(const tal_t *ctx, u32 groupid,
 	route->success_prob = 0.0;
 	route->result = NULL;
 
-	route->amount = amount;
+	route->amount_deliver = amount_deliver;
 	route->amount_sent = amount_sent;
+	route->path_num = -1;
+	route->shared_secrets = NULL;
 	return route;
 }
 
@@ -30,9 +32,10 @@ struct route *new_route(const tal_t *ctx, u32 groupid,
  * @gossmap: global gossmap
  * @flow: the flow to convert to route */
 struct route *flow_to_route(const tal_t *ctx,
-			    u32 groupid, u32 partid, struct sha256 payment_hash,
+			    u64 groupid, u64 partid, struct sha256 payment_hash,
 			    u32 final_cltv, struct gossmap *gossmap,
-			    struct flow *flow)
+			    struct flow *flow,
+			    bool blinded_destination)
 {
 	struct route *route =
 	    new_route(ctx, groupid, partid, payment_hash,
@@ -65,8 +68,14 @@ struct route *flow_to_route(const tal_t *ctx,
 			goto function_fail;
 	}
 	route->success_prob = flow->success_prob;
-	route->amount = route->hops[pathlen - 1].amount;
+	route->amount_deliver = route->hops[pathlen - 1].amount;
 	route->amount_sent = route->hops[0].amount;
+
+	if (blinded_destination) {
+		route->path_num = route->hops[pathlen - 1].scid.u64;
+		tal_arr_remove(&route->hops, pathlen - 1);
+	}
+
 	return route;
 
 function_fail:
@@ -74,7 +83,7 @@ function_fail:
 }
 
 struct route **flows_to_routes(const tal_t *ctx,
-			       u32 groupid, u32 partid,
+			       u64 groupid, u64 partid,
 			       struct sha256 payment_hash, u32 final_cltv,
 			       struct gossmap *gossmap, struct flow **flows)
 {
@@ -85,7 +94,8 @@ struct route **flows_to_routes(const tal_t *ctx,
 	for (size_t i = 0; i < N; i++) {
 		routes[i] =
 		    flow_to_route(routes, groupid, partid++,
-				  payment_hash, final_cltv, gossmap, flows[i]);
+				  payment_hash, final_cltv, gossmap, flows[i],
+				  false);
 		if (!routes[i])
 			goto function_fail;
 	}

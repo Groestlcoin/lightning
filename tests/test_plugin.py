@@ -221,7 +221,7 @@ def test_plugin_dir(node_factory):
 
 def test_plugin_slowinit(node_factory):
     """Tests that the 'plugin' RPC command times out if plugin doesnt respond"""
-    os.environ['SLOWINIT_TIME'] = '61'
+    os.environ['SLOWINIT_TIME'] = '121'
     n = node_factory.get_node()
 
     with pytest.raises(RpcError, match=': timed out before replying to init'):
@@ -2696,7 +2696,7 @@ def test_commando(node_factory, executor):
     l1, l2 = node_factory.line_graph(2, fundchannel=False,
                                      opts={'log-level': 'io', 'allow-deprecated-apis': True})
 
-    rune = l1.rpc.commando_rune()['rune']
+    rune = l1.rpc.createrune()['rune']
 
     # Bad rune fails
     with pytest.raises(RpcError, match="Not authorized: Not derived from master"):
@@ -2792,6 +2792,7 @@ def test_commando(node_factory, executor):
 def test_commando_rune(node_factory):
     l1, l2 = node_factory.line_graph(2, fundchannel=False, opts={
         'allow-deprecated-apis': True,
+        'broken_log': 'DEPRECATED API USED commando-rune'
     })
 
     rune1 = l1.rpc.commando_rune()
@@ -2931,9 +2932,8 @@ def test_commando_rune(node_factory):
 
 
 def test_commando_listrunes(node_factory):
-    l1 = node_factory.get_node(options={
-        'allow-deprecated-apis': True,
-    })
+    l1 = node_factory.get_node(options={'allow-deprecated-apis': True},
+                               broken_log='DEPRECATED API USED commando-rune|DEPRECATED API USED commando-listrunes')
     rune = l1.rpc.commando_rune()
     assert rune == {
         'rune': 'OSqc7ixY6F-gjcigBfxtzKUI54uzgFSA6YfBQoWGDV89MA==',
@@ -2975,6 +2975,7 @@ def test_commando_listrunes(node_factory):
 def test_commando_rune_pay_amount(node_factory):
     l1, l2 = node_factory.line_graph(2, opts={
         'allow-deprecated-apis': True,
+        'broken_log': 'DEPRECATED API USED commando-rune'
     })
 
     # This doesn't really work, since amount_msat is illegal if invoice
@@ -3029,6 +3030,7 @@ def test_commando_rune_pay_amount(node_factory):
 def test_commando_blacklist(node_factory):
     l1, l2 = node_factory.get_nodes(2, opts={
         'allow-deprecated-apis': True,
+        'broken_log': 'DEPRECATED API USED commando-rune|DEPRECATED API USED commando-blacklist|DEPRECATED API USED commando-listrunes',
     })
 
     l2.connect(l1)
@@ -3116,7 +3118,7 @@ def test_commando_stress(node_factory, executor):
         'allow-deprecated-apis': True,
     })
 
-    rune = nodes[0].rpc.commando_rune()['rune']
+    rune = nodes[0].rpc.createrune()['rune']
     for n in nodes[1:]:
         n.connect(nodes[0])
 
@@ -3150,9 +3152,9 @@ def test_commando_stress(node_factory, executor):
 
 def test_commando_badrune(node_factory):
     """Test invalid UTF-8 encodings in rune: used to make us kill the offers plugin which implements decode, as it gave bad utf8!"""
-    l1 = node_factory.get_node(options={
-        'allow-deprecated-apis': True,
-    })
+    l1 = node_factory.get_node(options={'allow-deprecated-apis': True},
+                               broken_log='DEPRECATED API USED commando-rune')
+
     l1.rpc.decode('5zi6-ugA6hC4_XZ0R7snl5IuiQX4ugL4gm9BQKYaKUU9gCZtZXRob2RebGlzdHxtZXRob2ReZ2V0fG1ldGhvZD1zdW1tYXJ5Jm1ldGhvZC9saXN0ZGF0YXN0b3Jl')
     rune = l1.rpc.commando_rune(restrictions="readonly")
 
@@ -3263,7 +3265,7 @@ def test_autoclean(node_factory):
     # Now enable: they will get autocleaned
     l3.rpc.setconfig('autoclean-expiredinvoices-age', 2)
     wait_for(lambda: len(l3.rpc.listinvoices()['invoices']) == 2)
-    assert l3.rpc.autoclean_status()['autoclean']['expiredinvoices']['cleaned'] == 3
+    wait_for(lambda: l3.rpc.autoclean_status()['autoclean']['expiredinvoices']['cleaned'] == 3)
 
     # Reconnect, l1 pays invoice, we test paid expiry.
     l2.rpc.connect(l3.info['id'], 'localhost', l3.port)
@@ -3281,7 +3283,7 @@ def test_autoclean(node_factory):
 
     wait_for(lambda: l3.rpc.listinvoices()['invoices'] == [])
     assert l3.rpc.autoclean_status()['autoclean']['expiredinvoices']['cleaned'] == 3
-    assert l3.rpc.autoclean_status()['autoclean']['paidinvoices']['cleaned'] == 1
+    wait_for(lambda: l3.rpc.autoclean_status()['autoclean']['paidinvoices']['cleaned'] == 1)
 
     assert only_one(l1.rpc.listpays(inv5['bolt11'])['pays'])['status'] == 'failed'
     assert only_one(l1.rpc.listpays(inv4['bolt11'])['pays'])['status'] == 'complete'
@@ -3289,7 +3291,7 @@ def test_autoclean(node_factory):
     l1.rpc.setconfig('autoclean-cycle', 5)
 
     wait_for(lambda: l1.rpc.listpays(inv5['bolt11'])['pays'] == [])
-    assert l1.rpc.autoclean_status()['autoclean']['failedpays']['cleaned'] == 1
+    wait_for(lambda: l1.rpc.autoclean_status()['autoclean']['failedpays']['cleaned'] == 1)
     assert l1.rpc.autoclean_status()['autoclean']['succeededpays']['cleaned'] == 0
 
     l1.rpc.setconfig('autoclean-succeededpays-age', 2)
@@ -3307,7 +3309,7 @@ def test_autoclean(node_factory):
     wait_for(lambda: l2.rpc.listforwards(status='failed')['forwards'] == [])
 
     assert len(l2.rpc.listforwards(status='settled')['forwards']) == 1
-    assert l2.rpc.autoclean_status()['autoclean']['failedforwards']['cleaned'] == 1
+    wait_for(lambda: l2.rpc.autoclean_status()['autoclean']['failedforwards']['cleaned'] == 1)
     assert l2.rpc.autoclean_status()['autoclean']['succeededforwards']['cleaned'] == 0
 
     amt_before = l2.rpc.getinfo()['fees_collected_msat']
@@ -3317,7 +3319,7 @@ def test_autoclean(node_factory):
     wait_for(lambda: l2.rpc.listforwards(status='settled')['forwards'] == [])
     assert l2.rpc.listforwards() == {'forwards': []}
     assert l2.rpc.autoclean_status()['autoclean']['failedforwards']['cleaned'] == 1
-    assert l2.rpc.autoclean_status()['autoclean']['succeededforwards']['cleaned'] == 1
+    wait_for(lambda: l2.rpc.autoclean_status()['autoclean']['succeededforwards']['cleaned'] == 1)
 
     # We still see correct total in getinfo!
     assert l2.rpc.getinfo()['fees_collected_msat'] == amt_before

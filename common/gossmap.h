@@ -6,6 +6,7 @@
 #include <ccan/typesafe_cb/typesafe_cb.h>
 #include <common/amount.h>
 #include <common/fp16.h>
+#include <common/status_levels.h>
 
 struct node_id;
 struct sciddir_or_pubkey;
@@ -42,46 +43,36 @@ struct gossmap_chan {
 
 /* If num_channel_updates_rejected is not NULL, indicates how many channels we
  * marked inactive because their values were too high to be represented. */
-struct gossmap *gossmap_load(const tal_t *ctx, const char *filename,
-			     size_t *num_channel_updates_rejected);
+#define gossmap_load(ctx, filename, logcb, cbarg)			\
+	gossmap_load_((ctx), (filename), (0),				\
+		      typesafe_cb_postargs(void, void *, (logcb), (cbarg), \
+					   enum log_level,		\
+					   const char *fmt,		\
+					   ...),			\
+		      (cbarg))
 
-/* Version which uses existing fd */
-#define gossmap_load_fd(ctx, fd, cupdate_fail, unknown_record, cbarg)	\
-	gossmap_load_fd_((ctx), (fd),					\
-			 typesafe_cb_preargs(void, void *, (cupdate_fail), (cbarg), \
-					     struct gossmap *,		\
-					     const struct short_channel_id_dir *, \
-					     u16 cltv_expiry_delta,	\
-					     u32 fee_base_msat,		\
-					     u32 fee_proportional_millionths), \
-			 typesafe_cb_preargs(bool, void *, (unknown_record), (cbarg), \
-					     struct gossmap *,		\
-					     int type,			\
-					     u64 off,			\
-					     size_t msglen),		\
-			 (cbarg))
+/* If we're the author of the gossmap, it should have no redundant records, corruption, etc.
+ * So this fails if that's not the case. */
+#define gossmap_load_initial(ctx, filename, expected_len, logcb, cbarg)	\
+	gossmap_load_((ctx), (filename), (expected_len),			\
+		      typesafe_cb_postargs(void, void *, (logcb), (cbarg), \
+					   enum log_level,		\
+					   const char *fmt,		\
+					   ...),			\
+		      (cbarg))
 
-struct gossmap *gossmap_load_fd_(const tal_t *ctx, int fd,
-				 void (*cupdate_fail)(struct gossmap *map,
-						      const struct short_channel_id_dir *scidd,
-						      u16 cltv_expiry_delta,
-						      u32 fee_base_msat,
-						      u32 fee_proportional_millionths,
-						      void *cb_arg),
-				 bool (*unknown_record)(struct gossmap *map,
-							int type,
-							u64 off,
-							size_t msglen,
-							void *cb_arg),
-				 void *cb_arg);
-
+struct gossmap *gossmap_load_(const tal_t *ctx,
+			      const char *filename,
+			      u64 expected_len,
+			      void (*logcb)(void *cb_arg,
+					    enum log_level level,
+					    const char *fmt,
+					    ...),
+			      void *cb_arg);
 
 /* Call this before using to ensure it's up-to-date.  Returns true if something
  * was updated. Note: this can scramble node and chan indexes! */
-bool gossmap_refresh(struct gossmap *map, size_t *num_channel_updates_rejected);
-
-/* Call this if you have set unknown_cb, and thus this can fail! */
-bool gossmap_refresh_mayfail(struct gossmap *map, bool *updated);
+bool gossmap_refresh(struct gossmap *map);
 
 /* Local modifications. */
 struct gossmap_localmods *gossmap_localmods_new(const tal_t *ctx);
@@ -313,4 +304,7 @@ u64 gossmap_lengths(const struct gossmap *map, u64 *total);
 
 /* Debugging: connectd wants to enumerate fds */
 int gossmap_fd(const struct gossmap *map);
+
+/* Fetch unprocessed part of gossmap */
+const u8 *gossmap_fetch_tail(const tal_t *ctx, const struct gossmap *map);
 #endif /* LIGHTNING_COMMON_GOSSMAP_H */

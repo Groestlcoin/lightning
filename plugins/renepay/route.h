@@ -29,13 +29,13 @@ enum sendpay_result_status {
 struct payment_result {
 	/* DB internal id */
 	// TODO check all this variables
-	u64 id;
+	u64 *created_index;
 	struct preimage *payment_preimage;
 	enum sendpay_result_status status;
 	struct amount_msat amount_sent;
 	enum jsonrpc_errcode code;
 	const char *failcodename;
-	enum onion_wire failcode;
+	enum onion_wire *failcode;
 	const u8 *raw_message;
 	const char *message;
 	u32 *erring_index;
@@ -59,15 +59,23 @@ struct route {
 	/* The series of channels and nodes to traverse. */
 	struct route_hop *hops;
 
+	/* shared secrets to unwrap the onions */
+	struct secret *shared_secrets;
+
 	/* amounts are redundant here if we know the hops, however sometimes we
-	 * don't know the hops, eg. by calling listsendpays */
-	struct amount_msat amount, amount_sent;
+	 * don't know the hops, eg. by calling listsendpays, or if we have
+	 * blinded paths */
+	struct amount_msat amount_sent;
+	struct amount_msat amount_deliver;
 
 	/* Probability estimate (0-1) */
 	double success_prob;
 
 	/* result of waitsenday */
 	struct payment_result *result;
+
+	/* blinded path index if any */
+	int path_num;
 };
 
 static inline struct routekey routekey(const struct sha256 *hash, u64 groupid,
@@ -109,18 +117,19 @@ static inline bool routekey_equal(const struct route *route,
 HTABLE_DEFINE_NODUPS_TYPE(struct route, route_get_key, routekey_hash, routekey_equal,
 			  route_map);
 
-struct route *new_route(const tal_t *ctx, u32 groupid,
-			u32 partid, struct sha256 payment_hash,
+struct route *new_route(const tal_t *ctx, u64 groupid,
+			u64 partid, struct sha256 payment_hash,
 			struct amount_msat amount,
 			struct amount_msat amount_sent);
 
 struct route *flow_to_route(const tal_t *ctx,
-			    u32 groupid, u32 partid, struct sha256 payment_hash,
+			    u64 groupid, u64 partid, struct sha256 payment_hash,
 			    u32 final_cltv, struct gossmap *gossmap,
-			    struct flow *flow);
+			    struct flow *flow,
+			    bool blinded_destination);
 
 struct route **flows_to_routes(const tal_t *ctx,
-			       u32 groupid, u32 partid,
+			       u64 groupid, u64 partid,
 			       struct sha256 payment_hash, u32 final_cltv,
 			       struct gossmap *gossmap, struct flow **flows);
 
@@ -138,11 +147,7 @@ const char *fmt_route_path(const tal_t *ctx, const struct route *route);
 static inline struct amount_msat route_delivers(const struct route *route)
 {
 	assert(route);
-	if (route->hops && tal_count(route->hops) > 0)
-		assert(amount_msat_eq(
-		    route->amount,
-		    route->hops[tal_count(route->hops) - 1].amount));
-	return route->amount;
+	return route->amount_deliver;
 }
 static inline struct amount_msat route_sends(const struct route *route)
 {
@@ -165,7 +170,8 @@ static inline u32 route_delay(const struct route *route)
 {
 	assert(route);
 	assert(route->hops);
-	assert(tal_count(route->hops) > 0);
+	if (tal_count(route->hops) == 0)
+		return 0;
 	const size_t pathlen = tal_count(route->hops);
 	assert(route->hops[0].delay >= route->hops[pathlen - 1].delay);
 	return route->hops[0].delay - route->hops[pathlen - 1].delay;

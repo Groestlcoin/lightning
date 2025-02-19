@@ -94,15 +94,15 @@ static bool print_offer_amount(const struct bitcoin_blkid *chains,
 	unsigned int minor_unit;
 	bool ok = true;
 
-	/* BOLT-offers #12:
+	/* BOLT #12:
 	 * - if a specific minimum `offer_amount` is required for successful payment:
 	 *   - MUST set `offer_amount` to the amount expected (per item).
 	 *   - if the currency for `offer_amount` is that of all entries in `chains`:
-	 *     - MUST specify `amount` in multiples of the minimum lightning-payable unit
+	 *     - MUST specify `offer_amount` in multiples of the minimum lightning-payable unit
 	 *       (e.g. milli-satoshis for bitcoin).
 	 *   - otherwise:
-	 *     - MUST specify `offer_currency` `iso4217` as an ISO 4712 three-letter code.
-	 *     - MUST specify `offer_amount` in the currency unit adjusted by the ISO 4712
+	 *     - MUST specify `offer_currency` `iso4217` as an ISO 4217 three-letter code.
+	 *     - MUST specify `offer_amount` in the currency unit adjusted by the ISO 4217
 	 *       exponent (e.g. USD cents).
 	 *   - MUST set `offer_description` to a complete description of the purpose
 	 *       of the payment.
@@ -183,7 +183,7 @@ static bool print_recurrance(const struct recurrence *recurrence,
 	const char *unit;
 	bool ok = true;
 
-	/* BOLT-offers-recurrence #12:
+	/* BOLT-recurrence #12:
 	 * Thus, each offer containing a recurring payment has:
 	 * 1. A `time_unit` defining 0 (seconds), 1 (days), 2 (months),
 	 *    3 (years).
@@ -363,7 +363,7 @@ static void print_relative_expiry(u64 *created_at, u32 *relative)
 	if (!created_at)
 		return;
 
-	/* BOLT-offers #12:
+	/* BOLT #12:
 	 * - if `invoice_relative_expiry` is present:
 	 *   - MUST reject the invoice if the current time since 1970-01-01 UTC
 	 *     is greater than `invoice_created_at` plus `seconds_from_creation`.
@@ -395,6 +395,35 @@ static void print_msat(const char *fieldname, u64 amount)
 	printf("%s: %s\n", fieldname, fmt_amount_msat(tmpctx, amount_msat(amount)));
 }
 
+/* FIXME: Can name and domain be missing? */
+static bool print_bip353_name(const char *fieldname,
+			      const u8 *bip353_name, const u8 *bip353_domain)
+{
+	/* BOLT #12:
+	 *   - if `invreq_bip_353_name` is present:
+	 *    - MUST reject the invoice request if `name` or `domain`
+	 *      contain any bytes which are not `0`-`9`, `a`-`z`,
+	 *      `A`-`Z`, `-`, `_` or `.`.
+	 */
+	if (!bolt12_bip353_valid_string(bip353_name,
+					tal_bytelen(bip353_name))) {
+		fprintf(stderr, "Invalid chars in invreq_bip_353_name.name\n");
+		return false;
+	}
+	if (!bolt12_bip353_valid_string(bip353_domain,
+					tal_bytelen(bip353_domain))) {
+		fprintf(stderr, "Invalid chars in invreq_bip_353_name.domain\n");
+		return false;
+	}
+	if (bip353_name)
+		printf("%s.name: %.*s\n", fieldname,
+		       (int)tal_bytelen(bip353_name), (char *)bip353_name);
+	if (bip353_domain)
+		printf("%s.domain: %.*s\n", fieldname,
+		       (int)tal_bytelen(bip353_domain), (char *)bip353_domain);
+	return true;
+}
+
 static bool print_extra_fields(const struct tlv_field *fields)
 {
 	bool ok = true;
@@ -424,7 +453,7 @@ static u64 get_offer_type(const char *name)
 		const char *name;
 		u64 val;
 	} map[] = {
-		/* BOLT-offers #12:
+		/* BOLT #12:
 		 * 1. `tlv_stream`: `offer`
 		 * 2. types:
 		 *     1. type: 2 (`offer_chains`)
@@ -472,7 +501,7 @@ static u64 get_offer_type(const char *name)
 		{ "offer_issuer", 18 },
 		{ "offer_quantity_max", 20 },
 		{ "offer_issuer_id", 22 },
-		/* BOLT-offers #12:
+		/* BOLT #12:
 		 * 1. `tlv_stream`: `invoice_request`
 		 * 2. types:
 		 *     1. type: 0 (`invreq_metadata`)
@@ -532,6 +561,12 @@ static u64 get_offer_type(const char *name)
 		 *     1. type: 90 (`invreq_paths`)
 		 *     2. data:
 		 *         * [`...*blinded_path`:`paths`]
+		 *     1. type: 91 (`invreq_bip_353_name`)
+		 *     2. data:
+		 *         * [`u8`:`name_len`]
+		 *         * [`name_len*byte`:`name`]
+		 *         * [`u8`:`domain_len`]
+		 *         * [`domain_len*byte`:`domain`]
 		 *     1. type: 240 (`signature`)
 		 *     2. data:
 		 *         * [`bip340sig`:`sig`]
@@ -544,8 +579,9 @@ static u64 get_offer_type(const char *name)
 		 { "invreq_payer_id", 88 },
 		 { "invreq_payer_note", 89 },
 		 { "invreq_paths", 90 },
+		 { "invreq_bip_353_name", 91 },
 		 { "signature", 240 },
-		/* BOLT-offers #12:
+		/* BOLT #12:
 		 * 1. `tlv_stream`: `invoice`
 		 * 2. types:
 		 *     1. type: 0 (`invreq_metadata`)
@@ -797,7 +833,7 @@ int main(int argc, char *argv[])
 							  *offer->offer_amount);
 		if (offer->offer_description)
 			well_formed &= print_utf8("offer_description", offer->offer_description);
-		/* BOLT-offers #12:
+		/* BOLT #12:
 		 *   - if `offer_amount` is set and `offer_description` is not set:
 		 *     - MUST NOT respond to the offer.
 		 */
@@ -817,7 +853,7 @@ int main(int argc, char *argv[])
 			print_u64("offer_quantity_max", *offer->offer_quantity_max);
 		if (offer->offer_issuer_id)
 			print_node_id("offer_issuer_id", offer->offer_issuer_id);
-		/* BOLT-offers #12:
+		/* BOLT #12:
 		 *
 		 *   - if neither `offer_issuer_id` nor `offer_paths` are set:
 		 *     - MUST NOT respond to the offer.
@@ -897,12 +933,16 @@ int main(int argc, char *argv[])
 		if (invreq->invreq_paths)
 			print_blindedpaths("invreq_paths", invreq->invreq_paths, NULL);
 		if (must_have(invreq, signature)) {
-			well_formed = print_signature("invoice_request",
-						      "signature",
-						      invreq->fields,
-						      invreq->invreq_payer_id,
-						      invreq->signature);
+			well_formed &= print_signature("invoice_request",
+						       "signature",
+						       invreq->fields,
+						       invreq->invreq_payer_id,
+						       invreq->signature);
 		}
+		if (invreq->invreq_bip_353_name)
+			well_formed &= print_bip353_name("invreq_bip_353_name",
+							 invreq->invreq_bip_353_name->name,
+							 invreq->invreq_bip_353_name->domain);
 		if (!print_extra_fields(invreq->fields))
 			well_formed = false;
 	} else if (streq(hrp, "lni")) {
@@ -990,6 +1030,10 @@ int main(int argc, char *argv[])
 			print_features("invoice_features", invoice->invoice_features);
 		if (must_have(invoice, invoice_node_id))
 			print_node_id("invoice_node_id", invoice->invoice_node_id);
+		if (invoice->invreq_bip_353_name)
+			well_formed &= print_bip353_name("invreq_bip_353_name",
+							 invoice->invreq_bip_353_name->name,
+							 invoice->invreq_bip_353_name->domain);
 		if (must_have(invoice, signature))
 			well_formed &= print_signature("invoice", "signature",
 						       invoice->fields,

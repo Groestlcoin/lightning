@@ -48,6 +48,10 @@ struct wallet {
 	 * the blockchain. This is currently all P2WSH outputs */
 	struct outpointfilter *utxoset_outpoints;
 
+	/* Our issued wallet addresses.  We update on lookup. */
+	u32 our_addresses_maxindex;
+	struct wallet_address_htable *our_addresses;
+
 	/* How many keys should we look ahead at most? */
 	u64 keyscan_gap;
 };
@@ -274,6 +278,7 @@ static inline enum channel_state channel_state_in_db(enum channel_state s)
 /* /!\ This is a DB ENUM, please do not change the numbering of any
  * already defined elements (adding is ok) /!\ */
 enum addrtype {
+	ADDR_P2SH_SEGWIT = 1,
 	ADDR_BECH32 = 2,
 	ADDR_P2TR = 4,
 	ADDR_ALL = (ADDR_BECH32 + ADDR_P2TR)
@@ -291,6 +296,10 @@ static inline enum addrtype wallet_addrtype_in_db(enum addrtype t)
 	case ADDR_ALL:
 		BUILD_ASSERT(ADDR_ALL == 6);
 		return t;
+	/* This existed, but is NEVER placed into db */
+	case ADDR_P2SH_SEGWIT:
+		BUILD_ASSERT(ADDR_P2SH_SEGWIT == 1);
+		break;
 	}
 	fatal("%s: %u is invalid", __func__, t);
 }
@@ -601,8 +610,12 @@ s64 wallet_get_newindex(struct lightningd *ld, enum addrtype addrtype);
  * wallet_get_addrtype - get the address types for this key.
  * @wallet: (in) wallet
  * @keyidx: what address types we've published.
+ * @addrtype: filled in if true.
+ *
+ * If we don't know, returns false.
  */
-enum addrtype wallet_get_addrtype(struct wallet *w, u64 keyidx);
+bool wallet_get_addrtype(struct wallet *wallet, u64 idx,
+			 enum addrtype *addrtype);
 
 /**
  * wallet_shachain_add_hash -- wallet wrapper around shachain_add_hash

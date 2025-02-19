@@ -4438,7 +4438,8 @@ def test_fetchinvoice(node_factory, bitcoind):
     l1, l2, l3 = node_factory.line_graph(3, wait_for_announce=True,
                                          opts=[{},
                                                {},
-                                               {'broken_log': "plugin-offers: Failed invreq.*Unknown command 'currencyconvert'"}])
+                                               {'broken_log': "plugin-offers: Failed invreq.*Unknown command 'currencyconvert'",
+                                                'dev-allow-localhost': None}])
 
     # Simple offer first.
     offer1 = l3.rpc.call('offer', {'amount': '2msat',
@@ -4534,12 +4535,28 @@ def test_fetchinvoice(node_factory, bitcoind):
                                    'description': 'offer3'})
     l4 = node_factory.get_node()
     l4.rpc.connect(l2.info['id'], 'localhost', l2.port)
+    time.sleep(0.25)
     # ... even if we can't find ourselves.
     l4.rpc.call('fetchinvoice', {'offer': offer3['bolt12']})
     # ... even if we know it from gossmap
     wait_for(lambda: l4.rpc.listnodes(l3.info['id'])['nodes'] != [])
     l4.rpc.connect(l3.info['id'], 'localhost', l3.port)
     l4.rpc.call('fetchinvoice', {'offer': offer1['bolt12']})
+
+    # We've done 3 onion calls: sleep now to avoid hitting ratelimit!
+    time.sleep(1)
+
+    # Test bip353.
+    inv1 = l1.rpc.call('fetchinvoice', {'offer': offer1['bolt12'], 'bip353': '₿rusty@blockstream.com'})['invoice']
+    assert l1.rpc.decode(inv1)['invreq_bip_353_name'] == {'name': 'rusty',
+                                                          'domain': 'blockstream.com'}
+    # Without ₿ works too.
+    inv1 = l1.rpc.call('fetchinvoice', {'offer': offer1['bolt12'], 'bip353': 'rusty@blockstream.com'})['invoice']
+    assert l1.rpc.decode(inv1)['invreq_bip_353_name'] == {'name': 'rusty',
+                                                          'domain': 'blockstream.com'}
+    # Needs @
+    with pytest.raises(RpcError, match="missing @"):
+        l1.rpc.call('fetchinvoice', {'offer': offer1['bolt12'], 'bip353': 'rustyblockstream.com'})
 
     # We've done 3 onion calls: sleep now to avoid hitting ratelimit!
     time.sleep(1)
@@ -4570,7 +4587,8 @@ def test_fetchinvoice(node_factory, bitcoind):
 
 def test_fetchinvoice_recurrence(node_factory, bitcoind):
     """Test for our recurrence extension"""
-    l1, l2, l3 = node_factory.line_graph(3, wait_for_announce=True)
+    l1, l2, l3 = node_factory.line_graph(3, wait_for_announce=True,
+                                         opts=[{}, {'dev-allow-localhost': None}, {}])
 
     # Recurring offer.
     offer3 = l2.rpc.call('offer', {'amount': '1msat',
@@ -5246,7 +5264,7 @@ def test_payerkey(node_factory):
     # Now we are supposed to put invreq_payer_id inside invreq, and lightningd
     # checks the derivation as a courtesy.  Fortunately, invreq_payer_id is last
     for n, k in zip(nodes, expected_keys):
-        # BOLT-offers #12:
+        # BOLT #12:
         #     1. type: 88 (`invreq_payer_id`)
         #     2. data:
         #        * [`point`:`key`]
@@ -5618,8 +5636,10 @@ def test_pay_partial_msat(node_factory, executor):
 
 def test_blindedpath_privchan(node_factory, bitcoind):
     l1, l2 = node_factory.line_graph(2, wait_for_announce=True,
-                                     opts={'may_reconnect': True})
-    l3 = node_factory.get_node(options={'cltv-final': 120},
+                                     opts={'may_reconnect': True,
+                                           'dev-allow-localhost': None})
+    l3 = node_factory.get_node(options={'cltv-final': 120,
+                                        'dev-allow-localhost': None},
                                may_reconnect=True)
 
     # Private channel.
@@ -5657,6 +5677,25 @@ def test_blindedpath_privchan(node_factory, bitcoind):
     assert decode['invoice_paths'][0]['first_scid_dir'] == chan['direction']
 
     l1.rpc.pay(inv['invoice'])
+
+
+def test_blindedpath_noaddr(node_factory, bitcoind):
+    l1, l2 = node_factory.line_graph(2, wait_for_announce=True,
+                                     opts={'dev-allow-localhost': None})
+
+    # Another channel.
+    l3 = node_factory.get_node()
+
+    node_factory.join_nodes([l2, l3], wait_for_announce=True)
+    # Make sure l3 knows about l1-l2, so will add route hint.
+    wait_for(lambda: l3.rpc.listnodes(l1.info['id']) != {'nodes': []})
+
+    offer = l3.rpc.offer(1000, 'test_pay_blindedpath_nodeaddr')
+    assert only_one(l1.rpc.decode(offer['bolt12'])['offer_paths'])['first_node_id'] == l2.info['id']
+
+    # But l2 has a public address, so doesn't bother.
+    offer = l2.rpc.offer(1000, 'test_pay_blindedpath_nodeaddr')
+    assert 'offer_paths' not in l1.rpc.decode(offer['bolt12'])
 
 
 def test_blinded_reply_path_scid(node_factory):
@@ -5914,7 +5953,7 @@ def test_fetch_no_description_with_amount(node_factory):
     l1, l2 = node_factory.line_graph(2, opts={'allow-deprecated-apis': True})
 
     # Deprecated fields make schema checker upset.
-    # BOLT-offers #12:
+    # BOLT #12:
     #
     # - if offer_amount is set and offer_description is not set:
     #   - MUST NOT respond to the offer.
@@ -6383,9 +6422,10 @@ def test_injectpaymentonion_selfpay(node_factory, executor):
 
 def test_injectpaymentonion_blindedpath(node_factory, executor):
     l1, l2 = node_factory.line_graph(2,
-                                     wait_for_announce=True)
+                                     wait_for_announce=True,
+                                     # avoids trying to create a blinded path to next node
+                                     opts=[{}, {'dev-allow-localhost': None}])
     blockheight = l1.rpc.getinfo()['blockheight']
-
     # Test bolt12, with stub blinded path.
     offer = l2.rpc.offer('any')
     inv7 = l1.rpc.fetchinvoice(offer['bolt12'], '1000msat')

@@ -1,5 +1,7 @@
 #include "config.h"
 #include <common/json_stream.h>
+#include <common/onionreply.h>
+#include <common/sphinx.h>
 #include <plugins/renepay/json.h>
 
 /* See if this notification is about one of our flows. */
@@ -50,7 +52,7 @@ struct route *tal_route_from_json(const tal_t *ctx, const char *buf,
 		goto fail;
 	if (!json_to_sha256(buf, hashtok, &route->key.payment_hash))
 		goto fail;
-	if (!json_to_msat(buf, amttok, &route->amount))
+	if (!json_to_msat(buf, amttok, &route->amount_deliver))
 		goto fail;
 	if (!json_to_msat(buf, senttok, &route->amount_sent))
 		goto fail;
@@ -64,6 +66,7 @@ struct route *tal_route_from_json(const tal_t *ctx, const char *buf,
 	route->hops = NULL;
 	route->final_msg = NULL;
 	route->final_error = LIGHTNINGD;
+	route->shared_secrets = NULL;
 
 	return route;
 fail:
@@ -71,11 +74,104 @@ fail:
 	return tal_free(route);
 }
 
+static bool get_data_details_onionreply(struct payment_result *result,
+					const char *buffer,
+					const jsmntok_t *datatok,
+					struct secret *shared_secrets)
+{
+	const tal_t *this_ctx = tal(result, tal_t);
+	const jsmntok_t *onionreplytok;
+	struct onionreply *onionreply, *wonionreply;
+	const u8 *replymsg;
+	int index;
+
+	onionreplytok = json_get_member(buffer, datatok, "onionreply");
+	if (!onionreplytok || !shared_secrets)
+		goto fail;
+	onionreply = new_onionreply(
+	    this_ctx,
+	    take(json_tok_bin_from_hex(this_ctx, buffer, onionreplytok)));
+	assert(onionreply);
+	/* FIXME: It seems that lightningd will unwrap top portion of the
+	 * onionreply for us before serializing it, while unwrap_onionreply will
+	 * try to do the entire unwraping. It would be a better API if either
+	 * lightningd unwraps the entire thing or it doesn't do any unwraping.
+	 * Also it wouldn't hurt if injectpaymentonion accepted the shared
+	 * secrets to allow lightningd do the decoding for us. */
+	wonionreply = wrap_onionreply(this_ctx, &shared_secrets[0], onionreply);
+	replymsg = unwrap_onionreply(this_ctx, shared_secrets,
+				     tal_count(shared_secrets),
+				     wonionreply, &index);
+	if (replymsg) {
+		result->failcode = tal(result, enum onion_wire);
+		*result->failcode = fromwire_peektype(replymsg);
+
+		result->erring_index = tal(result, u32);
+		*result->erring_index = index;
+	}
+	tal_free(this_ctx);
+	return true;
+fail:
+	tal_free(this_ctx);
+	return false;
+}
+
+static bool get_data_details(struct payment_result *result,
+			     const char *buffer,
+			     const jsmntok_t *datatok)
+{
+
+	const jsmntok_t *erridxtok, *failcodetok, *errnodetok, *errchantok,
+	    *errdirtok, *rawmsgtok, *failcodenametok;
+	erridxtok = json_get_member(buffer, datatok, "erring_index");
+	failcodetok = json_get_member(buffer, datatok, "failcode");
+
+	if (!erridxtok || !failcodetok)
+		return false;
+	result->failcode = tal(result, enum onion_wire);
+	json_to_u32(buffer, failcodetok, result->failcode);
+
+	result->erring_index = tal(result, u32);
+	json_to_u32(buffer, erridxtok, result->erring_index);
+
+	// search for other fields
+	errnodetok = json_get_member(buffer, datatok, "erring_node");
+	errchantok = json_get_member(buffer, datatok, "erring_channel");
+	errdirtok = json_get_member(buffer, datatok, "erring_direction");
+	failcodenametok = json_get_member(buffer, datatok, "failcodename");
+	rawmsgtok = json_get_member(buffer, datatok, "raw_message");
+
+	if (errnodetok != NULL) {
+		result->erring_node = tal(result, struct node_id);
+		json_to_node_id(buffer, errnodetok, result->erring_node);
+	}
+
+	if (errchantok != NULL) {
+		result->erring_channel = tal(result, struct short_channel_id);
+		json_to_short_channel_id(buffer, errchantok,
+					 result->erring_channel);
+	}
+	if (errdirtok != NULL) {
+		result->erring_direction = tal(result, int);
+		json_to_int(buffer, errdirtok, result->erring_direction);
+	}
+	if (rawmsgtok != NULL)
+		result->raw_message =
+		    json_tok_bin_from_hex(result, buffer, rawmsgtok);
+
+	if (failcodenametok != NULL)
+		result->failcodename =
+		    json_strdup(result, buffer, failcodenametok);
+
+	return true;
+}
+
 struct payment_result *tal_sendpay_result_from_json(const tal_t *ctx,
 						    const char *buffer,
-						    const jsmntok_t *toks)
+						    const jsmntok_t *toks,
+						    struct secret *shared_secrets)
 {
-	const jsmntok_t *idtok = json_get_member(buffer, toks, "id");
+	const jsmntok_t *idtok = json_get_member(buffer, toks, "created_index");
 	const jsmntok_t *hashtok =
 	    json_get_member(buffer, toks, "payment_hash");
 	const jsmntok_t *senttok =
@@ -84,28 +180,33 @@ struct payment_result *tal_sendpay_result_from_json(const tal_t *ctx,
 	const jsmntok_t *preimagetok =
 	    json_get_member(buffer, toks, "payment_preimage");
 	const jsmntok_t *codetok = json_get_member(buffer, toks, "code");
+	const jsmntok_t *msgtok = json_get_member(buffer, toks, "message");
 	const jsmntok_t *datatok = json_get_member(buffer, toks, "data");
-	const jsmntok_t *erridxtok, *msgtok, *failcodetok, *rawmsgtok,
-	    *failcodenametok, *errchantok, *errnodetok, *errdirtok;
 	struct payment_result *result;
 
 	/* Check if we have an error and need to descend into data to get
 	 * details. */
 	if (codetok != NULL && datatok != NULL) {
-		idtok = json_get_member(buffer, datatok, "id");
+		idtok = json_get_member(buffer, datatok, "create_index");
 		hashtok = json_get_member(buffer, datatok, "payment_hash");
 		senttok = json_get_member(buffer, datatok, "amount_sent_msat");
 		statustok = json_get_member(buffer, datatok, "status");
 	}
 
 	/* Initial sanity checks, all these fields must exist. */
-	if (idtok == NULL || idtok->type != JSMN_PRIMITIVE || hashtok == NULL ||
-	    hashtok->type != JSMN_STRING || senttok == NULL ||
-	    statustok == NULL || statustok->type != JSMN_STRING) {
+	if (hashtok == NULL || hashtok->type != JSMN_STRING ||
+	    senttok == NULL || statustok == NULL ||
+	    statustok->type != JSMN_STRING) {
 		return NULL;
 	}
 
 	result = tal(ctx, struct payment_result);
+	memset(result, 0, sizeof(struct payment_result));
+
+	if (msgtok)
+		result->message = json_strdup(result, buffer, msgtok);
+	else
+		result->message = NULL;
 
 	if (codetok != NULL)
 		// u32? isn't this an int?
@@ -114,7 +215,12 @@ struct payment_result *tal_sendpay_result_from_json(const tal_t *ctx,
 	else
 		result->code = 0;
 
-	json_to_u64(buffer, idtok, &result->id);
+	if (idtok) {
+		result->created_index = tal(result, u64);
+		json_to_u64(buffer, idtok, result->created_index);
+	} else
+		result->created_index = NULL;
+
 	json_to_msat(buffer, senttok, &result->amount_sent);
 	if (json_tok_streq(buffer, statustok, "pending")) {
 		result->status = SENDPAY_PENDING;
@@ -132,77 +238,13 @@ struct payment_result *tal_sendpay_result_from_json(const tal_t *ctx,
 	}
 
 	/* Now extract the error details if the error code is not 0 */
-	if (result->code != 0) {
-		erridxtok = json_get_member(buffer, datatok, "erring_index");
-		errnodetok = json_get_member(buffer, datatok, "erring_node");
-		errchantok = json_get_member(buffer, datatok, "erring_channel");
-		errdirtok =
-		    json_get_member(buffer, datatok, "erring_direction");
-		failcodetok = json_get_member(buffer, datatok, "failcode");
-		failcodenametok =
-		    json_get_member(buffer, datatok, "failcodename");
-		msgtok = json_get_member(buffer, toks, "message");
-		rawmsgtok = json_get_member(buffer, datatok, "raw_message");
-		if (failcodetok == NULL ||
-		    failcodetok->type != JSMN_PRIMITIVE ||
-		    (failcodenametok != NULL &&
-		     failcodenametok->type != JSMN_STRING) ||
-		    (erridxtok != NULL && erridxtok->type != JSMN_PRIMITIVE) ||
-		    (errnodetok != NULL && errnodetok->type != JSMN_STRING) ||
-		    (errchantok != NULL && errchantok->type != JSMN_STRING) ||
-		    (errdirtok != NULL && errdirtok->type != JSMN_PRIMITIVE) ||
-		    msgtok == NULL || msgtok->type != JSMN_STRING ||
-		    (rawmsgtok != NULL && rawmsgtok->type != JSMN_STRING))
+	if (result->code != 0 && datatok) {
+		/* try one, then try the other, then fail */
+		if (!get_data_details(result, buffer, datatok) &&
+		    !get_data_details_onionreply(result, buffer, datatok,
+						 shared_secrets))
 			goto fail;
-
-		if (rawmsgtok != NULL)
-			result->raw_message =
-			    json_tok_bin_from_hex(result, buffer, rawmsgtok);
-		else
-			result->raw_message = NULL;
-
-		if (failcodenametok != NULL)
-			result->failcodename =
-			    json_strdup(result, buffer, failcodenametok);
-		else
-			result->failcodename = NULL;
-
-		json_to_u32(buffer, failcodetok, &result->failcode);
-		result->message = json_strdup(result, buffer, msgtok);
-
-		if (erridxtok != NULL) {
-			result->erring_index = tal(result, u32);
-			json_to_u32(buffer, erridxtok, result->erring_index);
-		} else {
-			result->erring_index = NULL;
-		}
-
-		if (errdirtok != NULL) {
-			result->erring_direction = tal(result, int);
-			json_to_int(buffer, errdirtok,
-				    result->erring_direction);
-		} else {
-			result->erring_direction = NULL;
-		}
-
-		if (errnodetok != NULL) {
-			result->erring_node = tal(result, struct node_id);
-			json_to_node_id(buffer, errnodetok,
-					result->erring_node);
-		} else {
-			result->erring_node = NULL;
-		}
-
-		if (errchantok != NULL) {
-			result->erring_channel =
-			    tal(result, struct short_channel_id);
-			json_to_short_channel_id(buffer, errchantok,
-						 result->erring_channel);
-		} else {
-			result->erring_channel = NULL;
-		}
 	}
-
 	return result;
 fail:
 	return tal_free(result);
@@ -326,4 +368,28 @@ void json_add_route(struct json_stream *js, const struct route *route,
 	if (pinfo->description)
 		json_add_string(js, "description", pinfo->description);
 
+}
+
+void json_myadd_blinded_path(struct json_stream *s,
+			     const char *fieldname,
+			     const struct blinded_path *blinded_path)
+{
+	// FIXME: how can we support the case when the entry point is a
+	// scid?
+	assert(blinded_path->first_node_id.is_pubkey);
+	json_object_start(s, fieldname);
+	json_add_pubkey(s, "first_node_id",
+			&blinded_path->first_node_id.pubkey);
+	json_add_pubkey(s, "first_path_key", &blinded_path->first_path_key);
+	json_array_start(s, "path");
+	for (size_t i = 0; i < tal_count(blinded_path->path); i++) {
+		const struct blinded_path_hop *hop = blinded_path->path[i];
+		json_object_start(s, NULL);
+		json_add_pubkey(s, "blinded_node_id", &hop->blinded_node_id);
+		json_add_hex_talarr(s, "encrypted_recipient_data",
+				    hop->encrypted_recipient_data);
+		json_object_end(s);
+	}
+	json_array_end(s);
+	json_object_end(s);
 }

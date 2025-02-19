@@ -4,6 +4,7 @@
 #include "../../common/dijkstra.c"
 #include "../libplugin-pay.c"
 #include <bitcoin/chainparams.h>
+#include <ccan/crc32c/crc32c.h>
 #include <common/gossip_store.h>
 #include <common/setup.h>
 #include <common/utils.h>
@@ -285,6 +286,12 @@ void *notleak_(void *ptr UNNEEDED, bool plus_children UNNEEDED)
 /* Generated stub for plugin_err */
 void   plugin_err(struct plugin *p UNNEEDED, const char *fmt UNNEEDED, ...)
 { fprintf(stderr, "plugin_err called!\n"); abort(); }
+/* Generated stub for plugin_gossmap_logcb */
+void plugin_gossmap_logcb(struct plugin *plugin UNNEEDED,
+			  enum log_level level UNNEEDED,
+			  const char *fmt UNNEEDED,
+			  ...)
+{ fprintf(stderr, "plugin_gossmap_logcb called!\n"); abort(); }
 /* Generated stub for plugin_log */
 void plugin_log(struct plugin *p UNNEEDED, enum log_level l UNNEEDED, const char *fmt UNNEEDED, ...)
 { fprintf(stderr, "plugin_log called!\n"); abort(); }
@@ -335,9 +342,8 @@ static void write_to_store(int store_fd, const u8 *msg)
 
 	hdr.flags = cpu_to_be16(0);
 	hdr.len = cpu_to_be16(tal_count(msg));
-	/* We don't actually check these! */
-	hdr.crc = 0;
 	hdr.timestamp = 0;
+	hdr.crc = cpu_to_be32(crc32c(be32_to_cpu(hdr.timestamp), msg, tal_count(msg)));
 	assert(write(store_fd, &hdr, sizeof(hdr)) == sizeof(hdr));
 	assert(write(store_fd, msg, tal_count(msg)) == tal_count(msg));
 }
@@ -525,7 +531,7 @@ int main(int argc, char *argv[])
 					  amount_sat(100 + 100000000 * !i));
 		path[3] = scids[!i];
 
-		gossmap = gossmap_load(tmpctx, gossipfilename, NULL);
+		gossmap = gossmap_load(tmpctx, gossipfilename, NULL, NULL);
 		global_gossmap = gossmap;
 
 		node_id('A', &src);

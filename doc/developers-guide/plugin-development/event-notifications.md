@@ -106,9 +106,9 @@ A notification for topic `connect` is sent every time a new connection to a peer
       "address" : "127.0.0.1",
       "port" : 38012,
       "type" : "ipv4"
-  },
-  "direction" : "in",
-  "id" : "022d223620a359a47ff7f7ac447c85c46c923da53389221a0054c11c1e3ca31d59"
+    },
+    "direction" : "in",
+    "id" : "022d223620a359a47ff7f7ac447c85c46c923da53389221a0054c11c1e3ca31d59"
   }
 }
 ```
@@ -519,3 +519,51 @@ In the shutdown case, plugins should not interact with lightnind except via (id-
     }
 }
 ```
+
+### `plugin_started` (v25.02 onward) 
+
+Emitted when a plugin has completed startup.
+
+```json
+{
+  "plugin_started": {
+    "plugin_name": "example_plugin",
+    "plugin_path": "/path/to/example_plugin.py",
+    "methods": [
+      "example_method1",
+      "example_method2",
+      "example_method3"
+    ]
+  }
+}
+```
+
+Where:
+
+- `plugin_name`: The short name of the plugin.
+- `plugin_path`: The full file path to the plugin executable.
+- `methods`: An array of RPC method names that the plugin registered.
+
+### `plugin_stopped` (v25.02 onward) 
+
+Emitted when a plugin has been stopped or has exited.
+
+```json
+{
+  "plugin_stopped": {
+    "plugin_name": "example_plugin",
+    "plugin_path": "/path/to/example_plugin.py",
+    "methods": [
+      "example_method1",
+      "example_method2",
+      "example_method3"
+    ]
+  }
+}
+```
+
+Where:
+
+- `plugin_name`: The short name of the plugin.
+- `plugin_path`: The full file path to the plugin executable.
+- `methods`: An array of RPC method names that the plugin registered.

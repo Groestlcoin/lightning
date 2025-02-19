@@ -46,7 +46,7 @@ static struct xpay *xpay_of(struct plugin *plugin)
 /* This refreshes the gossmap. */
 static struct gossmap *get_gossmap(struct xpay *xpay)
 {
-	gossmap_refresh(xpay->global_gossmap, NULL);
+	gossmap_refresh(xpay->global_gossmap);
 	return xpay->global_gossmap;
 }
 
@@ -76,6 +76,8 @@ struct payment {
 	struct amount_msat maxfee;
 	/* Maximum delay on the route we're ok with */
 	u32 *maxdelay;
+	/* Do we have to do it all in a single part? */
+	bool disable_mpp;
 	/* BOLT11 payment secret (NULL for BOLT12, it uses blinded paths) */
 	const struct secret *payment_secret;
 	/* BOLT11 payment metadata (NULL for BOLT12, it uses blinded paths) */
@@ -1192,6 +1194,8 @@ static struct command_result *getroutes_for(struct command *aux_cmd,
 	/* Add user-specified layers */
 	for (size_t i = 0; i < tal_count(payment->layers); i++)
 		json_add_string(req->js, NULL, payment->layers[i]);
+	if (payment->disable_mpp)
+		json_add_string(req->js, NULL, "auto.no_mpp_support");
 	json_array_end(req->js);
 	json_add_amount_msat(req->js, "maxfee_msat", maxfee);
 	json_add_u32(req->js, "final_cltv", payment->final_cltv);
@@ -1312,7 +1316,7 @@ static char *add_blindedpath(const tal_t *ctx,
 	struct short_channel_id scid;
 	struct node_id src, dst;
 
-	/* BOLT-offers #12:
+	/* BOLT #12:
 	 *   - SHOULD prefer to use earlier `invoice_paths` over later ones if
 	 *     it has no other reason for preference.
 	 */
@@ -1335,7 +1339,7 @@ static char *add_blindedpath(const tal_t *ctx,
 
 	assert(path->first_node_id.is_pubkey);
 
-	/* BOLT-offers #12:
+	/* BOLT #12:
 	 *   - For each `invoice_blindedpay`.`payinfo`:
 	 *     - MUST NOT use the corresponding `invoice_paths`.`path`
 	 *       if `payinfo`.`features` has any unknown even bits set.
@@ -1457,6 +1461,11 @@ preapproveinvoice_succeed(struct command *cmd,
 	payment->unique_id = xpay->counter++;
 	payment->private_layer = tal_fmt(payment,
 					 "xpay-%"PRIu64, payment->unique_id);
+
+	/* Now unique_id is set, we can log this message */
+	if (payment->disable_mpp)
+		payment_log(payment, LOG_INFORM, "No MPP support: this is going to be hard to pay");
+
 	return populate_private_layer(cmd, payment);
 }
 
@@ -1551,6 +1560,10 @@ static struct command_result *json_xpay_core(struct command *cmd,
 			if (payment->payinfos[i]->cltv_expiry_delta > payment->final_cltv)
 				payment->final_cltv = payment->payinfos[i]->cltv_expiry_delta;
 		}
+		/* We will start honoring this flag in future */
+		payment->disable_mpp = !feature_offered(b12inv->invoice_features, OPT_BASIC_MPP);
+		if (payment->disable_mpp && command_deprecated_in_ok(cmd, "ignore_bolt12_mpp", "v25.05", "v25.11"))
+			payment->disable_mpp = false;
 	} else {
 		struct bolt11 *b11
 			= bolt11_decode(tmpctx, payment->invstring,
@@ -1586,6 +1599,7 @@ static struct command_result *json_xpay_core(struct command *cmd,
 		else
 			payment->full_amount = *msat;
 
+		payment->disable_mpp = !feature_offered(b11->features, OPT_BASIC_MPP);
  		if (amount_msat_is_zero(payment->full_amount))
 			return command_fail(cmd, JSONRPC2_INVALID_PARAMS,
 					    "Cannot pay bolt11 invoice with zero amount");
@@ -1733,21 +1747,15 @@ static const char *init(struct command *init_cmd,
 {
 	struct plugin *plugin = init_cmd->plugin;
 	struct xpay *xpay = xpay_of(plugin);
-	size_t num_cupdates_rejected;
 	struct out_req *req;
 
 	xpay->global_gossmap = gossmap_load(xpay,
 					    GOSSIP_STORE_FILENAME,
-				      &num_cupdates_rejected);
+					    plugin_gossmap_logcb,
+					    plugin);
 	if (!xpay->global_gossmap)
 		plugin_err(plugin, "Could not load gossmap %s: %s",
 			   GOSSIP_STORE_FILENAME, strerror(errno));
-
-	if (num_cupdates_rejected)
-		plugin_log(plugin, LOG_DBG,
-			   "gossmap ignored %zu channel updates",
-			   num_cupdates_rejected);
-
 	xpay->counter = 0;
 	if (!pubkey_from_hexstr("02" "0000000000000000000000000000000000000000000000000000000000000001", 66, &xpay->fakenode))
 		abort();

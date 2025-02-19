@@ -65,7 +65,10 @@ route_check_constraints(struct route *route, struct gossmap *gossmap,
 	assert(route);
 	assert(route->hops);
 	const size_t pathlen = tal_count(route->hops);
-	if (!amount_msat_eq(route->amount, route->hops[pathlen - 1].amount))
+	if (pathlen == 0)
+		return RENEPAY_NOERROR;
+	if (!amount_msat_eq(route->amount_deliver,
+			    route->hops[pathlen - 1].amount))
 		return RENEPAY_PRECONDITION_ERROR;
 	if (!amount_msat_eq(route->amount_sent, route->hops[0].amount))
 		return RENEPAY_PRECONDITION_ERROR;
@@ -140,6 +143,7 @@ struct route **get_routes(const tal_t *ctx,
 
 			  u64 *next_partid,
 			  u64 groupid,
+			  bool blinded_destination,
 
 			  enum jsonrpc_errcode *ecode,
 			  const char **fail)
@@ -297,7 +301,8 @@ struct route **get_routes(const tal_t *ctx,
 			struct route *r = flow_to_route(
 			    this_ctx, groupid, *next_partid,
 			    payment_info->payment_hash,
-			    payment_info->final_cltv, gossmap, flows[i]);
+			    payment_info->final_cltv, gossmap, flows[i],
+			    blinded_destination);
 
 			if (!r) {
 				tal_report_error(

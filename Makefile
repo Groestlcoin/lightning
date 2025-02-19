@@ -4,7 +4,7 @@
 VERSION=$(shell git describe --tags --always --dirty=-modded --abbrev=7 2>/dev/null || pwd | sed -n 's|.*/c\{0,1\}lightning-v\{0,1\}\([0-9a-f.rc\-]*\)$$|v\1|gp')
 
 # Next release.
-CLN_NEXT_VERSION := v24.11
+CLN_NEXT_VERSION := v25.02
 
 # --quiet / -s means quiet, dammit!
 ifeq ($(findstring s,$(word 1, $(MAKEFLAGS))),s)
@@ -26,7 +26,7 @@ CCANDIR := ccan
 
 # Where we keep the BOLT RFCs
 BOLTDIR := ../bolts/
-DEFAULT_BOLTVERSION := 5dec5eb84957d70c9fedf27173e78f1b0b6b0217
+DEFAULT_BOLTVERSION := 89b99a578f52fcbabb39417f1855900e985b51db
 # Can be overridden on cmdline.
 BOLTVERSION := $(DEFAULT_BOLTVERSION)
 
@@ -369,17 +369,15 @@ include doc/Makefile
 include contrib/msggen/Makefile
 include devtools/Makefile
 include tools/Makefile
+ifneq ($(RUST),0)
+include cln-rpc/Makefile
+endif
 include plugins/Makefile
 include tests/plugins/Makefile
 
 ifneq ($(FUZZING),0)
 	include tests/fuzz/Makefile
 endif
-ifneq ($(RUST),0)
-	include cln-rpc/Makefile
-	include plugins/rest-plugin/Makefile
-endif
-include cln-grpc/Makefile
 
 ifneq ($V,1)
 MSGGEN_ARGS := -s

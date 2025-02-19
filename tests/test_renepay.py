@@ -52,7 +52,8 @@ def test_shadow_routing(node_factory):
     Note there is a very low (0.5**10) probability that it fails.
     """
     # We need l3 for random walk
-    l1, l2, l3 = node_factory.line_graph(3, wait_for_announce=True)
+    l1, l2, l3 = node_factory.line_graph(3, wait_for_announce=True,
+                                         opts={'dev-allow-localhost': None})
 
     amount = 10000
     total_amount = 0
@@ -76,7 +77,7 @@ def test_mpp(node_factory):
     Try paying 1.2M sats from 1 to 6.
     """
     opts = [
-        {"disable-mpp": None, "fee-base": 0, "fee-per-satoshi": 0},
+        {"disable-mpp": None, "fee-base": 0, "fee-per-satoshi": 0, 'dev-allow-localhost': None},
     ]
     l1, l2, l3, l4, l5, l6 = node_factory.get_nodes(6, opts=opts * 6)
     node_factory.join_nodes(
@@ -110,7 +111,7 @@ def test_errors(node_factory, bitcoind):
     node_factory.join_nodes([l1, l2, l4], wait_for_announce=True, fundamount=1000000)
     node_factory.join_nodes([l1, l3, l5], wait_for_announce=True, fundamount=1000000)
 
-    failmsg = r"Destination is unknown in the network gossip."
+    failmsg = r"failed to find a feasible flow"
     with pytest.raises(RpcError, match=failmsg):
         l1.rpc.call("renepay", {"invstring": inv})
 
@@ -140,7 +141,7 @@ def test_errors(node_factory, bitcoind):
 
     PAY_DESTINATION_PERM_FAIL = 203
     assert err.value.error["code"] == PAY_DESTINATION_PERM_FAIL
-    assert "WIRE_INCORRECT_OR_UNKNOWN_PAYMENT_DETAILS" in err.value.error["message"]
+    assert "Unknown invoice" in err.value.error["message"]
 
 
 @pytest.mark.openchannel("v1")
@@ -509,6 +510,7 @@ def test_htlc_max(node_factory):
     assert invoice["amount_received_msat"] >= Millisatoshi("800000sat")
 
 
+@unittest.skip
 def test_previous_sendpays(node_factory, bitcoind):
     """
     Check that renepay can complete a payment that already started
@@ -839,3 +841,35 @@ def test_description(node_factory):
         "renepay", {"invstring": inv_with_hash, "description": "paying for coffee"}
     )
     assert details["status"] == "complete"
+
+
+def test_offers(node_factory):
+    l1, l2, l3 = node_factory.line_graph(3, wait_for_announce=True,
+                                         opts={'dev-allow-localhost': None})
+    offer = l3.rpc.offer("1000sat", "test_renepay_offers")['bolt12']
+    invoice = l1.rpc.fetchinvoice(offer)['invoice']
+    response = l1.rpc.call("renepay", {"invstring": invoice})
+    assert response["status"] == "complete"
+
+
+def test_offer_selfpay(node_factory):
+    """We can fetch an pay our own offer"""
+    l1 = node_factory.get_node()
+    offer = l1.rpc.offer(amount="2msat", description="test_offer_path_self")["bolt12"]
+    inv = l1.rpc.fetchinvoice(offer)["invoice"]
+    l1.rpc.call("renepay", {"invstring": inv})
+
+
+def test_unannounced(node_factory):
+    l1, l2 = node_factory.line_graph(2, announce_channels=False)
+    # BOLT11 direct peer
+    b11 = l2.rpc.invoice(
+        "100sat", "test_renepay_unannounced", "test_renepay_unannounced"
+    )["bolt11"]
+    ret = l1.rpc.call("renepay", {"invstring": b11})
+    assert ret["status"] == "complete"
+    # BOLT12 direct peer
+    offer = l2.rpc.offer("any")["bolt12"]
+    b12 = l1.rpc.fetchinvoice(offer, "21sat")["invoice"]
+    ret = l1.rpc.call("renepay", {"invstring": b12})
+    assert ret["status"] == "complete"

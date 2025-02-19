@@ -1,5 +1,6 @@
 #include "config.h"
 #include <assert.h>
+#include <ccan/crc32c/crc32c.h>
 #include <common/channel_type.h>
 #include <common/dijkstra.h>
 #include <common/gossmap.h>
@@ -51,9 +52,8 @@ static void write_to_store(int store_fd, const u8 *msg)
 
 	hdr.flags = cpu_to_be16(0);
 	hdr.len = cpu_to_be16(tal_count(msg));
-	/* We don't actually check these! */
-	hdr.crc = 0;
 	hdr.timestamp = 0;
+	hdr.crc = cpu_to_be32(crc32c(be32_to_cpu(hdr.timestamp), msg, tal_count(msg)));
 	assert(write(store_fd, &hdr, sizeof(hdr)) == sizeof(hdr));
 	assert(write(store_fd, msg, tal_count(msg)) == tal_count(msg));
 }
@@ -195,18 +195,18 @@ int main(int argc, char *argv[])
 	store_fd = tmpdir_mkstemp(tmpctx, "run-route-gossipstore.XXXXXX", &gossipfilename);
 	assert(write(store_fd, &gossip_version, sizeof(gossip_version))
 	       == sizeof(gossip_version));
-	gossmap = gossmap_load(tmpctx, gossipfilename, NULL);
+	gossmap = gossmap_load(tmpctx, gossipfilename, NULL, NULL);
 
 	memset(&tmp, 'a', sizeof(tmp));
 	node_id_from_privkey(&tmp, &a);
 	memset(&tmp, 'b', sizeof(tmp));
 	node_id_from_privkey(&tmp, &b);
 
-	assert(!gossmap_refresh(gossmap, NULL));
+	assert(!gossmap_refresh(gossmap));
 
 	/* A<->B */
 	add_connection(store_fd, &a, &b, 1, 1, 1);
-	assert(gossmap_refresh(gossmap, NULL));
+	assert(gossmap_refresh(gossmap));
 
 	a_node = gossmap_find_node(gossmap, &a);
 	b_node = gossmap_find_node(gossmap, &b);
@@ -224,7 +224,7 @@ int main(int argc, char *argv[])
 	memset(&tmp, 'c', sizeof(tmp));
 	node_id_from_privkey(&tmp, &c);
 	add_connection(store_fd, &b, &c, 1, 1, 1);
-	assert(gossmap_refresh(gossmap, NULL));
+	assert(gossmap_refresh(gossmap));
 
 	/* These can theoretically change after refresh! */
 	a_node = gossmap_find_node(gossmap, &a);
@@ -248,7 +248,7 @@ int main(int argc, char *argv[])
 
 	add_connection(store_fd, &a, &d, 0, 2, 1);
 	add_connection(store_fd, &d, &c, 0, 2, 1);
-	assert(gossmap_refresh(gossmap, NULL));
+	assert(gossmap_refresh(gossmap));
 
 	/* These can theoretically change after refresh! */
 	a_node = gossmap_find_node(gossmap, &a);
@@ -289,7 +289,7 @@ int main(int argc, char *argv[])
 
 	/* Make B->C inactive, force it back via D */
 	update_connection(store_fd, &b, &c, 1, 1, 1, true);
-	assert(gossmap_refresh(gossmap, NULL));
+	assert(gossmap_refresh(gossmap));
 
 	/* These can theoretically change after refresh! */
 	a_node = gossmap_find_node(gossmap, &a);

@@ -1,5 +1,5 @@
 #include "config.h"
-  #include <lightningd/log.h>
+#include <lightningd/log.h>
 
 static void db_log_(struct logger *log UNUSED, enum log_level level UNUSED, const struct node_id *node_id UNUSED, bool call_notifier UNUSED, const char *fmt UNUSED, ...)
 {
@@ -299,6 +299,9 @@ const char *rune_is_ours(struct lightningd *ld UNNEEDED, const struct rune *rune
 /* Generated stub for rune_unique_id */
 u64 rune_unique_id(const struct rune *rune UNNEEDED)
 { fprintf(stderr, "rune_unique_id called!\n"); abort(); }
+/* Generated stub for scriptpubkey_hash */
+size_t scriptpubkey_hash(const u8 *out UNNEEDED)
+{ fprintf(stderr, "scriptpubkey_hash called!\n"); abort(); }
 /* Generated stub for sendpay_index_created */
 u64 sendpay_index_created(struct lightningd *ld UNNEEDED,
 			  const struct sha256 *payment_hash UNNEEDED,
@@ -544,5 +547,6 @@ int main(int argc, char *argv[])
 
 	tal_free(ld);
 	common_shutdown();
+	trace_cleanup();
 	return !ok;
 }

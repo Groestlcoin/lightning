@@ -551,6 +551,26 @@ def test_getroutes(node_factory):
                             'amount_msat': 5500005,
                             'delay': 99 + 6}]])
 
+    # We realize that this is impossible in a single path:
+    with pytest.raises(RpcError, match="The shortest path is 0x2x1, but 0x2x1/1 marked disabled by layer auto.no_mpp_support."):
+        l1.rpc.getroutes(source=nodemap[0],
+                         destination=nodemap[2],
+                         amount_msat=10000000,
+                         layers=['auto.no_mpp_support'],
+                         maxfee_msat=1000,
+                         final_cltv=99)
+
+    # But this will work.
+    check_getroute_paths(l1,
+                         nodemap[0],
+                         nodemap[2],
+                         9000000,
+                         [[{'short_channel_id_dir': '0x2x3/1',
+                            'next_node_id': nodemap[2],
+                            'amount_msat': 9000009,
+                            'delay': 99 + 6}]],
+                         layers=['auto.no_mpp_support'])
+
 
 def test_getroutes_fee_fallback(node_factory):
     """Test getroutes call takes into account fees, if excessive"""
@@ -1033,19 +1053,21 @@ def test_max_htlc(node_factory, bitcoind):
 
 
 def test_min_htlc(node_factory, bitcoind):
-    """A route which looks good isn't actually, because of min htlc limits"""
+    """A route which looks good isn't actually, because of min htlc limits.  Should fall back!"""
     gsfile, nodemap = generate_gossip_store([GenChannel(0, 1, capacity_sats=500_000,
                                                         forward=GenChannel.Half(htlc_min=2_000)),
                                              GenChannel(0, 1, capacity_sats=20_000)])
     l1 = node_factory.get_node(gossip_store_file=gsfile.name)
 
-    with pytest.raises(RpcError, match="Amount 1000msat below minimum 2000msat across 0x1x0/1"):
-        l1.rpc.getroutes(source=nodemap[0],
-                         destination=nodemap[1],
-                         amount_msat=1000,
-                         layers=[],
-                         maxfee_msat=20_000_000,
-                         final_cltv=10)
+    routes = l1.rpc.getroutes(source=nodemap[0],
+                              destination=nodemap[1],
+                              amount_msat=1000,
+                              layers=[],
+                              maxfee_msat=20_000_000,
+                              final_cltv=10)
+
+    check_route_as_expected(routes['routes'],
+                            [[{'short_channel_id_dir': '0x1x1/1', 'amount_msat': 1_000, 'delay': 10 + 6}]])
 
 
 def test_min_htlc_after_excess(node_factory, bitcoind):
@@ -1053,7 +1075,7 @@ def test_min_htlc_after_excess(node_factory, bitcoind):
                                                         forward=GenChannel.Half(htlc_min=2_000))])
     l1 = node_factory.get_node(gossip_store_file=gsfile.name)
 
-    with pytest.raises(RpcError, match=r"ending 1999msat across 0x1x0/1 would violate htlc_min \(~2000msat\)"):
+    with pytest.raises(RpcError, match=r"We could not find a usable set of paths.  The shortest path is 0x1x0, but 0x1x0/1 below htlc_minumum_msat ~2000msat"):
         l1.rpc.getroutes(source=nodemap[0],
                          destination=nodemap[1],
                          amount_msat=1999,
