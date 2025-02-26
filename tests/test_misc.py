@@ -1148,6 +1148,28 @@ def test_cli(node_factory):
     assert [l for l in lines if not re.search(r'^help\[[0-9]*\].', l)] == ['format-hint=simple']
 
 
+def test_cli_multiline_help(node_factory):
+    l1 = node_factory.get_node(options={'plugin': os.path.join(os.getcwd(), 'tests/plugins/multiline-help.py')})
+
+    out = subprocess.check_output(['cli/lightning-cli',
+                                   '--network={}'.format(TEST_NETWORK),
+                                   '--lightning-dir={}'
+                                   .format(l1.daemon.lightning_dir),
+                                   'help']).decode('utf-8')
+    assert ("helpme msat  \n"
+            " This is a message which consumes multiple lines and thus should\n"
+            " be well-formatted by lightning-cli help\n" in out)
+
+    out = subprocess.check_output(['cli/lightning-cli',
+                                   '--network={}'.format(TEST_NETWORK),
+                                   '--lightning-dir={}'
+                                   .format(l1.daemon.lightning_dir),
+                                   'help', 'helpme']).decode('utf-8')
+    assert out == ("helpme msat  \n"
+                   " This is a message which consumes multiple lines and thus should\n"
+                   " be well-formatted by lightning-cli help\n")
+
+
 def test_cli_commando(node_factory):
     l1, l2 = node_factory.line_graph(2, fundchannel=False,
                                      opts={'log-level': 'io'})
@@ -2884,6 +2906,94 @@ def test_getemergencyrecoverdata(node_factory):
 
 
 @unittest.skipIf(os.getenv('TEST_DB_PROVIDER', 'sqlite3') != 'sqlite3', "deletes database, which is assumed sqlite3")
+def test_emergencyrecover_old_format_handling(node_factory, bitcoind):
+    """
+    Test test_emergencyrecover_old_format_handling
+    """
+    l1 = node_factory.get_node()
+
+    encrypted_data = (
+        "4e90ed80be3ddf666967ecdebc296cb0ec9f9f2e1adf3b1ef359d74ae40dd152"
+        "167572828e682105992d4cabe8b11edafe5069143950262ad42efa2cb629d7e9"
+        "b990c9c3de2fc3cc30ef13cfa94cd4f5a9f9a70ea7837f3d0bbd5442c5086d34"
+        "f0bc4d4343c9309109afa9350dc869f3eed66a4f52a46674bbe5bc4aedffd358"
+        "5d8522c96739b9db57a00f8cc17a0221f72f1fd8c1b661f34eed33cde97c84e0"
+        "43dc2abc7d862f49949d7a904a56b2fefef3bf0fd56a32635c8d23"
+    )
+
+    os.unlink(os.path.join(l1.daemon.lightning_dir, TEST_NETWORK, "emergency.recover"))
+
+    with open(os.path.join(l1.daemon.lightning_dir, TEST_NETWORK, "emergency.recover"), 'wb') as f:
+        f.write(bytes.fromhex(encrypted_data))
+
+    stubs = l1.rpc.emergencyrecover()["stubs"]
+    assert len(stubs) == 1
+    assert stubs[0] == '3497625a774a5e1839f1a4a6b23a6a06493817ae90ff4ed0a536f4202845de2f'
+    assert l1.daemon.is_in_log('Watching for funding txid: 2fde452820f436a5d04eff90ae173849066a3ab2a6a4f139185e4a775a629734')
+    assert l1.daemon.is_in_log('Processing legacy emergency.recover file format. *')
+    l1.stop()
+
+
+@unittest.skipIf(TEST_NETWORK == 'liquid-regtest', "Txid on elements is different")
+@unittest.skipIf(os.getenv('TEST_DB_PROVIDER', 'sqlite3') != 'sqlite3', "deletes database, which is assumed sqlite3")
+def test_emergencyrecoverpenaltytxn(node_factory, bitcoind):
+    """
+    Test test_emergencyrecoverpenaltytxn
+    """
+    l1, l2 = node_factory.get_nodes(2, [{'broken_log': r"onchaind-chan#[0-9]*: Could not find resolution for output .*: did \*we\* cheat\?",
+                                         'may_reconnect': True,
+                                         'allow_bad_gossip': True,
+                                         'rescan': 10},
+                                    {'broken_log': r"onchaind-chan#[0-9]*: Could not find resolution for output .*: did \*we\* cheat\?",
+                                        'may_reconnect': True}])
+
+    l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
+    c12, _ = l2.fundchannel(l1, 10**5)
+    stubs = l1.rpc.emergencyrecover()["stubs"]
+    assert l1.daemon.is_in_log('channel {} already exists!'.format(_['channel_id']))
+
+    l2.rpc.pay(l1.rpc.invoice(25000000, 'lbl1', 'desc1')['bolt11'])
+
+    tx = l2.rpc.dev_sign_last_tx(l1.info['id'])['tx']
+
+    l2.rpc.pay(l1.rpc.invoice(25000000, 'lbl2', 'desc2')['bolt11'])
+
+    l1.stop()
+
+    # Now l2 cheats
+    bitcoind.rpc.sendrawtransaction(tx)
+    time.sleep(1)
+    bitcoind.generate_block(1)
+
+    # Deleting the database for the L1 node
+    os.unlink(os.path.join(l1.daemon.lightning_dir, TEST_NETWORK, "lightningd.sqlite3"))
+
+    # Running emergencyrecover on L1 to stub the channel inside the database.
+    l1.start()
+    assert l1.daemon.is_in_log('Server started with public key')
+    stubs = l1.rpc.emergencyrecover()["stubs"]
+    assert len(stubs) == 1
+    assert stubs[0] == _["channel_id"]
+    l1.daemon.wait_for_log('peer_out WIRE_ERROR')
+
+    # Restarting so that L1
+    l1.restart()
+
+    # Wait till L1 detects that L2 has cheated and it needs to create a penalty transaction.
+    _, txid, blocks = l1.wait_for_onchaind_tx('OUR_PENALTY_TX',
+                                              'THEIR_REVOKED_UNILATERAL/DELAYED_CHEAT_OUTPUT_TO_THEM')
+    assert blocks == 0
+    bitcoind.generate_block(10, wait_for_mempool=[txid])
+    sync_blockheight(bitcoind, [l1, l2])
+
+    # And l1 should consider it resolved now.
+    l1.daemon.wait_for_log('Resolved THEIR_REVOKED_UNILATERAL/DELAYED_CHEAT_OUTPUT_TO_THEM by our proposal OUR_PENALTY_TX')
+
+    assert(l1.rpc.listfunds()["channels"][0]["state"] == "ONCHAIN")
+    assert(l1.rpc.listfunds()["outputs"][0]["txid"] == txid)
+
+
+@unittest.skipIf(os.getenv('TEST_DB_PROVIDER', 'sqlite3') != 'sqlite3', "deletes database, which is assumed sqlite3")
 def test_emergencyrecover(node_factory, bitcoind):
     """
     Test emergencyrecover
@@ -3948,6 +4058,7 @@ def test_config_whitespace(node_factory):
 def test_setconfig(node_factory, bitcoind):
     l1, l2 = node_factory.line_graph(2, fundchannel=False)
     configfile = os.path.join(l2.daemon.opts.get("lightning-dir"), TEST_NETWORK, 'config')
+    setconfigfile = configfile + ".setconfig"
 
     assert (l2.rpc.listconfigs('min-capacity-sat')['configs']
             == {'min-capacity-sat':
@@ -3983,16 +4094,13 @@ def test_setconfig(node_factory, bitcoind):
     ret = l2.rpc.setconfig(config='min-capacity-sat', val=500000)
     assert ret == {'config':
                    {'config': 'min-capacity-sat',
-                    'source': '{}:2'.format(configfile),
+                    'source': '{}:2'.format(setconfigfile),
                     'value_int': 500000,
                     'dynamic': True}}
 
-    with open(configfile, 'r') as f:
+    with open(setconfigfile, 'r') as f:
         lines = f.read().splitlines()
-        timeline = lines[0]
-        assert lines[0].startswith('# Inserted by setconfig ')
-        assert lines[1] == 'min-capacity-sat=500000'
-        assert len(lines) == 2
+        assert lines == ["# Created and update by setconfig, but you can edit this manually when node is stopped.", "min-capacity-sat=500000"]
 
     # Now we need to meet minumum
     with pytest.raises(RpcError, match='which is below 500000sat'):
@@ -4009,7 +4117,7 @@ def test_setconfig(node_factory, bitcoind):
 
     assert (l2.rpc.listconfigs('min-capacity-sat')['configs']
             == {'min-capacity-sat':
-                {'source': '{}:2'.format(configfile),
+                {'source': '{}:2'.format(setconfigfile),
                  'value_int': 500000,
                  'dynamic': True}})
 
@@ -4018,24 +4126,21 @@ def test_setconfig(node_factory, bitcoind):
     with pytest.raises(RpcError, match='which is below 500000sat'):
         l1.fundchannel(l2, 400000)
 
-    # Now, changing again will comment that one out!
+    # Now, changing again will replace that one!
     ret = l2.rpc.setconfig(config='min-capacity-sat', val=400000)
     assert ret == {'config':
                    {'config': 'min-capacity-sat',
-                    'source': '{}:2'.format(configfile),
+                    'source': '{}:2'.format(setconfigfile),
                     'value_int': 400000,
                     'dynamic': True}}
 
-    with open(configfile, 'r') as f:
+    with open(setconfigfile, 'r') as f:
         lines = f.read().splitlines()
-        assert lines[0].startswith('# Inserted by setconfig ')
-        # It will have changed timestamp since last time!
-        assert lines[0] != timeline
-        assert lines[1] == 'min-capacity-sat=400000'
-        assert len(lines) == 2
+        assert lines == ["# Created and update by setconfig, but you can edit this manually when node is stopped.", "min-capacity-sat=400000"]
 
     # If it's not set by setconfig, it will comment it out instead.
     l2.stop()
+    os.unlink(setconfigfile)
 
     with open(configfile, 'w') as f:
         f.write('min-capacity-sat=500000\n')
@@ -4044,16 +4149,182 @@ def test_setconfig(node_factory, bitcoind):
     ret = l2.rpc.setconfig(config='min-capacity-sat', val=400000)
     assert ret == {'config':
                    {'config': 'min-capacity-sat',
-                    'source': '{}:3'.format(configfile),
+                    'source': '{}:2'.format(setconfigfile),
                     'value_int': 400000,
                     'dynamic': True}}
 
+    with open(setconfigfile, 'r') as f:
+        lines = f.read().splitlines()
+        assert lines == ["# Created and update by setconfig, but you can edit this manually when node is stopped.", "min-capacity-sat=400000"]
+
     with open(configfile, 'r') as f:
         lines = f.read().splitlines()
-        assert lines[0].startswith('# setconfig commented out: min-capacity-sat=500000')
-        assert lines[1].startswith('# Inserted by setconfig ')
-        assert lines[2] == 'min-capacity-sat=400000'
-        assert len(lines) == 3
+        assert lines[1].startswith("# Inserted by setconfig ")
+        assert lines == ['# setconfig commented out (see config.setconfig): min-capacity-sat=500000',
+                         lines[1],
+                         'include config.setconfig']
+
+    # We can also set it transiently.
+    ret = l2.rpc.setconfig(config='min-capacity-sat', val=400001, transient=True)
+    assert ret == {'config':
+                   {'config': 'min-capacity-sat',
+                    'source': 'setconfig transient',
+                    'value_int': 400001,
+                    'dynamic': True}}
+
+    # So this won't change.
+    with open(setconfigfile, 'r') as f:
+        lines = f.read().splitlines()
+        assert lines == ["# Created and update by setconfig, but you can edit this manually when node is stopped.", "min-capacity-sat=400000"]
+
+
+def test_setconfig_access(node_factory, bitcoind):
+    """Test that we correctly fail (not crash) if config file/dir not writable"""
+
+    # Disable bookkeeper, with its separate db which gets upset under CI.
+    l1 = node_factory.get_node(options={'disable-plugin': 'bookkeeper'})
+
+    netconfigfile = os.path.join(l1.daemon.opts.get("lightning-dir"), TEST_NETWORK, 'config')
+
+    # It's OK if the config file doesn't exist.
+    l1.rpc.check("setconfig", config="min-capacity-sat", val=1000000)
+
+    # But not if we can't create it.
+    os.chmod(os.path.dirname(netconfigfile), 0o550)
+    with pytest.raises(RpcError, match=f'Cannot write to config file {netconfigfile}'):
+        l1.rpc.check("setconfig", config="min-capacity-sat", val=1000000)
+
+    with pytest.raises(RpcError, match=f'Cannot write to config file {netconfigfile}'):
+        l1.rpc.setconfig(config="min-capacity-sat", val=1000000)
+
+    # Empty config file (we need to be able to write dir)
+    os.chmod(os.path.dirname(netconfigfile), 0o750)
+    with open(netconfigfile, 'w') as file:
+        pass
+    l1.restart()
+
+    # check will fail
+    os.chmod(os.path.dirname(netconfigfile), 0o550)
+    with pytest.raises(RpcError, match=f'Cannot write to config file {netconfigfile}'):
+        l1.rpc.check("setconfig", config="min-capacity-sat", val=1000000)
+
+    # real write will definitely fail
+    with pytest.raises(RpcError, match=f'Cannot write to config file {netconfigfile}'):
+        l1.rpc.setconfig(config="min-capacity-sat", val=1000000)
+
+    # Transient?  Don't care that we can't change it.
+    ret = l1.rpc.setconfig(config='min-capacity-sat', val=400001, transient=True)
+    assert ret == {'config':
+                   {'config': 'min-capacity-sat',
+                    'source': 'setconfig transient',
+                    'value_int': 400001,
+                    'dynamic': True}}
+
+    # db also needs to write directory!
+    os.chmod(os.path.dirname(netconfigfile), 0o750)
+
+    # Now put a setting in the main config file
+    l1.stop()
+    mainconfigfile = os.path.join(l1.daemon.opts.get("lightning-dir"), 'config')
+    with open(mainconfigfile, 'w') as file:
+        file.write("min-capacity-sat=100")
+    l1.start()
+
+    # We don't actually need to write file, just directoty.
+    os.chmod(mainconfigfile, 0o400)
+
+    l1.rpc.check("setconfig", config="min-capacity-sat", val=9999)
+    l1.rpc.setconfig(config="min-capacity-sat", val=9999)
+
+    # setconfig file exists, and its permissions matter!
+    setconfigfile = netconfigfile + ".setconfig"
+    os.chmod(setconfigfile, 0o400)
+    with pytest.raises(RpcError, match=f'Cannot write to config file {setconfigfile}'):
+        l1.rpc.check("setconfig", config="min-capacity-sat", val=1000000)
+
+    with pytest.raises(RpcError, match=f'Cannot write to config file {setconfigfile}'):
+        l1.rpc.setconfig(config="min-capacity-sat", val=1000000)
+
+    # Change location of setconfig file in another sub directory.
+    l1.stop()
+    includedir = os.path.join(os.path.dirname(netconfigfile), "include")
+    os.mkdir(includedir)
+    os.unlink(setconfigfile)
+    setconfigfile = os.path.join(includedir, "special.setconfig")
+    with open(netconfigfile, 'w') as file:
+        file.write(f"include {setconfigfile}")
+    with open(setconfigfile, 'w') as file:
+        pass
+    l1.start()
+
+    # Needs to be writable, to append.
+    os.chmod(setconfigfile, 0o400)
+    with pytest.raises(RpcError, match=f'Cannot write to config file {setconfigfile}'):
+        l1.rpc.check("setconfig", config="min-capacity-sat", val=1000000)
+
+    with pytest.raises(RpcError, match=f'Cannot write to config file {setconfigfile}'):
+        l1.rpc.setconfig(config="min-capacity-sat", val=1000000)
+
+    # But directory doesn't!
+    os.chmod(includedir, 0o500)
+    os.chmod(setconfigfile, 0o700)
+    assert l1.rpc.setconfig(config="min-capacity-sat", val=1000000) == {'config':
+                                                                        {'config': 'min-capacity-sat',
+                                                                         'source': f'{setconfigfile}:1',
+                                                                         'value_int': 1000000,
+                                                                         'dynamic': True}}
+
+    # Don't break pytest cleanup!
+    os.chmod(includedir, 0o700)
+
+
+def test_setconfig_changed(node_factory, bitcoind):
+    """Test that we correctly fail (not crash) if config file changed"""
+    l1 = node_factory.get_node(start=False)
+
+    netconfigfile = os.path.join(l1.daemon.opts.get("lightning-dir"), TEST_NETWORK, 'config')
+    with open(netconfigfile, 'w') as file:
+        file.write("min-capacity-sat=100")
+    l1.start()
+
+    assert l1.rpc.listconfigs(config="min-capacity-sat")['configs']['min-capacity-sat']['value_int'] == 100
+
+    # Change it underneath
+    with open(netconfigfile, 'w') as file:
+        file.write("#some comment\nmin-capacity-sat=100")
+
+    # This will fail.
+    with pytest.raises(RpcError, match=f'Configfile {netconfigfile} line 1 changed from min-capacity-sat=100 to #some comment!'):
+        l1.rpc.check("setconfig", config="min-capacity-sat", val=9999)
+    with pytest.raises(RpcError, match=f'Configfile {netconfigfile} line 1 changed from min-capacity-sat=100 to #some comment!'):
+        l1.rpc.setconfig(config="min-capacity-sat", val=9999)
+
+    # Restore it.
+    with open(netconfigfile, 'w') as file:
+        file.write("min-capacity-sat=100")
+
+    # Succeeds
+    l1.rpc.setconfig(config="min-capacity-sat", val=9999)
+
+    # Now mess with config.setconfig...
+    setconfigfile = netconfigfile + ".setconfig"
+    with open(setconfigfile, 'w') as file:
+        pass
+
+    # Now this will fail (truncated)
+    with pytest.raises(RpcError, match=f'Configfile {setconfigfile} no longer has 2 lines'):
+        l1.rpc.check("setconfig", config="min-capacity-sat", val=9999)
+    with pytest.raises(RpcError, match=f'Configfile {setconfigfile} no longer has 2 lines'):
+        l1.rpc.setconfig(config="min-capacity-sat", val=9999)
+
+    # This will fail (changed)
+    with open(setconfigfile, 'w') as file:
+        file.write("# Created and update by setconfig, but you can edit this manually when node is stopped.\nmin-capacity-sat=999")
+
+    with pytest.raises(RpcError, match=f'Configfile {setconfigfile} line 2 changed from min-capacity-sat=9999 to min-capacity-sat=999!'):
+        l1.rpc.check("setconfig", config="min-capacity-sat", val=9999)
+    with pytest.raises(RpcError, match=f'Configfile {setconfigfile} line 2 changed from min-capacity-sat=9999 to min-capacity-sat=999!'):
+        l1.rpc.setconfig(config="min-capacity-sat", val=9999)
 
 
 @unittest.skipIf(os.getenv('TEST_DB_PROVIDER', 'sqlite3') != 'sqlite3', "deletes database, which is assumed sqlite3")

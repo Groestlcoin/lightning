@@ -1032,7 +1032,7 @@ def generate_offers_renepay_examples(l1, l2, inv_l21, inv_l34):
             {'data_keys': ['any', 'bolt12', 'invreq'], 'original_value': offer_l21['bolt12'], 'new_value': NEW_VALUES_LIST['bolt12_l21']},
             {'data_keys': ['offer_id'], 'original_value': offer_l22['offer_id'], 'new_value': NEW_VALUES_LIST['offerid_l22']},
             {'data_keys': ['any', 'bolt12', 'invreq'], 'original_value': offer_l22['bolt12'], 'new_value': NEW_VALUES_LIST['bolt12_l22']},
-            {'data_keys': ['offer_id'], 'original_value': offer_l23['offer_id'], 'new_value': NEW_VALUES_LIST['offerid_l23']},
+            {'data_keys': ['any', 'offer_id'], 'original_value': offer_l23['offer_id'], 'new_value': NEW_VALUES_LIST['offerid_l23']},
             {'data_keys': ['any', 'bolt12', 'invreq'], 'original_value': offer_l23['bolt12'], 'new_value': NEW_VALUES_LIST['bolt12_l23']},
             {'data_keys': ['invreq_id'], 'original_value': inv_req_l1_l22['invreq_id'], 'new_value': NEW_VALUES_LIST['invreq_id_2']},
             {'data_keys': ['any', 'bolt12', 'invreq'], 'original_value': disableinv_res1['bolt12'], 'new_value': NEW_VALUES_LIST['bolt12_l24']},
@@ -1972,6 +1972,8 @@ def generate_list_examples(l1, l2, l3, c12, c23_2, inv_l31, inv_l32, offer_l23, 
             channel['alias']['local'] = '3000000' + str(i) + 'x6000000' + str(i) + 'x6000' + str(i)
             channel['alias']['remote'] = '1000000' + str(i) + 'x2000000' + str(i) + 'x3000' + str(i)
             channel['max_total_htlc_in_msat'] = NEW_VALUES_LIST['htlc_max_msat']
+            channel['their_max_htlc_value_in_flight_msat'] = NEW_VALUES_LIST['htlc_max_msat']
+            channel['our_max_htlc_value_in_flight_msat'] = NEW_VALUES_LIST['htlc_max_msat']
             for j, state in enumerate(channel['state_changes'], start=1):
                 state['timestamp'] = '2024-10-10T00:0' + str(j) + ':00.000Z'
         update_example(node=l1, method='listpeerchannels', params={'id': l2.info['id']}, response=listpeerchannels_res1)
@@ -1991,6 +1993,8 @@ def generate_list_examples(l1, l2, l3, c12, c23_2, inv_l31, inv_l32, offer_l23, 
                 channel['close_to'] = 'db2dec31' + (('0' + str(i)) * 30)
                 channel['status'][0] = re.sub(r'(tx:)[a-f0-9]+', r'\1' + scrt_id, channel['status'][0])
                 channel['max_total_htlc_in_msat'] = NEW_VALUES_LIST['htlc_max_msat']
+                channel['their_max_htlc_value_in_flight_msat'] = NEW_VALUES_LIST['htlc_max_msat']
+                channel['our_max_htlc_value_in_flight_msat'] = NEW_VALUES_LIST['htlc_max_msat']
                 if 'inflight' in channel and len(channel['inflight']) > 0:
                     channel['inflight'][0]['scratch_txid'] = scrt_id
                 for j, state in enumerate(channel['state_changes'], start=1):
@@ -2027,7 +2031,12 @@ def generate_list_examples(l1, l2, l3, c12, c23_2, inv_l31, inv_l32, offer_l23, 
         update_example(node=l2, method='listdatastore', params={'key': 'somekey'})
 
         listoffers_res1 = l2.rpc.listoffers(active_only=True)
-        listoffers_res1 = update_list_responses(listoffers_res1, list_key='offers')
+        for i, offer in enumerate(listoffers_res1['offers'], start=1):
+            ofr_id = 'offerid_l2' + str(i)
+            bolt12_id = 'bolt12_l2' + str(i)
+            offer['offer_id'] = NEW_VALUES_LIST[ofr_id]
+            offer['bolt12'] = NEW_VALUES_LIST[bolt12_id]
+        listoffers_res1 = update_list_responses(listoffers_res1, list_key='offers', slice_upto=5, update_func=None, sort=True, sort_key='offer_id')
         update_example(node=l2, method='listoffers', params={'active_only': True}, response=listoffers_res1)
         listoffers_res2 = l2.rpc.listoffers(offer_id=offer_l23['offer_id'])
         listoffers_res2 = update_list_responses(listoffers_res2, list_key='offers')

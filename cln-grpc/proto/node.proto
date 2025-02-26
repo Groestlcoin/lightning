@@ -1453,6 +1453,8 @@ message ListpeerchannelsChannels {
 	optional bool reestablished = 58;
 	optional Amount last_tx_fee_msat = 59;
 	optional uint32 direction = 60;
+	optional Amount their_max_htlc_value_in_flight_msat = 61;
+	optional Amount our_max_htlc_value_in_flight_msat = 62;
 }
 
 message ListpeerchannelsChannelsUpdates {
@@ -2688,6 +2690,7 @@ message SetchannelChannels {
 message SetconfigRequest {
 	string config = 1;
 	optional string val = 2;
+	optional bool transient = 3;
 }
 
 message SetconfigResponse {

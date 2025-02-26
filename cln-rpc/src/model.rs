@@ -3392,6 +3392,8 @@ pub mod requests {
 	#[derive(Clone, Debug, Deserialize, Serialize)]
 	pub struct SetconfigRequest {
 	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub transient: Option<bool>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
 	    pub val: Option<String>,
 	    pub config: String,
 	}
@@ -7060,6 +7062,9 @@ pub mod responses {
 
 	#[derive(Clone, Debug, Deserialize, Serialize)]
 	pub struct ListpeerchannelsChannels {
+	    #[deprecated]
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub max_total_htlc_in_msat: Option<Amount>,
 	    #[serde(skip_serializing_if = "Option::is_none")]
 	    pub alias: Option<ListpeerchannelsChannelsAlias>,
 	    #[serde(skip_serializing_if = "Option::is_none")]
@@ -7111,8 +7116,6 @@ pub mod responses {
 	    #[serde(skip_serializing_if = "Option::is_none")]
 	    pub max_to_us_msat: Option<Amount>,
 	    #[serde(skip_serializing_if = "Option::is_none")]
-	    pub max_total_htlc_in_msat: Option<Amount>,
-	    #[serde(skip_serializing_if = "Option::is_none")]
 	    pub maximum_htlc_out_msat: Option<Amount>,
 	    #[serde(skip_serializing_if = "Option::is_none")]
 	    pub min_to_us_msat: Option<Amount>,
@@ -7124,6 +7127,8 @@ pub mod responses {
 	    pub next_fee_step: Option<u32>,
 	    #[serde(skip_serializing_if = "Option::is_none")]
 	    pub next_feerate: Option<String>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub our_max_htlc_value_in_flight_msat: Option<Amount>,
 	    #[serde(skip_serializing_if = "Option::is_none")]
 	    pub our_reserve_msat: Option<Amount>,
 	    #[serde(skip_serializing_if = "Option::is_none")]
@@ -7150,6 +7155,8 @@ pub mod responses {
 	    pub short_channel_id: Option<ShortChannelId>,
 	    #[serde(skip_serializing_if = "Option::is_none")]
 	    pub spendable_msat: Option<Amount>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub their_max_htlc_value_in_flight_msat: Option<Amount>,
 	    #[serde(skip_serializing_if = "Option::is_none")]
 	    pub their_reserve_msat: Option<Amount>,
 	    #[serde(skip_serializing_if = "Option::is_none")]

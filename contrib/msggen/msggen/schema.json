@@ -2819,16 +2819,16 @@
             "channels_apy": [
               {
                 "account": "channelid0120000120000120000120000120000120000120000120000120000",
-                "routed_out_msat": 1000000,
-                "routed_in_msat": 510091208,
+                "routed_out_msat": 1001000,
+                "routed_in_msat": 510092209,
                 "lease_fee_paid_msat": 0,
                 "lease_fee_earned_msat": 0,
                 "pushed_out_msat": 0,
                 "pushed_in_msat": 0,
                 "our_start_balance_msat": 0,
                 "channel_start_balance_msat": 1000000000,
-                "fees_out_msat": 0,
-                "fees_in_msat": 106,
+                "fees_out_msat": 1,
+                "fees_in_msat": 107,
                 "utilization_out": "30.7060%",
                 "utilization_in": "10.0027%",
                 "utilization_in_initial": "50.0081%",
@@ -2881,16 +2881,16 @@
               },
               {
                 "account": "net",
-                "routed_out_msat": 1011190102,
-                "routed_in_msat": 510091208,
+                "routed_out_msat": 1011191102,
+                "routed_in_msat": 510092209,
                 "lease_fee_paid_msat": 0,
                 "lease_fee_earned_msat": 0,
                 "pushed_out_msat": 0,
                 "pushed_in_msat": 0,
                 "our_start_balance_msat": 2000000000,
                 "channel_start_balance_msat": 3000000000,
-                "fees_out_msat": 106,
-                "fees_in_msat": 106,
+                "fees_out_msat": 107,
+                "fees_in_msat": 107,
                 "utilization_out": "33.7060%",
                 "utilization_out_initial": "53.5591%",
                 "utilization_in": "13.0027%",
@@ -11004,7 +11004,7 @@
             "method": "delforward",
             "params": {
               "in_channel": "109x1x1",
-              "in_htlc_id": 21,
+              "in_htlc_id": 22,
               "status": "failed"
             }
           },
@@ -12640,7 +12640,7 @@
     "lightning-enableoffer.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
-      "rpc": "disableoffer",
+      "rpc": "enableoffer",
       "title": "Command for re-enabling an offer",
       "description": [
         "The **enableoffer** RPC command enables an offer, after it has been disabled."
@@ -15376,7 +15376,7 @@
                 "port": 19735
               }
             ],
-            "version": "v24.11",
+            "version": "v25.02rc1",
             "blockheight": 110,
             "network": "regtest",
             "fees_collected_msat": 0,
@@ -20812,7 +20812,7 @@
               },
               "autoclean-expiredinvoices-age": {
                 "value_int": 300,
-                "source": "/tmp/.lightning/regtest/config:2",
+                "source": "/tmp/.lightning/regtest/config.setconfig:2",
                 "plugin": "/root/lightning/plugins/autoclean",
                 "dynamic": true
               },
@@ -21121,7 +21121,7 @@
               },
               "min-capacity-sat": {
                 "value_int": 500000,
-                "source": "/tmp/.lightning/regtest/config:4",
+                "source": "/tmp/.lightning/regtest/config.setconfig:3",
                 "dynamic": true
               },
               "min-emergency-msat": {
@@ -21203,6 +21203,12 @@
                 "source": "cmdline"
               },
               "xpay-handle-pay": {
+                "value_bool": false,
+                "source": "default",
+                "plugin": "/root/lightning/plugins/cln-xpay",
+                "dynamic": true
+              },
+              "xpay-slow-mode": {
                 "value_bool": false,
                 "source": "default",
                 "plugin": "/root/lightning/plugins/cln-xpay",
@@ -21750,10 +21756,10 @@
           "response": {
             "forwards": [
               {
-                "created_index": 12,
-                "updated_index": 7,
+                "created_index": 13,
+                "updated_index": 8,
                 "in_channel": "109x1x1",
-                "in_htlc_id": 19,
+                "in_htlc_id": 20,
                 "out_channel": "123x1x1",
                 "out_htlc_id": 2,
                 "in_msat": 50000501,
@@ -21765,10 +21771,10 @@
                 "resolved_time": 1738500000
               },
               {
-                "created_index": 13,
-                "updated_index": 8,
+                "created_index": 14,
+                "updated_index": 9,
                 "in_channel": "109x1x1",
-                "in_htlc_id": 20,
+                "in_htlc_id": 21,
                 "out_channel": "123x1x1",
                 "out_htlc_id": 3,
                 "in_msat": 50000501,
@@ -23542,13 +23548,6 @@
           "response": {
             "offers": [
               {
-                "offer_id": "offeridl23000002300000230000023000002300000230000023000002300000",
-                "active": true,
-                "single_use": false,
-                "bolt12": "lno1qgsq000bolt230002300023000230002300023000230002300023000230002300023000230002300023000230002300023000230002300023000230002300023000",
-                "used": false
-              },
-              {
                 "offer_id": "offeridl21000002100000210000021000002100000210000021000002100000",
                 "active": true,
                 "single_use": false,
@@ -23561,6 +23560,13 @@
                 "single_use": false,
                 "bolt12": "lno1qgsq000bolt220002200022000220002200022000220002200022000220002200022000220002200022000220002200022000220002200022000220002200022000",
                 "used": false
+              },
+              {
+                "offer_id": "offeridl23000002300000230000023000002300000230000023000002300000",
+                "active": true,
+                "single_use": false,
+                "bolt12": "lno1qgsq000bolt230002300023000230002300023000230002300023000230002300023000230002300023000230002300023000230002300023000230002300023000",
+                "used": false
               }
             ]
           }
@@ -23570,7 +23576,7 @@
             "id": "example:listoffers#2",
             "method": "listoffers",
             "params": [
-              "b791f88cebf775853112c30828e116487f4d6c252d669372532b468bc7de8a24"
+              "offeridl23000002300000230000023000002300000230000023000002300000"
             ]
           },
           "response": {
@@ -24432,7 +24438,25 @@
                 "max_total_htlc_in_msat": {
                   "type": "msat",
                   "description": [
-                    "Max amount accept in a single payment."
+                    "Max amount accept in a single payment. This field is deprecated, use instead our_max_htlc_value_in_flight_msat"
+                  ],
+                  "deprecated": [
+                    "v25.02",
+                    "v26.05"
+                  ]
+                },
+                "their_max_htlc_value_in_flight_msat": {
+                  "type": "msat",
+                  "added": "v25.02",
+                  "description": [
+                    "Cap on total value of outstanding HTLCs offered to the remote node. This limits the total amount in flight we can send through this channel."
+                  ]
+                },
+                "our_max_htlc_value_in_flight_msat": {
+                  "type": "msat",
+                  "added": "v25.02",
+                  "description": [
+                    "Cap on total value of outstanding HTLCs we accept from the remote node. This limits the total amount in flight we can receive through this channel."
                   ]
                 },
                 "their_reserve_msat": {
@@ -24905,6 +24929,8 @@
                       "fee_proportional_millionths": {},
                       "dust_limit_msat": {},
                       "max_total_htlc_in_msat": {},
+                      "our_max_total_htlc_in_msat": {},
+                      "their_max_total_htlc_in_msat": {},
                       "their_reserve_msat": {},
                       "our_reserve_msat": {},
                       "spendable_msat": {},
@@ -24923,6 +24949,8 @@
                       "msatoshi_total": {},
                       "dust_limit_satoshis": {},
                       "max_htlc_value_in_flight_msat": {},
+                      "our_max_htlc_value_in_flight_msat": {},
+                      "their_max_htlc_value_in_flight_msat": {},
                       "our_channel_reserve_satoshis": {},
                       "their_channel_reserve_satoshis": {},
                       "spendable_satoshis": {},
@@ -25002,6 +25030,8 @@
                       "fee_proportional_millionths": {},
                       "dust_limit_msat": {},
                       "max_total_htlc_in_msat": {},
+                      "our_max_total_htlc_in_msat": {},
+                      "their_max_total_htlc_in_msat": {},
                       "their_reserve_msat": {},
                       "our_reserve_msat": {},
                       "spendable_msat": {},
@@ -25020,6 +25050,8 @@
                       "msatoshi_total": {},
                       "dust_limit_satoshis": {},
                       "max_htlc_value_in_flight_msat": {},
+                      "our_max_htlc_value_in_flight_msat": {},
+                      "their_max_htlc_value_in_flight_msat": {},
                       "our_channel_reserve_satoshis": {},
                       "their_channel_reserve_satoshis": {},
                       "spendable_satoshis": {},
@@ -25098,6 +25130,8 @@
                       "fee_proportional_millionths": {},
                       "dust_limit_msat": {},
                       "max_total_htlc_in_msat": {},
+                      "our_max_total_htlc_in_msat": {},
+                      "their_max_total_htlc_in_msat": {},
                       "their_reserve_msat": {},
                       "our_reserve_msat": {},
                       "spendable_msat": {},
@@ -25116,6 +25150,8 @@
                       "msatoshi_total": {},
                       "dust_limit_satoshis": {},
                       "max_htlc_value_in_flight_msat": {},
+                      "our_max_htlc_value_in_flight_msat": {},
+                      "their_max_htlc_value_in_flight_msat": {},
                       "our_channel_reserve_satoshis": {},
                       "their_channel_reserve_satoshis": {},
                       "spendable_satoshis": {},
@@ -25196,6 +25232,8 @@
                       "fee_proportional_millionths": {},
                       "dust_limit_msat": {},
                       "max_total_htlc_in_msat": {},
+                      "our_max_total_htlc_in_msat": {},
+                      "their_max_total_htlc_in_msat": {},
                       "their_reserve_msat": {},
                       "our_reserve_msat": {},
                       "spendable_msat": {},
@@ -25214,6 +25252,8 @@
                       "msatoshi_total": {},
                       "dust_limit_satoshis": {},
                       "max_htlc_value_in_flight_msat": {},
+                      "our_max_htlc_value_in_flight_msat": {},
+                      "their_max_htlc_value_in_flight_msat": {},
                       "our_channel_reserve_satoshis": {},
                       "their_channel_reserve_satoshis": {},
                       "spendable_satoshis": {},
@@ -25372,18 +25412,20 @@
                   "remote_funds_msat": 0,
                   "pushed_msat": 0
                 },
-                "to_us_msat": 390492790,
-                "min_to_us_msat": 390492790,
+                "to_us_msat": 390492789,
+                "min_to_us_msat": 390492789,
                 "max_to_us_msat": 1000000000,
                 "total_msat": 1000000000,
                 "fee_base_msat": 1,
                 "fee_proportional_millionths": 10,
                 "dust_limit_msat": 546000,
                 "max_total_htlc_in_msat": 18446744073709552000,
+                "their_max_htlc_value_in_flight_msat": 18446744073709552000,
+                "our_max_htlc_value_in_flight_msat": 18446744073709552000,
                 "their_reserve_msat": 10000000,
                 "our_reserve_msat": 10000000,
-                "spendable_msat": 363951708,
-                "receivable_msat": 599507210,
+                "spendable_msat": 363951707,
+                "receivable_msat": 599507211,
                 "minimum_htlc_in_msat": 0,
                 "minimum_htlc_out_msat": 0,
                 "maximum_htlc_out_msat": 990000000,
@@ -25409,18 +25451,18 @@
                 "status": [
                   "CHANNELD_NORMAL:Channel ready for use."
                 ],
-                "in_payments_offered": 1,
-                "in_offered_msat": 1000000,
-                "in_payments_fulfilled": 1,
-                "in_fulfilled_msat": 1000000,
-                "out_payments_offered": 22,
-                "out_offered_msat": 665528797,
-                "out_payments_fulfilled": 16,
-                "out_fulfilled_msat": 610507210,
+                "in_payments_offered": 2,
+                "in_offered_msat": 1001000,
+                "in_payments_fulfilled": 2,
+                "in_fulfilled_msat": 1001000,
+                "out_payments_offered": 23,
+                "out_offered_msat": 665529798,
+                "out_payments_fulfilled": 17,
+                "out_fulfilled_msat": 610508211,
                 "htlcs": [
                   {
                     "direction": "out",
-                    "id": 17,
+                    "id": 18,
                     "amount_msat": 4000082,
                     "expiry": 181,
                     "payment_hash": "paymenthashdelpay30303030303030303030303030303030303030303030303",
@@ -25502,18 +25544,20 @@
                   "remote_funds_msat": 0,
                   "pushed_msat": 0
                 },
-                "to_us_msat": 390492790,
-                "min_to_us_msat": 390492790,
+                "to_us_msat": 390492789,
+                "min_to_us_msat": 390492789,
                 "max_to_us_msat": 1000000000,
                 "total_msat": 1000000000,
                 "fee_base_msat": 1,
                 "fee_proportional_millionths": 10,
                 "dust_limit_msat": 546000,
                 "max_total_htlc_in_msat": 18446744073709552000,
+                "their_max_htlc_value_in_flight_msat": 18446744073709552000,
+                "our_max_htlc_value_in_flight_msat": 18446744073709552000,
                 "their_reserve_msat": 10000000,
                 "our_reserve_msat": 10000000,
-                "spendable_msat": 363951708,
-                "receivable_msat": 599507210,
+                "spendable_msat": 363951707,
+                "receivable_msat": 599507211,
                 "minimum_htlc_in_msat": 0,
                 "minimum_htlc_out_msat": 0,
                 "maximum_htlc_out_msat": 990000000,
@@ -25539,18 +25583,18 @@
                 "status": [
                   "CHANNELD_NORMAL:Channel ready for use."
                 ],
-                "in_payments_offered": 1,
-                "in_offered_msat": 1000000,
-                "in_payments_fulfilled": 1,
-                "in_fulfilled_msat": 1000000,
-                "out_payments_offered": 22,
-                "out_offered_msat": 665528797,
-                "out_payments_fulfilled": 16,
-                "out_fulfilled_msat": 610507210,
+                "in_payments_offered": 2,
+                "in_offered_msat": 1001000,
+                "in_payments_fulfilled": 2,
+                "in_fulfilled_msat": 1001000,
+                "out_payments_offered": 23,
+                "out_offered_msat": 665529798,
+                "out_payments_fulfilled": 17,
+                "out_fulfilled_msat": 610508211,
                 "htlcs": [
                   {
                     "direction": "out",
-                    "id": 17,
+                    "id": 18,
                     "amount_msat": 4000082,
                     "expiry": 181,
                     "payment_hash": "paymenthashdelpay30303030303030303030303030303030303030303030303",
@@ -25634,6 +25678,8 @@
                 "fee_proportional_millionths": 10,
                 "dust_limit_msat": 546000,
                 "max_total_htlc_in_msat": 18446744073709552000,
+                "their_max_htlc_value_in_flight_msat": 18446744073709552000,
+                "our_max_htlc_value_in_flight_msat": 18446744073709552000,
                 "their_reserve_msat": 546000,
                 "our_reserve_msat": 546000,
                 "spendable_msat": 8172000,
@@ -32591,9 +32637,9 @@
       "description": [
         "The **setconfig** RPC command allows you set the (dynamic) configuration option named by `config`: options which take a value (as separate from simple flag options) also need a `val` parameter.",
         "",
-        "This new value will *also* be written at the end of the config file, for persistence across restarts (and any old value commented out).",
+        "This new value will *also* be written at the end of the `config.setconfig` file (but see lightningd-config), for persistence across restarts (and any old value commented out if they were set in other config files).",
         "",
-        "You can see what options are dynamically adjustable using lightning- listconfigs(7). Note that you can also adjust existing options for stopped plugins; they will have an effect when the plugin is restarted."
+        "You can see what options are dynamically adjustable using lightning-listconfigs(7). Note that you can also adjust existing options for stopped plugins; they will have an effect when the plugin is restarted."
       ],
       "request": {
         "required": [
@@ -32621,6 +32667,14 @@
             ],
             "description": [
               "Value of the config variable to be set or updated."
+            ]
+          },
+          "transient": {
+            "type": "boolean",
+            "added": "v25.02",
+            "default": "False",
+            "description": [
+              "If set, this change does NOT try to alter the configuration files, so the change will be reverted on any restart."
             ]
           }
         }
@@ -32733,7 +32787,7 @@
             "config": {
               "config": "autoclean-expiredinvoices-age",
               "value_int": 300,
-              "source": "/tmp/.lightning/regtest/config:2",
+              "source": "/tmp/.lightning/regtest/config.setconfig:2",
               "plugin": "/root/lightning/plugins/autoclean",
               "dynamic": true
             }
@@ -32752,7 +32806,7 @@
             "config": {
               "config": "min-capacity-sat",
               "value_int": 500000,
-              "source": "/tmp/.lightning/regtest/config:4",
+              "source": "/tmp/.lightning/regtest/config.setconfig:3",
               "dynamic": true
             }
           }
@@ -34330,7 +34384,7 @@
             "rows": [
               [
                 "nodeid020202020202020202020202020202020202020202020202020202020202",
-                490493792,
+                490493791,
                 1000000000,
                 "CHANNELD_NORMAL:Channel ready for use."
               ]
@@ -34351,7 +34405,7 @@
           "response": {
             "rows": [
               [
-                9
+                10
               ]
             ]
           }
@@ -36935,7 +36989,7 @@
           "response": {
             "payment_preimage": "paymentpreimgxp2020202020202020202020202020202020202020202020202",
             "amount_msat": 1000,
-            "amount_sent_msat": 1000,
+            "amount_sent_msat": 1001,
             "failed_parts": 0,
             "successful_parts": 1
           }

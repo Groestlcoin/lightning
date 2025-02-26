@@ -1109,6 +1109,7 @@ static void resolve_htlc_tx(struct tracked_output ***outs,
 
 	msg = towire_onchaind_spend_to_us(NULL,
 					  &outpoint, amt,
+					  to_self_delay[LOCAL],
 					  rel_blockheight(out, to_self_delay[LOCAL]),
 					  commit_num,
 					  wscript);
@@ -2129,7 +2130,7 @@ static void our_unilateral_to_us(struct tracked_output ***outs,
 				 const struct bitcoin_outpoint *outpoint,
 				 u32 tx_blockheight,
 				 struct amount_sat amt,
-				 u16 sequence,
+				 u32 sequence,
 				 const u8 *local_scriptpubkey,
 				 const u8 *local_wscript)
 {
@@ -2156,7 +2157,8 @@ static void our_unilateral_to_us(struct tracked_output ***outs,
 
 	msg = towire_onchaind_spend_to_us(NULL,
 					  outpoint, amt,
-					  rel_blockheight(out, to_self_delay[LOCAL]),
+					  sequence,
+					  rel_blockheight(out, sequence),
 					  commit_num,
 					  local_wscript);
 
@@ -2166,7 +2168,7 @@ static void our_unilateral_to_us(struct tracked_output ***outs,
 	 * output is *resolved* by the spending transaction
 	 */
 	propose_resolution_to_master(out, take(msg),
-				     rel_blockheight(out, to_self_delay[LOCAL]),
+				     rel_blockheight(out, sequence),
 				     OUR_DELAYED_RETURN_TO_WALLET);
 }
 

@@ -2,8 +2,9 @@ from .lightning import LightningRpc, RpcError, Millisatoshi
 from .plugin import Plugin, monkey_patch, RpcException
 from .gossmap import Gossmap, GossmapNode, GossmapChannel, GossmapHalfchannel, GossmapNodeId, LnFeatureBits
 from .gossmapstats import GossmapStats
+from .version import NodeVersion, VersionSpec
 
-__version__ = "24.11"
+__version__ = "25.02rc1"
 
 __all__ = [
     "LightningRpc",
@@ -20,4 +21,6 @@ __all__ = [
     "GossmapNodeId",
     "LnFeatureBits",
     "GossmapStats",
+    "NodeVersion",
+    "VersionSpec",
 ]

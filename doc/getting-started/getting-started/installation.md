@@ -355,12 +355,12 @@ pip install poetry
 If you don't have groestlcoind installed locally you'll need to install that as well:
 
 ```shell
-brew install berkeley-db5 boost miniupnpc pkg-config libevent
+brew install boost cmake pkg-config libevent
 git clone https://github.com/groestlcoin/groestlcoin
 cd groestlcoin
-./autogen.sh
-./configure
-make src/groestlcoind src/groestlcoin-cli && make install
+cmake -B build
+cmake --build build --target groestlcoind groestlcoin-cli
+cmake --install build --component groestlcoind && cmake --install build --component groestlcoin-cli
 ```
 
 Clone lightning:
@@ -582,7 +582,7 @@ apk add libgcc libsodium sqlite-libs zlib
 
 ## Python plugins
 
-Python plugins will be installed with the `poetry install` step mentioned above fron development setup. 
+Python plugins will be installed with the `poetry install` step mentioned above fron development setup.
 
 Other users will need some Python packages if python plugins are used. Unfortunately there are some Python packages which are not packaged in Ubuntu, and so force installation will be needed (Flag `--user` is recommended which will install them in user's own .local directory, so at least the risk of breaking Python globally can be avoided!).
 
