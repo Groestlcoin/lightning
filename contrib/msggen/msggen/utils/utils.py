@@ -141,6 +141,7 @@ grpc_method_names = [
     "AskRene-Bias-Channel",
     "AskRene-ListReservations",
     "InjectPaymentOnion",
+    "InjectOnionMessage",
     "Xpay",
 ]
 
@@ -165,6 +166,10 @@ grpc_notification_names = [
         "name": "custommsg",
         "typename": "CustomMsg"
     },
+    {
+        "name": "channel_state_changed",
+        "typename": "ChannelStateChanged"
+    }
 ]
 
 

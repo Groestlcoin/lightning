@@ -12,7 +12,7 @@ use std::string::ToString;
 pub use bitcoin::hashes::sha256::Hash as Sha256;
 pub use bitcoin::secp256k1::PublicKey;
 
-#[derive(Copy, Clone, Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Copy, Clone, Serialize, Deserialize, Debug, PartialEq, Eq)]
 #[allow(non_camel_case_types)]
 pub enum ChannelState {
     OPENINGD = 0,
@@ -27,9 +27,11 @@ pub enum ChannelState {
     DUALOPEND_OPEN_INIT = 9,
     DUALOPEND_AWAITING_LOCKIN = 10,
     CHANNELD_AWAITING_SPLICE = 11,
+    DUALOPEND_OPEN_COMMITTED = 12,
+    DUALOPEND_OPEN_COMMIT_READY = 13,
 }
 
-#[derive(Copy, Clone, Serialize, Deserialize, Debug)]
+#[derive(Copy, Clone, Serialize, Deserialize, Debug, PartialEq, Eq)]
 #[allow(non_camel_case_types)]
 pub enum HtlcState {
     SENT_ADD_HTLC = 0,
@@ -69,18 +71,6 @@ pub enum ChannelTypeName {
     ZEROCONF_EVEN = 4,
     #[serde(rename = "anchors/even")]
     ANCHORS_EVEN = 5,
-}
-
-#[derive(Copy, Clone, Serialize, Deserialize, Debug)]
-#[allow(non_camel_case_types)]
-#[serde(rename_all = "lowercase")]
-pub enum ChannelStateChangeCause {
-    UNKNOWN,
-    LOCAL,
-    USER,
-    REMOTE,
-    PROTOCOL,
-    ONCHAIN,
 }
 
 #[derive(Copy, Clone, Serialize, Deserialize, Debug)]
@@ -412,7 +402,7 @@ impl<'de> Deserialize<'de> for Outpoint {
     }
 }
 
-#[derive(Copy, Clone, Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Copy, Clone, Serialize, Deserialize, Debug, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum ChannelSide {
     LOCAL,
@@ -450,6 +440,8 @@ impl TryFrom<i32> for ChannelState {
             9 => Ok(ChannelState::DUALOPEND_OPEN_INIT),
             10 => Ok(ChannelState::DUALOPEND_AWAITING_LOCKIN),
             11 => Ok(ChannelState::CHANNELD_AWAITING_SPLICE),
+            12 => Ok(ChannelState::DUALOPEND_OPEN_COMMITTED),
+            13 => Ok(ChannelState::DUALOPEND_OPEN_COMMIT_READY),
             _ => Err(anyhow!("Invalid channel state {}", value)),
         }
     }
