@@ -5697,6 +5697,11 @@ def test_blindedpath_noaddr(node_factory, bitcoind):
     offer = l2.rpc.offer(1000, 'test_pay_blindedpath_nodeaddr')
     assert 'offer_paths' not in l1.rpc.decode(offer['bolt12'])
 
+    # If l2 is disconnected, l3 will *not* add a blinded path.
+    l2.rpc.disconnect(l3.info['id'], force=True)
+    offer = l3.rpc.offer(1000, 'test_pay_blindedpath_nodeaddr2')
+    assert 'offer_paths' not in l1.rpc.decode(offer['bolt12'])
+
 
 def test_blinded_reply_path_scid(node_factory):
     """Check that we handle a blinded path which begins with a scid instead of a nodeid"""
