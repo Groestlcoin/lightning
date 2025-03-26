@@ -1227,7 +1227,7 @@ static void peer_got_shutdown(struct channel *channel, const u8 *msg)
 	 *   - if the `scriptpubkey` is not in one of the above forms:
 	 *     - SHOULD send a `warning`.
 	 */
-	if (!valid_shutdown_scriptpubkey(scriptpubkey, anysegwit, !anchors)) {
+	if (!valid_shutdown_scriptpubkey(scriptpubkey, anysegwit, !anchors, false)) {
 		u8 *warning = towire_warningfmt(NULL,
 						&channel->cid,
 						"Bad shutdown scriptpubkey %s",
@@ -1958,8 +1958,12 @@ is_fundee_should_forget(struct lightningd *ld,
 	if (block_height - channel->first_blocknum < max_funding_unconfirmed)
 		return false;
 
-	/* If we've got funds in the channel, don't forget it */
+	/* If we've got funds in the channel initially, don't forget it */
 	if (!amount_sat_is_zero(channel->our_funds))
+		return false;
+
+	/* If we ever had a stake in the channel, don't forget it. */
+	if (!amount_msat_is_zero(channel->msat_to_us_max))
 		return false;
 
 	/* Ah forget it! */
