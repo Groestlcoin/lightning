@@ -25,7 +25,6 @@ jobs:
             wget \
             py311-pip \
             py311-sqlite3 \
-            jq \
             gmake \
             git \
             python \
@@ -37,6 +36,9 @@ jobs:
             gettext \
             sqlite3 \
             lowdown \
+            pkgconf \
+            jq \
+            protobuf \
             curl
 
             pip install --user -U wheel pip mako==1.1.5 mistune==0.8.4 jinja2==2.11.3 MarkupSafe==2.0.1
