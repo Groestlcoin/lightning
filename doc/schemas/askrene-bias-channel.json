@@ -38,6 +38,14 @@
         "description": [
           "Description/annotation to display in askrene-listlayers(7)"
         ]
+      },
+      "relative": {
+        "type": "boolean",
+        "added": "v25.05",
+        "default": false,
+        "description": [
+          "The bias will be added to the previous value."
+        ]
       }
     }
   },

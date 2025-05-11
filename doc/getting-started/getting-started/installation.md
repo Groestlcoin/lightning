@@ -129,8 +129,8 @@ To build CLN for production:
 ```shell
 poetry install
 ./configure
-poetry run make -j$(($(nproc)-1))
-sudo make install
+RUST_PROFILE=release poetry run make
+sudo RUST_PROFILE=release make install
 ```
 
 > 📘
@@ -353,7 +353,7 @@ echo -e 'if command -v pyenv 1>/dev/null 2>&1; then\n  eval "$(pyenv init -)"\nf
 source ~/.bash_profile
 pyenv install 3.8.10
 pip install --upgrade pip
-pip install poetry
+pip install poetry==2.0.1
 ```
 
 

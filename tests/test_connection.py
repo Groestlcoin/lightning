@@ -1393,7 +1393,7 @@ def test_funding_external_wallet_corners(node_factory, bitcoind):
     except RpcError as err:
         assert "disconnected during connection" in err.error
 
-    l1.daemon.wait_for_log('Unknown channel .* for WIRE_CHANNEL_REESTABLISH')
+    l1.daemon.wait_for_log('Responded to reestablish for long-closed channel')
     wait_for(lambda: len(l1.rpc.listpeers()['peers']) == 0)
     wait_for(lambda: len(l2.rpc.listpeers()['peers']) == 0)
 
@@ -2792,19 +2792,19 @@ def test_fundee_forget_funding_tx_unconfirmed(node_factory, bitcoind):
     """Test that fundee will forget the channel if
     the funding tx has been unconfirmed for too long.
     """
-    # Keep this low (default is 2016), since everything
+    # Keep confirms low (default is 2016), since everything
     # is much slower in VALGRIND mode and wait_for_log
     # could time out before lightningd processes all the
-    # blocks.
-    blocks = 50
-    # opener
-    l1 = node_factory.get_node()
-    # peer
-    l2 = node_factory.get_node(options={"dev-max-funding-unconfirmed-blocks": blocks})
-    l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
+    # blocks.  This also reduces the number of "slow confirm" peers
+    # from 100, to 1.
+    blocks = 10
+    l1, l2, l3 = node_factory.line_graph(3, fundchannel=False,
+                                         opts={"dev-max-funding-unconfirmed-blocks": blocks})
 
-    # Give opener some funds.
+    # Give openers some funds.
     l1.fundwallet(10**7)
+    l3.fundwallet(10**7)
+    sync_blockheight(bitcoind, [l1, l2, l3])
 
     def mock_sendrawtransaction(r):
         return {'id': r['id'], 'error': {'code': 100, 'message': 'sendrawtransaction disabled'}}
@@ -2814,23 +2814,37 @@ def test_fundee_forget_funding_tx_unconfirmed(node_factory, bitcoind):
 
     # Prevent opener from broadcasting funding tx (any tx really).
     l1.daemon.rpcproxy.mock_rpc('sendrawtransaction', mock_sendrawtransaction)
+    # (for EXPERIMENTAL_DUAL_FUND=1, have to prevent l2 doing it too!)
     l2.daemon.rpcproxy.mock_rpc('sendrawtransaction', mock_donothing)
 
-    # Fund the channel.
-    # The process will complete, but opener will be unable
-    # to broadcast and confirm funding tx.
+    # l1 tries to open, fails.
     with pytest.raises(RpcError, match=r'sendrawtransaction disabled'):
         l1.rpc.fundchannel(l2.info['id'], 10**6)
 
-    # Generate blocks until unconfirmed.
-    bitcoind.generate_block(blocks)
+    # One block later, l3 tries, fails silently.
+    bitcoind.generate_block(1)
+    sync_blockheight(bitcoind, [l1, l2, l3])
 
-    # fundee will forget channel!
-    # (Note that we let the last number be anything (hence the {}\d)
-    l2.daemon.wait_for_log(r'Forgetting channel: It has been {}\d blocks'.format(str(blocks)[:-1]))
+    l3.daemon.rpcproxy.mock_rpc('sendrawtransaction', mock_donothing)
+    l3.rpc.fundchannel(l2.info['id'], 10**6)
 
-    # fundee will also forget, but not disconnect from peer.
-    wait_for(lambda: l2.rpc.listpeerchannels(l1.info['id'])['channels'] == [])
+    # After 10 blocks, l1's is due to be forgotten, but doesn't since we let 1 linger.
+    bitcoind.generate_block(blocks - 1)
+    assert not l2.daemon.is_in_log(r'Forgetting channel')
+
+    if EXPERIMENTAL_DUAL_FUND:
+        state = 'DUALOPEND_AWAITING_LOCKIN'
+    else:
+        state = 'CHANNELD_AWAITING_LOCKIN'
+    assert [c['state'] for c in l2.rpc.listpeerchannels()['channels']] == [state] * 2
+
+    # But once l3 is also delayed, l1 gets kicked out.
+    bitcoind.generate_block(1)
+
+    # fundee will forget oldest channel: the one with l1!
+    l2.daemon.wait_for_log(rf'Forgetting channel: It has been {blocks + 1} blocks')
+    assert [c['state'] for c in l2.rpc.listpeerchannels()['channels']] == [state]
+    assert l2.rpc.listpeerchannels(l1.info['id']) == {'channels': []}
 
 
 @pytest.mark.openchannel('v2')
@@ -4343,6 +4357,8 @@ def test_multichan(node_factory, executor, bitcoind):
     assert l1htlcs == l1.rpc.listhtlcs(scid12)['htlcs']
     assert l1htlcs == [{"short_channel_id": scid12,
                         "id": 0,
+                        "created_index": 1,
+                        "updated_index": 9,
                         "expiry": 117,
                         "direction": "out",
                         "amount_msat": Millisatoshi(100001001),
@@ -4350,6 +4366,8 @@ def test_multichan(node_factory, executor, bitcoind):
                         "state": "RCVD_REMOVE_ACK_REVOCATION"},
                        {"short_channel_id": scid12,
                         "id": 1,
+                        "created_index": 2,
+                        "updated_index": 18,
                         "expiry": 117,
                         "direction": "out",
                         "amount_msat": Millisatoshi(100001001),
@@ -4357,6 +4375,8 @@ def test_multichan(node_factory, executor, bitcoind):
                         "state": "RCVD_REMOVE_ACK_REVOCATION"},
                        {"short_channel_id": scid12,
                         "id": 2,
+                        "created_index": 3,
+                        "updated_index": 27,
                         "expiry": 135,
                         "direction": "out",
                         "amount_msat": Millisatoshi(100001001),
@@ -4364,6 +4384,8 @@ def test_multichan(node_factory, executor, bitcoind):
                         "state": "RCVD_REMOVE_ACK_REVOCATION"},
                        {"short_channel_id": scid12,
                         "id": 3,
+                        "created_index": 4,
+                        "updated_index": 36,
                         "expiry": 135,
                         "direction": "out",
                         "amount_msat": Millisatoshi(100001001),
@@ -4374,7 +4396,16 @@ def test_multichan(node_factory, executor, bitcoind):
     for h in l1htlcs:
         h['direction'] = 'in'
         h['state'] = 'SENT_REMOVE_ACK_REVOCATION'
-    assert l2.rpc.listhtlcs(scid12)['htlcs'] == l1htlcs
+        # These won't match!
+        del h['created_index']
+        del h['updated_index']
+
+    l2htlcs = l2.rpc.listhtlcs(scid12)['htlcs']
+    for h in l2htlcs:
+        del h['created_index']
+        del h['updated_index']
+
+    assert l2htlcs == l1htlcs
 
 
 def test_mutual_reconnect_race(node_factory, executor, bitcoind):
@@ -4722,12 +4753,19 @@ def test_connect_ratelimit(node_factory, bitcoind):
     # Suspend the others, to make sure they cannot respond too fast.
     for n in nodes:
         os.kill(n.daemon.proc.pid, signal.SIGSTOP)
-    l1.start()
 
-    # The first will be ok, but others should block and be unblocked.
-    l1.daemon.wait_for_logs((['Unblocking for ']
-                             + ['Too many connections, waiting'])
-                            * (len(nodes) - 1))
+    try:
+        l1.start()
+
+        # The first will be ok, but others should block and be unblocked.
+        l1.daemon.wait_for_logs((['Unblocking for ']
+                                 + ['Too many connections, waiting'])
+                                * (len(nodes) - 1))
+    except Exception as err:
+        # Resume, so pytest doesn't hang!
+        for n in nodes:
+            os.kill(n.daemon.proc.pid, signal.SIGCONT)
+        raise err
 
     # Resume them
     for n in nodes:
@@ -4743,9 +4781,11 @@ def test_onionmessage_forward_fail(node_factory, bitcoind):
                                          opts=[{},
                                                {'dev-allow-localhost': None,
                                                 'may_reconnect': True,
+                                                'dev-no-reconnect': None,
                                                 'plugin': os.path.join(os.getcwd(), 'tests/plugins/onionmessage_forward_fail_notification.py'),
                                                 },
                                                {'dev-allow-localhost': None,
+                                                'dev-no-reconnect': None,
                                                 'may_reconnect': True}])
 
     offer = l3.rpc.offer(300, "test_onionmessage_forward_fail")
@@ -4781,3 +4821,75 @@ def test_private_channel_no_reconnect(node_factory):
     wait_for(lambda: only_one(l3.rpc.listpeers()['peers'])['connected'] is True)
 
     assert only_one(l1.rpc.listpeers()['peers'])['connected'] is False
+
+
+@unittest.skipIf(VALGRIND, "We assume machine is reasonably fast")
+def test_no_delay(node_factory):
+    """Is our Nagle disabling for critical messages working?"""
+    l1, l2 = node_factory.line_graph(2)
+
+    scid = only_one(l1.rpc.listpeerchannels()['channels'])['short_channel_id']
+    routestep = {
+        'amount_msat': 100,
+        'id': l2.info['id'],
+        'delay': 5,
+        'channel': scid
+    }
+    start = time.time()
+    # If we were stupid enough to leave Nagle enabled, this would add 200ms
+    # seconds delays each way!
+    for _ in range(100):
+        phash = random.randbytes(32).hex()
+        l1.rpc.sendpay([routestep], phash)
+        with pytest.raises(RpcError, match="WIRE_INCORRECT_OR_UNKNOWN_PAYMENT_DETAILS"):
+            l1.rpc.waitsendpay(phash)
+    end = time.time()
+    assert end < start + 100 * 0.5
+
+
+@unittest.skipIf(os.getenv('TEST_BENCH', '0') == '0', "For profiling")
+def test_bench(node_factory):
+    """Is our Nagle disabling for critical messages working?"""
+    l1, l2 = node_factory.get_nodes(2, opts={'start': False,
+                                             'commit-time': 0})
+
+    # memleak detection plays havoc with profiles.
+    del l1.daemon.env["LIGHTNINGD_DEV_MEMLEAK"]
+    del l2.daemon.env["LIGHTNINGD_DEV_MEMLEAK"]
+
+    l1.start()
+    l2.start()
+    node_factory.join_nodes([l1, l2])
+
+    scid = only_one(l1.rpc.listpeerchannels()['channels'])['short_channel_id']
+    routestep = {
+        'amount_msat': 100,
+        'id': l2.info['id'],
+        'delay': 5,
+        'channel': scid
+    }
+
+    start = time.time()
+    # If we were stupid enough to leave Nagle enabled, this would add 200ms
+    # seconds delays each way!
+    for _ in range(1000):
+        phash = random.randbytes(32).hex()
+        l1.rpc.sendpay([routestep], phash)
+        with pytest.raises(RpcError, match="WIRE_INCORRECT_OR_UNKNOWN_PAYMENT_DETAILS"):
+            l1.rpc.waitsendpay(phash)
+    end = time.time()
+    duration = end - start
+    assert duration == 0
+
+
+def test_listpeerchannels_by_scid(node_factory):
+    l1, l2, l3 = node_factory.line_graph(3, announce_channels=False)
+
+    chans = l2.rpc.listpeerchannels(l1.info['id'])
+    c = only_one(chans['channels'])
+    assert l2.rpc.listpeerchannels(short_channel_id=c['short_channel_id']) == chans
+    assert l2.rpc.listpeerchannels(short_channel_id=c['alias']['local']) == chans
+    assert l2.rpc.listpeerchannels(short_channel_id=c['alias']['remote']) == {'channels': []}
+
+    with pytest.raises(RpcError, match="Cannot specify both short_channel_id and id"):
+        l2.rpc.listpeerchannels(peer_id=l1.info['id'], short_channel_id='1x2x3')

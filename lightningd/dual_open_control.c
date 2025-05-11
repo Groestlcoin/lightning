@@ -67,7 +67,7 @@ void channel_unsaved_close_conn(struct channel *channel, const char *why)
 
 	assert(channel->owner);
 	channel_set_owner(channel, NULL);
-	delete_channel(channel);
+	delete_channel(channel, false);
 }
 
 static void channel_saved_err_broken_reconn(struct channel *channel,
@@ -696,7 +696,7 @@ openchannel2_hook_cb(struct openchannel2_payload *payload STEALS)
 	if (wallet_can_spend(dualopend->ld->wallet,
 			     payload->our_shutdown_scriptpubkey,
 			     tal_bytelen(payload->our_shutdown_scriptpubkey),
-			     &found_wallet_index)) {
+			     &found_wallet_index, NULL)) {
 		our_shutdown_script_wallet_index = tal(tmpctx, u32);
 		*our_shutdown_script_wallet_index = found_wallet_index;
 	} else
@@ -1825,13 +1825,37 @@ static void handle_peer_tx_sigs_sent(struct subd *dualopend,
 	    !inflight->tx_broadcast) {
 		inflight->tx_broadcast = true;
 
-		wtx = psbt_final_tx(NULL, inflight->funding_psbt);
+		wtx = psbt_final_tx(tmpctx, inflight->funding_psbt);
 		if (!wtx) {
 			channel_internal_error(channel,
 					       "Unable to extract final tx"
 					       " from PSBT %s",
 					       fmt_wally_psbt(tmpctx,
 							      inflight->funding_psbt));
+			return;
+		}
+
+		/* BOLT #2
+		 * The receiving node:  ...
+		 * - MUST fail the channel if:
+		 *   - the `witness_stack` weight lowers the
+		 *   effective `feerate` below the agreed upon
+		 *   transaction `feerate`
+		 */
+		if (!feerate_satisfied(inflight->funding_psbt,
+				       inflight->funding->feerate)) {
+			char *errmsg = tal_fmt(tmpctx,
+					       "Witnesses lower effective"
+					       " feerate below agreed upon rate"
+					       " of %dperkw. Failing channel."
+					       " Offending PSBT: %s",
+					       inflight->funding->feerate,
+					       fmt_wally_psbt(tmpctx,
+							      inflight->funding_psbt));
+
+			/* Notify the peer we're failing */
+			subd_send_msg(dualopend,
+				      take(towire_dualopend_fail(NULL, errmsg)));
 			return;
 		}
 
@@ -1857,29 +1881,6 @@ static void handle_peer_tx_sigs_sent(struct subd *dualopend,
 					      &channel->funding_sats,
 					      &channel->funding.txid,
 					      channel->remote_channel_ready);
-
-		/* BOLT #2
-		 * The receiving node:  ...
-		 * - MUST fail the channel if:
-		 *   - the `witness_stack` weight lowers the
-		 *   effective `feerate` below the agreed upon
-		 *   transaction `feerate`
-		 */
-		if (!feerate_satisfied(inflight->funding_psbt,
-				       inflight->funding->feerate)) {
-			char *errmsg = tal_fmt(tmpctx,
-					       "Witnesses lower effective"
-					       " feerate below agreed upon rate"
-					       " of %dperkw. Failing channel."
-					       " Offending PSBT: %s",
-					       inflight->funding->feerate,
-					       fmt_wally_psbt(tmpctx,
-							      inflight->funding_psbt));
-
-			/* Notify the peer we're failing */
-			subd_send_msg(dualopend,
-				      take(towire_dualopend_fail(NULL, errmsg)));
-		}
 	}
 }
 
@@ -1990,7 +1991,7 @@ static void handle_channel_locked(struct subd *dualopend,
 	channel_watch_funding(dualopend->ld, channel);
 
 	/* FIXME: LND sigs/update_fee msgs? */
-	peer_start_channeld(channel, peer_fd, NULL, false, NULL);
+	peer_start_channeld(channel, peer_fd, NULL, false);
 	return;
 }
 
@@ -2170,7 +2171,7 @@ static void handle_peer_tx_sigs_msg(struct subd *dualopend,
 
 		/* Saves the now finalized version of the psbt */
 		wallet_inflight_save(ld->wallet, inflight);
-		wtx = psbt_final_tx(NULL, inflight->funding_psbt);
+		wtx = psbt_final_tx(tmpctx, inflight->funding_psbt);
 		if (!wtx) {
 			channel_internal_error(channel,
 					       "Unable to extract final tx"
@@ -2179,26 +2180,6 @@ static void handle_peer_tx_sigs_msg(struct subd *dualopend,
 							      inflight->funding_psbt));
 			return;
 		}
-
-		send_funding_tx(channel, take(wtx));
-
-		assert(channel->state == DUALOPEND_OPEN_COMMITTED
-		       /* We might be reconnecting */
-		       || channel->state == DUALOPEND_AWAITING_LOCKIN);
-		channel_set_state(channel, channel->state,
-				  DUALOPEND_AWAITING_LOCKIN,
-				  REASON_UNKNOWN,
-				  "Sigs exchanged, waiting for lock-in");
-
-		/* Mimic the old behavior, notify a channel has been opened,
-		 * for the accepter side */
-		if (channel->opener == REMOTE)
-			/* Tell plugins about the success */
-			notify_channel_opened(dualopend->ld,
-					      &channel->peer->id,
-					      &channel->funding_sats,
-					      &channel->funding.txid,
-					      channel->remote_channel_ready);
 
 		/* BOLT #2
 		 * The receiving node:  ...
@@ -2221,7 +2202,28 @@ static void handle_peer_tx_sigs_msg(struct subd *dualopend,
 			/* Notify the peer we're failing */
 			subd_send_msg(dualopend,
 				      take(towire_dualopend_fail(NULL, errmsg)));
+			return;
 		}
+		send_funding_tx(channel, take(wtx));
+
+		assert(channel->state == DUALOPEND_OPEN_COMMITTED
+		       /* We might be reconnecting */
+		       || channel->state == DUALOPEND_AWAITING_LOCKIN);
+		channel_set_state(channel, channel->state,
+				  DUALOPEND_AWAITING_LOCKIN,
+				  REASON_UNKNOWN,
+				  "Sigs exchanged, waiting for lock-in");
+
+		/* Mimic the old behavior, notify a channel has been opened,
+		 * for the accepter side */
+		if (channel->opener == REMOTE)
+			/* Tell plugins about the success */
+			notify_channel_opened(dualopend->ld,
+					      &channel->peer->id,
+					      &channel->funding_sats,
+					      &channel->funding.txid,
+					      channel->remote_channel_ready);
+
 	}
 
 	/* Send notification with peer's signed PSBT */
@@ -3092,7 +3094,7 @@ static struct command_result *openchannel_init(struct command *cmd,
 	if (wallet_can_spend(cmd->ld->wallet,
 			     oa->our_upfront_shutdown_script,
 			     tal_bytelen(oa->our_upfront_shutdown_script),
-			     &found_wallet_index)) {
+			     &found_wallet_index, NULL)) {
 		our_upfront_shutdown_script_wallet_index = &found_wallet_index;
 	} else
 		our_upfront_shutdown_script_wallet_index = NULL;
@@ -3861,7 +3863,7 @@ static struct command_result *json_queryrates(struct command *cmd,
 	if (wallet_can_spend(cmd->ld->wallet,
 			     oa->our_upfront_shutdown_script,
 			     tal_bytelen(oa->our_upfront_shutdown_script),
-			     &found_wallet_index)) {
+			     &found_wallet_index, NULL)) {
 		our_upfront_shutdown_script_wallet_index = tal(tmpctx, u32);
 		*our_upfront_shutdown_script_wallet_index = found_wallet_index;
 	} else
@@ -3959,13 +3961,13 @@ static void dualopen_errmsg(struct channel *channel,
 	if (channel_state_uncommitted(channel->state)) {
 		log_info(channel->log, "%s", "Unsaved peer failed."
 			 " Deleting channel.");
-		delete_channel(channel);
+		delete_channel(channel, false);
 		return;
 	}
 	if ((warning || disconnect) && channel_state_open_uncommitted(channel->state)) {
 		log_info(channel->log, "%s", "Commit ready peer failed."
 			 " Deleting channel.");
-		delete_channel(channel);
+		delete_channel(channel, false);
 		return;
 	}
 
@@ -4009,7 +4011,7 @@ static void dualopen_errmsg(struct channel *channel,
 			if (channel_state_open_uncommitted(channel->state)) {
 				log_info(channel->log, "%s", "Commit ready peer can't reconnect."
 					 " Deleting channel.");
-				delete_channel(channel);
+				delete_channel(channel, false);
 				return;
 			}
 			char *err = restart_dualopend(tmpctx,
@@ -4209,7 +4211,7 @@ bool peer_restart_dualopend(struct peer *peer,
 	if (wallet_can_spend(peer->ld->wallet,
 			     channel->shutdown_scriptpubkey[LOCAL],
 			     tal_bytelen(channel->shutdown_scriptpubkey[LOCAL]),
-			     &found_wallet_index)) {
+			     &found_wallet_index, NULL)) {
 		local_shutdown_script_wallet_index = tal(tmpctx, u32);
 		*local_shutdown_script_wallet_index = found_wallet_index;
 	} else

@@ -40,6 +40,7 @@ bool initialized = false;
 /* Do we fail all preapprove requests? */
 bool dev_fail_preapprove = false;
 bool dev_no_preapprove_check = false;
+bool dev_warn_on_overgrind = false;
 
 struct hsmd_client *hsmd_client_new_main(const tal_t *ctx, u64 capabilities,
 					 void *extra)
@@ -527,7 +528,7 @@ static void bitcoin_key(struct privkey *privkey, struct pubkey *pubkey,
 
 /* This gets the bitcoin private key needed to spend from our wallet */
 static void hsm_key_for_utxo(struct privkey *privkey, struct pubkey *pubkey,
-			     const struct utxo *utxo)
+			     const struct hsm_utxo *utxo)
 {
 	if (utxo->close_info != NULL) {
 		/* This is a their_unilateral_close/to-us output, so
@@ -545,14 +546,15 @@ static void hsm_key_for_utxo(struct privkey *privkey, struct pubkey *pubkey,
 
 /* Find our inputs by the pubkey associated with the inputs, and
  * add a partial sig for each */
-static void sign_our_inputs(struct utxo **utxos, struct wally_psbt *psbt)
+static void sign_our_inputs(struct hsm_utxo **utxos, struct wally_psbt *psbt)
 {
 	bool is_cache_enabled = false;
 	for (size_t i = 0; i < tal_count(utxos); i++) {
-		struct utxo *utxo = utxos[i];
+		struct hsm_utxo *utxo = utxos[i];
 		for (size_t j = 0; j < psbt->num_inputs; j++) {
 			struct privkey privkey;
 			struct pubkey pubkey;
+			bool needed_sig;
 
 			if (!wally_psbt_input_spends(&psbt->inputs[j],
 						   &utxo->outpoint))
@@ -590,6 +592,10 @@ static void sign_our_inputs(struct utxo **utxos, struct wally_psbt *psbt)
 				wally_psbt_signing_cache_enable(psbt, 0);
 				is_cache_enabled = true;
 			}
+
+			/* We watch for pre-taproot variable-length sigs */
+			needed_sig = (psbt->inputs[j].signatures.num_items == 0);
+
 			if (wally_psbt_sign(psbt, privkey.secret.data,
 					    sizeof(privkey.secret.data),
 					    EC_FLAG_GRIND_R) != WALLY_OK) {
@@ -601,6 +607,14 @@ static void sign_our_inputs(struct utxo **utxos, struct wally_psbt *psbt)
 				    "sign input %zu with key %s. PSBT: %s",
 				    j, fmt_pubkey(tmpctx, &pubkey),
 				    fmt_wally_psbt(tmpctx, psbt));
+			}
+			if (dev_warn_on_overgrind
+			    && needed_sig
+			    && psbt->inputs[j].signatures.num_items == 1
+			    && psbt->inputs[j].signatures.items[0].value_len < 71) {
+				hsmd_status_fmt(LOG_BROKEN, NULL,
+						"overgrind: short signature length %zu",
+						psbt->inputs[j].signatures.items[0].value_len);
 			}
 			tal_wally_end(psbt);
 		}
@@ -1315,11 +1329,11 @@ static u8 *handle_get_per_commitment_point(struct hsmd_client *c, const u8 *msg_
  * we can do more to check the previous case is valid. */
 static u8 *handle_sign_withdrawal_tx(struct hsmd_client *c, const u8 *msg_in)
 {
-	struct utxo **utxos;
+	struct hsm_utxo **utxos;
 	struct wally_psbt *psbt;
 
 	if (!fromwire_hsmd_sign_withdrawal(tmpctx, msg_in,
-					  &utxos, &psbt))
+					   &utxos, &psbt))
 		return hsmd_status_malformed_request(c, msg_in);
 
 	sign_our_inputs(utxos, psbt);
@@ -1584,7 +1598,7 @@ static u8 *handle_sign_remote_commitment_tx(struct hsmd_client *c, const u8 *msg
 	struct pubkey remote_per_commit;
 	bool option_static_remotekey;
 	u64 commit_num;
-	struct simple_htlc **htlc;
+	struct hsm_htlc *htlc;
 	u32 feerate;
 
 	if (!fromwire_hsmd_sign_remote_commitment_tx(tmpctx, msg_in,
@@ -1705,7 +1719,7 @@ static u8 *handle_sign_anchorspend(struct hsmd_client *c, const u8 *msg_in)
 {
 	struct node_id peer_id;
 	u64 dbid;
-	struct utxo **utxos;
+	struct hsm_utxo **utxos;
 	struct wally_psbt *psbt;
 	struct secret seed;
 	struct pubkey local_funding_pubkey;
@@ -1744,7 +1758,7 @@ static u8 *handle_sign_htlc_tx_mingle(struct hsmd_client *c, const u8 *msg_in)
 {
 	struct node_id peer_id;
 	u64 dbid;
-	struct utxo **utxos;
+	struct hsm_utxo **utxos;
 	struct wally_psbt *psbt;
 
 	/* FIXME: Check output goes to us. */
@@ -1820,7 +1834,7 @@ static u8 *handle_sign_commitment_tx(struct hsmd_client *c, const u8 *msg_in)
 static u8 *handle_validate_commitment_tx(struct hsmd_client *c, const u8 *msg_in)
 {
 	struct bitcoin_tx *tx;
-	struct simple_htlc **htlc;
+	struct hsm_htlc *htlc;
 	u64 commit_num;
 	u32 feerate;
 	struct bitcoin_signature sig;

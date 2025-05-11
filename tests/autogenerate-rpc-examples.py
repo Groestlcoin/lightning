@@ -1880,9 +1880,9 @@ def generate_list_examples(l1, l2, l3, c12, c23_2, inv_l31, inv_l32, offer_l23, 
         listhtlcs_res1 = l1.rpc.listhtlcs(c12)
         listhtlcs_res1 = update_list_responses(listhtlcs_res1, list_key='htlcs')
         update_example(node=l1, method='listhtlcs', params=[c12], response=listhtlcs_res1)
-        listhtlcs_res2 = l1.rpc.listhtlcs()
+        listhtlcs_res2 = l1.rpc.listhtlcs(index='created', start=4, limit=1)
         listhtlcs_res2 = update_list_responses(listhtlcs_res2, list_key='htlcs')
-        update_example(node=l1, method='listhtlcs', params={}, response=listhtlcs_res2)
+        update_example(node=l1, method='listhtlcs', params={'index': 'created', 'start': 4, 'limit': 1}, response=listhtlcs_res2)
 
         listsendpays_res1 = l1.rpc.listsendpays(bolt11=inv_l31['bolt11'])
         listsendpays_res1 = update_list_responses(listsendpays_res1, list_key='payments', slice_upto=5, update_func=lambda x, i: x.update({'created_at': NEW_VALUES_LIST['time_at_800'] + (i * 10000), 'completed_at': NEW_VALUES_LIST['time_at_900'] + (i * 10000)}))
@@ -1914,7 +1914,7 @@ def generate_list_examples(l1, l2, l3, c12, c23_2, inv_l31, inv_l32, offer_l23, 
                 output['amount_msat'] = 201998900000 + (i * 1000) + (k * 100)
         update_example(node=l1, method='listtransactions', params={}, response=listtransactions_res1)
         listclosedchannels_res1 = l2.rpc.listclosedchannels()
-        listclosedchannels_res1 = update_list_responses(listclosedchannels_res1, list_key='closedchannels')
+        listclosedchannels_res1 = update_list_responses(listclosedchannels_res1, list_key='closedchannels', slice_upto=2, update_func=None, sort=True, sort_key='channel_id')
         for i, closedchannel in enumerate(listclosedchannels_res1['closedchannels'], start=1):
             closedchannel['last_commitment_fee_msat'] = 2894000 + (i * 1000)
             closedchannel['last_commitment_txid'] = 'txidcloselastcommitment0' + (('0000' + str(i)) * 8)

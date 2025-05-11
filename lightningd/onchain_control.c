@@ -528,7 +528,7 @@ static void handle_irrevocably_resolved(struct channel *channel, const u8 *msg U
 	log_info(channel->log, "onchaind complete, forgetting peer");
 
 	/* This will also free onchaind. */
-	delete_channel(channel);
+	delete_channel(channel, false);
 }
 
 
@@ -1056,6 +1056,7 @@ static bool consider_onchain_htlc_tx_rebroadcast(struct channel *channel,
 {
 	struct amount_sat change, excess;
 	struct utxo **utxos;
+	const struct hsm_utxo **hsm_utxos;
 	u32 feerate;
 	size_t weight;
 	struct bitcoin_tx *newtx;
@@ -1090,9 +1091,10 @@ static bool consider_onchain_htlc_tx_rebroadcast(struct channel *channel,
 	utxos = wallet_utxo_boost(tmpctx,
 				  ld->wallet,
 				  get_block_height(ld->topology),
+				  AMOUNT_SAT(0),
 				  bitcoin_tx_compute_fee(newtx),
 				  feerate,
-				  &weight);
+				  &weight, NULL);
 
 	/* Add those to create a new PSBT */
 	psbt = psbt_using_utxos(tmpctx, ld->wallet, utxos, locktime,
@@ -1140,11 +1142,11 @@ static bool consider_onchain_htlc_tx_rebroadcast(struct channel *channel,
 	}
 
 	/* Now, get HSM to sign off. */
+	hsm_utxos = utxos_to_hsm_utxos(tmpctx, utxos);
 	msg = towire_hsmd_sign_htlc_tx_mingle(NULL,
 					      &channel->peer->id,
 					      channel->dbid,
-					      cast_const2(const struct utxo **,
-							  utxos),
+					      hsm_utxos,
 					      psbt);
 	msg = hsm_sync_req(tmpctx, ld, take(msg));
 	if (!fromwire_hsmd_sign_htlc_tx_mingle_reply(tmpctx, msg, &psbt))

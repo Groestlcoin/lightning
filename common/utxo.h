@@ -31,11 +31,13 @@ enum output_status {
 	OUTPUT_STATE_ANY = 255
 };
 
+const char *utxotype_to_str(enum utxotype utxotype);
+
 struct utxo {
 	struct bitcoin_outpoint outpoint;
 	struct amount_sat amount;
 	u32 keyindex;
-	bool is_p2sh;
+	enum utxotype utxotype;
 	enum output_status status;
 
 	/* Optional unilateral close information, NULL if this is just
@@ -80,9 +82,6 @@ static inline bool utxo_is_csv_locked(const struct utxo *utxo, u32 current_heigh
 	assert(*utxo->blockheight + utxo->close_info->csv > *utxo->blockheight);
 	return *utxo->blockheight + utxo->close_info->csv > current_height;
 }
-
-void towire_utxo(u8 **pptr, const struct utxo *utxo);
-struct utxo *fromwire_utxo(const tal_t *ctx, const u8 **ptr, size_t *max);
 
 /* Estimate of (signed) UTXO weight in transaction */
 size_t utxo_spend_weight(const struct utxo *utxo, size_t min_witness_weight);

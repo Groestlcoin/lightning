@@ -912,23 +912,22 @@ static u8 *master_wait_sync_reply(const tal_t *ctx,
 	return reply;
 }
 
-/* Collect the htlcs for call to hsmd. */
-static struct simple_htlc **collect_htlcs(const tal_t *ctx, const struct htlc **htlc_map)
+static struct hsm_htlc *collect_htlcs(const tal_t *ctx,
+				      const struct htlc **htlc_map)
 {
-	struct simple_htlc **htlcs;
+	struct hsm_htlc *htlcs;
 
-	htlcs = tal_arr(ctx, struct simple_htlc *, 0);
+	htlcs = tal_arr(ctx, struct hsm_htlc, 0);
 	size_t num_entries = tal_count(htlc_map);
 	for (size_t ndx = 0; ndx < num_entries; ++ndx) {
 		struct htlc const *hh = htlc_map[ndx];
 		if (hh) {
-			struct simple_htlc *simple =
-				new_simple_htlc(htlcs,
-						htlc_state_owner(hh->state),
-						hh->amount,
-						&hh->rhash,
-						hh->expiry.locktime);
-			tal_arr_expand(&htlcs, simple);
+			struct hsm_htlc htlc;
+			htlc.side = htlc_state_owner(hh->state);
+			htlc.amount = hh->amount;
+			htlc.payment_hash = hh->rhash;
+			htlc.cltv_expiry = hh->expiry.locktime;
+			tal_arr_expand(&htlcs, htlc);
 		}
 	}
 	return htlcs;
@@ -946,7 +945,7 @@ static struct bitcoin_signature *calc_commitsigs(const tal_t *ctx,
 						  struct bitcoin_signature *commit_sig,
 						  struct pubkey remote_funding_pubkey)
 {
-	struct simple_htlc **htlcs;
+	struct hsm_htlc *htlcs;
 	size_t i;
 	struct pubkey local_htlckey;
 	const u8 *msg;
@@ -959,7 +958,7 @@ static struct bitcoin_signature *calc_commitsigs(const tal_t *ctx,
 						    channel_has(peer->channel,
 								OPT_STATIC_REMOTEKEY),
 						    commit_index,
-						    (const struct simple_htlc **) htlcs,
+						    htlcs,
 						    channel_feerate(peer->channel, REMOTE));
 
 	msg = hsm_req(tmpctx, take(msg));
@@ -1200,7 +1199,10 @@ static u8 *send_commit_part(const tal_t *ctx,
 		*anchor = tal(ctx, struct local_anchor_info);
 		bitcoin_txid(txs[0], &(*anchor)->anchor_point.txid);
 		(*anchor)->anchor_point.n = local_anchor_outnum;
-		(*anchor)->commitment_weight = bitcoin_tx_weight(txs[0]);
+		/* Actual weight will include witnesses!  Note: this assumes
+		 * 73 byte sigs (worst case as per BOLT), whereas we grind to
+		 * 71, and so does everyone else. */
+		(*anchor)->commitment_weight = bitcoin_tx_weight(txs[0]) + bitcoin_tx_2of2_input_witness_weight() - 4;
 		(*anchor)->commitment_fee = bitcoin_tx_compute_fee(txs[0]);
 	}
 
@@ -1883,7 +1885,7 @@ static struct commitsig_info *handle_peer_commit_sig(struct peer *peer,
 	const struct htlc **htlc_map;
 	const u8 *funding_wscript;
 	size_t i;
-	struct simple_htlc **htlcs;
+	const struct hsm_htlc *htlcs;
 	const u8 * msg2;
 	u8 *splice_msg;
 	int type;
@@ -2091,7 +2093,7 @@ static struct commitsig_info *handle_peer_commit_sig(struct peer *peer,
 	htlcs = collect_htlcs(NULL, htlc_map);
 	msg2 = towire_hsmd_validate_commitment_tx(NULL,
 						  txs[0],
-						  (const struct simple_htlc **) htlcs,
+						  htlcs,
 						  local_index,
 						  channel_feerate(peer->channel, LOCAL),
 						  &commit_sig,
@@ -4987,8 +4989,7 @@ static u8 *to_bytearr(const tal_t *ctx,
 }
 
 static void peer_reconnect(struct peer *peer,
-			   const struct secret *last_remote_per_commit_secret,
-			   bool reestablish_only)
+			   const struct secret *last_remote_per_commit_secret)
 {
 	struct channel_id channel_id;
 	/* Note: BOLT #2 uses these names! */
@@ -5146,14 +5147,6 @@ static void peer_reconnect(struct peer *peer,
 	do {
 		clean_tmpctx();
 		msg = peer_read(tmpctx, peer->pps);
-
-		/* connectd promised us the msg was reestablish? */
-		if (reestablish_only) {
-			if (fromwire_peektype(msg) != WIRE_CHANNEL_REESTABLISH)
-				status_failed(STATUS_FAIL_INTERNAL_ERROR,
-					      "Expected reestablish, got: %s",
-					      tal_hex(tmpctx, msg));
-		}
 	} while (handle_peer_error_or_warning(peer->pps, msg) ||
 		 capture_premature_msg(&premature_msgs, msg));
 
@@ -5499,23 +5492,6 @@ static void peer_reconnect(struct peer *peer,
 
 		if (type)
 			set_channel_type(peer->channel, type);
-	}
-
-	/* Now stop, we've been polite long enough. */
-	if (reestablish_only) {
-		/* We've reestablished! */
-		wire_sync_write(MASTER_FD,
-				take(towire_channeld_reestablished(NULL)));
-
-		/* If we were successfully closing, we still go to closingd. */
-		if (shutdown_complete(peer)) {
-			send_shutdown_complete(peer);
-			daemon_shutdown();
-			exit(0);
-		}
-		peer_failed_err(peer->pps,
-				&peer->channel_id,
-				"Channel is already closed");
 	}
 
 	tal_free(send_tlvs);
@@ -6103,7 +6079,6 @@ static void init_channel(struct peer *peer)
 	u32 minimum_depth, lease_expiry;
 	struct secret last_remote_per_commit_secret;
 	struct penalty_base *pbases;
-	bool reestablish_only;
 	struct channel_type *channel_type;
 
 	assert(!(fcntl(MASTER_FD, F_GETFL) & O_NONBLOCK));
@@ -6159,7 +6134,6 @@ static void init_channel(struct peer *peer)
 				    &channel_type,
 				    &peer->dev_disable_commit,
 				    &pbases,
-				    &reestablish_only,
 				    &peer->experimental_upgrade,
 				    &peer->splice_state->inflights,
 				    &peer->local_alias)) {
@@ -6249,10 +6223,7 @@ static void init_channel(struct peer *peer)
 
 	/* OK, now we can process peer messages. */
 	if (reconnected)
-		peer_reconnect(peer, &last_remote_per_commit_secret,
-			       reestablish_only);
-	else
-		assert(!reestablish_only);
+		peer_reconnect(peer, &last_remote_per_commit_secret);
 
 	/* If we have a messages to send, send them immediately */
 	if (fwd_msg)

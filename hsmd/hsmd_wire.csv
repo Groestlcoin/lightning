@@ -14,6 +14,8 @@ tlvtype,hsmd_dev_preinit_tlvs,fail_preapprove,1
 tlvdata,hsmd_dev_preinit_tlvs,fail_preapprove,fail,bool,
 tlvtype,hsmd_dev_preinit_tlvs,no_preapprove_check,3
 tlvdata,hsmd_dev_preinit_tlvs,no_preapprove_check,disable,bool,
+tlvtype,hsmd_dev_preinit_tlvs,warn_on_overgrind,5
+tlvdata,hsmd_dev_preinit_tlvs,warn_on_overgrind,enable,bool,
 
 #include <bitcoin/chainparams.h>
 # Start the HSM.
@@ -118,7 +120,7 @@ msgdata,hsmd_forget_channel,dbid,u64,
 msgtype,hsmd_forget_channel_reply,134
 
 # Return signature for a funding tx.
-#include <common/utxo.h>
+#include <hsmd/hsm_utxo.h>
 
 # Master asks the HSM to sign a node_announcement
 msgtype,hsmd_node_announcement_sig_req,6
@@ -132,7 +134,7 @@ msgdata,hsmd_node_announcement_sig_reply,signature,secp256k1_ecdsa_signature,
 #include <bitcoin/psbt.h>
 msgtype,hsmd_sign_withdrawal,7
 msgdata,hsmd_sign_withdrawal,num_inputs,u16,
-msgdata,hsmd_sign_withdrawal,inputs,utxo,num_inputs
+msgdata,hsmd_sign_withdrawal,inputs,hsm_utxo,num_inputs
 msgdata,hsmd_sign_withdrawal,psbt,wally_psbt,
 
 msgtype,hsmd_sign_withdrawal_reply,107
@@ -229,11 +231,18 @@ msgdata,hsmd_sign_commitment_tx,commit_num,u64,
 msgtype,hsmd_sign_commitment_tx_reply,105
 msgdata,hsmd_sign_commitment_tx_reply,sig,bitcoin_signature,
 
+#include <common/htlc_wire.h> // For enum side and towire_side
+subtype,hsm_htlc
+subtypedata,hsm_htlc,side,enum side,
+subtypedata,hsm_htlc,amount,amount_msat,
+subtypedata,hsm_htlc,payment_hash,sha256,
+subtypedata,hsm_htlc,cltv_expiry,u32,
+
 # Validate the counterparty's commitment signatures.
 msgtype,hsmd_validate_commitment_tx,35
 msgdata,hsmd_validate_commitment_tx,tx,bitcoin_tx,
 msgdata,hsmd_validate_commitment_tx,num_htlcs,u16,
-msgdata,hsmd_validate_commitment_tx,htlcs,simple_htlc,num_htlcs
+msgdata,hsmd_validate_commitment_tx,htlcs,hsm_htlc,num_htlcs
 msgdata,hsmd_validate_commitment_tx,commit_num,u64,
 msgdata,hsmd_validate_commitment_tx,feerate,u32,
 msgdata,hsmd_validate_commitment_tx,sig,bitcoin_signature,
@@ -290,7 +299,6 @@ msgdata,hsmd_sign_local_htlc_tx,wscript,u8,wscript_len
 msgdata,hsmd_sign_local_htlc_tx,option_anchor_outputs,bool,
 
 # Openingd/channeld asks HSM to sign the other sides' commitment tx.
-#include <common/htlc_wire.h>
 msgtype,hsmd_sign_remote_commitment_tx,19
 msgdata,hsmd_sign_remote_commitment_tx,tx,bitcoin_tx,
 msgdata,hsmd_sign_remote_commitment_tx,remote_funding_key,pubkey,
@@ -298,7 +306,7 @@ msgdata,hsmd_sign_remote_commitment_tx,remote_per_commit,pubkey,
 msgdata,hsmd_sign_remote_commitment_tx,option_static_remotekey,bool,
 msgdata,hsmd_sign_remote_commitment_tx,commit_num,u64,
 msgdata,hsmd_sign_remote_commitment_tx,num_htlcs,u16,
-msgdata,hsmd_sign_remote_commitment_tx,htlcs,simple_htlc,num_htlcs
+msgdata,hsmd_sign_remote_commitment_tx,htlcs,hsm_htlc,num_htlcs
 msgdata,hsmd_sign_remote_commitment_tx,feerate,u32,
 
 # channeld asks HSM to sign remote HTLC tx.
@@ -425,7 +433,7 @@ msgtype,hsmd_sign_anchorspend,147
 msgdata,hsmd_sign_anchorspend,peerid,node_id,
 msgdata,hsmd_sign_anchorspend,channel_dbid,u64,
 msgdata,hsmd_sign_anchorspend,num_inputs,u16,
-msgdata,hsmd_sign_anchorspend,inputs,utxo,num_inputs
+msgdata,hsmd_sign_anchorspend,inputs,hsm_utxo,num_inputs
 msgdata,hsmd_sign_anchorspend,psbt,wally_psbt,
 
 msgtype,hsmd_sign_anchorspend_reply,148
@@ -474,7 +482,7 @@ msgtype,hsmd_sign_htlc_tx_mingle,149
 msgdata,hsmd_sign_htlc_tx_mingle,peerid,node_id,
 msgdata,hsmd_sign_htlc_tx_mingle,channel_dbid,u64,
 msgdata,hsmd_sign_htlc_tx_mingle,num_inputs,u16,
-msgdata,hsmd_sign_htlc_tx_mingle,inputs,utxo,num_inputs
+msgdata,hsmd_sign_htlc_tx_mingle,inputs,hsm_utxo,num_inputs
 msgdata,hsmd_sign_htlc_tx_mingle,psbt,wally_psbt,
 
 msgtype,hsmd_sign_htlc_tx_mingle_reply,150

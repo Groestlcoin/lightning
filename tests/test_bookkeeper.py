@@ -361,7 +361,7 @@ def test_bookkeeping_missed_chans_leases(node_factory, bitcoind):
 
     open_amt = 500000
     feerate = 2000
-    lease_fee = 6432000
+    lease_fee = 6268000
     invoice_msat = 11000000
 
     l1.fundwallet(open_amt * 1000)
@@ -410,7 +410,7 @@ def test_bookkeeping_missed_chans_leases(node_factory, bitcoind):
     _check_events(l1, channel_id, exp_events)
 
     exp_events = [('channel_open', open_amt * 1000, 0),
-                  ('onchain_fee', 892000, 0),
+                  ('onchain_fee', 894000, 0),
                   ('lease_fee', lease_fee, 0),
                   ('journal_entry', invoice_msat, 0)]
     _check_events(l2, channel_id, exp_events)

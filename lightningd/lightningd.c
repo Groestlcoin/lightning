@@ -67,6 +67,7 @@
 #include <lightningd/channel.h>
 #include <lightningd/channel_control.h>
 #include <lightningd/channel_gossip.h>
+#include <lightningd/closed_channel.h>
 #include <lightningd/coin_mvts.h>
 #include <lightningd/connect_control.h>
 #include <lightningd/gossip_control.h>
@@ -151,6 +152,7 @@ static struct lightningd *new_lightningd(const tal_t *ctx)
 	ld->dev_allow_shutdown_destination_change = false;
 	ld->dev_hsmd_no_preapprove_check = false;
 	ld->dev_hsmd_fail_preapprove = false;
+	ld->dev_hsmd_warn_on_overgrind = false;
 	ld->dev_handshake_no_reply = false;
 	ld->dev_strict_forwarding = false;
 	ld->dev_limit_connections_inflight = false;
@@ -211,6 +213,11 @@ static struct lightningd *new_lightningd(const tal_t *ctx)
 	 * in limbo until we get all the parts, or we time them out. */
 	ld->htlc_sets = tal(ld, struct htlc_set_map);
 	htlc_set_map_init(ld->htlc_sets);
+
+	/*~ We keep a map of closed channels.  Mainly so we can respond to peers
+	 * who talk to us about long-closed channels. */
+	ld->closed_channels = tal(ld, struct closed_channel_map);
+	closed_channel_map_init(ld->closed_channels);
 
 	/*~ We have a multi-entry log-book infrastructure: we define a 10MB log
 	 * book to hold all the entries (and trims as necessary), and multiple

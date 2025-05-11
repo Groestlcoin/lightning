@@ -236,8 +236,14 @@ static struct command_result *json_connect(struct command *cmd,
 					   &peer->addr);
 	}
 
+	/* When a peer disconnects, we give subds time to clean themselves up
+	 * (this lets connectd ensure they've seen the final messages).  But
+	 * now it's going to try to reconnect, we've gotta force them out. */
+	if (peer)
+		peer_channels_cleanup(peer);
+
 	subd_send_msg(cmd->ld->connectd,
-		      take(towire_connectd_connect_to_peer(NULL, &id_addr.id, addr, true, true)));
+		      take(towire_connectd_connect_to_peer(NULL, &id_addr.id, addr, true)));
 
 	/* Leave this here for peer_connected, connect_failed or peer_disconnect_done. */
 	new_connect(cmd->ld, &id_addr.id, cmd);
@@ -436,7 +442,7 @@ void connectd_connect_to_peer(struct lightningd *ld,
 	}
 	subd_send_msg(peer->ld->connectd,
 		      take(towire_connectd_connect_to_peer(NULL, &peer->id,
-							   waddr, true,
+							   waddr,
 							   !is_important)));
 }
 

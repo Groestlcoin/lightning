@@ -149,7 +149,10 @@ struct important_id {
 
 	struct node_id id;
 	struct wireaddr_internal *addrs;
+
+	/* Backoff timer (increases by 2 each time) */
 	size_t reconnect_secs;
+	struct oneshot *reconnect_timer;
 };
 
 static const struct node_id *important_id_keyof(const struct important_id *imp)
@@ -292,10 +295,6 @@ struct daemon {
 	/* There are DNS seeds we can use to look up node addresses as a last
 	 * resort, but doing so leaks our address so can be disabled. */
 	bool use_dns;
-
-	/* The address that the broken response returns instead of
-	 * NXDOMAIN. NULL if we have not detected a broken resolver. */
-	struct sockaddr *broken_resolver_response;
 
 	/* File descriptors to listen on once we're activated. */
 	const struct listen_fd **listen_fds;

@@ -8,7 +8,7 @@ from utils import (
     scriptpubkey_addr, calc_lease_fee,
     check_utxos_channel, check_coin_moves,
     mine_funding_to_announce, check_inspect_channel,
-    first_scid
+    first_scid, check_feerate
 )
 
 import bitcoin
@@ -18,6 +18,7 @@ import pytest
 import re
 import subprocess
 import threading
+import time
 import unittest
 
 
@@ -75,8 +76,9 @@ def test_closing_simple(node_factory, bitcoind, chainparams):
     ]
     bitcoind.generate_block(1)
 
-    l1.daemon.wait_for_log(r'Owning output.* \(SEGWIT\).* txid %s.* CONFIRMED' % closetxid)
-    l2.daemon.wait_for_log(r'Owning output.* \(SEGWIT\).* txid %s.* CONFIRMED' % closetxid)
+    outtype = 'p2tr' if not chainparams['elements'] else 'p2wpkh'
+    l1.daemon.wait_for_log(rf'Owning output.* \({outtype}\).* txid %s.* CONFIRMED' % closetxid)
+    l2.daemon.wait_for_log(rf'Owning output.* \({outtype}\).* txid %s.* CONFIRMED' % closetxid)
 
     # Make sure both nodes have grabbed their close tx funds
     assert closetxid in set([o['txid'] for o in l1.rpc.listfunds()['outputs']])
@@ -332,13 +334,15 @@ def test_closing_specified_destination(node_factory, bitcoind, chainparams):
     bitcoind.generate_block(1)
     sync_blockheight(bitcoind, [l1, l2, l3, l4])
 
+    outtype = 'p2tr' if not chainparams['elements'] else 'p2wpkh'
+
     # l1 can't spent the output to addr.
     for txid in closetxs.values():
-        assert not l1.daemon.is_in_log(r'Owning output.* \(SEGWIT\).* txid {}.* CONFIRMED'.format(txid))
+        assert not l1.daemon.is_in_log(rf'Owning output.* \({outtype}\).* txid {txid}.* CONFIRMED')
 
     # Check the txid has at least 1 confirmation
     for n, txid in closetxs.items():
-        n.daemon.wait_for_log(r'Owning output.* \(SEGWIT\).* txid {}.* CONFIRMED'.format(txid))
+        n.daemon.wait_for_log(rf'Owning output.* \({outtype}\).* txid {txid}.* CONFIRMED')
 
     for n in [l2, l3, l4]:
         # Make sure both nodes have grabbed their close tx funds
@@ -885,17 +889,17 @@ def test_channel_lease_post_expiry(node_factory, bitcoind, chainparams):
     l2.daemon.wait_for_log('Resolved FUNDING_TRANSACTION/FUNDING_OUTPUT by MUTUAL_CLOSE')
 
     channel_mvts_1 = [
-        {'type': 'chain_mvt', 'credit_msat': 506432000, 'debit_msat': 0, 'tags': ['channel_open', 'opener', 'leased']},
-        {'type': 'channel_mvt', 'credit_msat': 0, 'debit_msat': 6432000, 'tags': ['lease_fee'], 'fees_msat': '0msat'},
+        {'type': 'chain_mvt', 'credit_msat': 506268000, 'debit_msat': 0, 'tags': ['channel_open', 'opener', 'leased']},
+        {'type': 'channel_mvt', 'credit_msat': 0, 'debit_msat': 6268000, 'tags': ['lease_fee'], 'fees_msat': '0msat'},
         {'type': 'channel_mvt', 'credit_msat': 0, 'debit_msat': 10000, 'tags': ['invoice'], 'fees_msat': '0msat'},
         {'type': 'chain_mvt', 'credit_msat': 0, 'debit_msat': 499990000, 'tags': ['channel_close']},
     ]
 
     channel_mvts_2 = [
         {'type': 'chain_mvt', 'credit_msat': 500000000, 'debit_msat': 0, 'tags': ['channel_open', 'leased']},
-        {'type': 'channel_mvt', 'credit_msat': 6432000, 'debit_msat': 0, 'tags': ['lease_fee'], 'fees_msat': '0msat'},
+        {'type': 'channel_mvt', 'credit_msat': 6268000, 'debit_msat': 0, 'tags': ['lease_fee'], 'fees_msat': '0msat'},
         {'type': 'channel_mvt', 'credit_msat': 10000, 'debit_msat': 0, 'tags': ['invoice'], 'fees_msat': '0msat'},
-        {'type': 'chain_mvt', 'credit_msat': 0, 'debit_msat': 506442000, 'tags': ['channel_close']},
+        {'type': 'chain_mvt', 'credit_msat': 0, 'debit_msat': 506278000, 'tags': ['channel_close']},
     ]
 
     check_coin_moves(l1, channel_id, channel_mvts_1, chainparams)
@@ -927,6 +931,9 @@ def test_channel_lease_unilat_closes(node_factory, bitcoind):
     l1.fundwallet(20000000)
     l2.fundwallet(20000000)
     l3.fundwallet(20000000)
+
+    # Make sure we are at known height for lease.
+    sync_blockheight(bitcoind, [l1, l2, l3])
 
     l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
     rates = l1.rpc.dev_queryrates(l2.info['id'], amount, amount)
@@ -1414,8 +1421,12 @@ def test_penalty_htlc_tx_timeout(node_factory, bitcoind, chainparams, anchors):
 
     l1, l2, l3, l4, l5 = node_factory.get_nodes(5, opts=opts)
 
-    node_factory.join_nodes([l1, l2, l3, l4], wait_for_announce=True)
-    node_factory.join_nodes([l3, l5], wait_for_announce=True)
+    node_factory.join_nodes([l1, l2, l3, l4])
+    node_factory.join_nodes([l3, l5])
+    bitcoind.generate_block(5)
+    # Make sure all nodes see all channels!
+    for n in (l1, l2, l3, l4, l5):
+        wait_for(lambda: len(n.rpc.listchannels()['channels']) == 4 * 2)
 
     channel_id = first_channel_id(l2, l3)
 
@@ -3769,9 +3780,9 @@ def test_closing_anchorspend_htlc_tx_rbf(node_factory, bitcoind):
     fundsats = int(Millisatoshi(only_one(l1.rpc.listfunds()['outputs'])['amount_msat']).to_satoshi())
     psbt = l1.rpc.fundpsbt("all", "1000perkw", 1000)['psbt']
     # Pay 5k sats in fees, send most to l2
-    psbt = l1.rpc.addpsbtoutput(fundsats - 20000 - 5000, psbt, destination=l2.rpc.newaddr()['bech32'])['psbt']
-    # 10x2000 sat outputs for l1 to use.
-    for i in range(10):
+    psbt = l1.rpc.addpsbtoutput(fundsats - 24000 - 5000, psbt, destination=l2.rpc.newaddr()['bech32'])['psbt']
+    # 12x2000 sat outputs for l1 to use.
+    for i in range(12):
         psbt = l1.rpc.addpsbtoutput(2000, psbt)['psbt']
     l1.rpc.sendpsbt(l1.rpc.signpsbt(psbt)['signed_psbt'])
     bitcoind.generate_block(1, wait_for_mempool=1)
@@ -3803,6 +3814,13 @@ def test_closing_anchorspend_htlc_tx_rbf(node_factory, bitcoind):
 
     wait_for(lambda: len(bitcoind.rpc.getrawmempool()) == 2)
 
+    # Expect package feerate of 2000
+    details = bitcoind.rpc.getrawmempool(True).values()
+    total_weight = sum([d['weight'] for d in details])
+    total_fees = sum([float(d['fees']['base']) * 100_000_000 for d in details])
+    total_feerate_perkw = total_fees / total_weight * 1000
+    assert 2000 - 1 < total_feerate_perkw < 2000 + 1
+
     # But we don't mine it!  And fees go up again!
     l1.set_feerates((3000, 3000, 3000, 3000))
     bitcoind.generate_block(1, needfeerate=5000)
@@ -3810,6 +3828,13 @@ def test_closing_anchorspend_htlc_tx_rbf(node_factory, bitcoind):
     l1.daemon.wait_for_log('RBF anchor spend')
     # We actually resubmit the commit tx, then the RBF:
     l1.daemon.wait_for_logs(['sendrawtx exit 0'] * 2)
+
+    # Expect package feerate of 3000
+    details = bitcoind.rpc.getrawmempool(True).values()
+    total_weight = sum([d['weight'] for d in details])
+    total_fees = sum([float(d['fees']['base']) * 100_000_000 for d in details])
+    total_feerate_perkw = total_fees / total_weight * 1000
+    assert 3000 - 1 < total_feerate_perkw < 3000 + 1
 
     # And now we'll get it in (there's some rounding, so feerate a bit lower!)
     bitcoind.generate_block(1, needfeerate=2990)
@@ -3832,8 +3857,15 @@ def test_closing_anchorspend_htlc_tx_rbf(node_factory, bitcoind):
     # It will enter the mempool
     wait_for(lambda: txid in bitcoind.rpc.getrawmempool())
 
+    tx = bitcoind.rpc.getrawmempool(True)[txid]
+    feerate_perkw = float(tx['fees']['base']) * 100_000_000 / tx['weight'] * 1000
+    # It actually has no change output, so it exceeds the fee quite a bit.
+    assert len(bitcoind.rpc.decoderawtransaction(bitcoind.rpc.getrawtransaction(txid))['vout']) == 1
+    assert feerate_perkw > 5000
+
     # And this will mine it!
-    bitcoind.generate_block(1, needfeerate=4990)
+    bitcoind.generate_block(1, needfeerate=5000)
+    assert bitcoind.rpc.getrawmempool() == []
 
 
 @pytest.mark.parametrize("anchors", [False, True])
@@ -3952,7 +3984,9 @@ def test_closing_minfee(node_factory, bitcoind):
 def test_peer_anchor_push(node_factory, bitcoind, executor, chainparams):
     """Test that we use anchor on peer's commit to CPFP tx"""
     l1, l2, l3 = node_factory.line_graph(3, opts=[{},
-                                                  {'min-emergency-msat': 546000},
+                                                  {'min-emergency-msat': 546000,
+                                                   'dev-warn-on-overgrind': None,
+                                                   'broken_log': 'overgrind: short signature length'},
                                                   {'disconnect': ['-WIRE_UPDATE_FULFILL_HTLC']}],
                                          wait_for_announce=True)
 
@@ -3992,26 +4026,43 @@ def test_peer_anchor_push(node_factory, bitcoind, executor, chainparams):
     # We put l3's tx in the mempool, but won't mine it.
     bitcoind.rpc.sendrawtransaction(closetx)
 
-    # We aim for feerate ~3750, so this won't mine it.
-    # HTLC's going to time out at block 119
-    for block in range(108, 119):
+    # We aim for feerate ~3750, so this won't mine l3's unilateral close.
+    # HTLC's going to time out at block 120 (we give one block grace)
+    for block in range(110, 120):
         bitcoind.generate_block(1, needfeerate=5000)
+        assert bitcoind.rpc.getblockcount() == block
         sync_blockheight(bitcoind, [l2])
+    assert only_one(l2.rpc.listpeerchannels(l3.info['id'])['channels'])['state'] == 'CHANNELD_NORMAL'
 
     # Drops to chain
+    bitcoind.generate_block(1, needfeerate=5000)
     wait_for(lambda: only_one(l2.rpc.listpeerchannels(l3.info['id'])['channels'])['state'] == 'AWAITING_UNILATERAL')
 
-    # But, l3's tx already there, and identical feerate will not RBF
+    # But, l3's tx already there, and identical feerate will not RBF.
     l2.daemon.wait_for_log("rejecting replacement")
-    assert bitcoind.rpc.getrawmempool() != []
+    wait_for(lambda: len(bitcoind.rpc.getrawmempool()) == 2)
 
     # As blocks pass, we will use anchor to boost l3's tx.
-    for block in range(119, 124):
-        bitcoind.generate_block(1, needfeerate=5000)
+    for block, feerate in zip(range(120, 124), (12000, 13000, 14000, 15000)):
+        l2.daemon.wait_for_log(fr"Worth fee [0-9]*sat for remote commit tx to get 100000000msat at block 125 \(\+{125 - block}\) at feerate {feerate}perkw")
+        l2.daemon.wait_for_log("sendrawtx exit 0")
+        # Check feerate for entire package (commitment tx + anchor) is ~ correct
+        details = bitcoind.rpc.getrawmempool(True).values()
+        total_weight = sum([d['weight'] for d in details])
+        total_fees = sum([float(d['fees']['base']) * 100_000_000 for d in details])
+        total_feerate_perkw = total_fees / total_weight * 1000
+        check_feerate(l2, total_feerate_perkw, feerate)
+        bitcoind.generate_block(1, needfeerate=16000)
         sync_blockheight(bitcoind, [l2])
+        assert len(bitcoind.rpc.getrawmempool()) == 2
 
-    # mempool should be empty, but our 'needfeerate' logic is bogus and leaves
-    # the anchor spend tx!  So just check that l2 did see the commitment tx
+    # Feerate tops out at +1, so this is the same.  This time we mine it!
+    l2.daemon.wait_for_log(fr"Worth fee [0-9]*sat for remote commit tx to get 100000000msat at block 125 \(\+1\) at feerate 15000perkw")
+    l2.daemon.wait_for_log("sendrawtx exit 0")
+
+    bitcoind.generate_block(1, needfeerate=15000)
+
+    assert bitcoind.rpc.getrawmempool() == []
     wait_for(lambda: only_one(l2.rpc.listpeerchannels(l3.info['id'])['channels'])['state'] == 'ONCHAIN')
 
 
@@ -4136,11 +4187,20 @@ def test_anchorspend_using_to_remote(node_factory, bitcoind, anchors):
     # Don't need l4 any more
     l4.stop()
 
+    for n in (l1, l2, l3):
+        wait_for(lambda: n.rpc.listchannels() == {'channels': []})
+
     # Now l1->l2<-l3 but push funds to l2 so it can forward.
-    node_factory.join_nodes([l1, l2], wait_for_announce=True)
-    node_factory.join_nodes([l3, l2], wait_for_announce=True)
+    node_factory.join_nodes([l1, l2])
+    node_factory.join_nodes([l3, l2])
+
+    # Make sure everyone knows about everyone else!
+    bitcoind.generate_block(5)
+    for n in (l1, l2, l3):
+        wait_for(lambda: len(n.rpc.listchannels()['channels']) == 4)
+
     l3.rpc.pay(l2.rpc.invoice(200000000, 'test2', 'test2')['bolt11'])
-    wait_for(lambda: only_one(l2.rpc.listpeerchannels(l3.info['id'])['channels'])['htlcs'] != [])
+    wait_for(lambda: only_one(l2.rpc.listpeerchannels(l3.info['id'])['channels'])['htlcs'] == [])
 
     # Get HTLC stuck, so l2 has reason to push commitment tx.
     amt = 100_000_000
@@ -4152,13 +4212,13 @@ def test_anchorspend_using_to_remote(node_factory, bitcoind, anchors):
     # Give l2 a sense of urgency, by ensuring there's an HTLC in-channel
     # when it needs to go onchain.
     # Make sure HTLC expiry is what we expect!
-    l2.daemon.wait_for_log('Adding HTLC 0 amount=100000000msat cltv=128 gave CHANNEL_ERR_ADD_OK')
+    l2.daemon.wait_for_log('Adding HTLC 0 amount=100000000msat cltv=123 gave CHANNEL_ERR_ADD_OK')
 
     # Kill l1 and l3, we just care about l2.
     l3.stop()
     l1.stop()
 
-    for block in range(117, 128):
+    for block in range(112, 123):
         bitcoind.generate_block(1)
         sync_blockheight(bitcoind, [l2])
 
@@ -4229,7 +4289,7 @@ def test_onchain_reestablish_reply(node_factory, bitcoind, executor):
 @unittest.skipIf(TEST_NETWORK != 'regtest', 'elementsd anchors not supportd')
 def test_onchain_slow_anchor(node_factory, bitcoind):
     """We still use anchors for non-critical closes"""
-    l1, l2 = node_factory.line_graph(2)
+    l1, l2 = node_factory.line_graph(2, opts={'feerates': (15000, 11000, 253, 253)})
 
     # Don't let l1 succeed in sending commit tx
     def censoring_sendrawtx(r):
@@ -4243,12 +4303,14 @@ def test_onchain_slow_anchor(node_factory, bitcoind):
     l1.rpc.disconnect(l2.info['id'], force=True)
     l1.rpc.close(l2.info['id'], unilateraltimeout=1)
 
-    # We will have a super-low-prio anchor spend.
-    l1.daemon.wait_for_log(r"Low-priority anchorspend aiming for block {} \(feerate 253\)".format(close_start_depth + 2016))
+    # We will *not* have a super-low-prio anchor spend, since we're there already.
+    time.sleep(5)
+    assert not l1.daemon.is_in_log(r"Low-priority anchorspend")
 
-    # Restart with reduced block time.
+    # Restart with reduced block time, and increase feerates.
     l1.stop()
     l1.daemon.opts['dev-low-prio-anchor-blocks'] = 20
+    l1.set_feerates((15000, 11000, 7500, 3750), wait_for_effect=False)
     l1.start()
 
     l1.daemon.wait_for_log("Low-priority anchorspend aiming for block {}".format(close_start_depth + 20))
@@ -4264,7 +4326,7 @@ def test_onchain_slow_anchor(node_factory, bitcoind):
     height = bitcoind.rpc.getblockchaininfo()['blocks']
     l1.daemon.wait_for_log(r"Low-priority anchorspend aiming for block {} \(feerate 7458\)".format(height + 13))
     # Can be out-by-one (short sig)!
-    l1.daemon.wait_for_log(r"Anchorspend for local commit tx fee (12335|12328)sat \(w=714\), commit_tx fee 4545sat \(w=76[78]\): package feerate 1139[02] perkw")
+    l1.daemon.wait_for_log(r"Anchorspend for local commit tx fee (9377|9369)sat \(w=722\), commit_tx fee 1735sat \(w=76[78]\): package feerate 7457 perkw")
     assert not l1.daemon.is_in_log("Low-priority anchorspend aiming for block {}".format(height + 12))
 
     bitcoind.generate_block(1)
@@ -4275,6 +4337,40 @@ def test_onchain_slow_anchor(node_factory, bitcoind):
     bitcoind.generate_block(1)
     height = bitcoind.rpc.getblockchaininfo()['blocks']
     l1.daemon.wait_for_log(r"Low-priority anchorspend aiming for block {} \(feerate 7500\)".format(height + 12))
+
+
+def test_reestablish_closed_channels(node_factory, bitcoind):
+    """Even long-forgotten channels respond to WIRE_REESTABLISH"""
+    l1, l2 = node_factory.line_graph(2, opts={'may_reconnect': True,
+                                              'dev-no-reconnect': None})
+
+    # We block l2 from seeing close, so it will try to reestablish.
+    def no_new_blocks(req):
+        return {"error": "go away"}
+    l2.daemon.rpcproxy.mock_rpc('getblockhash', no_new_blocks)
+
+    # Make a payment, make sure it's entirely finished before we close.
+    l1.rpc.pay(l2.rpc.invoice(200000000, 'test', 'test')['bolt11'])
+    wait_for(lambda: only_one(l1.rpc.listpeerchannels()['channels'])['htlcs'] == [])
+
+    # l1 closes, unilaterally.
+    l1.rpc.disconnect(l2.info['id'], force=True)
+    l1.rpc.close(l2.info['id'], unilateraltimeout=1)
+
+    # 5 blocks before we can spend to-us.
+    bitcoind.generate_block(5, wait_for_mempool=1)
+    # 100 more to forget channel
+    bitcoind.generate_block(100, wait_for_mempool=1)
+    wait_for(lambda: l1.rpc.listclosedchannels()['closedchannels'] != [])
+
+    # l2 reconnects, gets reestablish before error.
+    l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
+    l1.daemon.wait_for_log('Responded to reestablish for long-closed channel')
+    l2.daemon.wait_for_log('peer_in WIRE_CHANNEL_REESTABLISH')
+    l2.daemon.wait_for_log('peer_in WIRE_ERROR')
+
+    # Make sure l2 was happy with the reestablish message.
+    assert not l2.daemon.is_in_log('bad reestablish')
 
 
 @unittest.skipIf(TEST_NETWORK != 'regtest', "elementsd doesn't use p2tr anyway")

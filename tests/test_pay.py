@@ -736,16 +736,16 @@ def test_wait_sendpay(node_factory, executor):
     l1.rpc.sendpay([routestep], inv['payment_hash'], payment_secret=inv['payment_secret'])
     assert wait_created.result(TIMEOUT) == {'subsystem': 'sendpays',
                                             'created': 1,
-                                            'details': {'groupid': 1,
-                                                        'partid': 0,
-                                                        'payment_hash': inv['payment_hash'],
-                                                        'status': 'pending'}}
+                                            'sendpays': {'groupid': 1,
+                                                         'partid': 0,
+                                                         'payment_hash': inv['payment_hash'],
+                                                         'status': 'pending'}}
     assert wait_updated.result(TIMEOUT) == {'subsystem': 'sendpays',
                                             'updated': 1,
-                                            'details': {'groupid': 1,
-                                                        'partid': 0,
-                                                        'payment_hash': inv['payment_hash'],
-                                                        'status': 'complete'}}
+                                            'sendpays': {'groupid': 1,
+                                                         'partid': 0,
+                                                         'payment_hash': inv['payment_hash'],
+                                                         'status': 'complete'}}
 
     l1.rpc.waitsendpay(inv['payment_hash'])['payment_preimage']
 
@@ -3423,11 +3423,10 @@ def test_reject_invalid_payload(node_factory):
                      first_hop=first_hop,
                      payment_hash=inv['payment_hash'],
                      shared_secrets=onion['shared_secrets'])
-
-    l2.daemon.wait_for_log(r'Failing HTLC because of an invalid payload')
-
     with pytest.raises(RpcError, match=r'WIRE_INVALID_ONION_PAYLOAD'):
         l1.rpc.waitsendpay(inv['payment_hash'])
+
+    l2.daemon.wait_for_log(r'Failing HTLC because of an invalid payload')
 
 
 @unittest.skip("Test is flaky causing CI to be unusable.")
@@ -4737,7 +4736,7 @@ def test_fetchinvoice_disconnected_reply(node_factory, bitcoind):
 
     # l2 is already connected to l3, so it can fetch.  It specifies a reply
     # path of l1->l2.  l3 knows it can simply route reply to l1 via l2.
-    l2.rpc.fetchinvoice(offer=offer['bolt12'], dev_reply_path=[l1.info['id'], l2.info['id']])
+    l2.rpc.call('fetchinvoice', {'offer': offer['bolt12'], 'dev_reply_path': [l1.info['id'], l2.info['id']]})
     assert l3.rpc.listpeers(l1.info['id']) == {'peers': []}
 
 
@@ -5481,10 +5480,10 @@ def test_sendpays_wait(node_factory, executor):
     waitres = waitfut.result(TIMEOUT)
     assert waitres == {'subsystem': 'sendpays',
                        'created': 1,
-                       'details': {'status': 'pending',
-                                   'partid': 0,
-                                   'groupid': 1,
-                                   'payment_hash': inv1['payment_hash']}}
+                       'sendpays': {'status': 'pending',
+                                    'partid': 0,
+                                    'groupid': 1,
+                                    'payment_hash': inv1['payment_hash']}}
     assert only_one(l1.rpc.listsendpays(bolt11=inv1['bolt11'])['payments'])['created_index'] == 1
     assert only_one(l1.rpc.listsendpays(bolt11=inv1['bolt11'])['payments'])['updated_index'] == 1
 
@@ -5506,10 +5505,10 @@ def test_sendpays_wait(node_factory, executor):
     waitres = waitfut.result(TIMEOUT)
     assert waitres == {'subsystem': 'sendpays',
                        'updated': 2,
-                       'details': {'status': 'complete',
-                                   'partid': 0,
-                                   'groupid': 1,
-                                   'payment_hash': inv2['payment_hash']}}
+                       'sendpays': {'status': 'complete',
+                                    'partid': 0,
+                                    'groupid': 1,
+                                    'payment_hash': inv2['payment_hash']}}
     assert only_one(l1.rpc.listsendpays(bolt11=inv2['bolt11'])['payments'])['created_index'] == 2
     assert only_one(l1.rpc.listsendpays(bolt11=inv2['bolt11'])['payments'])['updated_index'] == 2
 
@@ -5530,10 +5529,10 @@ def test_sendpays_wait(node_factory, executor):
     waitres = waitfut.result(TIMEOUT)
     assert waitres == {'subsystem': 'sendpays',
                        'updated': 3,
-                       'details': {'status': 'failed',
-                                   'partid': 0,
-                                   'groupid': 1,
-                                   'payment_hash': inv3['payment_hash']}}
+                       'sendpays': {'status': 'failed',
+                                    'partid': 0,
+                                    'groupid': 1,
+                                    'payment_hash': inv3['payment_hash']}}
 
     # Order and pagination.
     assert [(p['created_index'], p['bolt11']) for p in l1.rpc.listsendpays(index='created')['payments']] == [(1, inv1['bolt11']), (2, inv2['bolt11']), (3, inv3['bolt11'])]
@@ -5558,10 +5557,10 @@ def test_sendpays_wait(node_factory, executor):
     waitres = waitfut.result(TIMEOUT)
     assert waitres == {'subsystem': 'sendpays',
                        'deleted': 1,
-                       'details': {'status': 'failed',
-                                   'partid': 0,
-                                   'groupid': 1,
-                                   'payment_hash': inv3['payment_hash']}}
+                       'sendpays': {'status': 'failed',
+                                    'partid': 0,
+                                    'groupid': 1,
+                                    'payment_hash': inv3['payment_hash']}}
 
 
 def test_pay_routehint_minhtlc(node_factory, bitcoind):
@@ -5709,7 +5708,7 @@ def test_blinded_reply_path_scid(node_factory):
 
     chan = only_one(l1.rpc.listpeerchannels()['channels'])
     scidd = "{}/{}".format(chan['short_channel_id'], chan['direction'])
-    inv = l1.rpc.fetchinvoice(offer=offer['bolt12'], dev_path_use_scidd=scidd)['invoice']
+    inv = l1.rpc.call('fetchinvoice', {'offer': offer['bolt12'], 'dev_path_use_scidd': scidd})['invoice']
 
     l1.rpc.pay(inv)
 
@@ -5740,9 +5739,10 @@ def test_offer_paths(node_factory, bitcoind):
 
     chan = only_one(l1.rpc.listpeerchannels()['channels'])
     scidd = "{}/{}".format(chan['short_channel_id'], chan['direction'])
-    offer = l2.rpc.offer(amount='100sat', description='test_offer_paths',
-                         dev_paths=[[scidd, l2.info['id']],
-                                    [l3.info['id'], l2.info['id']]])
+    offer = l2.rpc.call('offer', {'amount': '100sat',
+                                  'description': 'test_offer_paths',
+                                  'dev_paths': [[scidd, l2.info['id']],
+                                                [l3.info['id'], l2.info['id']]]})
 
     paths = l1.rpc.decode(offer['bolt12'])['offer_paths']
     assert len(paths) == 2

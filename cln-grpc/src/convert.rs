@@ -2146,12 +2146,14 @@ impl From<responses::ListhtlcsHtlcs> for pb::ListhtlcsHtlcs {
     fn from(c: responses::ListhtlcsHtlcs) -> Self {
         Self {
             amount_msat: Some(c.amount_msat.into()), // Rule #2 for type msat
+            created_index: c.created_index, // Rule #2 for type u64?
             direction: c.direction as i32,
             expiry: c.expiry, // Rule #2 for type u32
             id: c.id, // Rule #2 for type u64
             payment_hash: <Sha256 as AsRef<[u8]>>::as_ref(&c.payment_hash).to_vec(), // Rule #2 for type hash
             short_channel_id: c.short_channel_id.to_string(), // Rule #2 for type short_channel_id
             state: c.state as i32,
+            updated_index: c.updated_index, // Rule #2 for type u64?
         }
     }
 }
@@ -2681,12 +2683,69 @@ impl From<responses::WaitDetails> for pb::WaitDetails {
 }
 
 #[allow(unused_variables)]
+impl From<responses::WaitForwards> for pb::WaitForwards {
+    fn from(c: responses::WaitForwards) -> Self {
+        Self {
+            in_channel: c.in_channel.map(|v| v.to_string()), // Rule #2 for type short_channel_id?
+            in_htlc_id: c.in_htlc_id, // Rule #2 for type u64?
+            in_msat: c.in_msat.map(|f| f.into()), // Rule #2 for type msat?
+            out_channel: c.out_channel.map(|v| v.to_string()), // Rule #2 for type short_channel_id?
+            status: c.status.map(|v| v as i32),
+        }
+    }
+}
+
+#[allow(unused_variables)]
+impl From<responses::WaitHtlcs> for pb::WaitHtlcs {
+    fn from(c: responses::WaitHtlcs) -> Self {
+        Self {
+            amount_msat: c.amount_msat.map(|f| f.into()), // Rule #2 for type msat?
+            cltv_expiry: c.cltv_expiry, // Rule #2 for type u32?
+            direction: c.direction.map(|v| v as i32),
+            htlc_id: c.htlc_id, // Rule #2 for type u64?
+            payment_hash: c.payment_hash.map(|v| <Sha256 as AsRef<[u8]>>::as_ref(&v).to_vec()), // Rule #2 for type hash?
+            short_channel_id: c.short_channel_id.map(|v| v.to_string()), // Rule #2 for type short_channel_id?
+            state: c.state.map(|v| v as i32),
+        }
+    }
+}
+
+#[allow(unused_variables)]
+impl From<responses::WaitInvoices> for pb::WaitInvoices {
+    fn from(c: responses::WaitInvoices) -> Self {
+        Self {
+            bolt11: c.bolt11, // Rule #2 for type string?
+            bolt12: c.bolt12, // Rule #2 for type string?
+            description: c.description, // Rule #2 for type string?
+            label: c.label, // Rule #2 for type string?
+            status: c.status.map(|v| v as i32),
+        }
+    }
+}
+
+#[allow(unused_variables)]
+impl From<responses::WaitSendpays> for pb::WaitSendpays {
+    fn from(c: responses::WaitSendpays) -> Self {
+        Self {
+            groupid: c.groupid, // Rule #2 for type u64?
+            partid: c.partid, // Rule #2 for type u64?
+            payment_hash: c.payment_hash.map(|v| <Sha256 as AsRef<[u8]>>::as_ref(&v).to_vec()), // Rule #2 for type hash?
+            status: c.status.map(|v| v as i32),
+        }
+    }
+}
+
+#[allow(unused_variables,deprecated)]
 impl From<responses::WaitResponse> for pb::WaitResponse {
     fn from(c: responses::WaitResponse) -> Self {
         Self {
             created: c.created, // Rule #2 for type u64?
             deleted: c.deleted, // Rule #2 for type u64?
             details: c.details.map(|v| v.into()),
+            forwards: c.forwards.map(|v| v.into()),
+            htlcs: c.htlcs.map(|v| v.into()),
+            invoices: c.invoices.map(|v| v.into()),
+            sendpays: c.sendpays.map(|v| v.into()),
             subsystem: c.subsystem as i32,
             updated: c.updated, // Rule #2 for type u64?
         }
@@ -4332,7 +4391,7 @@ impl From<notifications::ChannelStateChangedNotification> for pb::ChannelStateCh
             channel_id: <Sha256 as AsRef<[u8]>>::as_ref(&c.channel_id).to_vec(), // Rule #2 for type hash
             message: c.message, // Rule #2 for type string
             new_state: c.new_state as i32,
-            old_state: c.old_state as i32,
+            old_state: c.old_state.map(|v| v as i32),
             peer_id: c.peer_id.serialize().to_vec(), // Rule #2 for type pubkey
             short_channel_id: c.short_channel_id.to_string(), // Rule #2 for type short_channel_id
             timestamp: c.timestamp, // Rule #2 for type string
@@ -4964,6 +5023,7 @@ impl From<requests::ListpeerchannelsRequest> for pb::ListpeerchannelsRequest {
     fn from(c: requests::ListpeerchannelsRequest) -> Self {
         Self {
             id: c.id.map(|v| v.serialize().to_vec()), // Rule #2 for type pubkey?
+            short_channel_id: c.short_channel_id.map(|v| v.to_string()), // Rule #2 for type short_channel_id?
         }
     }
 }
@@ -5238,6 +5298,9 @@ impl From<requests::ListhtlcsRequest> for pb::ListhtlcsRequest {
     fn from(c: requests::ListhtlcsRequest) -> Self {
         Self {
             id: c.id, // Rule #2 for type string?
+            index: c.index.map(|v| v as i32),
+            limit: c.limit, // Rule #2 for type u32?
+            start: c.start, // Rule #2 for type u64?
         }
     }
 }
@@ -5927,6 +5990,7 @@ impl From<requests::AskrenebiaschannelRequest> for pb::AskrenebiaschannelRequest
             bias: c.bias, // Rule #2 for type integer
             description: c.description, // Rule #2 for type string?
             layer: c.layer, // Rule #2 for type string
+            relative: c.relative, // Rule #2 for type boolean?
             short_channel_id_dir: c.short_channel_id_dir.to_string(), // Rule #2 for type short_channel_id_dir
         }
     }
@@ -6640,6 +6704,7 @@ impl From<pb::ListpeerchannelsRequest> for requests::ListpeerchannelsRequest {
     fn from(c: pb::ListpeerchannelsRequest) -> Self {
         Self {
             id: c.id.map(|v| PublicKey::from_slice(&v).unwrap()), // Rule #1 for type pubkey?
+            short_channel_id: c.short_channel_id.map(|v| cln_rpc::primitives::ShortChannelId::from_str(&v).unwrap()), // Rule #1 for type short_channel_id?
         }
     }
 }
@@ -6910,6 +6975,9 @@ impl From<pb::ListhtlcsRequest> for requests::ListhtlcsRequest {
     fn from(c: pb::ListhtlcsRequest) -> Self {
         Self {
             id: c.id, // Rule #1 for type string?
+            index: c.index.map(|v| v.try_into().unwrap()),
+            limit: c.limit, // Rule #1 for type u32?
+            start: c.start, // Rule #1 for type u64?
         }
     }
 }
@@ -7587,6 +7655,7 @@ impl From<pb::AskrenebiaschannelRequest> for requests::AskrenebiaschannelRequest
             bias: c.bias, // Rule #1 for type integer
             description: c.description, // Rule #1 for type string?
             layer: c.layer, // Rule #1 for type string
+            relative: c.relative, // Rule #1 for type boolean?
             short_channel_id_dir: cln_rpc::primitives::ShortChannelIdDir::from_str(&c.short_channel_id_dir).unwrap(), // Rule #1 for type short_channel_id_dir
         }
     }

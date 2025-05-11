@@ -455,7 +455,7 @@ static void opening_funder_finished(struct subd *openingd, const u8 *resp,
 	tell_connectd_peer_importance(channel->peer, was_important);
 
 	/* If this fails, it cleans up */
-	if (!peer_start_channeld(channel, peer_fd, NULL, false, NULL))
+	if (!peer_start_channeld(channel, peer_fd, NULL, false))
 		return;
 
 	funding_success(channel);
@@ -562,7 +562,7 @@ static void opening_fundee_finished(struct subd *openingd,
 		wallet_penalty_base_add(ld->wallet, channel->dbid, pbase);
 
 	/* On to normal operation (frees if it fails!) */
-	if (peer_start_channeld(channel, peer_fd, fwd_msg, false, NULL))
+	if (peer_start_channeld(channel, peer_fd, fwd_msg, false))
 		tal_free(uc);
 	return;
 
@@ -717,7 +717,7 @@ openchannel_hook_final(struct openchannel_hook_payload *payload STEALS)
 	if (wallet_can_spend(payload->openingd->ld->wallet,
 			     our_upfront_shutdown_script,
 			     tal_bytelen(our_upfront_shutdown_script),
-			     &found_wallet_index)) {
+			     &found_wallet_index, NULL)) {
 		upfront_shutdown_script_wallet_index = tal(tmpctx, u32);
 		*upfront_shutdown_script_wallet_index = found_wallet_index;
 	} else
@@ -1408,7 +1408,7 @@ static struct command_result *json_fundchannel_start(struct command *cmd,
 	if (wallet_can_spend(fc->cmd->ld->wallet,
 			     fc->our_upfront_shutdown_script,
 			     tal_bytelen(fc->our_upfront_shutdown_script),
-			     &found_wallet_index)) {
+			     &found_wallet_index, NULL)) {
 		upfront_shutdown_script_wallet_index = tal(tmpctx, u32);
 		*upfront_shutdown_script_wallet_index = found_wallet_index;
 	} else
