@@ -305,6 +305,9 @@ def test_pay_get_error_with_update(node_factory):
 
     inv = l3.rpc.invoice(123000, 'test_pay_get_error_with_update', 'description')
 
+    # Make sure it's not doing startup any more (where it doesn't disable channels!)
+    l2.daemon.wait_for_log("channel_gossip: no longer in startup mode", timeout=70)
+
     # Make sure l2 doesn't tell l1 directly that channel is disabled.
     l2.rpc.dev_suppress_gossip()
     l3.stop()
@@ -313,9 +316,6 @@ def test_pay_get_error_with_update(node_factory):
     wait_for(lambda: only_one(l2.rpc.listpeerchannels(l3.info['id'])['channels'])['peer_connected'] is False)
 
     assert(l1.is_channel_active(chanid2))
-
-    # Make sure it's not doing startup any more (where it doesn't disable channels!)
-    l1.daemon.wait_for_log("channel_gossip: no longer in startup mode", timeout=70)
 
     with pytest.raises(RpcError, match=r'WIRE_TEMPORARY_CHANNEL_FAILURE'):
         l1.rpc.pay(inv['bolt11'])
@@ -4808,7 +4808,7 @@ def test_dev_rawrequest(node_factory):
     # Get fetchinvoice to make us an invoice_request
     l1.rpc.call('fetchinvoice', {'offer': offer['bolt12']})
 
-    m = re.search(r'invoice_request: \\"([a-z0-9]*)\\"', l1.daemon.is_in_log('invoice_request:'))
+    m = re.search(r'invoice_request: "([a-z0-9]*)"', l1.daemon.is_in_log('invoice_request:'))
     ret = l1.rpc.call('dev-rawrequest', {'invreq': m.group(1),
                                          'nodeid': l2.info['id'],
                                          'timeout': 10})
@@ -5936,7 +5936,7 @@ def test_offer_experimental_fields(node_factory):
         l2.rpc.fetchinvoice(mangled)
 
     # invice request contains the unknown field
-    m = re.search(r'invoice_request: \\"([a-z0-9]*)\\"', l2.daemon.is_in_log('invoice_request:'))
+    m = re.search(r'invoice_request: "([a-z0-9]*)"', l2.daemon.is_in_log('invoice_request:'))
     assert l1.rpc.decode(m.group(1))['unknown_invoice_request_tlvs'] == [{'type': 1000000001, 'length': 1, 'value': '00'}]
 
 
@@ -6862,3 +6862,79 @@ def test_decode_expired_bolt12(node_factory):
         'type': 'bolt12 invoice',
         'valid': True,
     }
+
+
+def test_sendonion_sendpay(node_factory, bitcoind):
+    """
+    Check that a payment initiated with sendpay can be completed by sendonion.
+    """
+    opts = [
+        {"disable-mpp": None, "fee-base": 1000, "fee-per-satoshi": 1000},
+    ]
+    l1, l2, l3 = node_factory.line_graph(3, wait_for_announce=True, opts=opts * 3)
+
+    total_amount = "10000sat"
+    # First case, do not overpay a pending MPP payment
+    invstr = l3.rpc.invoice("10000sat", "inv", "description")["bolt11"]
+    inv = l1.rpc.decode(invstr)
+    route2 = l1.rpc.getroute(inv["payee"], "2000sat", 10)["route"]
+    route8 = l1.rpc.getroute(inv["payee"], "8000sat", 10)["route"]
+
+    def pay_with_sendpay(invoice, route, groupid, partid):
+        l1.rpc.sendpay(
+            route=route,
+            payment_hash=invoice["payment_hash"],
+            payment_secret=invoice["payment_secret"],
+            amount_msat=invoice["amount_msat"],
+            groupid=groupid,
+            partid=partid,
+        )
+
+    def pay_with_sendonion(invoice, route, groupid, partid):
+        blockheight = l1.rpc.getinfo()["blockheight"]
+        # Need to shift the parameters by one hop
+        hops = []
+        for h, n in zip(route[:-1], route[1:]):
+            # We tell the node h about the parameters to use for n (a.k.a. h + 1)
+            hops.append(
+                {
+                    "pubkey": h["id"],
+                    "payload": serialize_payload_tlv(
+                        n["amount_msat"], n["delay"], n["channel"], blockheight
+                    ).hex(),
+                }
+            )
+        # The last hop has a special payload:
+        hops.append(
+            {
+                "pubkey": route[-1]["id"],
+                "payload": serialize_payload_final_tlv(
+                    route[-1]["amount_msat"],
+                    route[-1]["delay"],
+                    invoice["amount_msat"],
+                    blockheight,
+                    invoice["payment_secret"],
+                ).hex(),
+            }
+        )
+        onion = l1.rpc.createonion(hops=hops, assocdata=invoice["payment_hash"])
+        l1.rpc.call(
+            "sendonion",
+            {
+                "onion": onion["onion"],
+                "shared_secrets": onion["shared_secrets"],
+                "first_hop": route[0],
+                "payment_hash": invoice["payment_hash"],
+                "total_amount_msat": invoice["amount_msat"],
+                "groupid": groupid,
+                "partid": partid,
+            },
+        )
+
+    pay_with_sendpay(inv, route2, 1, 1)
+    pay_with_sendonion(inv, route8, 1, 2)
+
+    l1.wait_for_htlcs()
+    invoice = only_one(l3.rpc.listinvoices("inv")["invoices"])
+    # the receive amount should be exact
+    assert invoice["amount_received_msat"] == Millisatoshi(total_amount)

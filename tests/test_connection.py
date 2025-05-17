@@ -2626,7 +2626,9 @@ def test_update_fee_reconnect(node_factory, bitcoind):
     assert l1.daemon.is_in_log('got commitsig [0-9]*: feerate 14005')
     assert l2.daemon.is_in_log('got commitsig [0-9]*: feerate 14005')
 
-    # Now shutdown cleanly.
+    # Now shutdown cleanly.  (Make sure l1 has raised min_acceptable: if it
+    # changes while it negotiates, it may reject the result and unilaterally close!)
+    wait_for(lambda: l1.rpc.feerates(style='perkw')['perkw']['min_acceptable'] == 7000)
     l1.rpc.close(chan)
 
     # And should put closing into mempool.
@@ -3746,6 +3748,7 @@ def test_openchannel_init_alternate(node_factory, executor):
             print("nothing to do")
 
 
+@unittest.skip("experimental-upgrade-protocol TLV fields conflict with splicing TLV fields")
 def test_upgrade_statickey(node_factory, executor):
     """l1 doesn't have option_static_remotekey, l2 offers it."""
     l1, l2 = node_factory.get_nodes(2, opts=[{'may_reconnect': True,
@@ -3784,6 +3787,7 @@ def test_upgrade_statickey(node_factory, executor):
     l2.daemon.wait_for_log(r"They sent desired_channel_type \[12\]")
 
 
+@unittest.skip("experimental-upgrade-protocol TLV fields conflict with splicing TLV fields")
 def test_upgrade_statickey_onchaind(node_factory, executor, bitcoind):
     """We test penalty before/after, and unilateral before/after"""
     l1, l2 = node_factory.get_nodes(2, opts=[{'may_reconnect': True,
@@ -3941,6 +3945,7 @@ def test_upgrade_statickey_onchaind(node_factory, executor, bitcoind):
     wait_for(lambda: len(l2.rpc.listpeerchannels()['channels']) == 0)
 
 
+@unittest.skip("experimental-upgrade-protocol TLV fields conflict with splicing TLV fields")
 def test_upgrade_statickey_fail(node_factory, executor, bitcoind):
     """We reconnect at all points during retransmit, and we won't upgrade."""
     l1_disconnects = ['-WIRE_COMMITMENT_SIGNED',
@@ -4063,6 +4068,7 @@ def test_htlc_failed_noclose(node_factory):
     assert l1.rpc.getpeer(l2.info['id'])['connected']
 
 
+@pytest.mark.openchannel('v1')
 @pytest.mark.openchannel('v2')
 def test_multichan_stress(node_factory, executor, bitcoind):
     """Test multiple channels between same nodes"""
@@ -4099,7 +4105,7 @@ def test_multichan_stress(node_factory, executor, bitcoind):
 
     wait_for(lambda: only_one(l3.rpc.listpeers(l2.info['id'])['peers'])['connected'])
     inv = l3.rpc.invoice(50000000, "invoice4", "invoice4")
-    l1.rpc.pay(inv['bolt11'])
+    l1.rpc.xpay(inv['bolt11'])
 
 
 def test_old_feerate(node_factory):

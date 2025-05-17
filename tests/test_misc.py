@@ -1,3 +1,4 @@
+import base64
 from bitcoin.rpc import RawProxy
 from decimal import Decimal
 from fixtures import *  # noqa: F401,F403
@@ -172,12 +173,15 @@ def test_bitcoin_pruned(node_factory, bitcoind):
             "result": [
                 {
                     "id": 1,
+                    "services": "000000000000040d",
                 },
                 {
                     "id": 2,
+                    "services": "0000000000000001",
                 },
                 {
                     "id": 3,
+                    "services": "0000000000000000",
                 },
             ],
         }
@@ -210,10 +214,10 @@ def test_bitcoin_pruned(node_factory, bitcoind):
     l1.daemon.rpcproxy.mock_rpc("getblockfrompeer", mock_getblockfrompeer())
     l1.start(wait_for_bitcoind_sync=False)
 
-    # check that we fetched a block from a peer (1st peer (from the back) in this case).
+    # check that we fetched a block from a peer (1st peer (from the back) in this case, but not from 3 which isn't a full node).
     pruned_block = bitcoind.rpc.getblockhash(bitcoind.rpc.getblockcount())
     l1.daemon.wait_for_log(f"failed to fetch block {pruned_block} from the bitcoin backend")
-    l1.daemon.wait_for_log(rf"try to fetch block {pruned_block} from peer 3")
+    l1.daemon.wait_for_log(rf"try to fetch block {pruned_block} from peer 2")
     l1.daemon.wait_for_log(rf"Adding block (\d+): {pruned_block}")
 
     # check that we can also fetch from a peer > 1st (from the back).
@@ -222,8 +226,8 @@ def test_bitcoin_pruned(node_factory, bitcoind):
 
     pruned_block = bitcoind.rpc.getblockhash(bitcoind.rpc.getblockcount())
     l1.daemon.wait_for_log(f"failed to fetch block {pruned_block} from the bitcoin backend")
-    l1.daemon.wait_for_log(rf"failed to fetch block {pruned_block} from peer 3")
-    l1.daemon.wait_for_log(rf"try to fetch block {pruned_block} from peer (\d+)")
+    l1.daemon.wait_for_log(rf"failed to fetch block {pruned_block} from peer 2")
+    l1.daemon.wait_for_log(rf"try to fetch block {pruned_block} from peer 1")
     l1.daemon.wait_for_log(rf"Adding block (\d+): {pruned_block}")
 
     # check that we retry if we could not fetch any block
@@ -2153,7 +2157,7 @@ def test_bitcoind_fail_first(node_factory, bitcoind):
     # first.
     timeout = 5 if 5 < TIMEOUT // 3 else TIMEOUT // 3
     l1 = node_factory.get_node(start=False,
-                               broken_log=r'plugin-bcli: .*-stdinrpcpass getblockhash 100 exited 1 \(after [0-9]* other errors\)',
+                               broken_log=r'plugin-bcli: .*(-stdinrpcpass getblockhash 100 exited 1 \(after [0-9]* other errors\)|we have been retrying command for)',
                                may_fail=True,
                                options={'bitcoin-retry-timeout': timeout})
 
@@ -2400,6 +2404,7 @@ def test_list_features_only(node_factory):
                 'option_shutdown_anysegwit/odd',
                 'option_quiesce/odd',
                 'option_onion_messages/odd',
+                'option_provide_storage/odd',
                 'option_channel_type/odd',
                 'option_scid_alias/odd',
                 'option_zeroconf/odd']
@@ -2479,6 +2484,42 @@ def test_signmessage(node_factory):
     # check that checkmassage used with a wrong zbase format throws an RPC exception
     with pytest.raises(RpcError, match="zbase is not valid zbase32"):
         l2.rpc.checkmessage(message="wrong zbase format", zbase="wrong zbase format")
+
+
+def test_signmessagewithkey(node_factory, chainparams):
+    l1, l2 = node_factory.get_nodes(2)
+    message = "a test message"
+    addr_bech32 = l1.rpc.newaddr("bech32")["bech32"]
+    addr_other = l2.rpc.newaddr("bech32")["bech32"]
+    if TEST_NETWORK != "liquid-regtest":
+        # refuse to sign if the address is not a P2WPKH
+        addr_p2tr = l1.rpc.newaddr("p2tr")["p2tr"]
+        with pytest.raises(
+            RpcError, match=r"Address is not p2wpkh and it is not supported"
+        ):
+            l1.rpc.signmessagewithkey(message, addr_p2tr)
+
+    # refuse to sign if the address does not belong to us
+    with pytest.raises(
+        RpcError, match=r"Address is not found in the wallet\'s database"
+    ):
+        l1.rpc.signmessagewithkey(message, addr_other)
+    response = l1.rpc.signmessagewithkey(message, addr_bech32)
+    assert response["address"] == addr_bech32
+    signature = base64.b64decode(response["base64"])
+    assert signature.hex() == response["signature"]
+    assert (
+        subprocess.check_output(
+            [
+                "devtools/bip137-verifysignature",
+                message,
+                response["signature"],
+                response["address"],
+                chainparams["name"],
+            ]
+        ).decode("utf-8")
+        == "Signature is valid!\n"
+    )
 
 
 def test_include(node_factory):
@@ -2976,6 +3017,7 @@ def test_emergencyrecoverpenaltytxn(node_factory, bitcoind):
     stubs = l1.rpc.emergencyrecover()["stubs"]
     assert len(stubs) == 1
     assert stubs[0] == _["channel_id"]
+    l1.daemon.wait_for_log('Sending a bogus channel_reestablish message to make the peer unilaterally close the channel.')
     l1.daemon.wait_for_log('peer_out WIRE_ERROR')
 
     # Restarting so that L1
@@ -3023,7 +3065,10 @@ def test_emergencyrecover(node_factory, bitcoind):
     listfunds = l1.rpc.listfunds()["channels"][0]
     assert listfunds["short_channel_id"] == "1x1x1"
 
+    l1.daemon.wait_for_log('Sending a bogus channel_reestablish message to make the peer unilaterally close the channel.')
     l1.daemon.wait_for_log('peer_out WIRE_ERROR')
+
+    l2.daemon.wait_for_log('bad reestablish commitment_number: 0')
     l2.daemon.wait_for_log('State changed from CHANNELD_NORMAL to AWAITING_UNILATERAL')
 
     bitcoind.generate_block(5, wait_for_mempool=1)
@@ -3044,27 +3089,11 @@ def test_emergencyrecover(node_factory, bitcoind):
 @pytest.mark.openchannel('v1')
 @pytest.mark.openchannel('v2')
 def test_recover_plugin(node_factory, bitcoind):
-    l1 = node_factory.get_node(
-        may_reconnect=True,
-        allow_warning=True,
-        feerates=(7500, 7500, 7500, 7500),
-        options={
-            'log-level': 'info',
-            'experimental-peer-storage': None,
-            'dev-no-reconnect': None,
-        },
-    )
-    l2 = node_factory.get_node(
-        may_reconnect=True,
-        feerates=(7500, 7500, 7500, 7500),
-        broken_log='.*',
-        allow_bad_gossip=True,
-        options={
-            'log-level': 'info',
-            'experimental-peer-storage': None,
-            'dev-no-reconnect': None,
-        },
-    )
+    l1, l2 = node_factory.get_nodes(2, opts=[{'may_reconnect': True,
+                                              'dev-no-reconnect': None},
+                                             {'may_reconnect': True,
+                                              'dev-no-reconnect': None,
+                                              'broken_log': 'Cannot broadcast our commitment tx: they have a future one|ERROR: Unknown commitment #[0-9]*, recovering our funds!'}])
 
     l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
     l2.fundchannel(l1, 10**6)
@@ -3115,17 +3144,24 @@ def test_restorefrompeer(node_factory, bitcoind):
     Test restorefrompeer
     """
     l1, l2 = node_factory.get_nodes(2, [{'broken_log': 'ERROR: Unknown commitment #.*, recovering our funds!',
-                                         'experimental-peer-storage': None,
                                          'may_reconnect': True,
                                          'allow_bad_gossip': True},
-                                        {'experimental-peer-storage': None,
-                                         'may_reconnect': True}])
+                                        {'may_reconnect': True}])
 
     l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
 
     c12, _ = l1.fundchannel(l2, 10**5)
     assert l1.daemon.is_in_log('Peer storage sent!')
     assert l2.daemon.is_in_log('Peer storage sent!')
+
+    # Note: each node may or may not send peer_storage_retrieval: if it
+    # receives storage fast enough, it will, otherwise not.
+    l1.rpc.disconnect(l2.info['id'], force=True)
+    l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
+    l1.daemon.wait_for_logs(['peer_out WIRE_PEER_STORAGE',
+                             'peer_in WIRE_PEER_STORAGE'])
+    l2.daemon.wait_for_logs(['peer_out WIRE_PEER_STORAGE',
+                             'peer_in WIRE_PEER_STORAGE'])
 
     l1.stop()
     os.unlink(os.path.join(l1.daemon.lightning_dir, TEST_NETWORK, "lightningd.sqlite3"))
@@ -3144,7 +3180,9 @@ def test_restorefrompeer(node_factory, bitcoind):
 
     assert l1.rpc.restorefrompeer()['stubs'][0] == _['channel_id']
 
+    l1.daemon.wait_for_log('Sending a bogus channel_reestablish message to make the peer unilaterally close the channel.')
     l1.daemon.wait_for_log('peer_out WIRE_ERROR')
+
     l2.daemon.wait_for_log('State changed from CHANNELD_NORMAL to AWAITING_UNILATERAL')
 
     bitcoind.generate_block(5, wait_for_mempool=1)

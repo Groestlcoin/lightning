@@ -81,6 +81,11 @@ struct channel_inflight {
 	/* On reestablish recovery; should I sign first? */
 	bool force_sign_first;
 
+	/* Has this inflight reached sufficent depth on chain? This is needed
+	 * for splices that need to coordinate `splice_locked` with their
+	 * peer through reconnect flows. */
+	struct short_channel_id *locked_scid;
+
 	/* Note: This field is not stored in the database.
 	 *
 	 * After splice_locked, we need a way to stop the chain watchers from
@@ -595,6 +600,29 @@ static inline bool channel_state_failing_onchain(enum channel_state state)
 	case DUALOPEND_AWAITING_LOCKIN:
 		return false;
 	case AWAITING_UNILATERAL:
+	case FUNDING_SPEND_SEEN:
+	case ONCHAIN:
+		return true;
+	}
+	abort();
+}
+
+static inline bool channel_state_funding_spent_onchain(enum channel_state state)
+{
+	switch (state) {
+	case CHANNELD_AWAITING_LOCKIN:
+	case CHANNELD_NORMAL:
+	case CHANNELD_AWAITING_SPLICE:
+	case CLOSINGD_SIGEXCHANGE:
+	case CHANNELD_SHUTTING_DOWN:
+	case CLOSINGD_COMPLETE:
+	case DUALOPEND_OPEN_INIT:
+	case DUALOPEND_OPEN_COMMIT_READY:
+	case DUALOPEND_OPEN_COMMITTED:
+	case DUALOPEND_AWAITING_LOCKIN:
+	case AWAITING_UNILATERAL:
+		return false;
+	case CLOSED:
 	case FUNDING_SPEND_SEEN:
 	case ONCHAIN:
 		return true;

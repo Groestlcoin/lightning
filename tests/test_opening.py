@@ -577,10 +577,6 @@ def test_v2_rbf_liquidity_ad(node_factory, bitcoind, chainparams):
 
     l1, l2 = node_factory.get_nodes(2, opts=opts)
 
-    # Other plugins use datastore, but we want to make sure our own
-    # data is cleared!
-    empty_datastore = l1.rpc.listdatastore()
-
     # what happens when we RBF?
     feerate = 2000
     amount = 500000
@@ -637,7 +633,7 @@ def test_v2_rbf_liquidity_ad(node_factory, bitcoind, chainparams):
     l1.rpc.openchannel_signed(chan_id, signed_psbt)
 
     # There's data in the datastore now (l2 only)
-    assert l1.rpc.listdatastore() == empty_datastore
+    assert l1.rpc.listdatastore(['funder']) == {'datastore': []}
     only_one(l2.rpc.listdatastore("funder/{}".format(chan_id))['datastore'])
 
     # what happens when the channel opens?
@@ -645,8 +641,8 @@ def test_v2_rbf_liquidity_ad(node_factory, bitcoind, chainparams):
     l1.daemon.wait_for_log('to CHANNELD_NORMAL')
 
     # Datastore should be cleaned up!
-    assert l1.rpc.listdatastore() == empty_datastore
-    wait_for(lambda: l2.rpc.listdatastore() == empty_datastore)
+    assert l1.rpc.listdatastore(['funder']) == {'datastore': []}
+    wait_for(lambda: l2.rpc.listdatastore(['funder']) == {'datastore': []})
 
     # This should be the accepter's amount
     fundings = only_one(l1.rpc.listpeerchannels()['channels'])['funding']
@@ -1867,7 +1863,8 @@ def test_v2_replay_bookkeeping(node_factory, bitcoind):
 
     opts = [{'funder-policy': 'match', 'funder-policy-mod': 100,
              'lease-fee-base-sat': '100sat', 'lease-fee-basis': 100,
-             'rescan': 10, 'funding-confirms': 6, 'may_reconnect': True},
+             'rescan': 10, 'funding-confirms': 6, 'may_reconnect': True,
+             'broken_log': 'channeld.*current blockheight [0-9]* less than last'},
             {'funder-policy': 'match', 'funder-policy-mod': 100,
              'lease-fee-base-sat': '100sat', 'lease-fee-basis': 100,
              'may_reconnect': True}]
@@ -1928,7 +1925,8 @@ def test_buy_liquidity_ad_check_bookkeeping(node_factory, bitcoind):
     opts = [{'funder-policy': 'match', 'funder-policy-mod': 100,
              'lease-fee-base-sat': '100sat', 'lease-fee-basis': 100,
              'rescan': 10, 'disable-plugin': 'bookkeeper',
-             'funding-confirms': 6, 'may_reconnect': True},
+             'funding-confirms': 6, 'may_reconnect': True,
+             'broken_log': 'channeld.*current blockheight [0-9]* less than last'},
             {'funder-policy': 'match', 'funder-policy-mod': 100,
              'lease-fee-base-sat': '100sat', 'lease-fee-basis': 100,
              'may_reconnect': True}]
@@ -2722,6 +2720,7 @@ def test_zeroconf_forget(node_factory, bitcoind, dopay: bool):
         return {"id": tx["id"], "result": {}}
 
     l1.daemon.rpcproxy.mock_rpc("sendrawtransaction", censoring_sendrawtx)
+    l3.daemon.rpcproxy.mock_rpc("sendrawtransaction", censoring_sendrawtx)
 
     l1.fundwallet(10**7)
     l3.fundwallet(10**7)

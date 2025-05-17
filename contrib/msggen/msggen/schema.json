@@ -13602,7 +13602,7 @@
           "amount": {
             "type": "sat_or_all",
             "description": [
-              "The amount in satoshis taken from the internal wallet to fund the channel (but if we have any anchor channels, this will always leave at least `min-emergency- msat` as change). The string *all* can be used to specify all available funds (or 16777215 satoshi if more is available and large channels were not negotiated with the peer). Otherwise, it is in satoshi precision; it can be a whole number, a whole number ending in *sat*, a whole number ending in *000msat*, or a number with 1 to 8 decimal places ending in *btc*. The value cannot be less than the dust limit, currently set to 546, nor more than 16777215 satoshi (unless large channels were negotiated with the peer)."
+              "The amount in satoshis taken from the internal wallet to fund the channel (but if we have any anchor channels, this will always leave at least `min-emergency- msat` as change). The string *all* can be used to specify all available funds (may be restricted by the `utxos` parameter, and limited to 16777215 satoshi if large channels were not negotiated with the peer). Otherwise, it is in satoshi precision; it can be a whole number, a whole number ending in *sat*, a whole number ending in *000msat*, or a number with 1 to 8 decimal places ending in *btc*. The value cannot be less than the dust limit, currently set to 546, nor more than 16777215 satoshi (unless large channels were negotiated with the peer)."
             ]
           },
           "feerate": {
@@ -28990,9 +28990,9 @@
             "description": [
               "Determines what action is taken:",
               "  - *subcommand* **start** takes a *path* to an executable as argument and starts it as plugin. *path* may be an absolute path or a path relative to the plugins directory (default *~/.lightning/plugins*). If the plugin is already running and the executable (checksum) has changed, the plugin is killed and restarted except if its an important (or builtin) plugin. If the plugin doesn't complete the 'getmanifest' and 'init' handshakes within 60 seconds, the command will timeout and kill the plugin. Additional *options* may be passed to the plugin, but requires all parameters to be passed as keyword=value pairs using the `-k|--keyword` option which is recommended. For example the following command starts the plugin helloworld.py (present in the plugin directory) with the option greeting set to 'A crazy':",
-              "  ```shell.",
-              "  lightning-cli -k plugin subcommand=start plugin=helloworld.py greeting='A crazy'.",
-              "  ```.",
+              "    ```shell",
+              "    lightning-cli -k plugin subcommand=start plugin=helloworld.py greeting='A crazy'",
+              "    ```",
               "  - *subcommand* **stop** takes a plugin executable *path* or *name* as argument and stops the plugin. If the plugin subscribed to 'shutdown', it may take up to 30 seconds before this command returns. If the plugin is important and dynamic, this will shutdown `lightningd`.",
               "  - *subcommand* **startdir** starts all executables it can find in *directory* (excl. subdirectories) as plugins. Checksum and timeout behavior as in **start** applies.",
               "  - *subcommand* **rescan** starts all plugins in the default plugins directory (default *~/.lightning/plugins*) that are not already running. Checksum and timeout behavior as in **start** applies.",
@@ -29655,51 +29655,13 @@
           }
         }
       },
-      "notes": [
-        "Reckless currently supports python and javascript plugins.",
-        "Running the first time will prompt the user that their lightningd's bitcoin config will be appended (or created) to inherit the reckless config file (this config is specific to bitcoin by default.). Management of plugins will subsequently modify this file.",
-        "",
-        "Available option flags:",
-        "**-d**, **--reckless-dir** *reckless_dir*: specify an alternative data directory for reckless to use. Useful if your .lightning is protected from execution.",
-        "",
-        "**-l**, **--lightning** *lightning\\_data\\_dir*: lightning data directory (defaults to $USER/.lightning)",
-        "",
-        "**-c**, **--conf** *lightning\\_config*: pass the config used by lightningd",
-        "",
-        "**-r**, **--regtest**: use the regtest network and config instead of bitcoin mainnet",
-        "",
-        "**-v**, **--verbose**: request additional debug output",
-        "",
-        "**--network**=*network*: specify bitcoin, regtest, liquid, liquid-regtest, litecoin, signet, or testnet networks. (default: bitcoin)",
-        "",
-        "**--version**: print the version of reckless and exit",
-        "",
-        "",
-        "Troubleshooting tips:",
-        "",
-        "Plugins must be executable. For python plugins, the shebang is invoked, so **python3** should be available in your environment. This can be verified with **which Python3**. The default reckless directory is $USER/.lightning/reckless and it should be possible for the lightningd user to execute files located here. If this is a problem, the option flag **reckless -d=<my_alternate_dir>** may be used to relocate the reckless directory from its default. Consider creating a permanent alias in this case.",
-        "Python plugins are installed to their own virtual environments. The environment is activated by a wrapper (named the same as the plugin) which then imports and executes the actual plugin entrypoint.",
-        "",
-        "For Plugin Developers:",
-        "",
-        "To make your plugin compatible with reckless install:",
-        "- Choose a unique plugin name: The plugin entrypoint is inferred. Naming your plugin executable the same as your plugin name will allow reckless to identify it correctly (file extensions are okay.)",
-        "- For python plugins, a requirements.txt is the preferred medium for python dependencies. A pyproject.toml will be used as a fallback, but test installation via `pip install -e .` - Poetry looks for additional files in the working directory, whereas with pip, any references to these will require something like `packages = [{ include = \"*.py\" }]` under the `[tool.poetry]` section.",
-        "- Additional repository sources may be added with `reckless source add https://my.repo.url/here` however, https://github.com/lightningd/plugins is included by default. Consider adding your plugin lightningd/plugins to make installation simpler.",
-        "- If your plugin is located in a subdirectory of your repo with a different name than your plugin, it will likely be overlooked."
-      ],
       "author": [
-        "Antoine Poinsot wrote the original reckless plugin on which this is based.",
-        "",
-        "Rusty Russell wrote the outline for the reckless utility's function",
-        "",
-        "Alex Myers <<alex@endothermic.dev>> is mainly responsible for the reckless code and this man page, with thanks to Christian Decker for extensive review."
+        "Alex Myers <<alex@endothermic.dev>> is mainly responsible."
       ],
       "see_also": [
-        "reckless(7)"
+        "reckless(1)"
       ],
       "resources": [
-        "Core-Lightning plugins repo: <https://github.com/lightningd/plugins>",
         "Main web site: <https://github.com/ElementsProject/lightning>"
       ],
       "examples": [
@@ -30975,6 +30937,15 @@
             "description": [
               "If provided, it will be returned in *waitsendpay* and *listsendpays* results."
             ]
+          },
+          "total_amount_msat": {
+            "type": "msat",
+            "description": [
+              "This is the full amount requested by the destination in the invoice. It is needed internally for multi-part payments.",
+              "Its default value is 0 msat for backwards compatibility."
+            ],
+            "default": "0",
+            "added": "v25.05"
           }
         }
       },
@@ -32878,6 +32849,99 @@
         }
       ]
     },
+    "signmessagewithkey.json": {
+      "$schema": "../rpc-schema-draft.json",
+      "type": "object",
+      "rpc": "signmessagewithkey",
+      "title": "Command to create a signature using a key from the wallet",
+      "description": [
+        "The **signmessagewithkey** RPC command creates a digital signature of *message* using the key associated with the address provided in the input.",
+        "The signature scheme follows the BIP137 specification."
+      ],
+      "added": "v25.05",
+      "request": {
+        "required": [
+          "message",
+          "address"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "message": {
+            "type": "string",
+            "description": [
+              "Less than 65536 characters long message to be signed by the node."
+            ]
+          },
+          "address": {
+            "type": "string",
+            "description": [
+              "A Bitcoin accepted type address for lookup in the list of addresses issued to date.",
+              "Only P2WPKH type addresses are supported"
+            ]
+          }
+        }
+      },
+      "response": {
+        "required": [
+          "address",
+          "pubkey",
+          "signature",
+          "base64"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "address": {
+            "type": "string",
+            "description": [
+              "The bitcoin address used for signing."
+            ]
+          },
+          "pubkey": {
+            "type": "pubkey",
+            "description": [
+              "The public key associated with the bitcoin address provided."
+            ]
+          },
+          "signature": {
+            "type": "hex",
+            "description": [
+              "The signature."
+            ]
+          },
+          "base64": {
+            "type": "string",
+            "description": [
+              "The signature encoded in base64."
+            ]
+          }
+        }
+      },
+      "author": [
+        "Lagrang3 <<lagrang3@protonmail.com>> is mainly responsible."
+      ],
+      "see_also": [],
+      "resources": [
+        "Main web site: <https://github.com/ElementsProject/lightning>"
+      ],
+      "examples": [
+        {
+          "request": {
+            "id": "example:signmessagewithkey#1",
+            "method": "signmessagewithkey",
+            "params": {
+              "message": "a test message",
+              "address": "bcrt1qgrh5vtf63mtayzhxwp480aww3j3qfr5qpq65un"
+            }
+          },
+          "response": {
+            "address": "bcrt1qgrh5vtf63mtayzhxwp480aww3j3qfr5qpq65un",
+            "pubkey": "03bc4a456585ba21ba26af4a0e5399ec76410b2e0ca67db0f3bcb2f47b232fa4b0",
+            "signature": "28564edf260a72d991cbb38cf608e293124f8b8f478d13d4544fe27b9d76c65df1284ca395ccdfd3d5f151729ef18f56c028f5f860155d6aa4d0aaaa176a00db01",
+            "base64": "KFZO3yYKctmRy7OM9gjikxJPi49HjRPUVE/ie512xl3xKEyjlczf09XxUXKe8Y9WwCj1+GAVXWqk0KqqF2oA2wE="
+          }
+        }
+      ]
+    },
     "signpsbt.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
@@ -32996,7 +33060,10 @@
           "relative_amount": {
             "type": "integer",
             "description": [
-              "A positive or negative amount of satoshis to add or subtract from the channel. Note you may need to add a double dash (--) after splice_init if using a negative *relative_amount* so it is not interpretted as a command modifier. For example: ```shell lightning-cli splice_init -- $CHANNEL_ID -100000 ```."
+              "A positive or negative amount of satoshis to add or subtract from the channel. Note you may need to add a double dash (--) after splice_init if using a negative *relative_amount* so it is not interpretted as a command modifier. For example:",
+              "```shell",
+              "lightning-cli splice_init -- $CHANNEL_ID -100000",
+              "```"
             ]
           },
           "initialpsbt": {
@@ -36280,7 +36347,7 @@
           "satoshi": {
             "type": "sat_or_all",
             "description": [
-              "The amount to be withdrawn from the internal wallet (expressed, as name suggests, in satoshi). The string *all* can be used to specify withdrawal of all available funds (but if we have any anchor channels, this will always leave at least `min-emergency-msat` as change). Otherwise, it is in satoshi precision; it can be a whole number, a whole number ending in *sat*, a whole number ending in *000msat*, or a number with 1 to 8 decimal places ending in *btc*."
+              "The amount to be withdrawn from the internal wallet (expressed, as name suggests, in satoshi). The string *all* can be used to specify withdrawal of all available funds (possibly restricted by the `utxos` parameter, and note that if we have any anchor channels, this will always leave at least `min-emergency-msat` as change).  Otherwise, it is in satoshi precision; it can be a whole number, a whole number ending in *sat*, a whole number ending in *000msat*, or a number with 1 to 8 decimal places ending in *btc*."
             ]
           },
           "feerate": {

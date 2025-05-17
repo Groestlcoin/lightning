@@ -1056,7 +1056,8 @@ static enum watch_result opening_depth_cb(struct lightningd *ld,
 				   &inflight->channel->peer->id);
 
 	if (depth >= inflight->channel->minimum_depth)
-		update_channel_from_inflight(ld, inflight->channel, inflight);
+		update_channel_from_inflight(ld, inflight->channel, inflight,
+					     false);
 
 	dualopend_tell_depth(inflight->channel, txid, depth);
 
@@ -4125,7 +4126,7 @@ bool peer_start_dualopend(struct peer *peer,
 	 *       funding transaction.
 	 */
 	/* FIXME: We should override this to 0 in the openchannel2 hook of we want zeroconf*/
-	channel->minimum_depth = peer->ld->config.anchor_confirms;
+	channel->minimum_depth = peer->ld->config.funding_confirms;
 
 	msg = towire_dualopend_init(NULL, chainparams,
 				    peer->ld->our_features,

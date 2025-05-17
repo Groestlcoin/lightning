@@ -3400,7 +3400,8 @@
             "SendOnion.onion": 1,
             "SendOnion.partid": 6,
             "SendOnion.payment_hash": 3,
-            "SendOnion.shared_secrets[]": 5
+            "SendOnion.shared_secrets[]": 5,
+            "SendOnion.total_amount_msat": 15
         },
         "SendonionResponse": {
             "SendOnion.amount_msat": 4,
@@ -3566,6 +3567,16 @@
             "SignMessage.recid": 2,
             "SignMessage.signature": 1,
             "SignMessage.zbase": 3
+        },
+        "SignmessagewithkeyRequest": {
+            "SignMessageWithKey.address": 2,
+            "SignMessageWithKey.message": 1
+        },
+        "SignmessagewithkeyResponse": {
+            "SignMessageWithKey.address": 1,
+            "SignMessageWithKey.base64": 4,
+            "SignMessageWithKey.pubkey": 2,
+            "SignMessageWithKey.signature": 3
         },
         "SignpsbtRequest": {
             "SignPsbt.psbt": 1,
@@ -12077,6 +12088,10 @@
             "added": "pre-v0.10.1",
             "deprecated": null
         },
+        "SendOnion.total_amount_msat": {
+            "added": "v25.05",
+            "deprecated": null
+        },
         "SendOnion.updated_index": {
             "added": "v23.11",
             "deprecated": null
@@ -12471,6 +12486,30 @@
         },
         "SignMessage.zbase": {
             "added": "pre-v0.10.1",
+            "deprecated": null
+        },
+        "SignMessageWithKey": {
+            "added": "v25.05",
+            "deprecated": null
+        },
+        "SignMessageWithKey.address": {
+            "added": "v25.05",
+            "deprecated": null
+        },
+        "SignMessageWithKey.base64": {
+            "added": "v25.05",
+            "deprecated": null
+        },
+        "SignMessageWithKey.message": {
+            "added": "v25.05",
+            "deprecated": null
+        },
+        "SignMessageWithKey.pubkey": {
+            "added": "v25.05",
+            "deprecated": null
+        },
+        "SignMessageWithKey.signature": {
+            "added": "v25.05",
             "deprecated": null
         },
         "SignPsbt": {

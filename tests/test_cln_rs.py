@@ -65,10 +65,10 @@ def test_plugin_start(node_factory):
 
     l1.rpc.setconfig("test-dynamic-option", True)
     assert l1.rpc.listconfigs("test-dynamic-option")["configs"]["test-dynamic-option"]["value_bool"]
-    wait_for(lambda: l1.daemon.is_in_log(r'cln-plugin-startup: Got dynamic option change: test-dynamic-option \\"true\\"'))
+    wait_for(lambda: l1.daemon.is_in_log(r'cln-plugin-startup: Got dynamic option change: test-dynamic-option "true"'))
     l1.rpc.setconfig("test-dynamic-option", False)
     assert not l1.rpc.listconfigs("test-dynamic-option")["configs"]["test-dynamic-option"]["value_bool"]
-    wait_for(lambda: l1.daemon.is_in_log(r'cln-plugin-startup: Got dynamic option change: test-dynamic-option \\"false\\"'))
+    wait_for(lambda: l1.daemon.is_in_log(r'cln-plugin-startup: Got dynamic option change: test-dynamic-option "false"'))
 
 
 def test_plugin_options_handle_defaults(node_factory):
@@ -452,6 +452,9 @@ def test_grpc_custommsg_notification(node_factory):
     l2.rpc.sendcustommsg(l1.info["id"], "3131313174657374")
 
     for custommsg in custommsg_stream:
+        # Ignore peer storage message!
+        if custommsg.payload.hex().startswith('0007'):
+            continue
         assert custommsg.peer_id.hex() == l2.info["id"]
         assert custommsg.payload.hex() == "3131313174657374"
         assert custommsg.payload == b"1111test"

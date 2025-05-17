@@ -41,7 +41,7 @@ def hex_bits(features):
 
 def expected_peer_features(extra=[]):
     """Return the expected peer features hexstring for this configuration"""
-    features = [0, 5, 7, 8, 11, 12, 14, 17, 19, 25, 27, 35, 39, 45, 47, 51]
+    features = [0, 5, 7, 8, 11, 12, 14, 17, 19, 25, 27, 35, 39, 43, 45, 47, 51]
     if EXPERIMENTAL_DUAL_FUND:
         # option_dual_fund
         features += [29]
@@ -57,7 +57,7 @@ def expected_peer_features(extra=[]):
 # features for the 'node' and the 'peer' feature sets
 def expected_node_features(extra=[]):
     """Return the expected node features hexstring for this configuration"""
-    features = [0, 5, 7, 8, 11, 12, 14, 17, 19, 25, 27, 35, 39, 45, 47, 51, 55]
+    features = [0, 5, 7, 8, 11, 12, 14, 17, 19, 25, 27, 35, 39, 43, 45, 47, 51, 55]
     if EXPERIMENTAL_DUAL_FUND:
         # option_dual_fund
         features += [29]
@@ -668,8 +668,11 @@ def did_short_sig(node):
     return node.daemon.is_in_log('overgrind: short signature length')
 
 
-def check_feerate(node, actual_feerate, expected_feerate):
+def check_feerate(nodes, actual_feerate, expected_feerate):
     # Feerate can't be lower.
     assert actual_feerate > expected_feerate - 2
-    if not did_short_sig(node):
-        assert actual_feerate < expected_feerate + 2
+    if actual_feerate >= expected_feerate + 2:
+        if any([did_short_sig(n) for n in nodes]):
+            return
+    # Use assert as it shows the actual values on failure
+    assert actual_feerate < expected_feerate + 2

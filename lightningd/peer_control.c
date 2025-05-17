@@ -356,7 +356,7 @@ static enum watch_result closed_inflight_depth_cb(struct lightningd *ld,
 		return KEEP_WATCHING;
 
 	/* This is now the main tx. */
-	update_channel_from_inflight(ld, inflight->channel, inflight);
+	update_channel_from_inflight(ld, inflight->channel, inflight, false);
 	channel_fail_saw_onchain(inflight->channel,
 				 REASON_UNKNOWN,
 				 tx,
@@ -1377,6 +1377,32 @@ tell_connectd:
 send_error:
 	log_debug(channel->log, "Telling connectd to send error %s",
 		       tal_hex(tmpctx, error));
+
+	/* LND does not respond to errors with a unilateral close
+	 * (https://github.com/lightningnetwork/lnd/blob/abb1e3463f3a83bbb843d5c399869dbe930ad94f/htlcswitch/link.go#L2119).
+	 * We fix this by sending a `ChannelReestablish` msg with `0` commitment numbers and an
+	 * invalid `your_last_per_commitment_secret`. */
+	if (is_stub_scid(*channel->scid)) {
+		struct secret your_last_per_commit_secret;
+		memset(&your_last_per_commit_secret, 1,
+			sizeof(your_last_per_commit_secret));
+
+		const u8 *msg = towire_channel_reestablish(tmpctx, &channel->cid,
+							   0,
+							   0,
+							   &your_last_per_commit_secret,
+							   &channel->channel_info.remote_per_commit,
+							   NULL);
+
+		log_debug(channel->log, "Sending a bogus channel_reestablish message to make the peer "
+					"unilaterally close the channel.");
+
+		subd_send_msg(ld->connectd,
+			      take(towire_connectd_peer_send_msg(NULL, &channel->peer->id,
+								 channel->peer->connectd_counter,
+								 msg)));
+	}
+
 	/* Get connectd to send error and close. */
 	subd_send_msg(ld->connectd,
 		      take(towire_connectd_peer_send_msg(NULL, &channel->peer->id,
@@ -2103,14 +2129,18 @@ void peer_disconnect_done(struct lightningd *ld, const u8 *msg)
 
 void update_channel_from_inflight(struct lightningd *ld,
 				  struct channel *channel,
-				  const struct channel_inflight *inflight)
+				  const struct channel_inflight *inflight,
+				  bool is_splice)
 {
-	struct wally_psbt *psbt_copy;
-
 	channel->funding = inflight->funding->outpoint;
 	channel->funding_sats = inflight->funding->total_funds;
 
 	channel->our_funds = inflight->funding->our_funds;
+
+	/* At this point, our_msat *becomes* our_funds because the splice
+	 * confirms. Any excess millisats stay in our_msats */
+	if (is_splice)
+		channel->our_funds = amount_msat_to_sat_round_down(channel->our_msat);
 
 	if (!amount_sat_add_sat_s64(&channel->our_funds, channel->our_funds,
 				    inflight->funding->splice_amnt)) {
@@ -2120,7 +2150,7 @@ void update_channel_from_inflight(struct lightningd *ld,
 				       "Updaing channel view for splice causes"
 				       " an invalid satoshi amount wrapping,"
 				       " channel: %s, initial funds: %s, splice"
-				       " banace change: %s",
+				       " balance change: "PRIi64,
 				       fmt_channel_id(tmpctx,
 						      &channel->cid),
 				       fmt_amount_sat(tmpctx, channel->our_funds),
@@ -2141,10 +2171,9 @@ void update_channel_from_inflight(struct lightningd *ld,
 							channel->opener,
 							&inflight->lease_blockheight_start);
 
-	/* Make a 'clone' of this tx */
-	psbt_copy = clone_psbt(channel, inflight->last_tx->psbt);
 	channel_set_last_tx(channel,
-			    bitcoin_tx_with_psbt(channel, psbt_copy),
+			    bitcoin_tx_with_psbt(channel,
+			    			 inflight->last_tx->psbt),
 			    &inflight->last_sig);
 
 	/* If the remote side rotated their pubkey during splice, update now */
@@ -2950,9 +2979,9 @@ timeout_waitblockheight_waiter(struct waitblockheight_waiter *w)
 				 "Timed out."));
 }
 /* Called by lightningd at each new block.  */
-void waitblockheight_notify_new_block(struct lightningd *ld,
-				      u32 block_height)
+void waitblockheight_notify_new_block(struct lightningd *ld)
 {
+	u32 block_height = get_block_height(ld->topology);
 	struct waitblockheight_waiter *w, *n;
 	char *to_delete = tal(NULL, char);
 
@@ -2967,8 +2996,7 @@ void waitblockheight_notify_new_block(struct lightningd *ld,
 		list_del(&w->list);
 		w->removed = true;
 		tal_steal(to_delete, w);
-		was_pending(waitblockheight_complete(w->cmd,
-						     block_height));
+		was_pending(waitblockheight_complete(w->cmd, block_height));
 	}
 	tal_free(to_delete);
 }
