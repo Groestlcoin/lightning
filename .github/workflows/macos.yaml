@@ -24,6 +24,14 @@ jobs:
           sudo mv groestlcoin-${GROESTLCOIND_VERSION}/bin/* /usr/local/bin
           rm -rf groestlcoin-${GROESTLCOIND_VERSION}-${TARGET_ARCH}.tar.gz groestlcoin-${GROESTLCOIND_VERSION}
 
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
       - name: Install dependencies
         run: |
           export PATH="/usr/local/opt:/Users/runner/.local/bin:/Users/runner/Library/Python/3.10/bin:$PATH"
@@ -34,6 +42,11 @@ jobs:
           python3.10 -m poetry install
           python3.10 -m pip install -U --user mako
 
+          # https://github.com/grpc/grpc/issues/31737#issuecomment-1323796842
+          export GRPC_PYTHON_BUILD_SYSTEM_OPENSSL=1
+          export GRPC_PYTHON_BUILD_SYSTEM_ZLIB=1
+          uv sync --all-groups
+
           sudo ln -s /usr/local/Cellar/gettext/0.20.1/bin/xgettext /usr/local/opt
 
       - name: Build
@@ -43,8 +56,8 @@ jobs:
           export CFLAGS="-Wno-error -Wno-nullability-completeness -Wno-expansion-to-defined -Wno-builtin-requires-header"
           export CXXFLAGS="-Wno-error -Wno-nullability-completeness -Wno-expansion-to-defined -Wno-builtin-requires-header"
 
-          python3.10 -m poetry run ./configure --disable-valgrind --disable-compat
-          python3.10 -m poetry run make
+          uv run ./configure --disable-valgrind --disable-compat
+          uv run make
 
           #sudo python3.10 -m poetry run make install
 

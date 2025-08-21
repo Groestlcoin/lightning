@@ -23,8 +23,11 @@ RUN dnf update -y && \
 		jq \
 		xz \
 		zlib-devel && \
+		cartgo && \
 	dnf remove -y python-setuptools && \
 	dnf clean all
+
+RUN python3 -m pip install uv
 
 RUN wget https://github.com/Groestlcoin/groestlcoin/releases/download/v$GROESTLCOIN_VERSION/groestlcoin-$GROESTLCOIN_VERSION-x86_64-linux-gnu.tar.gz -O groestlcoin.tar.gz && \
     tar -xvzf groestlcoin.tar.gz && \

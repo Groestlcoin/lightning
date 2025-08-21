@@ -366,6 +366,7 @@ struct getroutes_info {
 	struct additional_cost_htable *additional_costs;
 	/* Non-NULL if we are told to use "auto.localchans" */
 	struct layer *local_layer;
+	u32 maxparts;
 };
 
 static void apply_layers(struct askrene *askrene, struct route_query *rq,
@@ -551,6 +552,7 @@ static struct command_result *do_getroutes(struct command *cmd,
 	rq->capacities = tal_dup_talarr(rq, fp16_t, askrene->capacities);
 	/* FIXME: we still need to do something useful with these */
 	rq->additional_costs = info->additional_costs;
+	rq->maxparts = info->maxparts;
 
 	/* apply selected layers to the localmods */
 	apply_layers(askrene, rq, &info->source, info->amount, localmods,
@@ -563,6 +565,13 @@ static struct command_result *do_getroutes(struct command *cmd,
 
 	/* we temporarily apply localmods */
 	gossmap_apply_localmods(askrene->gossmap, localmods);
+
+	/* I want to be able to disable channels while working on this query.
+	 * Layers are for user interaction and cannot be used for this purpose.
+	 */
+	rq->disabled_chans =
+	    tal_arrz(rq, bitmap,
+		     2 * BITMAP_NWORDS(gossmap_max_chan_idx(askrene->gossmap)));
 
 	/* localmods can add channels, so we need to allocate biases array
 	 * *afterwards* */
@@ -757,12 +766,14 @@ static struct command_result *json_getroutes(struct command *cmd,
 	 */
 	/* FIXME: Typo in spec for CLTV in descripton! But it breaks our spelling check, so we omit it above */
 	const u32 maxdelay_allowed = 2016;
+	const u32 default_maxparts = 100;
 	struct getroutes_info *info = tal(cmd, struct getroutes_info);
 	/* param functions require pointers */
 	struct node_id *source, *dest;
 	struct amount_msat *amount, *maxfee;
 	u32 *finalcltv, *maxdelay;
 	enum algorithm *dev_algo;
+	u32 *maxparts;
 
 	if (!param_check(cmd, buffer, params,
 			 p_req("source", param_node_id, &source),
@@ -773,6 +784,8 @@ static struct command_result *json_getroutes(struct command *cmd,
 			 p_req("final_cltv", param_u32, &finalcltv),
 			 p_opt_def("maxdelay", param_u32, &maxdelay,
 				   maxdelay_allowed),
+			 p_opt_def("maxparts", param_u32, &maxparts,
+				   default_maxparts),
 			 p_opt_dev("dev_algorithm", param_algorithm,
 				   &dev_algo, ALGO_DEFAULT),
 			 NULL))
@@ -804,6 +817,7 @@ static struct command_result *json_getroutes(struct command *cmd,
 	info->dev_algo = *dev_algo;
 	info->additional_costs = tal(info, struct additional_cost_htable);
 	additional_cost_htable_init(info->additional_costs);
+	info->maxparts = *maxparts;
 
 	if (have_layer(info->layers, "auto.localchans")) {
 		struct out_req *req;
