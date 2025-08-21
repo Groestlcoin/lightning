@@ -22,8 +22,8 @@ RUN dnf update -y && \
 		git \
 		jq \
 		xz \
-		zlib-devel && \
-		cartgo && \
+		zlib-devel \
+		cargo && \
 	dnf remove -y python-setuptools && \
 	dnf clean all
 
