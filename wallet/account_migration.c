@@ -105,7 +105,7 @@ static struct chain_event *stmt2chain_event(const tal_t *ctx, struct db_stmt *st
 	e->debit = db_col_amount_msat(stmt, "e.debit");
 	e->output_value = db_col_amount_msat(stmt, "e.output_value");
 
-	e->currency = db_col_strdup(e, stmt, "e.currency");
+	e->currency = db_col_strdup_optional(e, stmt, "e.currency");
 	e->timestamp = db_col_u64(stmt, "e.timestamp");
 	e->blockheight = db_col_int(stmt, "e.blockheight");
 
@@ -124,7 +124,11 @@ static struct chain_event *stmt2chain_event(const tal_t *ctx, struct db_stmt *st
 	} else
 		e->spending_txid = NULL;
 
-	e->ignored = db_col_int(stmt, "e.ignored") == 1;
+	/* If they ran master before this, ignored might be null! */
+	if (db_col_is_null(stmt, "e.ignored"))
+		e->ignored = false;
+	else
+		e->ignored = db_col_int(stmt, "e.ignored") == 1;
 	e->stealable = db_col_int(stmt, "e.stealable") == 1;
 
 	if (!db_col_is_null(stmt, "e.ev_desc"))
@@ -266,7 +270,7 @@ static struct channel_event *stmt2channel_event(const tal_t *ctx, struct db_stmt
 	e->debit = db_col_amount_msat(stmt, "e.debit");
 	e->fees = db_col_amount_msat(stmt, "e.fees");
 
-	e->currency = db_col_strdup(e, stmt, "e.currency");
+	e->currency = db_col_strdup_optional(e, stmt, "e.currency");
 	if (!db_col_is_null(stmt, "e.payment_id")) {
 		e->payment_id = tal(e, struct sha256);
 		db_col_sha256(stmt, "e.payment_id", e->payment_id);
@@ -400,6 +404,16 @@ void migrate_from_account_db(struct lightningd *ld, struct db *db)
 		struct amount_sat output_sat;
 		u64 id;
 
+		/* We removed currency support, because the only way you could
+		 * use it was to inject your own events, and nobody did that
+		 * and it would be a nightmare to support */
+		if (ev->currency
+		    && !streq(ev->currency, chainparams->lightning_hrp)) {
+			log_broken(ld->log, "IGNORING foreign currency chain event (%s, currency %s)",
+				   ev->tag, ev->currency);
+			continue;
+		}
+
 		stmt = db_prepare_v2(db,
 			     SQL("INSERT INTO chain_moves ("
 				 " id,"
@@ -421,7 +435,8 @@ void migrate_from_account_db(struct lightningd *ld, struct db *db)
 		id = chain_mvt_index_created(ld, db, account, ev->credit, ev->debit);
 		db_bind_u64(stmt, id);
 		if (!mvt_tag_parse(ev->tag, strlen(ev->tag), &tag))
-			abort();
+			db_fatal(db, "Unknown tag '%s' in chain_moves migration!",
+				 ev->tag);
 		tags = tag_to_mvt_tags(tag);
 		if (tag == MVT_CHANNEL_OPEN && ev->we_opened)
 			mvt_tag_set(&tags, MVT_OPENER);
@@ -479,6 +494,16 @@ void migrate_from_account_db(struct lightningd *ld, struct db *db)
 		enum mvt_tag tag;
 		u64 id;
 
+		/* We removed currency support, because the only way you could
+		 * use it was to inject your own events, and nobody did that
+		 * and it would be a nightmare to support */
+		if (ev->currency
+		    && !streq(ev->currency, chainparams->lightning_hrp)) {
+			log_broken(ld->log, "IGNORING foreign currency channel event (%s, currency %s)",
+				   ev->tag, ev->currency);
+			continue;
+		}
+
 		stmt = db_prepare_v2(db,
 			     SQL("INSERT INTO channel_moves ("
 				 " id,"
@@ -497,7 +522,8 @@ void migrate_from_account_db(struct lightningd *ld, struct db *db)
 		db_bind_mvt_account_id(stmt, db, account);
 		db_bind_credit_debit(stmt, ev->credit, ev->debit);
 		if (!mvt_tag_parse(ev->tag, strlen(ev->tag), &tag))
-			abort();
+			db_fatal(db, "Unknown tag '%s' in channel_moves migration!",
+				 ev->tag);
 		db_bind_mvt_tags(stmt, tag_to_mvt_tags(tag));
 		db_bind_u64(stmt, ev->timestamp);
 		if (ev->payment_id)
