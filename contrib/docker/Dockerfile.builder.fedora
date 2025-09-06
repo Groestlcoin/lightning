@@ -1,44 +1,38 @@
 FROM fedora:35
 
-ENV GROESTLCOIN_VERSION 27.0
+ENV UV_PYTHON=3.12
+ENV GROESTLCOIN_VERSION=27.0
+
 WORKDIR /tmp
 
 RUN dnf update -y && \
-	dnf groupinstall -y \
-		'C Development Tools and Libraries' \
-		'Development Tools' && \
-	dnf install -y \
-		clang \
-		libsq3-devel \
-		python3-devel \
-		python3-mako \
-		python3-pip \
-		python3-virtualenv \
-		python3-setuptools \
-		redhat-lsb \
-		net-tools \
-		valgrind \
-		wget \
-		git \
-		jq \
-		xz \
-		zlib-devel \
-		cargo && \
-	dnf remove -y python-setuptools && \
-	dnf clean all
+    dnf groupinstall -y \
+        'C Development Tools and Libraries' \
+        'Development Tools' && \
+    dnf install -y \
+        clang \
+        libsq3-devel \
+        redhat-lsb \
+        net-tools \
+        valgrind \
+        wget \
+        git \
+        jq \
+        xz \
+        zlib-devel \
+        cargo && \
+    dnf remove -y python-setuptools && \
+    dnf clean all
 
-RUN python3 -m pip install uv
-
-RUN wget https://github.com/Groestlcoin/groestlcoin/releases/download/v$GROESTLCOIN_VERSION/groestlcoin-$GROESTLCOIN_VERSION-x86_64-linux-gnu.tar.gz -O groestlcoin.tar.gz && \
+RUN wget https://github.com/Groestlcoin/groestlcoin/releases/download/v$GROESTLCOIN_VERSION/groestlcoin-$GROESTLCOIN_VERSION-x86_64-linux-gnu.tar.gz \
+    -O groestlcoin.tar.gz && \
     tar -xvzf groestlcoin.tar.gz && \
     mv groestlcoin-$GROESTLCOIN_VERSION/bin/groestlcoin* /usr/local/bin/ && \
-		mv groestlcoin-$GROESTLCOIN_VERSION/lib/* /usr/local/lib/ && \
-		mv groestlcoin-$GROESTLCOIN_VERSION/include/* /usr/local/include/ && \
-		mv groestlcoin-$GROESTLCOIN_VERSION/share/man/man1/* /usr/share/man/man1 && \
+    mv groestlcoin-$GROESTLCOIN_VERSION/lib/* /usr/local/lib/ && \
+    mv groestlcoin-$GROESTLCOIN_VERSION/include/* /usr/local/include/ && \
+    mv groestlcoin-$GROESTLCOIN_VERSION/share/man/man1/* /usr/share/man/man1 && \
     rm -rf groestlcoin.tar.gz groestlcoin-$GROESTLCOIN_VERSION
 
-ENV PATH=/opt/venv/bin:${PATH}
-RUN python3 -m pip install pip wheel && \
-    python3 -m virtualenv /opt/venv && \
-    /opt/venv/bin/python3 -m pip install --force-reinstall -U pip poetry wheel
-RUN poetry self add poetry-plugin-export
+# Ensure `uv` can be found
+ENV PATH=${PATH}:/root/.local/bin
+RUN wget -qO- https://astral.sh/uv/install.sh | sh

@@ -4,7 +4,7 @@
 VERSION=$(shell git describe --tags --always --dirty=-modded --abbrev=7 2>/dev/null || pwd | sed -n 's|.*/c\{0,1\}lightning-v\{0,1\}\([0-9a-f.rc\-]*\)$$|v\1|gp')
 
 # Next release.
-CLN_NEXT_VERSION := v25.09
+CLN_NEXT_VERSION := v25.12
 
 # --quiet / -s means quiet, dammit!
 ifeq ($(findstring s,$(word 1, $(MAKEFLAGS))),s)
@@ -756,13 +756,16 @@ clean: obsclean
 
 # See doc/contribute-to-core-lightning/contributor-workflow.md
 PYLNS=client proto testing
-update-versions: update-pyln-versions update-reckless-version update-dot-version update-doc-examples
+update-versions: update-pyln-versions update-reckless-version update-dot-version # FIXME: update-doc-examples
+	@uv lock
+
 update-pyln-versions: $(PYLNS:%=update-pyln-version-%)
 
 update-pyln-version-%:
 	@if [ -z "$(NEW_VERSION)" ]; then echo "Set NEW_VERSION!" >&2; exit 1; fi
 	@echo "Updating contrib/pyln-$* to $(NEW_VERSION)"
 	@sed -i.bak 's/^version = .*/version = "$(NEW_VERSION)"/' contrib/pyln-$*/pyproject.toml && rm contrib/pyln-$*/pyproject.toml.bak
+	@sed -i.bak 's/^__version__ = .*/__version__ = "$(NEW_VERSION)"/' contrib/pyln-$*/pyln/$*/__init__.py && rm contrib/pyln-$*/pyln/$*/__init__.py.bak
 
 pyln-release:  $(PYLNS:%=pyln-release-%)
 
