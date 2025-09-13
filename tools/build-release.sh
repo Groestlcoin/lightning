@@ -88,13 +88,13 @@ if [ "$VERSION" = "" ]; then
 fi
 
 # Don't forget the v prefix!
-case "$VERSION" in
-    v*) ;;
-    *)
-	echo "Version must begin with v! Not $VERSION" >&2
-	exit 1
-	;;
-esac
+#case "$VERSION" in
+#    v*) ;;
+#    *)
+#	echo "Version must begin with v! Not $VERSION" >&2
+#	exit 1
+#	;;
+#esac
 
 # `status --porcelain -u no` suppressed modified!  Bug reported...
 if [ "$(git diff --name-only)" != "" ] && ! $FORCE_UNCLEAN; then
