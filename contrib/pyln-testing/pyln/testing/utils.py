@@ -83,6 +83,7 @@ TIMEOUT = int(env("TIMEOUT", 180 if SLOW_MACHINE else 60))
 EXPERIMENTAL_DUAL_FUND = env("EXPERIMENTAL_DUAL_FUND", "0") == "1"
 EXPERIMENTAL_SPLICING = env("EXPERIMENTAL_SPLICING", "0") == "1"
 GENERATE_EXAMPLES = env("GENERATE_EXAMPLES", "0") == "1"
+RUST = env("RUST", "0") == "1"
 
 
 def wait_for(success, timeout=TIMEOUT):
@@ -365,8 +366,9 @@ class SimpleBitcoinProxy:
     throwaway connections. This is easier than to reach into the RPC
     library to close, reopen and reauth upon failure.
     """
-    def __init__(self, btc_conf_file, *args, **kwargs):
+    def __init__(self, btc_conf_file, timeout=TIMEOUT, *args, **kwargs):
         self.__btc_conf_file__ = btc_conf_file
+        self.__timeout__ = timeout
 
     def __getattr__(self, name):
         if name.startswith('__') and name.endswith('__'):
@@ -374,7 +376,8 @@ class SimpleBitcoinProxy:
             raise AttributeError
 
         # Create a callable to do the actual call
-        proxy = BitcoinProxy(btc_conf_file=self.__btc_conf_file__)
+        proxy = BitcoinProxy(btc_conf_file=self.__btc_conf_file__,
+                             timeout=self.__timeout__)
 
         def f(*args):
             logging.debug("Calling {name} with arguments {args}".format(

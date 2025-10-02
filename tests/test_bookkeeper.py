@@ -318,8 +318,14 @@ def test_bookkeeping_missed_chans_leases(node_factory, bitcoind):
     l1.wait_local_channel_active(scid)
     channel_id = first_channel_id(l1, l2)
 
+    # Sigh.  bookkeeper sorts events by timestamp.  If the invoice event happens
+    # too close, it can change the order, so sleep here.
+    time.sleep(2)
+
+    # Send l2 funds via the channel
     l1.pay(l2, invoice_msat)
-    l1.daemon.wait_for_log(r'coin movement:.*\'invoice\'')
+    # Make sure they're completely settled, so accounting correct.
+    wait_for(lambda: only_one(l1.rpc.listpeerchannels()['channels'])['htlcs'] == [])
 
     # Now turn the bookkeeper on and restart
     l1.stop()
@@ -807,6 +813,18 @@ def test_rebalance_tracking(node_factory, bitcoind):
     assert result['status'] == 'complete'
 
     wait_for(lambda: 'invoice' not in [ev['tag'] for ev in l1.rpc.bkpr_listincome()['income_events']])
+    inc_evs = l1.rpc.bkpr_listincome()['income_events']
+    outbound_chan_id = only_one(l1.rpc.listpeerchannels(l2.info['id'])['channels'])['channel_id']
+
+    outbound_ev = only_one([ev for ev in inc_evs if ev['tag'] == 'rebalance_fee'])
+    assert outbound_ev['account'] == outbound_chan_id
+    assert outbound_ev['debit_msat'] == Millisatoshi(1001)
+    assert outbound_ev['credit_msat'] == Millisatoshi(0)
+    assert outbound_ev['payment_id'] == pay_hash
+
+    # Will reload on restart!
+    l1.restart()
+
     inc_evs = l1.rpc.bkpr_listincome()['income_events']
     outbound_chan_id = only_one(l1.rpc.listpeerchannels(l2.info['id'])['channels'])['channel_id']
 

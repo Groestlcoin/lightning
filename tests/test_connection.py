@@ -13,7 +13,7 @@ from utils import (
     mine_funding_to_announce, first_scid,
     CHANNEL_SIZE
 )
-from pyln.testing.utils import SLOW_MACHINE, VALGRIND, EXPERIMENTAL_DUAL_FUND, FUNDAMOUNT
+from pyln.testing.utils import SLOW_MACHINE, VALGRIND, EXPERIMENTAL_DUAL_FUND, FUNDAMOUNT, RUST
 
 import os
 import pytest
@@ -1397,7 +1397,8 @@ def test_funding_external_wallet_corners(node_factory, bitcoind):
 
 @pytest.mark.openchannel('v2')
 def test_funding_v2_corners(node_factory, bitcoind):
-    l1 = node_factory.get_node(may_reconnect=True)
+    # dualopend doesn't listen :(
+    l1 = node_factory.get_node(may_reconnect=True, broken_log='Subd did not close, forcing close')
     l2 = node_factory.get_node(may_reconnect=True)
 
     # We have wumbo, it's OK
@@ -2972,7 +2973,7 @@ def test_opener_feerate_reconnect(node_factory, bitcoind):
 
     # Wait until they reconnect.
     l1.daemon.wait_for_logs(['Peer transient failure in CHANNELD_NORMAL',
-                             'peer_disconnect_done'])
+                             'peer_disconnected'])
     wait_for(lambda: l1.rpc.getpeer(l2.info['id'])['connected'])
 
     # Should work normally.
@@ -4507,7 +4508,7 @@ def test_reconnect_no_additional_transient_failure(node_factory, bitcoind):
     l1.stop()
     # We wait for l2 to disconnect, ofc we also see an expected "Peer transient failure" here.
     l2.daemon.wait_for_logs([f"{l1id}-channeld-chan#1: Peer connection lost",
-                             f"{l1id}-lightningd: peer_disconnect_done",
+                             f"{l1id}-lightningd: peer_disconnected",
                              f"{l1id}-chan#1: Peer transient failure in CHANNELD_NORMAL: channeld: Owning subdaemon channeld died"])
 
     # When we restart l1 we should not see another Peer transient failure message.
@@ -4565,6 +4566,7 @@ def test_last_stable_connection(node_factory):
     assert only_one(l2.rpc.listpeerchannels()['channels'])['last_stable_connection'] >= recon_time + STABLE_TIME
 
 
+@unittest.skipUnless(RUST, 'RUST is not enabled')
 def test_wss_proxy(node_factory):
     wss_port = node_factory.get_unused_port()
     ws_port = node_factory.get_unused_port()
