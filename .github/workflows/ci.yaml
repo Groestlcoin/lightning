@@ -25,13 +25,10 @@ jobs:
       - name: Build
         run: |
           set -e
-          pip3 install --user pip wheel poetry
-          poetry self add poetry-plugin-export
-          poetry export -o requirements.txt --without-hashes
-          python3 -m pip install -r requirements.txt
-          ./configure --prefix=/usr
-          make -j $(nproc)
-          make install DESTDIR=inst RUST_PROFILE=release
+          pip3 install --user pip wheel
+          ./configure --prefix=/usr --enable-rust
+          uv run make -j $(nproc)
+          uv run make install DESTDIR=inst RUST_PROFILE=release
           cd inst/ && tar --sort=name --owner=0 --group=0 --numeric-owner -cvaf ../clightning-v-${{ matrix.os }}.tar.xz .
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
