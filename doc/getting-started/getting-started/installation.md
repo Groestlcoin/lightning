@@ -137,7 +137,7 @@ There are two ways to build core lightning, and this depends on how you want use
 To build CLN for production:
 
 ```shell
-uv sync --all-extras --all-groups
+uv sync --all-extras --all-groups --frozen
 ./configure
 RUST_PROFILE=release uv run make
 sudo RUST_PROFILE=release make install
@@ -150,7 +150,7 @@ sudo RUST_PROFILE=release make install
 To build CLN for development:
 
 ```shell
-uv sync --all-extras --all-groups
+uv sync --all-extras --all-groups --frozen
 ./configure
 uv run make
 uv run make check VALGRIND=0
@@ -269,7 +269,7 @@ Running lightning:
 
 Configure groestlcoind, if not already: add `rpcuser=<foo>` and `rpcpassword=<bar>` to `/usr/local/etc/groestlcoin.conf`, maybe also `testnet=1`.
 
-Configure lightningd: copy `/usr/local/etc/lightningd-groestlcoin.conf.sample` to  
+Configure lightningd: copy `/usr/local/etc/lightningd-groestlcoin.conf.sample` to
 `/usr/local/etc/lightningd-groestlcoin.conf` and edit according to your needs.
 
 ```shell
@@ -384,7 +384,7 @@ git checkout v24.05
 Build lightning:
 
 ```shell
-uv sync --all-extras --all-groups
+uv sync --all-extras --all-groups --frozen
 ./configure
 uv run make
 ```
@@ -445,7 +445,7 @@ Launch Core Lightning:
 
 ## To cross-compile for Android
 
-Make a standalone toolchain as per <https://developer.android.com/ndk/guides/standalone_toolchain.html>.  
+Make a standalone toolchain as per <https://developer.android.com/ndk/guides/standalone_toolchain.html>.
 For Core Lightning you must target an API level of 24 or higher.
 
 Depending on your toolchain location and target arch, source env variables such as:
@@ -470,8 +470,8 @@ make clean -C ccan/ccan/cdump/tools \
   && make CC=clang -C ccan/ccan/cdump/tools
 ```
 
-Install the `qemu-user` package.  
-This will allow you to properly configure the build for the target device environment.  
+Install the `qemu-user` package.
+This will allow you to properly configure the build for the target device environment.
 Build with:
 
 ```shell
@@ -498,8 +498,8 @@ export LD=$target_host-ld
 export STRIP=$target_host-strip
 ```
 
-Install the `qemu-user` package. This will allow you to properly configure the  
-build for the target device environment.  
+Install the `qemu-user` package. This will allow you to properly configure the
+build for the target device environment.
 Config the arm elf interpreter prefix:
 
 ```shell
@@ -543,7 +543,7 @@ For all the other Pi devices out there, consider using [Armbian](https://www.arm
 
 You can compile in `customize-image.sh` using the instructions for Ubuntu.
 
-A working example that compiles both groestlcoind and Core Lightning for Armbian can  
+A working example that compiles both groestlcoind and Core Lightning for Armbian can
 be found [here](https://github.com/Groestlcoin/armbian-groestlcoin-core).
 
 ## To compile for Alpine
