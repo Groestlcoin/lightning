@@ -57,9 +57,31 @@
 
 #define SPH_NO_64 0
 #define SPH_BIG_ENDIAN 1
-#define SPH_SPARCV9_GCC defined SPH_SPARCV9_GCC
-#define SPH_AMD64_GCC defined SPH_AMD64_GCC
-#define SPH_I386_GCC defined SPH_I386_GCC
+
+#ifndef SPH_I386_GCC
+#  if defined(__GNUC__) && (defined(__i386__) || defined(_M_IX86))
+#    define SPH_I386_GCC 1
+#  else
+#    define SPH_I386_GCC 0
+#  endif
+#endif
+
+#ifndef SPH_AMD64_GCC
+#  if defined(__GNUC__) && (defined(__x86_64__) || defined(_M_X64))
+#    define SPH_AMD64_GCC 1
+#  else
+#    define SPH_AMD64_GCC 0
+#  endif
+#endif
+
+#ifndef SPH_SPARCV9_GCC
+#  if defined(__GNUC__) && defined(__sparc__) && (defined(__arch64__) || defined(__sparcv9))
+#    define SPH_SPARCV9_GCC 1
+#  else
+#    define SPH_SPARCV9_GCC 0
+#  endif
+#endif
+
 #define SPH_NO_ASM 1
 #define SPH_SMALL_FOOTPRINT 1
 #define SPH_64_TRUE 1
