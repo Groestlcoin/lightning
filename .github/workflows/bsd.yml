@@ -4,16 +4,18 @@ on: [push, pull_request]
 
 jobs:
   testfreebsd:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     name: Build on FreeBSD
     timeout-minutes: 120
-    strategy:
-      fail-fast: true
-      matrix:
-        bitcoind-version: ["27.0"]
     steps:
     - uses: actions/checkout@v4
-    - name: Build
+    - name: Clean up disk space
+      run: |
+        sudo rm -rf /usr/share/dotnet
+        sudo rm -rf /opt/ghc
+        sudo rm -rf /usr/local/lib/android
+        sudo apt-get clean
+    - name: Build in FreeBSD VM
       id: test
       uses: vmactions/freebsd-vm@v1
       with:
@@ -23,7 +25,10 @@ jobs:
           pkg install -y \
             bash \
             wget \
-            python310 \
+            py311-pip \
+            py311-sqlite3 \
+            py311-mako \
+            py311-grpcio-tools \
             gmake \
             git \
             python \
@@ -42,25 +47,23 @@ jobs:
             uv \
             libffi
 
-            python3.10 -m ensurepip
-            python3.10 -m pip install --upgrade pip
-            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
-            # pip install --user -U wheel pip mako==1.1.5 mistune==0.8.4 jinja2==2.11.3 MarkupSafe==2.0.1
-
+            # pip install --user -U wheel pip mako==1.1.6 mistune==0.8.4 jinja2==3.1.6 MarkupSafe==3.0.3 grpcio-tools
 
         run: |
           PATH=/root/.local/bin:$PATH:/root/.cargo/bin; export PATH
-          uv sync --all-extras --all-groups
+          # uv sync --all-extras --all-groups
 
-          git clone https://github.com/lightning/bolts.git ../bolts
+          # git clone https://github.com/lightning/bolts.git ../bolts
           # fatal: unsafe repository ('/Users/runner/work/lightning/lightning' is owned by someone else)
           git config --global --add safe.directory $GITHUB_WORKSPACE
-          for d in libsodium libwally-core gheap jsmn libbacktrace lowdown; do git config --global --add safe.directory $GITHUB_WORKSPACE/external/$d; done
-          git submodule update --init --recursive
+          # for d in libsodium libwally-core gheap jsmn libbacktrace lowdown; do git config --global --add safe.directory $GITHUB_WORKSPACE/external/$d; done
+          # git submodule update --init --recursive
 
           ./configure CC="$CC" --disable-valgrind
-          uv run gmake
-          uv run gmake install
+          # uv run gmake
+          # uv run gmake install
+          gmake -j2
+          gmake install
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
