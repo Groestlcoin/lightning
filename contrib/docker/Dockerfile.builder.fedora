@@ -6,9 +6,7 @@ ENV GROESTLCOIN_VERSION=27.0
 WORKDIR /tmp
 
 RUN dnf update -y && \
-    dnf group install -y \
-        'C Development Tools and Libraries' \
-        'Development Tools' && \
+    dnf group install -y development-tools && \
     dnf install -y \
         clang \
         libsq3-devel \
