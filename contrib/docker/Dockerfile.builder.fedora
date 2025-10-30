@@ -12,6 +12,7 @@ RUN dnf update -y && \
     dnf install -y \
         clang \
         libsq3-devel \
+        lowdown \
         redhat-lsb \
         net-tools \
         valgrind \
