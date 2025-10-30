@@ -24,7 +24,10 @@ RUN dnf update -y && \
         sed \
         findutils \
         diffutils \
-        libsodium-devel && \
+        libsodium-devel \
+        autoconf \
+        automake \
+        libtool && \
     dnf remove -y python-setuptools && \
     dnf clean all
 
