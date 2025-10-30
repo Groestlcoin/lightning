@@ -19,7 +19,11 @@ RUN dnf update -y && \
         jq \
         xz \
         zlib-devel \
-        cargo && \
+        cargo \
+        which \
+        sed \
+        findutils \
+        diffutils && \
     dnf remove -y python-setuptools && \
     dnf clean all
 
