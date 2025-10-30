@@ -6,9 +6,11 @@
 #include "config.h"
 #include <bitcoin/address.h>
 #include <bitcoin/base58.h>
+#include <bitcoin/privkey.h>
+#include <bitcoin/pubkey.h>
+#include <bitcoin/shadouble.h>
 #include <arpa/inet.h>
 #include <assert.h>
-#include <bitcoin/base58.h>
 #include <bitcoin/chainparams.h>
 #include <bitcoin/groestl.h>
 #include <ccan/build_assert/build_assert.h>
