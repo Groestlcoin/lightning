@@ -27,7 +27,8 @@ RUN dnf update -y && \
         libsodium-devel \
         autoconf \
         automake \
-        libtool && \
+        libtool \
+        openssl-devel && \
     dnf remove -y python-setuptools && \
     dnf clean all
 
