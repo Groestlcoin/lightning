@@ -1,21 +1,18 @@
 #include "config.h"
 #include <ccan/array_size/array_size.h>
 #include <ccan/cast/cast.h>
-#include <ccan/err/err.h>
 #include <ccan/json_out/json_out.h>
 #include <ccan/noerr/noerr.h>
 #include <ccan/read_write_all/read_write_all.h>
 #include <ccan/tal/grab_file/grab_file.h>
 #include <ccan/tal/str/str.h>
-#include <ccan/time/time.h>
-#include <common/features.h>
-#include <common/hsm_encryption.h>
 #include <common/json_param.h>
 #include <common/json_stream.h>
 #include <common/memleak.h>
 #include <common/scb_wiregen.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <inttypes.h>
 #include <plugins/libplugin.h>
 #include <sodium.h>
 #include <unistd.h>
@@ -245,13 +242,9 @@ static void maybe_create_new_scb(struct plugin *p,
 
 static u8 *get_file_data(const tal_t *ctx, struct plugin *p)
 {
-	u8 *scb = grab_file(ctx, FILENAME);
-	if (!scb) {
+	u8 *scb = grab_file_raw(ctx, FILENAME);
+	if (!scb)
 		plugin_err(p, "Cannot read emergency.recover: %s", strerror(errno));
-	} else {
-		/* grab_file adds nul term */
-		tal_resize(&scb, tal_bytelen(scb) - 1);
-	}
 	return scb;
 }
 
@@ -1040,10 +1033,8 @@ static void setup_backup_map(struct command *init_cmd,
 	const jsmntok_t *datastore, *t;
 	size_t i, total = 0;
 
-	cb->backups = tal(cb, struct backup_map);
-	backup_map_init(cb->backups);
-	cb->peers = tal(cb, struct peer_map);
-	peer_map_init(cb->peers);
+	cb->backups = new_htable(cb, backup_map);
+	cb->peers = new_htable(cb, peer_map);
 
 	json_out_start(params, NULL, '{');
 	json_out_start(params, "key", '[');
@@ -1082,14 +1073,6 @@ static void setup_backup_map(struct command *init_cmd,
 	if (total)
 		plugin_log(init_cmd->plugin, LOG_INFORM,
 			   "Loaded %zu stored backups for peers", total);
-}
-
-static void chanbackup_mark_mem(struct plugin *plugin,
-				struct htable *memtable)
-{
-	const struct chanbackup *cb = chanbackup(plugin);
-	memleak_scan_htable(memtable, &cb->backups->raw);
-	memleak_scan_htable(memtable, &cb->peers->raw);
 }
 
 static const char *init(struct command *init_cmd,
@@ -1132,9 +1115,6 @@ static const char *init(struct command *init_cmd,
 	unlink_noerr("scb.tmp");
 
 	maybe_create_new_scb(init_cmd->plugin, scb_chan);
-
-	plugin_set_memleak_handler(init_cmd->plugin,
-				   chanbackup_mark_mem);
 	return NULL;
 }
 

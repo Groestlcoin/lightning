@@ -3,12 +3,9 @@
 #include <backtrace.h>
 #include <ccan/tal/str/str.h>
 #include <common/json_command.h>
-#include <common/json_param.h>
 #include <common/memleak.h>
 #include <common/timeout.h>
 #include <connectd/connectd_wiregen.h>
-#include <errno.h>
-#include <gossipd/gossipd_wiregen.h>
 #include <hsmd/hsmd_wiregen.h>
 #include <lightningd/chaintopology.h>
 #include <lightningd/channel.h>
@@ -17,8 +14,6 @@
 #include <lightningd/jsonrpc.h>
 #include <lightningd/lightningd.h>
 #include <lightningd/memdump.h>
-#include <lightningd/opening_common.h>
-#include <lightningd/peer_control.h>
 #include <lightningd/subd.h>
 
 static void json_add_ptr(struct json_stream *response, const char *name,
@@ -193,19 +188,6 @@ static bool lightningd_check_leaks(struct command *cmd)
 	/* This command is not a leak! */
 	memleak_ptr(memtable, cmd);
 	memleak_ignore_children(memtable, cmd);
-
-	/* First delete known false positives. */
-	memleak_scan_htable(memtable, &ld->topology->txwatches->raw);
-	memleak_scan_htable(memtable, &ld->topology->txowatches->raw);
-	memleak_scan_htable(memtable, &ld->topology->outgoing_txs->raw);
-	memleak_scan_htable(memtable, &ld->htlcs_in->raw);
-	memleak_scan_htable(memtable, &ld->htlcs_out->raw);
-	memleak_scan_htable(memtable, &ld->htlc_sets->raw);
-	memleak_scan_htable(memtable, &ld->peers->raw);
-	memleak_scan_htable(memtable, &ld->peers_by_dbid->raw);
-	memleak_scan_htable(memtable, &ld->channels_by_scid->raw);
-	memleak_scan_htable(memtable, &ld->closed_channels->raw);
-	wallet_memleak_scan(memtable, ld->wallet);
 
 	/* Now delete ld and those which it has pointers to. */
 	memleak_scan_obj(memtable, ld);

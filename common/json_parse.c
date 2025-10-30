@@ -4,23 +4,14 @@
 #include <bitcoin/preimage.h>
 #include <bitcoin/privkey.h>
 #include <bitcoin/psbt.h>
-#include <bitcoin/pubkey.h>
-#include <bitcoin/tx.h>
-#include <ccan/json_escape/json_escape.h>
 #include <ccan/mem/mem.h>
 #include <ccan/str/hex/hex.h>
 #include <ccan/tal/str/str.h>
-#include <ccan/time/time.h>
-#include <common/amount.h>
-#include <common/channel_id.h>
 #include <common/json_parse.h>
 #include <common/node_id.h>
 #include <common/overflows.h>
 #include <common/utils.h>
 #include <errno.h>
-#include <inttypes.h>
-#include <stdio.h>
-#include <wire/onion_wire.h>
 
 bool json_to_millionths(const char *buffer, const jsmntok_t *tok,
 			u64 *millionths)
@@ -675,4 +666,14 @@ json_tok_channel_id(const char *buffer, const jsmntok_t *tok,
 {
 	return hex_decode(buffer + tok->start, tok->end - tok->start,
 			  cid, sizeof(*cid));
+}
+
+void json_dup_contents(const tal_t *ctx,
+		       const char *buffer,
+		       const jsmntok_t *tok,
+		       const char **new_buffer,
+		       const jsmntok_t **new_toks)
+{
+	*new_buffer = tal_dup_arr(ctx, char, buffer, tok->end, 0);
+	*new_toks = tal_dup_arr(ctx, jsmntok_t, tok, json_next(tok) - tok, 0);
 }

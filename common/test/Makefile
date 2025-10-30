@@ -9,7 +9,7 @@ COMMON_TEST_COMMON_OBJS :=				\
 	common/utils.o
 
 $(COMMON_TEST_PROGRAMS): $(COMMON_TEST_COMMON_OBJS) $(BITCOIN_OBJS)
-$(COMMON_TEST_OBJS): $(COMMON_HEADERS) $(WIRE_HEADERS) $(COMMON_SRC)
+$(COMMON_TEST_OBJS): $(COMMON_HEADERS) $(WIRE_HEADERS) $(COMMON_SRC) common/test/Makefile
 
 ALL_C_SOURCES += $(COMMON_TEST_SRC)
 ALL_TEST_PROGRAMS += $(COMMON_TEST_PROGRAMS)
@@ -129,5 +129,7 @@ common/test/run-htable:					\
 common/test/run-shutdown_scriptpubkey: wire/towire.o wire/fromwire.o
 
 common/test/run-wireaddr: wire/towire.o wire/fromwire.o
+
+common/test/run-jsonrpc_io: common/json_parse_simple.o
 
 check-units: $(COMMON_TEST_PROGRAMS:%=unittest/%)

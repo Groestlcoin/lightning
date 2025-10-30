@@ -81,7 +81,7 @@ Get dependencies:
 sudo apt-get update
 sudo apt-get install -y \
   jq autoconf automake build-essential git libtool libsqlite3-dev libffi-dev \
-  python3 python3-pip net-tools zlib1g-dev libsodium-dev gettext
+  python3 python3-pip net-tools zlib1g-dev libsodium-dev gettext lowdown
 pip3 install --upgrade pip
 curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
@@ -118,8 +118,6 @@ For development or running tests, get additional dependencies:
 sudo apt-get install -y valgrind libpq-dev shellcheck cppcheck \
   libsecp256k1-dev lowdown
 ```
-
-If you can't install `lowdown`, a version will be built in-tree.
 
 If you want to build the Rust plugins (cln-grpc, clnrest, cln-bip353 and wss-proxy):
 
@@ -238,7 +236,7 @@ lightningd --network=testnet
 OS version: FreeBSD 11.1-RELEASE or above
 
 ```shell
-pkg install git python py39-pip gmake libtool gmp sqlite3 postgresql13-client gettext autotools
+pkg install git python py39-pip gmake libtool gmp sqlite3 postgresql13-client gettext autotools lowdown libsodium
 https://github.com/Groestlcoin/lightning.git
 pip install --upgrade pip
 pip3 install mako
@@ -330,7 +328,7 @@ make
 Assuming you have Xcode and Homebrew installed. Install dependencies:
 
 ```shell
-brew install autoconf automake libtool python3 gnu-sed gettext libsodium protobuf
+brew install autoconf automake libtool python3 gnu-sed gettext libsodium protobuf lowdown
 export PATH="/usr/local/opt:$PATH"
 ```
 

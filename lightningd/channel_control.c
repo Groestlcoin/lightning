@@ -1,36 +1,28 @@
 #include "config.h"
 #include <ccan/asort/asort.h>
 #include <ccan/cast/cast.h>
-#include <ccan/mem/mem.h>
 #include <ccan/tal/str/str.h>
 #include <channeld/channeld_wiregen.h>
+#include <common/daemon.h>
 #include <common/json_command.h>
-#include <common/json_param.h>
-#include <common/json_stream.h>
-#include <common/memleak.h>
 #include <common/psbt_open.h>
 #include <common/shutdown_scriptpubkey.h>
 #include <common/wire_error.h>
 #include <connectd/connectd_wiregen.h>
 #include <errno.h>
-#include <fcntl.h>
 #include <hsmd/permissions.h>
-#include <lightningd/chaintopology.h>
 #include <lightningd/channel.h>
 #include <lightningd/channel_control.h>
 #include <lightningd/channel_gossip.h>
 #include <lightningd/closing_control.h>
-#include <lightningd/coin_mvts.h>
 #include <lightningd/connect_control.h>
 #include <lightningd/dual_open_control.h>
-#include <lightningd/gossip_control.h>
+#include <lightningd/feerate.h>
 #include <lightningd/hsm_control.h>
 #include <lightningd/notification.h>
-#include <lightningd/peer_control.h>
 #include <lightningd/peer_fd.h>
 #include <lightningd/peer_htlcs.h>
-#include <wally_bip32.h>
-#include <wally_psbt.h>
+#include <unistd.h>
 
 struct stfu_result
 {
@@ -1134,13 +1126,16 @@ static void handle_peer_splice_locked(struct channel *channel, const u8 *msg)
 	wallet_htlcsigs_confirm_inflight(channel->peer->ld->wallet, channel,
 					 &inflight->funding->outpoint);
 
-	update_channel_from_inflight(channel->peer->ld, channel, inflight, true);
+	/* Stop watching previous funding tx (could be, for announcement) */
+	channel_unwatch_funding(channel->peer->ld, channel);
 
 	/* Stash prev funding data so we can log it after scid is updated
 	 * (to get the blockheight) */
 	prev_our_msats = channel->our_msat;
 	prev_funding_sats = channel->funding_sats;
 	prev_funding_out = channel->funding;
+
+	update_channel_from_inflight(channel->peer->ld, channel, inflight, true);
 
 	channel->our_msat.millisatoshis += splice_amnt * 1000; /* Raw: splicing */
 	channel->msat_to_us_min.millisatoshis += splice_amnt * 1000; /* Raw: splicing */
@@ -1823,6 +1818,11 @@ bool peer_start_channeld(struct channel *channel,
 
 		if (inflight->splice_locked_memonly)
 			continue;
+
+		if (!inflight->funding->splice_remote_funding) {
+			send_backtrace("Inflight has no splice_remote_funding?!");
+			continue;
+		}
 
 		infcopy = tal(inflights, struct inflight);
 

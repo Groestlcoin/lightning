@@ -36,7 +36,7 @@ jobs:
         run: |
           export PATH="/usr/local/opt:/Users/runner/.local/bin:/Users/runner/Library/Python/3.10/bin:$PATH"
 
-          brew install wget autoconf automake libtool python@3.10 gnu-sed gettext libsodium protobuf
+          brew install wget autoconf automake libtool python@3.10 gnu-sed gettext libsodium protobuf openssl lowdown
 
           python3.10 -m pip install -U --user poetry==1.8.3 wheel pip
           python3.10 -m poetry install

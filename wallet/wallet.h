@@ -18,6 +18,7 @@
 #include <lightningd/wait.h>
 
 struct amount_msat;
+struct bitcoin_signature;
 struct invoices;
 struct channel;
 struct channel_inflight;
@@ -612,6 +613,7 @@ bool wallet_can_spend(struct wallet *w,
  * Returns -1 on error (key exhaustion).
  */
 s64 wallet_get_newindex(struct lightningd *ld, enum addrtype addrtype);
+
 
 /**
  * wallet_get_addrtype - get the address types for this key.
@@ -1928,8 +1930,4 @@ void wallet_datastore_save_payment_description(struct db *db,
 void migrate_setup_coinmoves(struct lightningd *ld, struct db *db);
 void migrate_remove_chain_moves_duplicates(struct lightningd *ld, struct db *db);
 
-/**
- * wallet_memleak_scan - Check for memleaks in wallet.
- */
-void wallet_memleak_scan(struct htable *memtable, const struct wallet *w);
 #endif /* LIGHTNING_WALLET_WALLET_H */

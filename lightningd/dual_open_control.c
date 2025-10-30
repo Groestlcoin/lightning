@@ -3,7 +3,6 @@
  * saves and funding tx watching for a channel open */
 
 #include "config.h"
-#include <bitcoin/short_channel_id.h>
 #include <ccan/array_size/array_size.h>
 #include <ccan/cast/cast.h>
 #include <ccan/mem/mem.h>
@@ -11,28 +10,26 @@
 #include <common/blockheight_states.h>
 #include <common/json_channel_type.h>
 #include <common/json_command.h>
-#include <common/json_param.h>
 #include <common/psbt_open.h>
 #include <common/shutdown_scriptpubkey.h>
 #include <common/wire_error.h>
 #include <connectd/connectd_wiregen.h>
 #include <errno.h>
 #include <hsmd/permissions.h>
-#include <lightningd/chaintopology.h>
 #include <lightningd/channel.h>
 #include <lightningd/channel_control.h>
 #include <lightningd/channel_gossip.h>
 #include <lightningd/closing_control.h>
 #include <lightningd/connect_control.h>
 #include <lightningd/dual_open_control.h>
-#include <lightningd/gossip_control.h>
+#include <lightningd/feerate.h>
 #include <lightningd/hsm_control.h>
 #include <lightningd/notification.h>
 #include <lightningd/opening_common.h>
-#include <lightningd/peer_control.h>
 #include <lightningd/peer_fd.h>
 #include <lightningd/plugin_hook.h>
 #include <openingd/dualopend_wiregen.h>
+#include <unistd.h>
 
 struct commit_rcvd {
 	struct channel *channel;
@@ -1467,28 +1464,9 @@ wallet_commit_channel(struct lightningd *ld,
 					     &commitment_feerate);
 	channel->min_possible_feerate = commitment_feerate;
 	channel->max_possible_feerate = commitment_feerate;
-	if (channel->peer->addr.itype == ADDR_INTERNAL_WIREADDR) {
-		channel->scb = tal(channel, struct modern_scb_chan);
-		channel->scb->id = channel->dbid;
-		channel->scb->addr = channel->peer->addr.u.wireaddr.wireaddr;
-		channel->scb->node_id = channel->peer->id;
-		channel->scb->funding = *funding;
-		channel->scb->cid = channel->cid;
-		channel->scb->funding_sats = total_funding;
-
-		struct tlv_scb_tlvs *scb_tlvs = tlv_scb_tlvs_new(channel);
-		scb_tlvs->shachain = &channel->their_shachain.chain;
-		scb_tlvs->basepoints = &channel_info->theirbase;
-		scb_tlvs->opener = &channel->opener;
-		scb_tlvs->remote_to_self_delay = &channel_info->their_config.to_self_delay;
-
-		channel->scb->tlvs = scb_tlvs;
-	} else
-		channel->scb = NULL;
 
 	tal_free(channel->type);
 	channel->type = channel_type_dup(channel, type);
-	channel->scb->type = channel_type_dup(channel->scb, type);
 
 	if (our_upfront_shutdown_script)
 		channel->shutdown_scriptpubkey[LOCAL]

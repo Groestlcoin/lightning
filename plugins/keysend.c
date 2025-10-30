@@ -1,14 +1,14 @@
 #include "config.h"
-#include <bitcoin/preimage.h>
 #include <ccan/array_size/array_size.h>
 #include <ccan/asort/asort.h>
 #include <ccan/cast/cast.h>
 #include <ccan/tal/str/str.h>
-#include <common/gossmap.h>
+#include <common/features.h>
 #include <common/json_param.h>
 #include <common/json_stream.h>
 #include <common/memleak.h>
-#include <errno.h>
+#include <inttypes.h>
+#include <plugins/channel_hint.h>
 #include <plugins/libplugin-pay.h>
 #include <sodium.h>
 
@@ -221,8 +221,6 @@ static struct command_result *json_keysend(struct command *cmd, const char *buf,
 
 	p = payment_new(cmd, cmd, NULL /* No parent */, global_hints, pay_mods);
 	p->local_id = &my_id;
-	p->json_buffer = tal_dup_talarr(p, const char, buf);
-	p->json_toks = params;
 	p->route_destination = tal_steal(p, destination);
 	p->pay_destination = p->route_destination;
 	p->payment_secret = NULL;

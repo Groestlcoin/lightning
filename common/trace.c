@@ -4,13 +4,11 @@
 #include <ccan/err/err.h>
 #include <ccan/str/hex/hex.h>
 #include <ccan/tal/str/str.h>
-#include <ccan/tal/tal.h>
-#include <ccan/time/time.h>
 #include <common/json_stream.h>
 #include <common/memleak.h>
 #include <common/pseudorand.h>
 #include <common/trace.h>
-#include <fcntl.h>
+#include <inttypes.h>
 #include <stdio.h>
 #include <unistd.h>
 
@@ -184,15 +182,11 @@ static inline void trace_check_tree(void) {}
 static void trace_init(void)
 {
 	const char *dev_trace_file;
-	const char notleak_name[] = "struct span **NOTLEAK**";
 
 	if (active_spans)
 		return;
 
-	active_spans = tal_arrz(NULL, struct span, 1);
-	/* We're usually too early for memleak to be initialized, so mark
-	 * this notleak manually! */
-	tal_set_name(active_spans, notleak_name);
+	active_spans = notleak(tal_arrz(NULL, struct span, 1));
 
 	current = NULL;
 	dev_trace_file = getenv("CLN_DEV_TRACE_FILE");

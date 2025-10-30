@@ -370,8 +370,8 @@ endif
 
 include external/Makefile
 include bitcoin/Makefile
-include common/Makefile
 include wire/Makefile
+include common/Makefile
 include db/Makefile
 include hsmd/Makefile
 include gossipd/Makefile
@@ -392,10 +392,7 @@ include cln-grpc/Makefile
 endif
 include plugins/Makefile
 include tests/plugins/Makefile
-
-ifneq ($(FUZZING),0)
-	include tests/fuzz/Makefile
-endif
+include tests/fuzz/Makefile
 
 ifneq ($V,1)
 MSGGEN_ARGS := -s
@@ -588,6 +585,9 @@ check-tmpctx:
 check-discouraged-functions:
 	@if git grep -E "[^a-z_/](fgets|fputs|gets|scanf|sprintf)\(" -- "*.c" "*.h" ":(exclude)ccan/" ":(exclude)contrib/"; then exit 1; fi
 
+check-bad-sprintf:
+	@if git grep -n "%[*]\.s"; then exit 1; fi
+
 # Don't access amount_msat and amount_sat members directly without a good reason
 # since it risks overflow.
 check-amount-access:
@@ -612,7 +612,7 @@ check-doc-examples: update-doc-examples
 	git diff --exit-code HEAD
 
 # For those without working cppcheck
-check-source-no-cppcheck: check-makefile check-source-bolt check-whitespace check-spelling check-python check-includes check-shellcheck check-setup_locale check-tmpctx check-discouraged-functions check-amount-access
+check-source-no-cppcheck: check-makefile check-source-bolt check-whitespace check-spelling check-python check-includes check-shellcheck check-setup_locale check-tmpctx check-discouraged-functions check-amount-access check-bad-sprintf
 
 check-source: check-source-no-cppcheck
 
@@ -698,9 +698,10 @@ $(ALL_TEST_PROGRAMS) $(ALL_FUZZ_TARGETS): %: %.o
 # Without this rule, the (built-in) link line contains
 # external/libwallycore.a directly, which causes a symbol clash (it
 # uses some ccan modules internally).  We want to rely on -lwallycore etc.
-# (as per EXTERNAL_LDLIBS) so we filter them out here.
+# (as per EXTERNAL_LDLIBS) so we filter them out here.  We have to put the other
+# .a files (if any) at the end of the link line.
 $(ALL_PROGRAMS) $(ALL_TEST_PROGRAMS):
-	@$(call VERBOSE, "ld $@", $(LINK.o) $(filter-out %.a,$^) $(LOADLIBES) $(EXTERNAL_LDLIBS) $(LDLIBS) libccan.a $($(@)_LDLIBS) -o $@)
+	@$(call VERBOSE, "ld $@", $(LINK.o) $(filter-out %.a,$^) $(filter-out external/%,$(filter %.a,$^)) $(LOADLIBES) $(EXTERNAL_LDLIBS) $(LDLIBS) $($(@)_LDLIBS) -o $@)
 ifeq ($(OS),Darwin)
 	@$(call VERBOSE, "dsymutil $@", dsymutil $@)
 endif
@@ -708,6 +709,7 @@ endif
 # We special case the fuzzing target binaries, as they need to link against libfuzzer,
 # which brings its own main().
 # FUZZER_LIB and LLVM_LDFLAGS are set by configure script on macOS
+ifneq ($(FUZZING),0)
 ifeq ($(OS),Darwin)
 ifneq ($(FUZZER_LIB),)
 FUZZ_LDFLAGS = $(FUZZER_LIB) $(LLVM_LDFLAGS)
@@ -717,9 +719,10 @@ endif
 else
 FUZZ_LDFLAGS = -fsanitize=fuzzer
 endif
+endif
 
 $(ALL_FUZZ_TARGETS):
-	@$(call VERBOSE, "ld $@", $(LINK.o) $(filter-out %.a,$^) $(LOADLIBES) $(EXTERNAL_LDLIBS) $(LDLIBS) libccan.a $(FUZZ_LDFLAGS) -o $@)
+	@$(call VERBOSE, "ld $@", $(LINK.o) $(filter-out %.a,$^) libcommon.a libccan.a $(LOADLIBES) $(EXTERNAL_LDLIBS) $(LDLIBS) $(FUZZ_LDFLAGS) -o $@)
 ifeq ($(OS),Darwin)
 	@$(call VERBOSE, "dsymutil $@", dsymutil $@)
 endif
@@ -839,6 +842,10 @@ update-mocks/%: % $(ALL_GEN_HEADERS) $(ALL_GEN_SOURCES)
 
 unittest/%: % bolt-precheck
 	BOLTDIR=$(LOCAL_BOLTDIR) $(VG) $(VG_TEST_ARGS) $* > /dev/null
+
+# FIXME: we don't do leak detection on fuzz tests, since they don't have a cleanup function.
+fuzzunittest/%: % bolt-precheck
+	BOLTDIR=$(LOCAL_BOLTDIR) $(VG) $* > /dev/null
 
 # Commands
 MKDIR_P = mkdir -p
@@ -1093,3 +1100,8 @@ ccan-rune-rune.o: $(CCANDIR)/ccan/rune/rune.c
 	@$(call VERBOSE, "cc $<", $(CC) $(CFLAGS) -c -o $@ $<)
 ccan-rune-coding.o: $(CCANDIR)/ccan/rune/coding.c
 	@$(call VERBOSE, "cc $<", $(CC) $(CFLAGS) -c -o $@ $<)
+
+print-binary-sizes: $(ALL_PROGRAMS) $(ALL_TEST_PROGRAMS)
+	@find $(ALL_PROGRAMS) $(ALL_TEST_PROGRAMS) -printf '%p\t%s\n'
+	@echo 'Total program size:	'`find $(ALL_PROGRAMS) -printf '%s\n' | awk '{TOTAL+= $$1} END {print TOTAL}'`
+	@echo 'Total tests size:	'`find $(ALL_TEST_PROGRAMS) -printf '%s\n' | awk '{TOTAL+= $$1} END {print TOTAL}'`

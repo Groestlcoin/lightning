@@ -11,28 +11,21 @@
  * add complexity to this daemon.
  */
 #include "config.h"
-#include <ccan/cast/cast.h>
 #include <ccan/tal/str/str.h>
 #include <common/daemon_conn.h>
 #include <common/ecdh_hsmd.h>
-#include <common/lease_rates.h>
 #include <common/memleak.h>
-#include <common/pseudorand.h>
 #include <common/status.h>
 #include <common/subdaemon.h>
 #include <common/timeout.h>
+#include <common/utils.h>
 #include <common/wire_error.h>
-#include <common/wireaddr.h>
 #include <connectd/connectd_gossipd_wiregen.h>
-#include <errno.h>
-#include <gossipd/gossip_store.h>
-#include <gossipd/gossip_store_wiregen.h>
 #include <gossipd/gossipd.h>
 #include <gossipd/gossipd_wiregen.h>
 #include <gossipd/gossmap_manage.h>
 #include <gossipd/queries.h>
 #include <gossipd/seeker.h>
-#include <sodium/crypto_aead_chacha20poly1305.h>
 
 const struct node_id *peer_node_id(const struct peer *peer)
 {
@@ -479,7 +472,6 @@ static void dev_gossip_memleak(struct daemon *daemon, const u8 *msg)
 	memleak_ptr(memtable, msg);
 	/* Now delete daemon and those which it has pointers to. */
 	memleak_scan_obj(memtable, daemon);
-	memleak_scan_htable(memtable, &daemon->peers->raw);
 	dev_seeker_memleak(memtable, daemon->seeker);
 	gossmap_manage_memleak(memtable, daemon->gm);
 
@@ -632,8 +624,7 @@ int main(int argc, char *argv[])
 	daemon = tal(NULL, struct daemon);
 	daemon->developer = developer;
 	daemon->dev_gossip_time = NULL;
-	daemon->peers = tal(daemon, struct peer_node_id_map);
-	peer_node_id_map_init(daemon->peers);
+	daemon->peers = new_htable(daemon, peer_node_id_map);
 	daemon->deferred_txouts = tal_arr(daemon, struct short_channel_id, 0);
 	daemon->current_blockheight = 0; /* i.e. unknown */
 

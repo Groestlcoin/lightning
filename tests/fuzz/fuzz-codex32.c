@@ -2,10 +2,10 @@
 #include <assert.h>
 #include <ccan/ccan/array_size/array_size.h>
 #include <ccan/ccan/tal/str/str.h>
-#include <common/setup.h>
 #include <common/bech32.h>
-#include <common/utils.h>
 #include <common/codex32.h>
+#include <common/setup.h>
+#include <common/utils.h>
 #include <tests/fuzz/libfuzz.h>
 
 /* Default mutator defined by libFuzzer */
@@ -34,7 +34,9 @@ static struct codex32 *codex32_dup(const tal_t *ctx, const struct codex32 *src)
 
 void init(int *argc, char ***argv)
 {
-	common_setup("fuzzer");
+	/* Don't call this if we're in unit-test mode, as libfuzz.c does it */
+	if (!tmpctx)
+		common_setup("fuzzer");
 }
 
 /* Custom mutator with structure-aware and byte-level mutations */

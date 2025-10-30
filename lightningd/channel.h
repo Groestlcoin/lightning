@@ -1,6 +1,7 @@
 #ifndef LIGHTNING_LIGHTNINGD_CHANNEL_H
 #define LIGHTNING_LIGHTNINGD_CHANNEL_H
 #include "config.h"
+#include <bitcoin/signature.h>
 #include <ccan/htable/htable_type.h>
 #include <common/channel_config.h>
 #include <common/channel_id.h>
@@ -342,10 +343,6 @@ struct channel {
 	u32 lease_chan_max_msat;
 	/* Lease commited max part per thousandth channel fee (ppm * 1000) */
 	u16 lease_chan_max_ppt;
-
-	/* `Channel-shell` of this channel
-	 * (Minimum information required to backup this channel). */
-	struct modern_scb_chan *scb;
 
 	/* Do we allow the peer to set any fee it wants? */
 	bool ignore_fee_limits;

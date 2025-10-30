@@ -1,7 +1,6 @@
 #include "config.h"
 #include <assert.h>
 #include <bitcoin/block.h>
-#include <bitcoin/chainparams.h>
 #include <bitcoin/tx.h>
 #include "bitcoin/groestl.h"
 #include <ccan/mem/mem.h>

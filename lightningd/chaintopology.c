@@ -1,32 +1,23 @@
 #include "config.h"
-#include <bitcoin/feerate.h>
 #include <bitcoin/script.h>
-#include <bitcoin/tx.h>
 #include <ccan/array_size/array_size.h>
 #include <ccan/io/io.h>
 #include <ccan/tal/str/str.h>
-#include <common/configdir.h>
 #include <common/htlc_tx.h>
-#include <common/json_command.h>
-#include <common/json_param.h>
 #include <common/memleak.h>
 #include <common/timeout.h>
 #include <common/trace.h>
 #include <db/exec.h>
-#include <lightningd/bitcoind.h>
 #include <lightningd/chaintopology.h>
 #include <lightningd/channel.h>
 #include <lightningd/coin_mvts.h>
+#include <lightningd/feerate.h>
 #include <lightningd/gossip_control.h>
 #include <lightningd/invoice.h>
 #include <lightningd/io_loop_with_timers.h>
-#include <lightningd/jsonrpc.h>
-#include <lightningd/lightningd.h>
-#include <lightningd/log.h>
 #include <lightningd/notification.h>
 #include <math.h>
 #include <wallet/txfilter.h>
-#include <wallet/wallet.h>
 
 /* Mutual recursion via timer. */
 static void try_extend_tip(struct chain_topology *topo);
@@ -354,6 +345,37 @@ static void watch_for_utxo_reconfirmation(struct chain_topology *topo,
 			   &unconfirmed[i]->outpoint.txid,
 			   closeinfo_txid_confirmed, NULL);
 	}
+}
+
+static enum watch_result tx_confirmed(struct lightningd *ld,
+				      const struct bitcoin_txid *txid,
+				      const struct bitcoin_tx *tx,
+				      unsigned int depth,
+				      void *unused)
+{
+	/* We don't actually need to do anything here: the fact that we were
+	 * watching the tx made chaintopology.c update the transaction depth */
+	if (depth != 0)
+		return DELETE_WATCH;
+	return KEEP_WATCHING;
+}
+
+void watch_unconfirmed_txid(struct lightningd *ld,
+			    struct chain_topology *topo,
+			    const struct bitcoin_txid *txid)
+{
+	watch_txid(ld->wallet, topo, txid, tx_confirmed, NULL);
+}
+
+static void watch_for_unconfirmed_txs(struct lightningd *ld,
+				      struct chain_topology *topo)
+{
+	struct bitcoin_txid *txids;
+
+	txids = wallet_transactions_by_height(tmpctx, ld->wallet, 0);
+	log_debug(ld->log, "Got %zu unconfirmed transactions", tal_count(txids));
+	for (size_t i = 0; i < tal_count(txids); i++)
+		watch_unconfirmed_txid(ld, topo, &txids[i]);
 }
 
 /* Mutual recursion via timer. */
@@ -1033,6 +1055,7 @@ static void remove_tip(struct chain_topology *topo)
 
 	/* This may have unconfirmed txs: reconfirm as we add blocks. */
 	watch_for_utxo_reconfirmation(topo, topo->ld->wallet);
+
 	block_map_del(topo->block_map, b);
 
 	/* These no longer exist, so gossipd drops any reference to them just
@@ -1202,14 +1225,10 @@ struct chain_topology *new_topology(struct lightningd *ld, struct logger *log)
 	struct chain_topology *topo = tal(ld, struct chain_topology);
 
 	topo->ld = ld;
-	topo->block_map = tal(topo, struct block_map);
-	block_map_init(topo->block_map);
-	topo->outgoing_txs = tal(topo, struct outgoing_tx_map);
-	outgoing_tx_map_init(topo->outgoing_txs);
-	topo->txwatches = tal(topo, struct txwatch_hash);
-	txwatch_hash_init(topo->txwatches);
-	topo->txowatches = tal(topo, struct txowatch_hash);
-	txowatch_hash_init(topo->txowatches);
+	topo->block_map = new_htable(topo, block_map);
+	topo->outgoing_txs = new_htable(topo, outgoing_tx_map);
+	topo->txwatches = new_htable(topo, txwatch_hash);
+	topo->txowatches = new_htable(topo, txowatch_hash);
 	topo->log = log;
 	topo->bitcoind = new_bitcoind(topo, ld, log);
 	topo->poll_seconds = 30;
@@ -1483,6 +1502,11 @@ void setup_topology(struct chain_topology *topo)
 
 	/* May have unconfirmed txs: reconfirm as we add blocks. */
 	watch_for_utxo_reconfirmation(topo, topo->ld->wallet);
+
+	/* We usually watch txs because we have outputs coming to us, or they're
+	 * related to a channel.  But not if they're created by sendpsbt without any
+	 * outputs to us. */
+	watch_for_unconfirmed_txs(topo->ld, topo);
 	db_commit_transaction(topo->ld->wallet->db);
 
 	tal_free(local_ctx);

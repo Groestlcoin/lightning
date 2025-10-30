@@ -1,46 +1,22 @@
 #include "config.h"
-#include <arpa/inet.h>
 #include <bitcoin/feerate.h>
 #include <bitcoin/script.h>
-#include <bitcoin/tx.h>
 #include <ccan/array_size/array_size.h>
 #include <ccan/asort/asort.h>
-#include <ccan/cast/cast.h>
-#include <ccan/io/io.h>
-#include <ccan/mem/mem.h>
-#include <ccan/noerr/noerr.h>
-#include <ccan/str/str.h>
-#include <ccan/take/take.h>
 #include <ccan/tal/str/str.h>
 #include <channeld/channeld_wiregen.h>
 #include <common/addr.h>
-#include <common/closing_fee.h>
-#include <common/configdir.h>
-#include <common/dev_disconnect.h>
-#include <common/features.h>
 #include <common/htlc_trim.h>
 #include <common/initial_commit_tx.h>
 #include <common/json_channel_type.h>
 #include <common/json_command.h>
-#include <common/json_param.h>
-#include <common/jsonrpc_errors.h>
-#include <common/key_derive.h>
-#include <common/scb_wiregen.h>
-#include <common/shutdown_scriptpubkey.h>
-#include <common/status.h>
 #include <common/timeout.h>
-#include <common/utils.h>
 #include <common/version.h>
 #include <common/wire_error.h>
 #include <connectd/connectd_wiregen.h>
 #include <errno.h>
-#include <fcntl.h>
-#include <gossipd/gossipd_wiregen.h>
 #include <hsmd/hsmd_wiregen.h>
-#include <inttypes.h>
 #include <lightningd/anchorspend.h>
-#include <lightningd/bitcoind.h>
-#include <lightningd/chaintopology.h>
 #include <lightningd/channel.h>
 #include <lightningd/channel_control.h>
 #include <lightningd/channel_gossip.h>
@@ -48,31 +24,20 @@
 #include <lightningd/closing_control.h>
 #include <lightningd/connect_control.h>
 #include <lightningd/dual_open_control.h>
-#include <lightningd/gossip_control.h>
 #include <lightningd/hsm_control.h>
-#include <lightningd/jsonrpc.h>
-#include <lightningd/lightningd.h>
-#include <lightningd/log.h>
 #include <lightningd/memdump.h>
 #include <lightningd/notification.h>
 #include <lightningd/onchain_control.h>
 #include <lightningd/opening_common.h>
 #include <lightningd/opening_control.h>
-#include <lightningd/options.h>
 #include <lightningd/peer_control.h>
 #include <lightningd/peer_fd.h>
 #include <lightningd/peer_htlcs.h>
 #include <lightningd/plugin_hook.h>
-#include <lightningd/subd.h>
-#include <limits.h>
 #include <onchaind/onchaind_wiregen.h>
 #include <openingd/dualopend_wiregen.h>
 #include <openingd/openingd_wiregen.h>
-#include <stdlib.h>
 #include <unistd.h>
-#include <wally_bip32.h>
-#include <wire/onion_wire.h>
-#include <wire/wire_sync.h>
 
 /* FIXME: Reorder! */
 static void peer_disconnected(struct lightningd *ld,
@@ -245,7 +210,12 @@ u8 *p2tr_for_keyidx(const tal_t *ctx, struct lightningd *ld, u64 keyidx)
 {
 	struct pubkey shutdownkey;
 
-	bip32_pubkey(ld, &shutdownkey, keyidx);
+	/* Use BIP86 derivation if wallet has BIP86 base, otherwise use BIP32 */
+	if (ld->bip86_base) {
+		bip86_pubkey(ld, &shutdownkey, keyidx);
+	} else {
+		bip32_pubkey(ld, &shutdownkey, keyidx);
+	}
 
 	return scriptpubkey_p2tr(ctx, &shutdownkey);
 }
@@ -2382,6 +2352,14 @@ void channel_watch_wrong_funding(struct lightningd *ld, struct channel *channel)
 	}
 }
 
+/* We need to do this before we change channel funding (for splice), otherwise
+ * funding_depth_cb will fail the assertion that it's the current funding tx */
+void channel_unwatch_funding(struct lightningd *ld, struct channel *channel)
+{
+	tal_free(find_txwatch(ld->topology,
+			      &channel->funding.txid, funding_depth_cb, channel));
+}
+
 void channel_watch_funding(struct lightningd *ld, struct channel *channel)
 {
 	log_debug(channel->log, "Watching for funding txid: %s",
@@ -2480,15 +2458,35 @@ static void json_add_scb(struct command *cmd,
 			 struct json_stream *response,
 			 struct channel *c)
 {
-	u8 *scb = tal_arr(cmd, u8, 0);
+	u8 *scb_wire = tal_arr(cmd, u8, 0);
+	struct modern_scb_chan *scb;
 
-	/* Update shachain & basepoints in SCB. */
-	c->scb->tlvs->shachain = &c->their_shachain.chain;
-	c->scb->tlvs->basepoints = &c->channel_info.theirbase;
-	towire_modern_scb_chan(&scb, c->scb);
+	/* Don't do scb for unix domain sockets. */
+	if (c->peer->addr.itype != ADDR_INTERNAL_WIREADDR)
+		return;
 
-	json_add_hex_talarr(response, fieldname,
-			    scb);
+	scb = tal(tmpctx, struct modern_scb_chan);
+	scb->id = c->dbid;
+	/* More useful to have last_known_addr, if avail */
+	if (c->peer->last_known_addr)
+		scb->addr = *c->peer->last_known_addr;
+	else
+		scb->addr = c->peer->addr.u.wireaddr.wireaddr;
+	scb->node_id = c->peer->id;
+	scb->funding = c->funding;
+	scb->cid = c->cid;
+	scb->funding_sats = c->funding_sats;
+	scb->type = channel_type_dup(scb, c->type);
+
+	scb->tlvs = tlv_scb_tlvs_new(scb);
+	scb->tlvs->shachain = &c->their_shachain.chain;
+	scb->tlvs->basepoints = &c->channel_info.theirbase;
+	scb->tlvs->opener = &c->opener;
+	scb->tlvs->remote_to_self_delay = &c->channel_info.their_config.to_self_delay;
+
+	towire_modern_scb_chan(&scb_wire, scb);
+
+	json_add_hex_talarr(response, fieldname, scb_wire);
 }
 
 /* This will return a SCB for all the channels currently loaded
@@ -2513,8 +2511,7 @@ static struct command_result *json_staticbackup(struct command *cmd,
 	     peer = peer_node_id_map_next(cmd->ld->peers, &it)) {
 		struct channel *channel;
 		list_for_each(&peer->channels, channel, list){
-			/* cppcheck-suppress uninitvar - false positive on channel */
-			if (!channel->scb)
+			if (channel_state_uncommitted(channel->state))
 				continue;
 			json_add_scb(cmd, NULL, response, channel);
 		}

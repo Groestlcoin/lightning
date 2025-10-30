@@ -5,20 +5,16 @@
 #include <common/fee_states.h>
 #include <common/json_command.h>
 #include <common/wire_error.h>
-#include <errno.h>
 #include <hsmd/hsmd_wiregen.h>
 #include <lightningd/channel.h>
 #include <lightningd/channel_gossip.h>
 #include <lightningd/channel_state_names_gen.h>
 #include <lightningd/connect_control.h>
-#include <lightningd/gossip_control.h>
 #include <lightningd/hsm_control.h>
 #include <lightningd/notification.h>
 #include <lightningd/opening_common.h>
-#include <lightningd/peer_control.h>
 #include <lightningd/subd.h>
 #include <wallet/txfilter.h>
-#include <wire/peer_wire.h>
 
 void channel_set_owner(struct channel *channel, struct subd *owner)
 {
@@ -343,7 +339,6 @@ struct channel *new_unsaved_channel(struct peer *peer,
 	channel->openchannel_signed_cmd = NULL;
 	channel->state = DUALOPEND_OPEN_INIT;
 	channel->owner = NULL;
-	channel->scb = NULL;
 	channel->reestablished = false;
 	memset(&channel->billboard, 0, sizeof(channel->billboard));
 	channel->billboard.transient = tal_fmt(channel, "%s",
@@ -577,30 +572,6 @@ struct channel *new_channel(struct peer *peer, u64 dbid,
 	memset(&channel->billboard, 0, sizeof(channel->billboard));
 	channel->billboard.transient = tal_strdup(channel, transient_billboard);
 	channel->channel_info = *channel_info;
-
-	/* If it's a unix domain socket connection, we don't save it */
-	if (peer->addr.itype == ADDR_INTERNAL_WIREADDR) {
-		channel->scb = tal(channel, struct modern_scb_chan);
-		channel->scb->id = dbid;
-		/* More useful to have last_known_addr, if avail */
-		if (peer->last_known_addr)
-			channel->scb->addr = *peer->last_known_addr;
-		channel->scb->addr = peer->addr.u.wireaddr.wireaddr;
-		channel->scb->node_id = peer->id;
-		channel->scb->funding = *funding;
-		channel->scb->cid = *cid;
-		channel->scb->funding_sats = funding_sats;
-		channel->scb->type = channel_type_dup(channel->scb, type);
-
-		struct tlv_scb_tlvs *scb_tlvs = tlv_scb_tlvs_new(channel);
-		scb_tlvs->shachain = &channel->their_shachain.chain;
-		scb_tlvs->basepoints = &channel->channel_info.theirbase;
-		scb_tlvs->opener = &channel->opener;
-		scb_tlvs->remote_to_self_delay = &channel->channel_info.their_config.to_self_delay;
-
-		channel->scb->tlvs = scb_tlvs;
-	} else
-		channel->scb = NULL;
 
 	if (!log) {
 		channel->log = new_logger(channel,
