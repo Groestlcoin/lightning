@@ -3,27 +3,6 @@ name: Ubuntu only release
 on: [push, pull_request]
 
 jobs:
-  focal:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Builder image setup
-        run: sudo docker build -t cl-repro-focal - < contrib/reprobuild/Dockerfile.focal
-      - name: create release folder
-        run: mkdir release
-      - name: Building using the builder image
-        run: sudo docker run --rm -v $(pwd):/repo -t cl-repro-focal
-      - name: Upload Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: clightning-${{ github.sha }}-Ubuntu-20.04
-          path: release/*.tar.xz
-          if-no-files-found: error
-          retention-days: 7
-      - name: Download artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: clightning-${{ github.sha }}-Ubuntu-20.04
 
   jammy:
     runs-on: ubuntu-latest

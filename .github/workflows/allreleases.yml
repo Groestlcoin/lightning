@@ -7,8 +7,6 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
-      - name: Builder focal image setup
-        run: sudo docker build -t cl-repro-focal - < contrib/reprobuild/Dockerfile.focal
       - name: Builder jammy image setup
         run: sudo docker build -t cl-repro-jammy - < contrib/reprobuild/Dockerfile.jammy
       - name: Builder noble image setup
