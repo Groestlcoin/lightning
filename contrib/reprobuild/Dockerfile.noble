@@ -24,6 +24,7 @@ RUN apt-get update \
 	libpq-dev \
 	libsodium23 \
 	libtool \
+	lowdown \
 	m4 \
 	sudo \
 	unzip \
