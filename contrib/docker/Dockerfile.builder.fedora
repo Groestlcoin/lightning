@@ -6,7 +6,7 @@ ENV GROESTLCOIN_VERSION=27.0
 WORKDIR /tmp
 
 RUN dnf update -y && \
-    dnf groupinstall -y \
+    dnf group install -y \
         'C Development Tools and Libraries' \
         'Development Tools' && \
     dnf install -y \
