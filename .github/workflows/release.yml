@@ -61,7 +61,6 @@ jobs:
       matrix:
         target:
           - 'bin-Fedora'
-          - 'bin-Ubuntu-focal'
           - 'bin-Ubuntu-jammy'
           - 'bin-Ubuntu-noble'
     steps:

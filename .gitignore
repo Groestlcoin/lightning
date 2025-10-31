@@ -89,7 +89,6 @@ plugins/cln-bip353
 
 # Build directories
 bionic/
-focal/
 jammy/
 noble/
 release/

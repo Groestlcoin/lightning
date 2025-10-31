@@ -1,5 +1,5 @@
 #!/bin/sh
-# This script creates base images for focal, jammy, and noble. Then it builds the
+# This script creates base images for jammy, and noble. Then it builds the
 # cl-repro-jammy, and cl-repro-noble builder images. The base images are created using
 # debootstrap, and the cl-repro images are created using the Dockerfiles in
 # contrib/reprobuild. These builder images will finally be used to build the
