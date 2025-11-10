@@ -100,17 +100,22 @@ ENV LIGHTNINGD_VERSION=master
 
 RUN dpkg --add-architecture ${target_arch_dpkg}
 
-#TODO: python3-dev needs QEMU for post install scripts. find a workaround to not use QEMU
+# Install architecture-independent libraries
 RUN apt-get update && \
     apt-get install -qq -y --no-install-recommends \
-        pkg-config:${target_arch_dpkg} \
-        libffi-dev:${target_arch_dpkg} \
-        python3-dev:${target_arch_dpkg} \
-        libicu-dev:${target_arch_dpkg} \
-        zlib1g-dev:${target_arch_dpkg} \
-        libsqlite3-dev:${target_arch_dpkg} \
-        libpq-dev:${target_arch_dpkg} \
-        crossbuild-essential-${target_arch_dpkg}
+        python3-dev \
+        lowdown
+
+# Install target-arch libraries
+RUN apt-get install -qq -y --no-install-recommends \
+    pkg-config:${target_arch_dpkg} \
+    libffi-dev:${target_arch_dpkg} \
+    libicu-dev:${target_arch_dpkg} \
+    zlib1g-dev:${target_arch_dpkg} \
+    libsqlite3-dev:${target_arch_dpkg} \
+    libpq-dev:${target_arch_dpkg} \
+    libsodium-dev:${target_arch_dpkg} \
+    crossbuild-essential-${target_arch_dpkg}
 
 ARG AR=${target_arch}-ar
 ARG AS=${target_arch}-as
@@ -139,6 +144,8 @@ RUN ./install-uv.sh -q
 RUN ./install-rust.sh -y -q --profile minimal --component rustfmt --target ${target_arch_rust}
 
 ENV PATH="/root/.cargo/bin:/root/.local/bin:${PATH}"
+ENV PKG_CONFIG_PATH=/usr/lib/${target_arch}/pkgconfig
+ENV PKG_CONFIG_LIBDIR=/usr/lib/${target_arch}/pkgconfig
 
 WORKDIR /opt/lightningd
 
@@ -161,7 +168,9 @@ RUN apt-get update && \
         inotify-tools \
         socat \
         jq \
-        libpq5 && \
+        libpq5 \
+        libsqlite3-0 \
+        libsodium23 && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 

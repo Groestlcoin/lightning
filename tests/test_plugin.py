@@ -1875,6 +1875,22 @@ def test_bitcoin_backend(node_factory, bitcoind):
                                " bitcoind")
 
 
+def test_bitcoin_backend_gianttx(node_factory, bitcoind):
+    """Test that a giant tx doesn't crash bcli"""
+    l1 = node_factory.get_node(start=False)
+    # With memleak we spend far too much time gathering backtraces.
+    if "LIGHTNINGD_DEV_MEMLEAK" in l1.daemon.env:
+        del l1.daemon.env["LIGHTNINGD_DEV_MEMLEAK"]
+    l1.start()
+    addrs = {addr: 0.00200000 for addr in [l1.rpc.newaddr('bech32')['bech32'] for _ in range(700)]}
+    bitcoind.rpc.sendmany("", addrs)
+    bitcoind.generate_block(1, wait_for_mempool=1)
+    sync_blockheight(bitcoind, [l1])
+
+    l1.rpc.withdraw(bitcoind.getnewaddress(), 'all')
+    bitcoind.generate_block(1, wait_for_mempool=1)
+
+
 def test_bitcoin_bad_estimatefee(node_factory, bitcoind):
     """
     This tests that we don't crash if bitcoind backend gives bad estimatefees.
@@ -4279,7 +4295,7 @@ def test_sql_crash(node_factory, bitcoind):
     """
     l1, l2 = node_factory.line_graph(2, fundchannel=False)
 
-    addr = l1.rpc.newaddr()['bech32']
+    addr = l1.rpc.newaddr('bech32')['bech32']
     bitcoind.rpc.sendtoaddress(addr, 1)
     bitcoind.generate_block(1)
 

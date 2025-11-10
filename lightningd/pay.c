@@ -1482,7 +1482,7 @@ static struct command_result *self_payment(struct lightningd *ld,
 				     local_invreq_id);
 
 	/* Now, resolve the invoice */
-	inv = invoice_check_payment(tmpctx, ld, rhash, msat, payment_secret, &err);
+	inv = invoice_check_payment(tmpctx, ld, rhash, msat, NULL, payment_secret, &err);
 	if (!inv) {
 		struct routing_failure *fail;
 		wallet_payment_set_status(ld->wallet, rhash, partid, groupid,
@@ -1973,7 +1973,7 @@ static struct command_result *json_injectpaymentonion(struct command *cmd,
 		 * not resolve immediately */
 		fixme_ignore(command_still_pending(cmd));
 		htlc_set_add(cmd->ld, cmd->ld->log, *msat, *payload->total_msat,
-			     payment_hash, payload->payment_secret,
+			     NULL, payment_hash, payload->payment_secret,
 			     selfpay_mpp_fail, selfpay_mpp_succeeded,
 			     selfpay);
 		return command_its_complicated("htlc_set_add may have immediately succeeded or failed");
@@ -2076,19 +2076,11 @@ static struct command_result *json_injectpaymentonion(struct command *cmd,
 	if (command_check_only(cmd))
 		return command_check_done(cmd);
 
-	register_payment_and_waiter(cmd,
-				    payment_hash,
-				    *partid, *groupid,
-				    *destination_msat, *msat, AMOUNT_MSAT(0),
-				    label, invstring, local_invreq_id,
-				    &shared_secret,
-				    destination);
-
-	/* If unknown, we set this equal (so accounting logs 0 fees) */
-	if (amount_msat_eq(*destination_msat, AMOUNT_MSAT(0)))
-		*destination_msat = *msat;
 	failmsg = send_htlc_out(tmpctx, next, *msat,
-				*cltv, *destination_msat,
+				*cltv,
+				/* If unknown, we set this equal (so accounting logs 0 fees) */
+				amount_msat_eq(*destination_msat, AMOUNT_MSAT(0))
+				? *msat : *destination_msat,
 				payment_hash,
 				next_path_key, NULL, *partid, *groupid,
 				serialize_onionpacket(tmpctx, rs->next),
@@ -2098,6 +2090,16 @@ static struct command_result *json_injectpaymentonion(struct command *cmd,
 				    "Could not send to first peer: %s",
 				    onion_wire_name(fromwire_peektype(failmsg)));
 	}
+
+	/* Now HTLC is created, we can add the payment as pending */
+	register_payment_and_waiter(cmd,
+				    payment_hash,
+				    *partid, *groupid,
+				    *destination_msat, *msat, AMOUNT_MSAT(0),
+				    label, invstring, local_invreq_id,
+				    &shared_secret,
+				    destination);
+
 	return command_still_pending(cmd);
 }
 

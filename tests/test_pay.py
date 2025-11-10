@@ -6755,6 +6755,49 @@ def test_injectpaymentonion_failures(node_factory, executor):
     assert 'onionreply' in err.value.error['data']
 
 
+def test_injectpaymentonion_peerfail(node_factory, executor):
+    l1, l2 = node_factory.line_graph(2,
+                                     opts=[{'may_reconnect': True,
+                                            'dev-no-reconnect': None,
+                                            'disconnect': ['=WIRE_UPDATE_ADD_HTLC', '-WIRE_COMMITMENT_SIGNED']},
+                                           {'may_reconnect': True,
+                                            'dev-no-reconnect': None}])
+    blockheight = l1.rpc.getinfo()['blockheight']
+
+    inv1 = l2.rpc.invoice(1000, "test_injectpaymentonion_peerfail", "test_injectpaymentonion_peerfail")
+
+    # First hop for injectpaymentonion is self.
+    hops = [{'pubkey': l1.info['id'],
+             'payload': serialize_payload_tlv(1000, 18 + 6, first_scid(l1, l2), blockheight).hex()},
+            {'pubkey': l2.info['id'],
+             'payload': serialize_payload_final_tlv(1000, 18, 1000, blockheight, inv1['payment_secret']).hex()}]
+    onion = l1.rpc.createonion(hops=hops, assocdata=inv1['payment_hash'])
+
+    l1.rpc.disconnect(l2.info['id'], force=True)
+    with pytest.raises(RpcError, match='WIRE_TEMPORARY_CHANNEL_FAILURE'):
+        l1.rpc.injectpaymentonion(onion=onion['onion'],
+                                  payment_hash=inv1['payment_hash'],
+                                  amount_msat=1000,
+                                  cltv_expiry=blockheight + 18 + 6,
+                                  partid=1,
+                                  groupid=0)
+    # In fact, it won't create any sendpays entry, since it fails too early.
+    assert l1.rpc.listsendpays() == {'payments': []}
+
+    # This will hang, since we disconnect once committed.  But provides another
+    # (legitimately) pending payment for our migration code to test.
+    l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
+    executor.submit(l1.rpc.injectpaymentonion,
+                    onion=onion['onion'],
+                    payment_hash=inv1['payment_hash'],
+                    amount_msat=1000,
+                    cltv_expiry=blockheight + 18 + 6,
+                    partid=2,
+                    groupid=0)
+    l1.daemon.wait_for_log("dev_disconnect: =WIRE_UPDATE_ADD_HTLC")
+    assert [p['status'] for p in l1.rpc.listsendpays()['payments']] == ['pending']
+
+
 def test_parallel_channels_reserve(node_factory, bitcoind):
     """Tests wether we are able to pay through parallel channels concurrently.
     To do that we need to enable strict-forwarding."""
@@ -7090,3 +7133,32 @@ def test_htlc_tlv_crash(node_factory):
 
     l1.rpc.waitsendpay(inv1['payment_hash'], TIMEOUT)
     l1.rpc.waitsendpay(inv2['payment_hash'], TIMEOUT)
+
+
+def test_invoice_amount_override(node_factory):
+    """Uses the htlc_accepted hook response value `invoice_msat` to override
+    the expected total payment amount of the invoice.
+    """
+    plugin = os.path.join(os.path.dirname(__file__), "plugins/override_invoice_msat.py")
+    l1, l2 = node_factory.line_graph(2, opts=[{}, {"plugin": plugin}])
+
+    inv = l2.rpc.invoice(10_000, "expected_amt_override", "expected_amt_override")
+
+    route = [
+        {
+            "amount_msat": 1_000,  # Reduced amount that is below the expected amount
+            "id": l2.info["id"],
+            "delay": 10,
+            "channel": first_scid(l1, l2),
+        }
+    ]
+
+    with pytest.raises(RpcError):
+        l1.rpc.sendpay(route, inv["payment_hash"], payment_secret=inv["payment_secret"])
+        l1.rpc.waitsendpay(inv["payment_hash"])
+
+    # Override expected invoice amount, via htlc_accepted.
+    l2.rpc.setinvoicemsat(msat=1_000)
+
+    l1.rpc.sendpay(route, inv["payment_hash"], payment_secret=inv["payment_secret"])
+    assert l1.rpc.waitsendpay(inv["payment_hash"])["status"] == "complete"

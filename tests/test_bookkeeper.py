@@ -128,7 +128,7 @@ def test_bookkeeping_external_withdraws(node_factory, bitcoind):
     """ Withdrawals to an external address shouldn't be included
     in the income statements until confirmed"""
     l1 = node_factory.get_node()
-    addr = l1.rpc.newaddr()['bech32']
+    addr = l1.rpc.newaddr()['p2tr']
 
     amount = 1111111
     amount_msat = Millisatoshi(amount * 1000)
@@ -210,7 +210,7 @@ def test_bookkeeping_rbf_withdraw(node_factory, bitcoind):
         (but it will show up in our account events)
     """
     l1 = node_factory.get_node()
-    addr = l1.rpc.newaddr()['bech32']
+    addr = l1.rpc.newaddr()['p2tr']
 
     amount = 1111111
     event_counter = 0
@@ -1167,7 +1167,7 @@ def test_migration_no_bkpr(node_factory, bitcoind):
 @unittest.skipIf(TEST_NETWORK != 'regtest', "External wallet support doesn't work with elements yet.")
 def test_listincome_timebox(node_factory, bitcoind):
     l1 = node_factory.get_node()
-    addr = l1.rpc.newaddr()['bech32']
+    addr = l1.rpc.newaddr()['p2tr']
 
     amount = 1111111
     bitcoind.rpc.sendtoaddress(addr, amount / 10**8)
@@ -1193,3 +1193,25 @@ def test_listincome_timebox(node_factory, bitcoind):
 
     incomes = l1.rpc.bkpr_listincome(end_time=first_one)['income_events']
     assert [i for i in incomes if i['timestamp'] > first_one] == []
+
+
+@unittest.skipIf(TEST_NETWORK != 'regtest', "Snapshots are bitcoin regtest.")
+@unittest.skipIf(os.getenv('TEST_DB_PROVIDER', 'sqlite3') != 'sqlite3', "uses snapshots")
+def test_bkpr_parallel(node_factory, bitcoind, executor):
+    """Bookkeeper could crash with parallel requests"""
+    bitcoind.generate_block(1)
+    l1 = node_factory.get_node(dbfile="l1-before-moves-in-db.sqlite3.xz",
+                               options={'database-upgrade': True})
+
+    fut1 = executor.submit(l1.rpc.bkpr_listincome)
+    fut2 = executor.submit(l1.rpc.bkpr_listincome)
+
+    fut1.result()
+    fut2.result()
+
+    # We save blockheights in storage, so make sure we restore them on restart!
+    acctevents_before = l1.rpc.bkpr_listaccountevents()
+    l1.restart()
+
+    acctevents_after = l1.rpc.bkpr_listaccountevents()
+    assert acctevents_after == acctevents_before
