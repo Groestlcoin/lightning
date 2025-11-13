@@ -299,19 +299,19 @@ automatically by `lightningd`.
   This option supports both legacy 32-byte `hsm_secret` files (where the passphrase
   encrypts the secret) and new BIP39 mnemonic-based secrets (where the passphrase
   is used as additional entropy during seed derivation according to the BIP39 standard).
-  
+
   Note that once you set a passphrase, this option will be mandatory for
-  `lightningd` to start. If there is no HSM secret yet, `lightningd` will create 
+  `lightningd` to start. If there is no HSM secret yet, `lightningd` will create
   a new mnemonic-based secret that will be secured with your passphrase following
   BIP39 specifications.
-  
+
   For legacy users: If you have an existing encrypted `hsm_secret` that was created
   with the deprecated `encrypted-hsm` option, this will continue to work seamlessly.
-  
+
   For new mnemonic-based secrets: The passphrase becomes part of the seed derivation
-  process as specified in BIP39, providing an additional factor of security. The 
+  process as specified in BIP39, providing an additional factor of security. The
   mnemonic words alone are not sufficient to derive the seed without the passphrase.
-  
+
   If you have an unencrypted legacy `hsm_secret` you want to encrypt, or need to
   manage your HSM secrets, see lightning-hsmtool(8).
 
@@ -501,6 +501,10 @@ specified multuple times. (Added in v23.08).
 
   Perform search for things to clean every *SECONDS* seconds (default
 3600, or 1 hour, which is usually sufficient).
+
+* **autoclean-networkevents-age**=*SECONDS* [plugin `autoclean`, *dynamic*]
+
+How old network events (in `listnetworkevents`) have to be before deletion (default 30 days, i.e. 2592000 seconds)
 
 * **autoclean-succeededforwards-age**=*SECONDS* [plugin `autoclean`, *dynamic*]
 
@@ -823,6 +827,24 @@ The operations will be bundled into a single transaction. The channel will remai
 active while awaiting splice confirmation, however you can only spend the smaller
 of the prior channel balance and the new one.
 
+* **experimental-lsps-client**
+
+  Specifying this enables client side support for the lsps protocol
+([blip][blip] #50). Core-Lightning only supports the lsps2 ([blip][blip] #52)
+subprotocol describing the creation of just-in-time-channel (JIT-channels)
+between a LSP and this client.
+
+* **experimental-lsps2-service**
+
+  Specifying this enables a LSP JIT-Channel service according to the lsps
+protocol ([blip][blip] #52). It requires a LSP-Policy plugin to be available and
+a *experimental-lsps2-promise-secret* to be set.
+
+* **experimental-lsps2-promise-secret**=*promisesecret*
+
+  Sets a `promisesecret` for the LSP JIT-Channel service. Is a 64-character hex
+ string that acts as the secret for promises according to ([blip][blip] #52).
+ Is required if *experimental-lsps2-service* is set.
 
 BUGS
 ----
@@ -857,3 +879,4 @@ the rest of the code is covered by the BSD-style MIT license.
 [bolt]: https://github.com/lightning/bolts
 [bolt12]: https://github.com/rustyrussell/lightning-rfc/blob/guilt/offers/12-offer-encoding.md
 [pr4421]: https://github.com/ElementsProject/lightning/pull/4421
+[blip]: https://github.com/lightning/blips

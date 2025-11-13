@@ -219,6 +219,13 @@ def autoclean_once_autoclean_failedpays2py(m):
     })
 
 
+def autoclean_once_autoclean_networkevents2py(m):
+    return remove_default({
+        "cleaned": m.cleaned,  # PrimitiveField in generate_composite
+        "uncleaned": m.uncleaned,  # PrimitiveField in generate_composite
+    })
+
+
 def autoclean_once_autoclean_paidinvoices2py(m):
     return remove_default({
         "cleaned": m.cleaned,  # PrimitiveField in generate_composite
@@ -267,6 +274,14 @@ def autoclean_status_autoclean_failedforwards2py(m):
 
 
 def autoclean_status_autoclean_failedpays2py(m):
+    return remove_default({
+        "age": m.age,  # PrimitiveField in generate_composite
+        "cleaned": m.cleaned,  # PrimitiveField in generate_composite
+        "enabled": m.enabled,  # PrimitiveField in generate_composite
+    })
+
+
+def autoclean_status_autoclean_networkevents2py(m):
     return remove_default({
         "age": m.age,  # PrimitiveField in generate_composite
         "cleaned": m.cleaned,  # PrimitiveField in generate_composite
@@ -2162,6 +2177,14 @@ def wait_invoices2py(m):
     })
 
 
+def wait_networkevents2py(m):
+    return remove_default({
+        "type": str(m.item_type),  # EnumField in generate_composite
+        "created_index": m.created_index,  # PrimitiveField in generate_composite
+        "peer_id": hexlify(m.peer_id),  # PrimitiveField in generate_composite
+    })
+
+
 def wait_sendpays2py(m):
     return remove_default({
         "status": str(m.status),  # EnumField in generate_composite
@@ -2988,6 +3011,7 @@ def askrene_listlayers_layers_biases2py(m):
         "bias": m.bias,  # PrimitiveField in generate_composite
         "description": m.description,  # PrimitiveField in generate_composite
         "short_channel_id_dir": m.short_channel_id_dir,  # PrimitiveField in generate_composite
+        "timestamp": m.timestamp,  # PrimitiveField in generate_composite
     })
 
 
@@ -3021,6 +3045,16 @@ def askrene_listlayers_layers_created_channels2py(m):
     })
 
 
+def askrene_listlayers_layers_node_biases2py(m):
+    return remove_default({
+        "description": m.description,  # PrimitiveField in generate_composite
+        "in_bias": m.in_bias,  # PrimitiveField in generate_composite
+        "node": hexlify(m.node),  # PrimitiveField in generate_composite
+        "out_bias": m.out_bias,  # PrimitiveField in generate_composite
+        "timestamp": m.timestamp,  # PrimitiveField in generate_composite
+    })
+
+
 def askrene_listlayers_layers2py(m):
     return remove_default({
         "biases": [askrene_listlayers_layers_biases2py(i) for i in m.biases],  # ArrayField[composite] in generate_composite
@@ -3029,6 +3063,7 @@ def askrene_listlayers_layers2py(m):
         "created_channels": [askrene_listlayers_layers_created_channels2py(i) for i in m.created_channels],  # ArrayField[composite] in generate_composite
         "disabled_channels": [m.disabled_channels for i in m.disabled_channels], # ArrayField[primitive] in generate_composite
         "disabled_nodes": [hexlify(m.disabled_nodes) for i in hexlify(m.disabled_nodes)], # ArrayField[primitive] in generate_composite
+        "node_biases": [askrene_listlayers_layers_node_biases2py(i) for i in m.node_biases],  # ArrayField[composite] in generate_composite
         "layer": m.layer,  # PrimitiveField in generate_composite
         "persistent": m.persistent,  # PrimitiveField in generate_composite
     })
@@ -3045,6 +3080,7 @@ def askrene_create_layer_layers_biases2py(m):
         "bias": m.bias,  # PrimitiveField in generate_composite
         "description": m.description,  # PrimitiveField in generate_composite
         "short_channel_id_dir": m.short_channel_id_dir,  # PrimitiveField in generate_composite
+        "timestamp": m.timestamp,  # PrimitiveField in generate_composite
     })
 
 
@@ -3076,6 +3112,16 @@ def askrene_create_layer_layers_created_channels2py(m):
     })
 
 
+def askrene_create_layer_layers_node_biases2py(m):
+    return remove_default({
+        "description": m.description,  # PrimitiveField in generate_composite
+        "in_bias": m.in_bias,  # PrimitiveField in generate_composite
+        "node": hexlify(m.node),  # PrimitiveField in generate_composite
+        "out_bias": m.out_bias,  # PrimitiveField in generate_composite
+        "timestamp": m.timestamp,  # PrimitiveField in generate_composite
+    })
+
+
 def askrene_create_layer_layers2py(m):
     return remove_default({
         "biases": [askrene_create_layer_layers_biases2py(i) for i in m.biases],  # ArrayField[composite] in generate_composite
@@ -3084,6 +3130,7 @@ def askrene_create_layer_layers2py(m):
         "created_channels": [askrene_create_layer_layers_created_channels2py(i) for i in m.created_channels],  # ArrayField[composite] in generate_composite
         "disabled_channels": [m.disabled_channels for i in m.disabled_channels], # ArrayField[primitive] in generate_composite
         "disabled_nodes": [hexlify(m.disabled_nodes) for i in hexlify(m.disabled_nodes)], # ArrayField[primitive] in generate_composite
+        "node_biases": [askrene_create_layer_layers_node_biases2py(i) for i in m.node_biases],  # ArrayField[composite] in generate_composite
         "layer": m.layer,  # PrimitiveField in generate_composite
         "persistent": m.persistent,  # PrimitiveField in generate_composite
     })
@@ -3174,6 +3221,7 @@ def askrene_bias_channel_biases2py(m):
         "description": m.description,  # PrimitiveField in generate_composite
         "layer": m.layer,  # PrimitiveField in generate_composite
         "short_channel_id_dir": m.short_channel_id_dir,  # PrimitiveField in generate_composite
+        "timestamp": m.timestamp,  # PrimitiveField in generate_composite
     })
 
 

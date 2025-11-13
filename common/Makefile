@@ -21,6 +21,7 @@ COMMON_SRC_NOGEN :=				\
 	common/channel_config.c			\
 	common/channel_id.c			\
 	common/channel_type.c			\
+	common/clock_time.c			\
 	common/close_tx.c			\
 	common/codex32.c			\
 	common/coin_mvt.c			\
@@ -86,6 +87,7 @@ COMMON_SRC_NOGEN :=				\
 	common/psbt_keypath.c			\
 	common/psbt_open.c			\
 	common/pseudorand.c			\
+	common/randbytes.c			\
 	common/random_select.c			\
 	common/read_peer_msg.c			\
 	common/route.c				\
@@ -134,8 +136,8 @@ common/scb_wiregen.c_args := -s
 
 # Check that all h and c files are in the Makefile!
 check-common-files:
-	@$(call VERBOSE, "MISSING-SRC common", [ "$(filter-out $(COMMON_SRC), $(wildcard common/*.c))" = "" ])
-	@$(call VERBOSE, "MISSING-HEADERS common", [ "$(filter-out $(COMMON_HEADERS) $(COMMON_SRC:.c=.h), $(wildcard common/*.h))" = "" ])
+	@$(call VERBOSE, "checking common source", [ "$(filter-out $(COMMON_SRC), $(wildcard common/*.c))" = "" ])
+	@$(call VERBOSE, "checking common headers", [ "$(filter-out $(COMMON_HEADERS) $(COMMON_SRC:.c=.h), $(wildcard common/*.h))" = "" ])
 
 check-source: check-common-files
 

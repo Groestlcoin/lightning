@@ -125,7 +125,6 @@ static struct lightningd *new_lightningd(const tal_t *ctx)
 	ld->dev_disconnect_fd = -1;
 	ld->dev_subdaemon_fail = false;
 	ld->dev_allow_localhost = false;
-	ld->dev_gossip_time = 0;
 	ld->dev_fast_gossip = false;
 	ld->dev_fast_gossip_prune = false;
 	ld->dev_throttle_gossip = false;
@@ -1189,8 +1188,6 @@ int main(int argc, char *argv[])
 	bool try_reexec;
 	size_t num_channels;
 
-	trace_span_start("lightningd/startup", argv);
-
 	/*~ What happens in strange locales should stay there. */
 	setup_locale();
 
@@ -1213,6 +1210,10 @@ int main(int argc, char *argv[])
 	/*~ Every daemon calls this in some form: the hooks are for dumping
 	 * backtraces when we crash (if supported on this platform). */
 	daemon_setup(argv[0], log_backtrace_print, log_backtrace_exit);
+
+	/*~ We enable trace as early as possible, but it uses support functions
+	 * (particularly if we're avoid entropy) so do it after daemon_setup. */
+	trace_span_start("lightningd/startup", argv);
 
 	/*~ There's always a battle between what a constructor like this
 	 * should do, and what should be added later by the caller.  In

@@ -1,9 +1,11 @@
 #include "config.h"
 #include <ccan/tal/str/str.h>
 #include <common/blockheight_states.h>
+#include <common/clock_time.h>
 #include <common/closing_fee.h>
 #include <common/fee_states.h>
 #include <common/json_command.h>
+#include <common/randbytes.h>
 #include <common/wire_error.h>
 #include <hsmd/hsmd_wiregen.h>
 #include <lightningd/channel.h>
@@ -1005,7 +1007,7 @@ void channel_set_state(struct channel *channel,
 		struct channel_state_change *change;
 
 		change = new_channel_state_change(channel->state_changes,
-						  time_now(),
+						  clock_time(),
 						  old_state,
 						  state,
 						  reason,

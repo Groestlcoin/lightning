@@ -3,9 +3,11 @@
 #include "../common/timeout.c"
 #include <common/blinding.h>
 #include <common/channel_type.h>
+#include <common/clock_time.h>
 #include <common/daemon_conn.h>
 #include <common/ecdh.h>
 #include <common/json_stream.h>
+#include <common/memleak.h>
 #include <common/onionreply.h>
 #include <common/sciddir_or_pubkey.h>
 #include <common/setup.h>

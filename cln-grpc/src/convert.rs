@@ -274,6 +274,16 @@ impl From<responses::AutocleanonceAutocleanFailedpays> for pb::AutocleanonceAuto
 }
 
 #[allow(unused_variables)]
+impl From<responses::AutocleanonceAutocleanNetworkevents> for pb::AutocleanonceAutocleanNetworkevents {
+    fn from(c: responses::AutocleanonceAutocleanNetworkevents) -> Self {
+        Self {
+            cleaned: c.cleaned, // Rule #2 for type u64
+            uncleaned: c.uncleaned, // Rule #2 for type u64
+        }
+    }
+}
+
+#[allow(unused_variables)]
 impl From<responses::AutocleanonceAutocleanPaidinvoices> for pb::AutocleanonceAutocleanPaidinvoices {
     fn from(c: responses::AutocleanonceAutocleanPaidinvoices) -> Self {
         Self {
@@ -310,6 +320,7 @@ impl From<responses::AutocleanonceAutoclean> for pb::AutocleanonceAutoclean {
             expiredinvoices: c.expiredinvoices.map(|v| v.into()),
             failedforwards: c.failedforwards.map(|v| v.into()),
             failedpays: c.failedpays.map(|v| v.into()),
+            networkevents: c.networkevents.map(|v| v.into()),
             paidinvoices: c.paidinvoices.map(|v| v.into()),
             succeededforwards: c.succeededforwards.map(|v| v.into()),
             succeededpays: c.succeededpays.map(|v| v.into()),
@@ -360,6 +371,17 @@ impl From<responses::AutocleanstatusAutocleanFailedpays> for pb::Autocleanstatus
 }
 
 #[allow(unused_variables)]
+impl From<responses::AutocleanstatusAutocleanNetworkevents> for pb::AutocleanstatusAutocleanNetworkevents {
+    fn from(c: responses::AutocleanstatusAutocleanNetworkevents) -> Self {
+        Self {
+            age: c.age, // Rule #2 for type u64?
+            cleaned: c.cleaned, // Rule #2 for type u64
+            enabled: c.enabled, // Rule #2 for type boolean
+        }
+    }
+}
+
+#[allow(unused_variables)]
 impl From<responses::AutocleanstatusAutocleanPaidinvoices> for pb::AutocleanstatusAutocleanPaidinvoices {
     fn from(c: responses::AutocleanstatusAutocleanPaidinvoices) -> Self {
         Self {
@@ -399,6 +421,7 @@ impl From<responses::AutocleanstatusAutoclean> for pb::AutocleanstatusAutoclean 
             expiredinvoices: c.expiredinvoices.map(|v| v.into()),
             failedforwards: c.failedforwards.map(|v| v.into()),
             failedpays: c.failedpays.map(|v| v.into()),
+            networkevents: c.networkevents.map(|v| v.into()),
             paidinvoices: c.paidinvoices.map(|v| v.into()),
             succeededforwards: c.succeededforwards.map(|v| v.into()),
             succeededpays: c.succeededpays.map(|v| v.into()),
@@ -2771,6 +2794,17 @@ impl From<responses::WaitInvoices> for pb::WaitInvoices {
 }
 
 #[allow(unused_variables)]
+impl From<responses::WaitNetworkevents> for pb::WaitNetworkevents {
+    fn from(c: responses::WaitNetworkevents) -> Self {
+        Self {
+            created_index: c.created_index, // Rule #2 for type u64?
+            peer_id: c.peer_id.map(|v| v.serialize().to_vec()), // Rule #2 for type pubkey?
+            item_type: c.item_type.map(|v| v as i32),
+        }
+    }
+}
+
+#[allow(unused_variables)]
 impl From<responses::WaitSendpays> for pb::WaitSendpays {
     fn from(c: responses::WaitSendpays) -> Self {
         Self {
@@ -2794,6 +2828,7 @@ impl From<responses::WaitResponse> for pb::WaitResponse {
             forwards: c.forwards.map(|v| v.into()),
             htlcs: c.htlcs.map(|v| v.into()),
             invoices: c.invoices.map(|v| v.into()),
+            networkevents: c.networkevents.map(|v| v.into()),
             sendpays: c.sendpays.map(|v| v.into()),
             subsystem: c.subsystem as i32,
             updated: c.updated, // Rule #2 for type u64?
@@ -4027,6 +4062,7 @@ impl From<responses::AskrenelistlayersLayersBiases> for pb::AskrenelistlayersLay
             bias: c.bias, // Rule #2 for type integer
             description: c.description, // Rule #2 for type string?
             short_channel_id_dir: c.short_channel_id_dir.to_string(), // Rule #2 for type short_channel_id_dir
+            timestamp: c.timestamp, // Rule #2 for type u64?
         }
     }
 }
@@ -4071,6 +4107,19 @@ impl From<responses::AskrenelistlayersLayersCreatedChannels> for pb::Askrenelist
 }
 
 #[allow(unused_variables)]
+impl From<responses::AskrenelistlayersLayersNodeBiases> for pb::AskrenelistlayersLayersNodeBiases {
+    fn from(c: responses::AskrenelistlayersLayersNodeBiases) -> Self {
+        Self {
+            description: c.description, // Rule #2 for type string?
+            in_bias: c.in_bias, // Rule #2 for type integer
+            node: c.node.serialize().to_vec(), // Rule #2 for type pubkey
+            out_bias: c.out_bias, // Rule #2 for type integer
+            timestamp: c.timestamp, // Rule #2 for type u64
+        }
+    }
+}
+
+#[allow(unused_variables)]
 impl From<responses::AskrenelistlayersLayers> for pb::AskrenelistlayersLayers {
     fn from(c: responses::AskrenelistlayersLayers) -> Self {
         Self {
@@ -4087,6 +4136,8 @@ impl From<responses::AskrenelistlayersLayers> for pb::AskrenelistlayersLayers {
             // Field: AskRene-ListLayers.layers[].disabled_nodes[]
             disabled_nodes: c.disabled_nodes.into_iter().map(|i| i.serialize().to_vec()).collect(), // Rule #3 for type pubkey
             layer: c.layer, // Rule #2 for type string
+            // Field: AskRene-ListLayers.layers[].node_biases[]
+            node_biases: c.node_biases.map(|arr| arr.into_iter().map(|i| i.into()).collect()).unwrap_or(vec![]), // Rule #3
             persistent: c.persistent, // Rule #2 for type boolean?
         }
     }
@@ -4109,6 +4160,7 @@ impl From<responses::AskrenecreatelayerLayersBiases> for pb::AskrenecreatelayerL
             bias: c.bias, // Rule #2 for type integer
             description: c.description, // Rule #2 for type string?
             short_channel_id_dir: c.short_channel_id_dir.to_string(), // Rule #2 for type short_channel_id_dir
+            timestamp: c.timestamp, // Rule #2 for type u64?
         }
     }
 }
@@ -4151,6 +4203,19 @@ impl From<responses::AskrenecreatelayerLayersCreatedChannels> for pb::Askrenecre
 }
 
 #[allow(unused_variables)]
+impl From<responses::AskrenecreatelayerLayersNodeBiases> for pb::AskrenecreatelayerLayersNodeBiases {
+    fn from(c: responses::AskrenecreatelayerLayersNodeBiases) -> Self {
+        Self {
+            description: c.description, // Rule #2 for type string?
+            in_bias: c.in_bias, // Rule #2 for type integer
+            node: c.node.serialize().to_vec(), // Rule #2 for type pubkey
+            out_bias: c.out_bias, // Rule #2 for type integer
+            timestamp: c.timestamp, // Rule #2 for type u64
+        }
+    }
+}
+
+#[allow(unused_variables)]
 impl From<responses::AskrenecreatelayerLayers> for pb::AskrenecreatelayerLayers {
     fn from(c: responses::AskrenecreatelayerLayers) -> Self {
         Self {
@@ -4167,6 +4232,8 @@ impl From<responses::AskrenecreatelayerLayers> for pb::AskrenecreatelayerLayers 
             // Field: AskRene-Create-Layer.layers[].disabled_nodes[]
             disabled_nodes: c.disabled_nodes.into_iter().map(|i| i.serialize().to_vec()).collect(), // Rule #3 for type pubkey
             layer: c.layer, // Rule #2 for type string
+            // Field: AskRene-Create-Layer.layers[].node_biases[]
+            node_biases: c.node_biases.map(|arr| arr.into_iter().map(|i| i.into()).collect()).unwrap_or(vec![]), // Rule #3
             persistent: c.persistent, // Rule #2 for type boolean
         }
     }
@@ -4299,6 +4366,7 @@ impl From<responses::AskrenebiaschannelBiases> for pb::AskrenebiaschannelBiases 
             description: c.description, // Rule #2 for type string?
             layer: c.layer, // Rule #2 for type string
             short_channel_id_dir: c.short_channel_id_dir.to_string(), // Rule #2 for type short_channel_id_dir
+            timestamp: c.timestamp, // Rule #2 for type u64?
         }
     }
 }

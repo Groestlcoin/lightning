@@ -1,7 +1,10 @@
 #! /usr/bin/make
 
+# Prefer VERSION from environment if provided (e.g., from GitHub Actions)
 # Extract version from git, or if we're from a zipfile, use dirname
-VERSION=$(shell git describe --tags --always --dirty=-modded --abbrev=7 2>/dev/null || pwd | $(SED) -n 's|.*/c\{0,1\}lightning-v\{0,1\}\([0-9a-f.rc\-]*\)$$|v\1|gp')
+VERSION ?= $(shell git describe --tags --always --dirty=-modded --abbrev=7 2>/dev/null || \
+	pwd | sed -n 's|.*/c\{0,1\}lightning-v\{0,1\}\([0-9a-f.rc\-]*\)$$|v\1|gp')
+$(info Building version $(VERSION))
 
 # Next release.
 CLN_NEXT_VERSION := v25.12
@@ -600,7 +603,7 @@ check-tmpctx:
 	@if git grep -n 'tal_free[(]tmpctx)' | grep -Ev '^ccan/|/test/|^common/setup.c:|^common/utils.c:'; then echo "Don't free tmpctx!">&2; exit 1; fi
 
 check-discouraged-functions:
-	@if git grep -E "[^a-z_/](fgets|fputs|gets|scanf|sprintf)\(" -- "*.c" "*.h" ":(exclude)ccan/" ":(exclude)contrib/"; then exit 1; fi
+	@if git grep -nE "[^a-z_/](fgets|fputs|gets|scanf|sprintf|randombytes_buf|time_now)\(" -- "*.c" "*.h" ":(exclude)ccan/" ":(exclude)contrib/" | grep -Fv '/* discouraged:'; then exit 1; fi
 
 check-bad-sprintf:
 	@if git grep -n "%[*]\.s"; then exit 1; fi

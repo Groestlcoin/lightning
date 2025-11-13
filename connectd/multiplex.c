@@ -634,8 +634,8 @@ static void send_ping(struct peer *peer)
 	/* If it's still sending us traffic, maybe ping reply is backed up?
 	 * That's OK, ping is just to make sure it's still alive, and clearly
 	 * it is. */
-	if (time_before(peer->last_recv_time,
-			timeabs_sub(time_now(), time_from_sec(60)))) {
+	if (timemono_before(peer->last_recv_time,
+			    timemono_sub(time_mono(), time_from_sec(60)))) {
 		/* Already have a ping in flight? */
 		if (peer->expecting_pong != PONG_UNEXPECTED) {
 			status_peer_debug(&peer->id, "Last ping unreturned: hanging up");
@@ -645,6 +645,7 @@ static void send_ping(struct peer *peer)
 		}
 
 		inject_peer_msg(peer, take(make_ping(NULL, 1, 0)));
+		peer->ping_start = time_mono();
 		peer->expecting_pong = PONG_EXPECTED_PROBING;
 	}
 
@@ -719,6 +720,10 @@ static void handle_pong_in(struct peer *peer, const u8 *msg)
 		/* fall thru */
 	case PONG_EXPECTED_PROBING:
 		peer->expecting_pong = PONG_UNEXPECTED;
+		daemon_conn_send(peer->daemon->master,
+				 take(towire_connectd_ping_latency(NULL,
+								   &peer->id,
+								   time_to_nsec(timemono_since(peer->ping_start)))));
 		return;
 	case PONG_UNEXPECTED:
 		status_debug("Unexpected pong?");
@@ -1253,7 +1258,7 @@ static struct io_plan *read_body_from_peer_done(struct io_conn *peer_conn,
        }
 
        /* We got something! */
-       peer->last_recv_time = time_now();
+       peer->last_recv_time = time_mono();
 
        /* Don't process packets while we're closing */
        if (peer->draining_state != NOT_DRAINING)
@@ -1387,9 +1392,10 @@ static void destroy_peer_conn(struct io_conn *peer_conn, struct peer *peer)
 {
 	assert(peer->to_peer == peer_conn);
 
-	/* We are no longer connected.  Tell lightningd & gossipd*/
+	/* We are no longer connected.  Tell lightningd & gossipd */
 	peer->to_peer = NULL;
-	send_disconnected(peer->daemon, &peer->id, peer->counter);
+	send_disconnected(peer->daemon, &peer->id, peer->counter,
+			  peer->connect_starttime);
 
 	/* Wake subds: give them 5 seconds to flush. */
 	for (size_t i = 0; i < tal_count(peer->subds); i++) {
@@ -1532,6 +1538,7 @@ void send_manual_ping(struct daemon *daemon, const u8 *msg)
 	if (tal_count(ping) > 65535)
 		status_failed(STATUS_FAIL_MASTER_IO, "Oversize ping");
 
+	peer->ping_start = time_mono();
 	inject_peer_msg(peer, take(ping));
 
 	status_debug("sending ping expecting %sresponse",

@@ -3804,7 +3804,7 @@ pub mod requests {
 	    }
 	}
 
-	/// ['The subsystem to get the next index value from.', '  `invoices`: corresponding to `listinvoices` (added in *v23.08*).', '  `sendpays`: corresponding to `listsendpays` (added in *v23.11*).', '  `forwards`: corresponding to `listforwards` (added in *v23.11*).', '  `htlcs`: corresponding to `listhtlcs` (added in *v25.05*).', '  `chainmoves`: corresponding to `listchainmoves` (added in *v25.09*).', '  `channelmoves`: corresponding to `listchannelmoves` (added in *v25.09*).']
+	/// ['The subsystem to get the next index value from.', '  `invoices`: corresponding to `listinvoices` (added in *v23.08*).', '  `sendpays`: corresponding to `listsendpays` (added in *v23.11*).', '  `forwards`: corresponding to `listforwards` (added in *v23.11*).', '  `htlcs`: corresponding to `listhtlcs` (added in *v25.05*).', '  `chainmoves`: corresponding to `listchainmoves` (added in *v25.09*).', '  `channelmoves`: corresponding to `listchannelmoves` (added in *v25.09*).', '  `networkevents`: corresponding to `listnetworkevents` (added in *v25.12*).']
 	#[derive(Copy, Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 	#[allow(non_camel_case_types)]
 	pub enum WaitSubsystem {
@@ -3820,6 +3820,8 @@ pub mod requests {
 	    CHAINMOVES = 4,
 	    #[serde(rename = "channelmoves")]
 	    CHANNELMOVES = 5,
+	    #[serde(rename = "networkevents")]
+	    NETWORKEVENTS = 6,
 	}
 
 	impl TryFrom<i32> for WaitSubsystem {
@@ -3832,6 +3834,7 @@ pub mod requests {
 	    3 => Ok(WaitSubsystem::HTLCS),
 	    4 => Ok(WaitSubsystem::CHAINMOVES),
 	    5 => Ok(WaitSubsystem::CHANNELMOVES),
+	    6 => Ok(WaitSubsystem::NETWORKEVENTS),
 	            o => Err(anyhow::anyhow!("Unknown variant {} for enum WaitSubsystem", o)),
 	        }
 	    }
@@ -3846,6 +3849,7 @@ pub mod requests {
 	            WaitSubsystem::HTLCS => "HTLCS",
 	            WaitSubsystem::CHAINMOVES => "CHAINMOVES",
 	            WaitSubsystem::CHANNELMOVES => "CHANNELMOVES",
+	            WaitSubsystem::NETWORKEVENTS => "NETWORKEVENTS",
 	        }.to_string()
 	    }
 	}
@@ -5328,6 +5332,12 @@ pub mod responses {
 	}
 
 	#[derive(Clone, Debug, Deserialize, Serialize)]
+	pub struct AutocleanonceAutocleanNetworkevents {
+	    pub cleaned: u64,
+	    pub uncleaned: u64,
+	}
+
+	#[derive(Clone, Debug, Deserialize, Serialize)]
 	pub struct AutocleanonceAutocleanPaidinvoices {
 	    pub cleaned: u64,
 	    pub uncleaned: u64,
@@ -5353,6 +5363,8 @@ pub mod responses {
 	    pub failedforwards: Option<AutocleanonceAutocleanFailedforwards>,
 	    #[serde(skip_serializing_if = "Option::is_none")]
 	    pub failedpays: Option<AutocleanonceAutocleanFailedpays>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub networkevents: Option<AutocleanonceAutocleanNetworkevents>,
 	    #[serde(skip_serializing_if = "Option::is_none")]
 	    pub paidinvoices: Option<AutocleanonceAutocleanPaidinvoices>,
 	    #[serde(skip_serializing_if = "Option::is_none")]
@@ -5402,6 +5414,14 @@ pub mod responses {
 	}
 
 	#[derive(Clone, Debug, Deserialize, Serialize)]
+	pub struct AutocleanstatusAutocleanNetworkevents {
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub age: Option<u64>,
+	    pub cleaned: u64,
+	    pub enabled: bool,
+	}
+
+	#[derive(Clone, Debug, Deserialize, Serialize)]
 	pub struct AutocleanstatusAutocleanPaidinvoices {
 	    #[serde(skip_serializing_if = "Option::is_none")]
 	    pub age: Option<u64>,
@@ -5433,6 +5453,8 @@ pub mod responses {
 	    pub failedforwards: Option<AutocleanstatusAutocleanFailedforwards>,
 	    #[serde(skip_serializing_if = "Option::is_none")]
 	    pub failedpays: Option<AutocleanstatusAutocleanFailedpays>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub networkevents: Option<AutocleanstatusAutocleanNetworkevents>,
 	    #[serde(skip_serializing_if = "Option::is_none")]
 	    pub paidinvoices: Option<AutocleanstatusAutocleanPaidinvoices>,
 	    #[serde(skip_serializing_if = "Option::is_none")]
@@ -9819,108 +9841,6 @@ pub mod responses {
 	    }
 	}
 
-	/// ['The first 10 states are for `in`, the next 10 are for `out`.']
-	#[derive(Copy, Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-	#[allow(non_camel_case_types)]
-	pub enum WaitHtlcsState {
-	    #[serde(rename = "SENT_ADD_HTLC")]
-	    SENT_ADD_HTLC = 0,
-	    #[serde(rename = "SENT_ADD_COMMIT")]
-	    SENT_ADD_COMMIT = 1,
-	    #[serde(rename = "RCVD_ADD_REVOCATION")]
-	    RCVD_ADD_REVOCATION = 2,
-	    #[serde(rename = "RCVD_ADD_ACK_COMMIT")]
-	    RCVD_ADD_ACK_COMMIT = 3,
-	    #[serde(rename = "SENT_ADD_ACK_REVOCATION")]
-	    SENT_ADD_ACK_REVOCATION = 4,
-	    #[serde(rename = "RCVD_REMOVE_HTLC")]
-	    RCVD_REMOVE_HTLC = 5,
-	    #[serde(rename = "RCVD_REMOVE_COMMIT")]
-	    RCVD_REMOVE_COMMIT = 6,
-	    #[serde(rename = "SENT_REMOVE_REVOCATION")]
-	    SENT_REMOVE_REVOCATION = 7,
-	    #[serde(rename = "SENT_REMOVE_ACK_COMMIT")]
-	    SENT_REMOVE_ACK_COMMIT = 8,
-	    #[serde(rename = "RCVD_REMOVE_ACK_REVOCATION")]
-	    RCVD_REMOVE_ACK_REVOCATION = 9,
-	    #[serde(rename = "RCVD_ADD_HTLC")]
-	    RCVD_ADD_HTLC = 10,
-	    #[serde(rename = "RCVD_ADD_COMMIT")]
-	    RCVD_ADD_COMMIT = 11,
-	    #[serde(rename = "SENT_ADD_REVOCATION")]
-	    SENT_ADD_REVOCATION = 12,
-	    #[serde(rename = "SENT_ADD_ACK_COMMIT")]
-	    SENT_ADD_ACK_COMMIT = 13,
-	    #[serde(rename = "RCVD_ADD_ACK_REVOCATION")]
-	    RCVD_ADD_ACK_REVOCATION = 14,
-	    #[serde(rename = "SENT_REMOVE_HTLC")]
-	    SENT_REMOVE_HTLC = 15,
-	    #[serde(rename = "SENT_REMOVE_COMMIT")]
-	    SENT_REMOVE_COMMIT = 16,
-	    #[serde(rename = "RCVD_REMOVE_REVOCATION")]
-	    RCVD_REMOVE_REVOCATION = 17,
-	    #[serde(rename = "RCVD_REMOVE_ACK_COMMIT")]
-	    RCVD_REMOVE_ACK_COMMIT = 18,
-	    #[serde(rename = "SENT_REMOVE_ACK_REVOCATION")]
-	    SENT_REMOVE_ACK_REVOCATION = 19,
-	}
-
-	impl TryFrom<i32> for WaitHtlcsState {
-	    type Error = anyhow::Error;
-	    fn try_from(c: i32) -> Result<WaitHtlcsState, anyhow::Error> {
-	        match c {
-	    0 => Ok(WaitHtlcsState::SENT_ADD_HTLC),
-	    1 => Ok(WaitHtlcsState::SENT_ADD_COMMIT),
-	    2 => Ok(WaitHtlcsState::RCVD_ADD_REVOCATION),
-	    3 => Ok(WaitHtlcsState::RCVD_ADD_ACK_COMMIT),
-	    4 => Ok(WaitHtlcsState::SENT_ADD_ACK_REVOCATION),
-	    5 => Ok(WaitHtlcsState::RCVD_REMOVE_HTLC),
-	    6 => Ok(WaitHtlcsState::RCVD_REMOVE_COMMIT),
-	    7 => Ok(WaitHtlcsState::SENT_REMOVE_REVOCATION),
-	    8 => Ok(WaitHtlcsState::SENT_REMOVE_ACK_COMMIT),
-	    9 => Ok(WaitHtlcsState::RCVD_REMOVE_ACK_REVOCATION),
-	    10 => Ok(WaitHtlcsState::RCVD_ADD_HTLC),
-	    11 => Ok(WaitHtlcsState::RCVD_ADD_COMMIT),
-	    12 => Ok(WaitHtlcsState::SENT_ADD_REVOCATION),
-	    13 => Ok(WaitHtlcsState::SENT_ADD_ACK_COMMIT),
-	    14 => Ok(WaitHtlcsState::RCVD_ADD_ACK_REVOCATION),
-	    15 => Ok(WaitHtlcsState::SENT_REMOVE_HTLC),
-	    16 => Ok(WaitHtlcsState::SENT_REMOVE_COMMIT),
-	    17 => Ok(WaitHtlcsState::RCVD_REMOVE_REVOCATION),
-	    18 => Ok(WaitHtlcsState::RCVD_REMOVE_ACK_COMMIT),
-	    19 => Ok(WaitHtlcsState::SENT_REMOVE_ACK_REVOCATION),
-	            o => Err(anyhow::anyhow!("Unknown variant {} for enum WaitHtlcsState", o)),
-	        }
-	    }
-	}
-
-	impl ToString for WaitHtlcsState {
-	    fn to_string(&self) -> String {
-	        match self {
-	            WaitHtlcsState::SENT_ADD_HTLC => "SENT_ADD_HTLC",
-	            WaitHtlcsState::SENT_ADD_COMMIT => "SENT_ADD_COMMIT",
-	            WaitHtlcsState::RCVD_ADD_REVOCATION => "RCVD_ADD_REVOCATION",
-	            WaitHtlcsState::RCVD_ADD_ACK_COMMIT => "RCVD_ADD_ACK_COMMIT",
-	            WaitHtlcsState::SENT_ADD_ACK_REVOCATION => "SENT_ADD_ACK_REVOCATION",
-	            WaitHtlcsState::RCVD_REMOVE_HTLC => "RCVD_REMOVE_HTLC",
-	            WaitHtlcsState::RCVD_REMOVE_COMMIT => "RCVD_REMOVE_COMMIT",
-	            WaitHtlcsState::SENT_REMOVE_REVOCATION => "SENT_REMOVE_REVOCATION",
-	            WaitHtlcsState::SENT_REMOVE_ACK_COMMIT => "SENT_REMOVE_ACK_COMMIT",
-	            WaitHtlcsState::RCVD_REMOVE_ACK_REVOCATION => "RCVD_REMOVE_ACK_REVOCATION",
-	            WaitHtlcsState::RCVD_ADD_HTLC => "RCVD_ADD_HTLC",
-	            WaitHtlcsState::RCVD_ADD_COMMIT => "RCVD_ADD_COMMIT",
-	            WaitHtlcsState::SENT_ADD_REVOCATION => "SENT_ADD_REVOCATION",
-	            WaitHtlcsState::SENT_ADD_ACK_COMMIT => "SENT_ADD_ACK_COMMIT",
-	            WaitHtlcsState::RCVD_ADD_ACK_REVOCATION => "RCVD_ADD_ACK_REVOCATION",
-	            WaitHtlcsState::SENT_REMOVE_HTLC => "SENT_REMOVE_HTLC",
-	            WaitHtlcsState::SENT_REMOVE_COMMIT => "SENT_REMOVE_COMMIT",
-	            WaitHtlcsState::RCVD_REMOVE_REVOCATION => "RCVD_REMOVE_REVOCATION",
-	            WaitHtlcsState::RCVD_REMOVE_ACK_COMMIT => "RCVD_REMOVE_ACK_COMMIT",
-	            WaitHtlcsState::SENT_REMOVE_ACK_REVOCATION => "SENT_REMOVE_ACK_REVOCATION",
-	        }.to_string()
-	    }
-	}
-
 	#[derive(Clone, Debug, Deserialize, Serialize)]
 	pub struct WaitHtlcs {
 	    #[serde(skip_serializing_if = "Option::is_none")]
@@ -9936,7 +9856,7 @@ pub mod responses {
 	    #[serde(skip_serializing_if = "Option::is_none")]
 	    pub short_channel_id: Option<ShortChannelId>,
 	    #[serde(skip_serializing_if = "Option::is_none")]
-	    pub state: Option<WaitHtlcsState>,
+	    pub state: Option<HtlcState>,
 	}
 
 	/// ["Whether it's paid, unpaid or unpayable."]
@@ -9985,6 +9905,54 @@ pub mod responses {
 	    pub label: Option<String>,
 	    #[serde(skip_serializing_if = "Option::is_none")]
 	    pub status: Option<WaitInvoicesStatus>,
+	}
+
+	/// ['The kind of network event']
+	#[derive(Copy, Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+	#[allow(non_camel_case_types)]
+	pub enum WaitNetworkeventsType {
+	    #[serde(rename = "connect")]
+	    CONNECT = 0,
+	    #[serde(rename = "connect_fail")]
+	    CONNECT_FAIL = 1,
+	    #[serde(rename = "ping")]
+	    PING = 2,
+	    #[serde(rename = "disconnect")]
+	    DISCONNECT = 3,
+	}
+
+	impl TryFrom<i32> for WaitNetworkeventsType {
+	    type Error = anyhow::Error;
+	    fn try_from(c: i32) -> Result<WaitNetworkeventsType, anyhow::Error> {
+	        match c {
+	    0 => Ok(WaitNetworkeventsType::CONNECT),
+	    1 => Ok(WaitNetworkeventsType::CONNECT_FAIL),
+	    2 => Ok(WaitNetworkeventsType::PING),
+	    3 => Ok(WaitNetworkeventsType::DISCONNECT),
+	            o => Err(anyhow::anyhow!("Unknown variant {} for enum WaitNetworkeventsType", o)),
+	        }
+	    }
+	}
+
+	impl ToString for WaitNetworkeventsType {
+	    fn to_string(&self) -> String {
+	        match self {
+	            WaitNetworkeventsType::CONNECT => "CONNECT",
+	            WaitNetworkeventsType::CONNECT_FAIL => "CONNECT_FAIL",
+	            WaitNetworkeventsType::PING => "PING",
+	            WaitNetworkeventsType::DISCONNECT => "DISCONNECT",
+	        }.to_string()
+	    }
+	}
+
+	#[derive(Clone, Debug, Deserialize, Serialize)]
+	pub struct WaitNetworkevents {
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub created_index: Option<u64>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub item_type: Option<WaitNetworkeventsType>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub peer_id: Option<PublicKey>,
 	}
 
 	/// ['Status of the payment.']
@@ -10048,6 +10016,8 @@ pub mod responses {
 	    CHAINMOVES = 4,
 	    #[serde(rename = "channelmoves")]
 	    CHANNELMOVES = 5,
+	    #[serde(rename = "networkevents")]
+	    NETWORKEVENTS = 6,
 	}
 
 	impl TryFrom<i32> for WaitSubsystem {
@@ -10060,6 +10030,7 @@ pub mod responses {
 	    3 => Ok(WaitSubsystem::HTLCS),
 	    4 => Ok(WaitSubsystem::CHAINMOVES),
 	    5 => Ok(WaitSubsystem::CHANNELMOVES),
+	    6 => Ok(WaitSubsystem::NETWORKEVENTS),
 	            o => Err(anyhow::anyhow!("Unknown variant {} for enum WaitSubsystem", o)),
 	        }
 	    }
@@ -10074,6 +10045,7 @@ pub mod responses {
 	            WaitSubsystem::HTLCS => "HTLCS",
 	            WaitSubsystem::CHAINMOVES => "CHAINMOVES",
 	            WaitSubsystem::CHANNELMOVES => "CHANNELMOVES",
+	            WaitSubsystem::NETWORKEVENTS => "NETWORKEVENTS",
 	        }.to_string()
 	    }
 	}
@@ -10097,6 +10069,8 @@ pub mod responses {
 	    pub htlcs: Option<WaitHtlcs>,
 	    #[serde(skip_serializing_if = "Option::is_none")]
 	    pub invoices: Option<WaitInvoices>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub networkevents: Option<WaitNetworkevents>,
 	    #[serde(skip_serializing_if = "Option::is_none")]
 	    pub sendpays: Option<WaitSendpays>,
 	    #[serde(skip_serializing_if = "Option::is_none")]
@@ -11536,6 +11510,8 @@ pub mod responses {
 	pub struct AskrenelistlayersLayersBiases {
 	    #[serde(skip_serializing_if = "Option::is_none")]
 	    pub description: Option<String>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub timestamp: Option<u64>,
 	    pub bias: i64,
 	    pub short_channel_id_dir: ShortChannelIdDir,
 	}
@@ -11555,6 +11531,16 @@ pub mod responses {
 	    #[serde(skip_serializing_if = "Option::is_none")]
 	    pub htlc_minimum_msat: Option<Amount>,
 	    pub short_channel_id_dir: ShortChannelIdDir,
+	}
+
+	#[derive(Clone, Debug, Deserialize, Serialize)]
+	pub struct AskrenelistlayersLayersNodeBiases {
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub description: Option<String>,
+	    pub in_bias: i64,
+	    pub node: PublicKey,
+	    pub out_bias: i64,
+	    pub timestamp: u64,
 	}
 
 	#[derive(Clone, Debug, Deserialize, Serialize)]
@@ -11587,6 +11573,8 @@ pub mod responses {
 	    pub channel_updates: Option<Vec<AskrenelistlayersLayersChannelUpdates>>,
 	    #[serde(skip_serializing_if = "crate::is_none_or_empty")]
 	    pub disabled_channels: Option<Vec<ShortChannelIdDir>>,
+	    #[serde(skip_serializing_if = "crate::is_none_or_empty")]
+	    pub node_biases: Option<Vec<AskrenelistlayersLayersNodeBiases>>,
 	    pub constraints: Vec<AskrenelistlayersLayersConstraints>,
 	    pub created_channels: Vec<AskrenelistlayersLayersCreatedChannels>,
 	    pub disabled_nodes: Vec<PublicKey>,
@@ -11613,8 +11601,20 @@ pub mod responses {
 	pub struct AskrenecreatelayerLayersBiases {
 	    #[serde(skip_serializing_if = "Option::is_none")]
 	    pub description: Option<String>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub timestamp: Option<u64>,
 	    pub bias: i64,
 	    pub short_channel_id_dir: ShortChannelIdDir,
+	}
+
+	#[derive(Clone, Debug, Deserialize, Serialize)]
+	pub struct AskrenecreatelayerLayersNodeBiases {
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub description: Option<String>,
+	    pub in_bias: i64,
+	    pub node: PublicKey,
+	    pub out_bias: i64,
+	    pub timestamp: u64,
 	}
 
 	#[derive(Clone, Debug, Deserialize, Serialize)]
@@ -11655,6 +11655,8 @@ pub mod responses {
 	    pub biases: Option<Vec<AskrenecreatelayerLayersBiases>>,
 	    #[serde(skip_serializing_if = "crate::is_none_or_empty")]
 	    pub disabled_channels: Option<Vec<ShortChannelIdDir>>,
+	    #[serde(skip_serializing_if = "crate::is_none_or_empty")]
+	    pub node_biases: Option<Vec<AskrenecreatelayerLayersNodeBiases>>,
 	    pub channel_updates: Vec<AskrenecreatelayerLayersChannelUpdates>,
 	    pub constraints: Vec<AskrenecreatelayerLayersConstraints>,
 	    pub created_channels: Vec<AskrenecreatelayerLayersCreatedChannels>,
@@ -11838,6 +11840,8 @@ pub mod responses {
 	pub struct AskrenebiaschannelBiases {
 	    #[serde(skip_serializing_if = "Option::is_none")]
 	    pub description: Option<String>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub timestamp: Option<u64>,
 	    pub bias: i64,
 	    pub layer: String,
 	    pub short_channel_id_dir: ShortChannelIdDir,

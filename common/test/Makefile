@@ -5,6 +5,8 @@ COMMON_TEST_PROGRAMS := $(COMMON_TEST_OBJS:.o=)
 
 COMMON_TEST_COMMON_OBJS :=				\
 	common/autodata.o				\
+	common/randbytes.o				\
+	common/clock_time.o				\
 	common/setup.o					\
 	common/utils.o
 
@@ -119,6 +121,7 @@ common/test/run-trace:					\
 	common/amount.o                                 \
 	common/memleak.o				\
 	common/pseudorand.o				\
+	common/randbytes.o				\
 	common/trace.o					\
 	wire/fromwire.o					\
 	wire/towire.o

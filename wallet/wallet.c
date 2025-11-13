@@ -1,12 +1,15 @@
 #include "config.h"
 #include <bitcoin/script.h>
 #include <ccan/array_size/array_size.h>
+#include <ccan/asort/asort.h>
 #include <ccan/cast/cast.h>
 #include <ccan/mem/mem.h>
 #include <ccan/tal/str/str.h>
 #include <channeld/channeld_wiregen.h>
+#include <common/clock_time.h>
 #include <common/memleak.h>
 #include <common/onionreply.h>
+#include <common/randbytes.h>
 #include <common/trace.h>
 #include <db/bindings.h>
 #include <db/common.h>
@@ -24,6 +27,7 @@
 #include <wallet/invoices.h>
 #include <wallet/txfilter.h>
 #include <wallet/wallet.h>
+#include <wally_bip32.h>
 
 #define SQLITE_MAX_UINT 0x7FFFFFFFFFFFFFFF
 #define DIRECTION_INCOMING 0
@@ -449,7 +453,23 @@ bool wallet_update_output_status(struct wallet *w,
 	return changes > 0;
 }
 
-static struct utxo **gather_utxos(const tal_t *ctx, struct db_stmt *stmt STEALS)
+static int cmp_utxo(struct utxo *const *a,
+		    struct utxo *const *b,
+		    void *unused)
+{
+	int ret = memcmp(&(*a)->outpoint.txid, &(*b)->outpoint.txid,
+			 sizeof((*a)->outpoint.txid));
+	if (ret)
+		return ret;
+	if ((*a)->outpoint.n < (*b)->outpoint.n)
+		return -1;
+	else if ((*a)->outpoint.n > (*b)->outpoint.n)
+		return 1;
+	return 0;
+}
+
+static struct utxo **gather_utxos(const tal_t *ctx,
+				  struct db_stmt *stmt STEALS)
 {
 	struct utxo **results;
 
@@ -460,6 +480,10 @@ static struct utxo **gather_utxos(const tal_t *ctx, struct db_stmt *stmt STEALS)
 		tal_arr_expand(&results, u);
 	}
 	tal_free(stmt);
+
+	/* Make sure these are in order if we're trying to remove entropy */
+	if (randbytes_overridden())
+		asort(results, tal_count(results), cmp_utxo, NULL);
 
 	return results;
 }
@@ -807,27 +831,53 @@ struct utxo *wallet_find_utxo(const tal_t *ctx, struct wallet *w,
 	struct db_stmt *stmt;
 	struct utxo *utxo;
 
-	stmt = db_prepare_v2(w->db, SQL("SELECT"
-					"  prev_out_tx"
-					", prev_out_index"
-					", value"
-					", type"
-					", status"
-					", keyindex"
-					", channel_id"
-					", peer_id"
-					", commitment_point"
-					", option_anchor_outputs"
-					", confirmation_height"
-					", spend_height"
-					", scriptpubkey "
-					", reserved_til"
-					", csv_lock"
-					", is_in_coinbase"
-					" FROM outputs"
-					" WHERE status = ?"
-					" OR (status = ? AND reserved_til <= ?)"
-					"ORDER BY RANDOM();"));
+	/* Make sure these are in order if we're trying to remove entropy! */
+	if (w->ld->developer && getenv("CLN_DEV_ENTROPY_SEED")) {
+		stmt = db_prepare_v2(w->db, SQL("SELECT"
+						"  prev_out_tx"
+						", prev_out_index"
+						", value"
+						", type"
+						", status"
+						", keyindex"
+						", channel_id"
+						", peer_id"
+						", commitment_point"
+						", option_anchor_outputs"
+						", confirmation_height"
+						", spend_height"
+						", scriptpubkey "
+						", reserved_til"
+						", csv_lock"
+						", is_in_coinbase"
+						" FROM outputs"
+						" WHERE status = ?"
+						" OR (status = ? AND reserved_til <= ?)"
+						"ORDER BY prev_out_tx, prev_out_index;"));
+	} else {
+		stmt = db_prepare_v2(w->db, SQL("SELECT"
+						"  prev_out_tx"
+						", prev_out_index"
+						", value"
+						", type"
+						", status"
+						", keyindex"
+						", channel_id"
+						", peer_id"
+						", commitment_point"
+						", option_anchor_outputs"
+						", confirmation_height"
+						", spend_height"
+						", scriptpubkey "
+						", reserved_til"
+						", csv_lock"
+						", is_in_coinbase"
+						" FROM outputs"
+						" WHERE status = ?"
+						" OR (status = ? AND reserved_til <= ?)"
+						"ORDER BY RANDOM();"));
+	}
+
 	db_bind_int(stmt, output_status_in_db(OUTPUT_STATE_AVAILABLE));
 	db_bind_int(stmt, output_status_in_db(OUTPUT_STATE_RESERVED));
 	db_bind_u64(stmt, current_blockheight);
@@ -4195,7 +4245,7 @@ void wallet_payment_set_status(struct wallet *wallet,
 	u32 completed_at = 0;
 
 	if (newstatus != PAYMENT_PENDING)
-		completed_at = time_now().ts.tv_sec;
+		completed_at = clock_time().ts.tv_sec;
 
 	stmt = db_prepare_v2(wallet->db,
 			     SQL("UPDATE payments SET status=?, completed_at=?, updated_index=? "
@@ -5350,7 +5400,7 @@ void wallet_forwarded_payment_add(struct wallet *w, const struct htlc_in *in,
 
 	if (state == FORWARD_SETTLED || state == FORWARD_FAILED) {
 		resolved_time = tal(tmpctx, struct timeabs);
-		*resolved_time = time_now();
+		*resolved_time = clock_time();
 	} else {
 		resolved_time = NULL;
 	}
@@ -7438,6 +7488,186 @@ struct db_stmt *wallet_channel_moves_next(struct wallet *wallet, struct db_stmt 
 	return stmt;
 }
 
+struct db_stmt *wallet_network_events_first(struct wallet *w,
+					    const struct node_id *specific_id,
+					    u64 liststart,
+					    u32 *listlimit)
+{
+	struct db_stmt *stmt;
+
+	if (specific_id) {
+		stmt = db_prepare_v2(w->db,
+				     SQL("SELECT"
+					 " id"
+					 ", peer_id"
+					 ", type"
+					 ", reason"
+					 ", timestamp"
+					 ", duration_nsec"
+					 ", connect_attempted"
+					 " FROM network_events"
+					 " WHERE peer_id = ? AND id >= ?"
+					 " ORDER BY id"
+					 " LIMIT ?;"));
+		db_bind_node_id(stmt, specific_id);
+	} else {
+		stmt = db_prepare_v2(w->db,
+				     SQL("SELECT"
+					 " id"
+					 ", peer_id"
+					 ", type"
+					 ", reason"
+					 ", timestamp"
+					 ", duration_nsec"
+					 ", connect_attempted"
+					 " FROM network_events"
+					 " WHERE id >= ?"
+					 " ORDER BY id"
+					 " LIMIT ?;"));
+	}
+	db_bind_u64(stmt, liststart);
+	if (listlimit)
+		db_bind_int(stmt, *listlimit);
+	else
+		db_bind_int(stmt, INT_MAX);
+	db_query_prepared(stmt);
+	return wallet_channel_moves_next(w, stmt);
+}
+
+const char *network_event_name(enum network_event n)
+{
+	switch (n) {
+	case NETWORK_EVENT_CONNECT:
+		return "connect";
+	case NETWORK_EVENT_CONNECTFAIL:
+		return "connect_fail";
+	case NETWORK_EVENT_PING:
+		return "ping";
+	case NETWORK_EVENT_DISCONNECT:
+		return "disconnect";
+	}
+	fatal("%s: %u is invalid", __func__, n);
+}
+
+struct db_stmt *wallet_network_events_next(struct wallet *w,
+					  struct db_stmt *stmt)
+{
+	if (!db_step(stmt))
+		return tal_free(stmt);
+
+	return stmt;
+}
+
+void wallet_network_events_extract(const tal_t *ctx,
+				   struct db_stmt *stmt,
+				   u64 *id,
+				   struct node_id *peer_id,
+				   u64 *timestamp,
+				   enum network_event *etype,
+				   const char **reason,
+				   u64 *duration_nsec,
+				   bool *connect_attempted)
+{
+	*id = db_col_u64(stmt, "id");
+	db_col_node_id(stmt, "peer_id", peer_id);
+	*etype = network_event_in_db(db_col_int(stmt, "type"));
+	*timestamp = db_col_u64(stmt, "timestamp");
+	*reason = db_col_strdup_optional(ctx, stmt, "reason");
+	*duration_nsec = db_col_u64(stmt, "duration_nsec");
+	*connect_attempted = db_col_int(stmt, "connect_attempted");
+}
+
+static u64 network_event_index_inc(struct lightningd *ld,
+				   /* NULL means it's being created */
+				   const u64 *created_index,
+				   const enum network_event *etype,
+				   const struct node_id *peer_id,
+				   enum wait_index idx)
+{
+	return wait_index_increment(ld, ld->wallet->db,
+				    WAIT_SUBSYSTEM_NETWORKEVENTS, idx,
+				    /* "" is a magic value meaning 'current val' */
+				    "=created_index", created_index ? tal_fmt(tmpctx, "%"PRIu64, *created_index) : "",
+				    "type", etype ? network_event_name(*etype) : NULL,
+				    "peer_id", peer_id ? fmt_node_id(tmpctx, peer_id) : NULL,
+				    NULL);
+}
+
+static u64 network_event_index_created(struct lightningd *ld,
+				       enum network_event etype,
+				       const struct node_id *peer_id)
+{
+	return network_event_index_inc(ld, NULL,
+				       &etype, peer_id,
+				       WAIT_INDEX_CREATED);
+}
+
+static void network_event_index_deleted(struct lightningd *ld,
+					u64 created_index)
+{
+	network_event_index_inc(ld, &created_index, NULL, NULL,
+				WAIT_INDEX_DELETED);
+}
+
+/* Put the next network event into the db */
+void wallet_save_network_event(struct lightningd *ld,
+			       const struct node_id *peer_id,
+			       enum network_event etype,
+			       const char *reason,
+			       u64 duration_nsec,
+			       bool connect_attempted)
+{
+	u64 id;
+	struct db_stmt *stmt;
+
+	stmt = db_prepare_v2(ld->wallet->db,
+			     SQL("INSERT INTO network_events ("
+				 " id,"
+				 " peer_id,"
+				 " type, "
+				 " timestamp,"
+				 " reason,"
+				 " duration_nsec,"
+				 " connect_attempted) VALUES "
+				 "(?, ?, ?, ?, ?, ?, ?);"));
+	id = network_event_index_created(ld, etype, peer_id);
+	db_bind_u64(stmt, id);
+	db_bind_node_id(stmt, peer_id);
+	db_bind_int(stmt, network_event_in_db(etype));
+	db_bind_u64(stmt, clock_time().ts.tv_sec);
+	if (reason)
+		db_bind_text(stmt, reason);
+	else
+		db_bind_null(stmt);
+	db_bind_u64(stmt, duration_nsec);
+	db_bind_int(stmt, connect_attempted);
+	db_exec_prepared_v2(take(stmt));
+}
+
+bool wallet_network_event_delete(struct wallet *w, u64 created_index)
+{
+	struct db_stmt *stmt;
+	bool changed;
+
+	stmt = db_prepare_v2(w->db,
+			     SQL("DELETE FROM network_events"
+				 " WHERE id = ?"));
+	db_bind_u64(stmt, created_index);
+	db_exec_prepared_v2(stmt);
+
+	changed = db_count_changes(stmt) != 0;
+	tal_free(stmt);
+
+	if (changed) {
+		/* FIXME: We don't set other details here, since that
+		 * would need an extra lookup */
+		network_event_index_deleted(w->ld, created_index);
+	}
+
+	return changed;
+
+}
+
 struct missing {
 	size_t num_found;
 	struct missing_addr *addrs;
@@ -7606,7 +7836,7 @@ void migrate_setup_coinmoves(struct lightningd *ld, struct db *db)
 {
 	struct utxo **utxos = db_get_unspent_utxos(tmpctx, db);
 	struct db_stmt *stmt;
-	u64 base_timestamp = time_now().ts.tv_sec - 2;
+	u64 base_timestamp = clock_time().ts.tv_sec - 2;
 
 	for (size_t i = 0; i < tal_count(utxos); i++) {
 		struct chain_coin_mvt *mvt;

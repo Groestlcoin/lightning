@@ -414,6 +414,7 @@ message AutocleanonceAutoclean {
 	optional AutocleanonceAutocleanFailedpays failedpays = 4;
 	optional AutocleanonceAutocleanPaidinvoices paidinvoices = 5;
 	optional AutocleanonceAutocleanExpiredinvoices expiredinvoices = 6;
+	optional AutocleanonceAutocleanNetworkevents networkevents = 7;
 }
 
 message AutocleanonceAutocleanSucceededforwards {
@@ -446,6 +447,11 @@ message AutocleanonceAutocleanExpiredinvoices {
 	uint64 uncleaned = 2;
 }
 
+message AutocleanonceAutocleanNetworkevents {
+	uint64 cleaned = 1;
+	uint64 uncleaned = 2;
+}
+
 message AutocleanstatusRequest {
 	optional AutocleanSubsystem subsystem = 1;
 }
@@ -461,6 +467,7 @@ message AutocleanstatusAutoclean {
 	optional AutocleanstatusAutocleanFailedpays failedpays = 4;
 	optional AutocleanstatusAutocleanPaidinvoices paidinvoices = 5;
 	optional AutocleanstatusAutocleanExpiredinvoices expiredinvoices = 6;
+	optional AutocleanstatusAutocleanNetworkevents networkevents = 7;
 }
 
 message AutocleanstatusAutocleanSucceededforwards {
@@ -494,6 +501,12 @@ message AutocleanstatusAutocleanPaidinvoices {
 }
 
 message AutocleanstatusAutocleanExpiredinvoices {
+	bool enabled = 1;
+	uint64 cleaned = 2;
+	optional uint64 age = 3;
+}
+
+message AutocleanstatusAutocleanNetworkevents {
 	bool enabled = 1;
 	uint64 cleaned = 2;
 	optional uint64 age = 3;
@@ -2853,6 +2866,7 @@ message WaitRequest {
 		HTLCS = 3;
 		CHAINMOVES = 4;
 		CHANNELMOVES = 5;
+		NETWORKEVENTS = 6;
 	}
 	// Wait.indexname
 	enum WaitIndexname {
@@ -2874,6 +2888,7 @@ message WaitResponse {
 		HTLCS = 3;
 		CHAINMOVES = 4;
 		CHANNELMOVES = 5;
+		NETWORKEVENTS = 6;
 	}
 	WaitSubsystem subsystem = 1;
 	optional uint64 created = 2;
@@ -2886,6 +2901,7 @@ message WaitResponse {
 	optional WaitHtlcs htlcs = 9;
 	optional WaitChainmoves chainmoves = 10;
 	optional WaitChannelmoves channelmoves = 11;
+	optional WaitNetworkevents networkevents = 12;
 }
 
 message WaitForwards {
@@ -2931,35 +2947,12 @@ message WaitSendpays {
 }
 
 message WaitHtlcs {
-	// Wait.htlcs.state
-	enum WaitHtlcsState {
-		SENT_ADD_HTLC = 0;
-		SENT_ADD_COMMIT = 1;
-		RCVD_ADD_REVOCATION = 2;
-		RCVD_ADD_ACK_COMMIT = 3;
-		SENT_ADD_ACK_REVOCATION = 4;
-		RCVD_REMOVE_HTLC = 5;
-		RCVD_REMOVE_COMMIT = 6;
-		SENT_REMOVE_REVOCATION = 7;
-		SENT_REMOVE_ACK_COMMIT = 8;
-		RCVD_REMOVE_ACK_REVOCATION = 9;
-		RCVD_ADD_HTLC = 10;
-		RCVD_ADD_COMMIT = 11;
-		SENT_ADD_REVOCATION = 12;
-		SENT_ADD_ACK_COMMIT = 13;
-		RCVD_ADD_ACK_REVOCATION = 14;
-		SENT_REMOVE_HTLC = 15;
-		SENT_REMOVE_COMMIT = 16;
-		RCVD_REMOVE_REVOCATION = 17;
-		RCVD_REMOVE_ACK_COMMIT = 18;
-		SENT_REMOVE_ACK_REVOCATION = 19;
-	}
 	// Wait.htlcs.direction
 	enum WaitHtlcsDirection {
 		OUT = 0;
 		IN = 1;
 	}
-	optional WaitHtlcsState state = 1;
+	optional HtlcState state = 1;
 	optional uint64 htlc_id = 2;
 	optional string short_channel_id = 3;
 	optional uint32 cltv_expiry = 4;
@@ -2978,6 +2971,19 @@ message WaitChannelmoves {
 	string account = 1;
 	Amount credit_msat = 2;
 	Amount debit_msat = 3;
+}
+
+message WaitNetworkevents {
+	// Wait.networkevents.type
+	enum WaitNetworkeventsType {
+		CONNECT = 0;
+		CONNECT_FAIL = 1;
+		PING = 2;
+		DISCONNECT = 3;
+	}
+	optional uint64 created_index = 1;
+	optional WaitNetworkeventsType item_type = 2;
+	optional bytes peer_id = 3;
 }
 
 message WaitDetails {
@@ -3827,6 +3833,7 @@ message AskrenelistlayersLayers {
 	repeated string disabled_channels = 6;
 	repeated AskrenelistlayersLayersChannelUpdates channel_updates = 7;
 	repeated AskrenelistlayersLayersBiases biases = 8;
+	repeated AskrenelistlayersLayersNodeBiases node_biases = 9;
 }
 
 message AskrenelistlayersLayersCreatedChannels {
@@ -3857,6 +3864,15 @@ message AskrenelistlayersLayersBiases {
 	string short_channel_id_dir = 1;
 	sint64 bias = 2;
 	optional string description = 3;
+	optional uint64 timestamp = 4;
+}
+
+message AskrenelistlayersLayersNodeBiases {
+	bytes node = 1;
+	sint64 in_bias = 2;
+	sint64 out_bias = 3;
+	optional string description = 4;
+	uint64 timestamp = 5;
 }
 
 message AskrenecreatelayerRequest {
@@ -3877,6 +3893,7 @@ message AskrenecreatelayerLayers {
 	repeated AskrenecreatelayerLayersChannelUpdates channel_updates = 6;
 	repeated AskrenecreatelayerLayersConstraints constraints = 7;
 	repeated AskrenecreatelayerLayersBiases biases = 8;
+	repeated AskrenecreatelayerLayersNodeBiases node_biases = 9;
 }
 
 message AskrenecreatelayerLayersCreatedChannels {
@@ -3905,6 +3922,15 @@ message AskrenecreatelayerLayersBiases {
 	string short_channel_id_dir = 1;
 	sint64 bias = 2;
 	optional string description = 3;
+	optional uint64 timestamp = 4;
+}
+
+message AskrenecreatelayerLayersNodeBiases {
+	bytes node = 1;
+	sint64 in_bias = 2;
+	sint64 out_bias = 3;
+	optional string description = 4;
+	uint64 timestamp = 5;
 }
 
 message AskreneremovelayerRequest {
@@ -4041,6 +4067,7 @@ message AskrenebiaschannelBiases {
 	string short_channel_id_dir = 2;
 	sint64 bias = 3;
 	optional string description = 4;
+	optional uint64 timestamp = 5;
 }
 
 message AskrenelistreservationsRequest {

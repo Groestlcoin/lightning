@@ -848,7 +848,7 @@ static void forward_htlc(struct htlc_in *hin,
 		 * - If it creates a new `channel_update` with updated channel parameters:
 		 *    - SHOULD keep accepting the previous channel parameters for 10 minutes
 		 */
-		if (!time_before(time_now(), next->old_feerate_timeout)
+		if (!timemono_before(time_mono(), next->old_feerate_timeout)
 		    || !check_fwd_amount(hin, amt_to_forward, hin->msat,
 					 next->old_feerate_base,
 					 next->old_feerate_ppm)) {
@@ -864,7 +864,7 @@ static void forward_htlc(struct htlc_in *hin,
 	if (amount_msat_greater(amt_to_forward, next->htlc_maximum_msat)
 	    || amount_msat_less(amt_to_forward, next->htlc_minimum_msat)) {
 		/* Are we in old-range grace-period? */
-		if (!time_before(time_now(), next->old_feerate_timeout)
+		if (!timemono_before(time_mono(), next->old_feerate_timeout)
 		    || amount_msat_less(amt_to_forward, next->old_htlc_minimum_msat)
 		    || amount_msat_greater(amt_to_forward, next->old_htlc_maximum_msat)) {
 			failmsg = towire_temporary_channel_failure(tmpctx,
@@ -1192,6 +1192,9 @@ static void htlc_accepted_hook_serialize(struct htlc_accepted_hook_payload *p,
 	hin->status =
 	    tal_fmt(hin, "Waiting for the htlc_accepted hook of plugin %s",
 		    plugin->shortname);
+
+	if (p->channel && p->channel->peer)
+		json_add_node_id(s, "peer_id", &p->channel->peer->id);
 
 	json_object_start(s, "onion");
 
