@@ -1018,7 +1018,8 @@ static void destroy_cmd_mark_freed(struct command *cmd, bool *cmd_freed)
 	*cmd_freed = true;
 }
 
-static void handle_rpc_reply(struct plugin *plugin, const char *buf, const jsmntok_t *toks)
+static void handle_rpc_reply(const tal_t *working_ctx,
+			     struct plugin *plugin, const char *buf, const jsmntok_t *toks)
 {
 	const jsmntok_t *idtok, *contenttok;
 	struct out_req *out;
@@ -1042,7 +1043,7 @@ static void handle_rpc_reply(struct plugin *plugin, const char *buf, const jsmnt
 	}
 
 	/* We want to free this if callback doesn't. */
-	tal_steal(tmpctx, out);
+	tal_steal(working_ctx, out);
 
 	/* If they return complete, cmd should have been freed! */
 	cmd_freed = false;
@@ -1302,6 +1303,19 @@ handle_getmanifest(struct command *getmanifest_cmd,
 						p->hook_subs[i].after[j]);
 			json_array_end(params);
 		}
+		if (p->hook_subs[i].num_strfilters) {
+			json_array_start(params, "filters");
+			for (size_t j = 0; j < p->hook_subs[i].num_strfilters; j++)
+				json_add_string(params, NULL,
+						p->hook_subs[i].strfilters[j]);
+			json_array_end(params);
+		} else if (p->hook_subs[i].num_intfilters) {
+			json_array_start(params, "filters");
+			for (size_t j = 0; j < p->hook_subs[i].num_intfilters; j++)
+				json_add_u64(params, NULL,
+					     p->hook_subs[i].intfilters[j]);
+			json_array_end(params);
+		}
 		json_object_end(params);
 	}
 	json_array_end(params);
@@ -1343,6 +1357,8 @@ static void rpc_conn_finished(struct io_conn *conn,
 static struct io_plan *rpc_conn_read_response(struct io_conn *conn,
 					      struct plugin *plugin)
 {
+	const tal_t *working_ctx = tal(NULL, char);
+
 	/* Gather an parse any new bytes */
 	for (;;) {
 		const jsmntok_t *toks;
@@ -1358,9 +1374,13 @@ static struct io_plan *rpc_conn_read_response(struct io_conn *conn,
 		if (!toks)
 			break;
 
-		handle_rpc_reply(plugin, buf, toks);
+		handle_rpc_reply(working_ctx, plugin, buf, toks);
 		jsonrpc_io_parse_done(plugin->jsonrpc_in);
 	}
+
+	/* Explicitly free any expired requests now; xpay uses this to
+	 * fire more commands! */
+	tal_free(working_ctx);
 
 	/* Read more */
 	return jsonrpc_io_read(conn, plugin->jsonrpc_in,

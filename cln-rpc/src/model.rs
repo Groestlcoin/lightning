@@ -2408,6 +2408,8 @@ pub mod requests {
 	}
 	#[derive(Clone, Debug, Deserialize, Serialize)]
 	pub struct FundchannelCompleteRequest {
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub withhold: Option<bool>,
 	    pub id: PublicKey,
 	    pub psbt: String,
 	}
@@ -4316,6 +4318,8 @@ pub mod requests {
 	#[derive(Clone, Debug, Deserialize, Serialize)]
 	pub struct AskreneunreservePath {
 	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub layer: Option<String>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
 	    pub short_channel_id_dir: Option<ShortChannelIdDir>,
 	    pub amount_msat: Amount,
 	}
@@ -4413,6 +4417,8 @@ pub mod requests {
 	}
 	#[derive(Clone, Debug, Deserialize, Serialize)]
 	pub struct AskrenereservePath {
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub layer: Option<String>,
 	    #[serde(skip_serializing_if = "Option::is_none")]
 	    pub short_channel_id_dir: Option<ShortChannelIdDir>,
 	    pub amount_msat: Amount,
@@ -7111,7 +7117,11 @@ pub mod responses {
 	    #[serde(skip_serializing_if = "Option::is_none")]
 	    pub fee_rcvd_msat: Option<Amount>,
 	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub psbt: Option<String>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
 	    pub pushed_msat: Option<Amount>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub withheld: Option<bool>,
 	    pub local_funds_msat: Amount,
 	    pub remote_funds_msat: Amount,
 	}
@@ -7402,7 +7412,11 @@ pub mod responses {
 	    #[serde(skip_serializing_if = "Option::is_none")]
 	    pub funding_fee_rcvd_msat: Option<Amount>,
 	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub funding_psbt: Option<String>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
 	    pub funding_pushed_msat: Option<Amount>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub funding_withheld: Option<bool>,
 	    #[serde(skip_serializing_if = "Option::is_none")]
 	    pub last_commitment_fee_msat: Option<Amount>,
 	    #[serde(skip_serializing_if = "Option::is_none")]

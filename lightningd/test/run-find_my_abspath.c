@@ -163,7 +163,9 @@ void onchaind_replay_channels(struct lightningd *ld UNNEEDED)
 { fprintf(stderr, "onchaind_replay_channels called!\n"); abort(); }
 /* Generated stub for plugin_hook_call_ */
 bool plugin_hook_call_(struct lightningd *ld UNNEEDED,
-		       const struct plugin_hook *hook UNNEEDED,
+		       struct plugin_hook *hook UNNEEDED,
+		       const char *strfilterfield TAKES UNNEEDED,
+		       u64 intfilterfield UNNEEDED,
 		       const char *cmd_id TAKES UNNEEDED,
 		       tal_t *cb_arg STEALS UNNEEDED)
 { fprintf(stderr, "plugin_hook_call_ called!\n"); abort(); }
@@ -184,6 +186,9 @@ void plugins_set_builtin_plugins_dir(struct plugins *plugins UNNEEDED,
 /* Generated stub for resend_closing_transactions */
 void resend_closing_transactions(struct lightningd *ld UNNEEDED)
 { fprintf(stderr, "resend_closing_transactions called!\n"); abort(); }
+/* Generated stub for resend_opening_transactions */
+void resend_opening_transactions(struct lightningd *ld UNNEEDED)
+{ fprintf(stderr, "resend_opening_transactions called!\n"); abort(); }
 /* Generated stub for runes_early_init */
 struct runes *runes_early_init(struct lightningd *ld UNNEEDED)
 { fprintf(stderr, "runes_early_init called!\n"); abort(); }

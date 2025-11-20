@@ -356,6 +356,12 @@ struct channel {
 
 	/* Our change history. */
 	struct channel_state_change **state_changes;
+
+	/* Unsigned PSBT if we initiated the open channel */
+	const struct wally_psbt *funding_psbt;
+
+	/* Are we not broadcasting the open tx? */
+	bool withheld;
 };
 
 /* Is channel owned (and should be talking to peer) */
@@ -441,7 +447,9 @@ struct channel *new_channel(struct peer *peer, u64 dbid,
 			    struct peer_update *peer_update STEALS,
 			    u64 last_stable_connection,
 			    const struct channel_stats *stats,
-			    struct channel_state_change **state_changes STEALS);
+			    struct channel_state_change **state_changes STEALS,
+			    const struct wally_psbt *funding_psbt STEALS,
+			    bool withheld);
 
 /* new_inflight - Create a new channel_inflight for a channel */
 struct channel_inflight *new_inflight(struct channel *channel,
@@ -490,7 +498,8 @@ channel_current_inflight(const struct channel *channel);
 u32 channel_last_funding_feerate(const struct channel *channel);
 
 /* Only set completely_eliminate for never-existed channels */
-void delete_channel(struct channel *channel STEALS, bool completely_eliminate);
+void delete_channel(struct channel *channel STEALS,
+		    bool completely_eliminate);
 
 /* Add a historic (public) short_channel_id to this channel */
 void channel_add_old_scid(struct channel *channel,

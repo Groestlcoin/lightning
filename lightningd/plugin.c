@@ -124,7 +124,8 @@ static bool plugins_all_in_state(const struct plugins *plugins,
 }
 
 /* Once they've all replied with their manifests, we can order them. */
-static void check_plugins_manifests(struct plugins *plugins)
+static void check_plugins_manifests(struct plugins *plugins,
+				    struct logger *log)
 {
 	struct plugin *plugin;
 	struct plugin **depfail;
@@ -133,7 +134,7 @@ static void check_plugins_manifests(struct plugins *plugins)
 		return;
 
 	/* Now things are settled, try to order hooks. */
-	depfail = plugin_hooks_make_ordered(tmpctx);
+	depfail = plugin_hooks_make_ordered(tmpctx, log);
 	for (size_t i = 0; i < tal_count(depfail); i++) {
 		/* Only complain and free plugins! */
 		if (depfail[i]->plugin_state != NEEDS_INIT)
@@ -284,7 +285,7 @@ static void destroy_plugin(struct plugin *p)
 
 	/* If this was last one manifests were waiting for, handle deps */
 	if (p->plugin_state == AWAITING_GETMANIFEST_RESPONSE)
-		check_plugins_manifests(p->plugins);
+		check_plugins_manifests(p->plugins, p->plugins->ld->log);
 
 	/* Daemon shutdown overrules plugin's importance; aborts init checks */
 	if (p->plugins->ld->state == LD_STATE_SHUTDOWN) {
@@ -371,7 +372,7 @@ struct plugin *plugin_register(struct plugins *plugins, const char* path TAKES,
 	p->can_check = false;
 
 	p->plugin_state = UNCONFIGURED;
-	p->js_arr = tal_arr(p, struct json_stream *, 0);
+	list_head_init(&p->jsouts);
 	p->notification_topics = tal_arr(p, const char *, 0);
 	p->subscriptions = NULL;
 	p->dynamic = false;
@@ -473,8 +474,8 @@ void plugin_kill(struct plugin *plugin, enum log_level loglevel,
  */
 static void plugin_send(struct plugin *plugin, struct json_stream *stream)
 {
-	tal_steal(plugin->js_arr, stream);
-	tal_arr_expand(&plugin->js_arr, stream);
+	tal_steal(plugin, stream);
+	list_add_tail(&plugin->jsouts, &stream->list);
 	io_wake(plugin);
 }
 
@@ -709,6 +710,7 @@ static struct io_plan *plugin_read_json(struct io_conn *conn,
 	const char *new_bytes, *buffer;
 	const jsmntok_t *toks;
 	size_t new_bytes_len;
+	size_t num_responses = 0;
 	/* wallet is NULL in really early code */
 	bool want_transaction = (plugin->plugins->want_db_transaction
 				 && wallet != NULL);
@@ -802,6 +804,12 @@ static struct io_plan *plugin_read_json(struct io_conn *conn,
 		}
 
 		jsonrpc_io_parse_done(plugin->json_in);
+		/* Don't let it flood us with logs/responses and starve everyone else */
+		if (num_responses++ == 100) {
+			log_debug(plugin->log, "Pausing response parsing after %zu response", num_responses);
+			/* Call us back, as if we read nothing new */
+			return io_always(conn, plugin_read_json, plugin);
+		}
 	}
 
 	/* Now read more from the connection */
@@ -815,10 +823,7 @@ static struct io_plan *plugin_write_json(struct io_conn *conn,
 
 static struct io_plan *plugin_stream_complete(struct io_conn *conn, struct json_stream *js, struct plugin *plugin)
 {
-	assert(tal_count(plugin->js_arr) > 0);
-	/* Remove js and shift all remainig over */
-	tal_arr_remove(&plugin->js_arr, 0);
-
+	list_del_from(&plugin->jsouts, &js->list);
 	/* It got dropped off the queue, free it. */
 	tal_free(js);
 
@@ -828,8 +833,11 @@ static struct io_plan *plugin_stream_complete(struct io_conn *conn, struct json_
 static struct io_plan *plugin_write_json(struct io_conn *conn,
 					 struct plugin *plugin)
 {
-	if (tal_count(plugin->js_arr)) {
-		return json_stream_output(plugin->js_arr[0], plugin->stdin_conn, plugin_stream_complete, plugin);
+	struct json_stream *js;
+
+	js = list_top(&plugin->jsouts, struct json_stream, list);
+	if (js) {
+		return json_stream_output(js, plugin->stdin_conn, plugin_stream_complete, plugin);
 	}
 
 	return io_out_wait(conn, plugin, plugin_write_json, plugin);
@@ -1471,7 +1479,7 @@ static const char *plugin_subscriptions_add(struct plugin *plugin,
 static const char *plugin_hooks_add(struct plugin *plugin, const char *buffer,
 				    const jsmntok_t *resulttok)
 {
-	const jsmntok_t *t, *hookstok, *beforetok, *aftertok;
+	const jsmntok_t *t, *hookstok, *beforetok, *aftertok, *filterstok;
 	size_t i;
 
 	hookstok = json_get_member(buffer, resulttok, "hooks");
@@ -1481,6 +1489,7 @@ static const char *plugin_hooks_add(struct plugin *plugin, const char *buffer,
 	json_for_each_arr(i, t, hookstok) {
 		char *name;
 		struct plugin_hook *hook;
+		const char *err;
 
 		if (t->type == JSMN_OBJECT) {
 			const jsmntok_t *nametok;
@@ -1493,21 +1502,16 @@ static const char *plugin_hooks_add(struct plugin *plugin, const char *buffer,
 			name = json_strdup(tmpctx, buffer, nametok);
 			beforetok = json_get_member(buffer, t, "before");
 			aftertok = json_get_member(buffer, t, "after");
+			filterstok = json_get_member(buffer, t, "filters");
 		} else {
 			/* FIXME: deprecate in 3 releases after v0.9.2! */
 			name = json_strdup(tmpctx, buffer, t);
-			beforetok = aftertok = NULL;
+			beforetok = aftertok = filterstok = NULL;
 		}
 
-		hook = plugin_hook_register(plugin, name);
-		if (!hook) {
-			return tal_fmt(plugin,
-				    "could not register hook '%s', either the "
-				    "name doesn't exist or another plugin "
-				    "already registered it.",
-				    name);
-		}
-
+		err = plugin_hook_register(plugin, name, buffer, filterstok, &hook);
+		if (err)
+			return err;
 		plugin_hook_add_deps(hook, plugin, buffer, beforetok, aftertok);
 		tal_free(name);
 	}
@@ -1843,7 +1847,7 @@ static void plugin_manifest_cb(const char *buffer,
 		plugin_kill(plugin, LOG_INFORM,
 			    "Not a dynamic plugin");
 	else
-		check_plugins_manifests(plugin->plugins);
+		check_plugins_manifests(plugin->plugins, plugin->log);
 }
 
 /* If this is a valid plugin return full path name, otherwise NULL */

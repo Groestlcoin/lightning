@@ -387,7 +387,13 @@ def test_xpay_takeover(node_factory, executor):
     # Simple bolt11/bolt12 payment.
     inv = l3.rpc.invoice(100000, "test_xpay_takeover1", "test_xpay_takeover1")['bolt11']
     l1.rpc.pay(inv)
+    l1.daemon.wait_for_log('Calling rpc_command hook of plugin cln-xpay')
     l1.daemon.wait_for_log('Redirecting pay->xpay')
+
+    # Quickly test that xpay does NOT receive other commands now.
+    l1.rpc.help()
+    assert not l1.daemon.is_in_log('Calling rpc_command hook of plugin cln-xpay',
+                                   start=l1.daemon.logsearch_start)
 
     # Array version
     inv = l3.rpc.invoice(100000, "test_xpay_takeover2", "test_xpay_takeover2")['bolt11']
@@ -1018,6 +1024,58 @@ def test_xpay_bip353(node_factory):
 
     node_factory.join_nodes([l2, l1])
     l2.rpc.xpay('fake@fake.com', 100)
+
+
+def test_xpay_limited_max_accepted_htlcs(node_factory):
+    """xpay should try to reduce flows to 6 if there is an unannounced channel, and only try more if that fails"""
+    CHANNEL_SIZE_SATS = 10**6
+    l1, l2 = node_factory.line_graph(2,
+                                     fundamount=CHANNEL_SIZE_SATS * 20,
+                                     opts=[{}, {'max-concurrent-htlcs': 6}],
+                                     announce_channels=False)
+
+    # We want 10 paths between l3 and l1.
+    l3 = node_factory.get_node()
+    nodes = node_factory.get_nodes(10)
+    for n in nodes:
+        node_factory.join_nodes([l3, n, l1], fundamount=CHANNEL_SIZE_SATS)
+
+    # We don't want to use up capacity, so we make payment fail.
+    inv1 = l1.rpc.invoice(f"{CHANNEL_SIZE_SATS * 5}sat",
+                          'test_xpay_limited_max_accepted_htlcs',
+                          'test_xpay_limited_max_accepted_htlcs')['bolt11']
+    l1.rpc.delinvoice('test_xpay_limited_max_accepted_htlcs', 'unpaid')
+
+    with pytest.raises(RpcError, match="Destination said it doesn't know invoice"):
+        l3.rpc.xpay(inv1)
+
+    # 7 flows.
+    l3.daemon.wait_for_log('Final answer has 7 flows')
+
+    # Make sure xpay has completely finished!
+    wait_for(lambda: l3.rpc.askrene_listreservations() == {'reservations': []})
+
+    # If we have a routehint, it will squeeze into 6.
+    inv2 = l2.rpc.invoice(f"{CHANNEL_SIZE_SATS * 5}sat",
+                          'test_xpay_limited_max_accepted_htlcs',
+                          'test_xpay_limited_max_accepted_htlcs')['bolt11']
+    l2.rpc.delinvoice('test_xpay_limited_max_accepted_htlcs', 'unpaid')
+    with pytest.raises(RpcError, match="Destination said it doesn't know invoice"):
+        l3.rpc.xpay(inv2)
+
+    # 6 flows.
+    l3.daemon.wait_for_log('Final answer has 6 flows')
+
+    # Make sure xpay has completely finished!
+    wait_for(lambda: l3.rpc.askrene_listreservations() == {'reservations': []})
+
+    # If we force it, it will use more flows.  And fail on 7th part!
+    inv2 = l2.rpc.invoice(f"{CHANNEL_SIZE_SATS * 6}sat",
+                          'test_xpay_limited_max_accepted_htlcs2',
+                          'test_xpay_limited_max_accepted_htlcs2')['bolt11']
+    with pytest.raises(RpcError, match="We got temporary_channel_failure"):
+        l3.rpc.xpay(inv2)
+    l3.daemon.wait_for_log('Final answer has 7 flows')
 
 
 def test_xpay_blockheight_mismatch(node_factory, bitcoind, executor):

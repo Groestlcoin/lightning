@@ -1563,10 +1563,10 @@ def test_real_biases(node_factory, bitcoind):
     # CI, it's slow.
     if SLOW_MACHINE:
         limit = 25
-        expected = ({1: 6, 2: 6, 4: 7, 8: 10, 16: 15, 32: 20, 64: 25, 100: 25}, 0)
+        expected = ({1: 6, 2: 6, 4: 7, 8: 12, 16: 14, 32: 19, 64: 25, 100: 25}, 0)
     else:
         limit = 100
-        expected = ({1: 19, 2: 27, 4: 36, 8: 48, 16: 71, 32: 83, 64: 95, 100: 96}, 0)
+        expected = ({1: 22, 2: 25, 4: 36, 8: 53, 16: 69, 32: 80, 64: 96, 100: 96}, 0)
 
     l1.rpc.askrene_create_layer('biases')
     num_changed = {}
@@ -1782,8 +1782,7 @@ def test_simple_dummy_channel(node_factory):
 
 def test_maxparts_infloop(node_factory, bitcoind):
     # Three paths from l1 -> l5.
-    # FIXME: enhance explain_failure!
-    l1, l2, l3, l4, l5 = node_factory.get_nodes(5, opts=[{'broken_log': 'plugin-cln-askrene.*the obvious route'}] + [{}] * 4)
+    l1, l2, l3, l4, l5 = node_factory.get_nodes(5)
 
     for intermediate in (l2, l3, l4):
         node_factory.join_nodes([l1, intermediate, l5])
@@ -1805,16 +1804,14 @@ def test_maxparts_infloop(node_factory, bitcoind):
                              final_cltv=5)
     assert len(route['routes']) == 3
 
-    # Now with maxparts == 2.  Usually askrene can't figure out why it failed,
-    # but sometimes it gets a theory.
-    with pytest.raises(RpcError):
-        l1.rpc.getroutes(source=l1.info['id'],
-                         destination=l5.info['id'],
-                         amount_msat=amount,
-                         layers=[],
-                         maxfee_msat=amount,
-                         final_cltv=5,
-                         maxparts=2)
+    route = l1.rpc.getroutes(source=l1.info['id'],
+                             destination=l5.info['id'],
+                             amount_msat=amount,
+                             layers=[],
+                             maxfee_msat=amount,
+                             final_cltv=5,
+                             maxparts=2)
+    assert len(route['routes']) == 2
 
 
 def test_askrene_timeout(node_factory, bitcoind):
@@ -1847,4 +1844,74 @@ def test_askrene_timeout(node_factory, bitcoind):
                      amount_msat=1,
                      layers=['auto.localchans'],
                      maxfee_msat=1,
+                     final_cltv=5)
+
+
+def test_askrene_reserve_clash(node_factory, bitcoind):
+    """Reserves get (erroneously) counted globally by scid, even for fake scids."""
+    l1 = node_factory.get_node()
+
+    node1 = "020000000000000000000000000000000000000000000000000000000000000001"
+    node2 = "020000000000000000000000000000000000000000000000000000000000000002"
+    l1.rpc.askrene_create_layer('layer1')
+    l1.rpc.askrene_create_layer('layer2')
+    l1.rpc.askrene_create_channel(layer="layer1",
+                                  source=l1.info['id'],
+                                  destination=node1,
+                                  short_channel_id="0x0x0",
+                                  capacity_msat=1000000)
+    l1.rpc.askrene_update_channel(layer='layer1',
+                                  short_channel_id_dir='0x0x0/1',
+                                  enabled=True,
+                                  htlc_minimum_msat=0,
+                                  htlc_maximum_msat=1000000,
+                                  fee_base_msat=1,
+                                  fee_proportional_millionths=2,
+                                  cltv_expiry_delta=18)
+    l1.rpc.askrene_create_channel(layer="layer2",
+                                  source=l1.info['id'],
+                                  destination=node2,
+                                  short_channel_id="0x0x0",
+                                  capacity_msat=1000000)
+    l1.rpc.askrene_update_channel(layer='layer2',
+                                  short_channel_id_dir='0x0x0/1',
+                                  enabled=True,
+                                  htlc_minimum_msat=0,
+                                  htlc_maximum_msat=1000000,
+                                  fee_base_msat=1,
+                                  fee_proportional_millionths=2,
+                                  cltv_expiry_delta=18)
+    l1.rpc.getroutes(source=l1.info['id'],
+                     destination=node1,
+                     amount_msat=500000,
+                     layers=['layer1'],
+                     maxfee_msat=1000,
+                     final_cltv=5)
+    l1.rpc.getroutes(source=l1.info['id'],
+                     destination=node2,
+                     amount_msat=500000,
+                     layers=['layer2'],
+                     maxfee_msat=1000,
+                     final_cltv=5)
+
+    l1.rpc.askrene_reserve(path=[{'short_channel_id_dir': '0x0x0/1',
+                                  'amount_msat': 950000,
+                                  'layer': 'layer1'
+                                  }])
+
+    # We can't use this on layer 1 anymore, only 50000 msat left.
+    with pytest.raises(RpcError, match=r"We could not find a usable set of paths.  The shortest path is 0x0x0, but 0x0x0/1 already reserved 950000msat by command"):
+        l1.rpc.getroutes(source=l1.info['id'],
+                         destination=node1,
+                         amount_msat=500000,
+                         layers=['layer1'],
+                         maxfee_msat=1000,
+                         final_cltv=5)
+
+    # But layer2 should be unaffected
+    l1.rpc.getroutes(source=l1.info['id'],
+                     destination=node2,
+                     amount_msat=500000,
+                     layers=['layer2'],
+                     maxfee_msat=1000,
                      final_cltv=5)

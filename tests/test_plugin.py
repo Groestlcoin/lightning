@@ -940,7 +940,7 @@ def test_channel_state_changed_bilateral(node_factory, bitcoind):
     assert(event2['cause'] == "remote")
     assert(event2['message'] == "Closing complete")
 
-    bitcoind.generate_block(100, wait_for_mempool=1)  # so it gets settled
+    bitcoind.generate_block(99, wait_for_mempool=1)  # so it gets settled
 
     event1 = wait_for_event(l1)
     assert(event1['old_state'] == "CLOSINGD_COMPLETE")
@@ -963,6 +963,18 @@ def test_channel_state_changed_bilateral(node_factory, bitcoind):
     assert(event2['new_state'] == "ONCHAIN")
     assert(event2['cause'] == "remote")
     assert(event2['message'] == "Onchain init reply")
+
+    bitcoind.generate_block(1)
+    event1 = wait_for_event(l1)
+    assert(event1['old_state'] == "ONCHAIN")
+    assert(event1['new_state'] == "CLOSED")
+    assert(event1['cause'] == "unknown")
+    assert('message' not in event1)
+    event2 = wait_for_event(l2)
+    assert(event2['old_state'] == "ONCHAIN")
+    assert(event2['new_state'] == "CLOSED")
+    assert(event2['cause'] == "unknown")
+    assert('message' not in event2)
 
 
 @pytest.mark.openchannel('v1')
@@ -1058,8 +1070,8 @@ def test_channel_state_changed_unilateral(node_factory, bitcoind):
     assert(event1['cause'] == "protocol")
     assert(event1['message'] == "channeld: received ERROR channel {}: Forcibly closed by `close` command timeout".format(cid))
 
-    # settle the channel closure
-    bitcoind.generate_block(100)
+    # Almost settle the channel closure
+    bitcoind.generate_block(99, wait_for_mempool=1)
 
     event2 = wait_for_event(l2)
     assert(event2['old_state'] == "AWAITING_UNILATERAL")
@@ -1086,6 +1098,19 @@ def test_channel_state_changed_unilateral(node_factory, bitcoind):
     assert(event1['new_state'] == "ONCHAIN")
     assert(event1['cause'] == "onchain")
     assert(event1['message'] == "Onchain init reply")
+
+    bitcoind.generate_block(1)
+    event1 = wait_for_event(l1)
+    assert(event1['old_state'] == "ONCHAIN")
+    assert(event1['new_state'] == "CLOSED")
+    assert(event1['cause'] == "unknown")
+    assert('message' not in event1)
+
+    event2 = wait_for_event(l2)
+    assert(event2['old_state'] == "ONCHAIN")
+    assert(event2['new_state'] == "CLOSED")
+    assert(event2['cause'] == "unknown")
+    assert('message' not in event2)
 
 
 @pytest.mark.openchannel('v1')
@@ -2290,7 +2315,7 @@ def test_important_plugin(node_factory):
     n = node_factory.get_node(options={"important-plugin": os.path.join(pluginsdir, "nonexistent")},
                               may_fail=True, expect_fail=True,
                               # Other plugins can complain as lightningd stops suddenly:
-                              broken_log='Plugin marked as important, shutting down lightningd|Reading JSON input: Connection reset by peer|Lost connection to the RPC socket',
+                              broken_log='Plugin marked as important, shutting down lightningd|Reading sync lightningd: Connection reset by peer|Lost connection to the RPC socket',
                               start=False)
 
     n.daemon.start(wait_for_initialized=False, stderr_redir=True)
@@ -2583,6 +2608,39 @@ def test_htlc_accepted_hook_failonion(node_factory):
     inv = l2.rpc.invoice(42, 'failonion000', '')['bolt11']
     with pytest.raises(RpcError):
         l1.rpc.pay(inv)
+
+
+def test_hook_in_use(node_factory):
+    """If a hook is in use when we add a plugin to it, we have to defer"""
+    dep_a = os.path.join(os.path.dirname(__file__), 'plugins/dep_a.py')
+    dep_b = os.path.join(os.path.dirname(__file__), 'plugins/dep_b.py')
+
+    l1, l2 = node_factory.line_graph(2, opts=[{}, {'plugin': [dep_a]}])
+
+    NUM_ITERATIONS = 10
+
+    invs = [l2.rpc.invoice(1, f'test_hook_in_use{i}', 'test_hook_in_use') for i in range(NUM_ITERATIONS)]
+
+    route = [{'amount_msat': 1,
+              'id': l2.info['id'],
+              'delay': 20,
+              'channel': l1.get_channel_scid(l2)}]
+
+    for i in range(NUM_ITERATIONS):
+        l1.rpc.sendpay(route,
+                       amount_msat=1,
+                       payment_hash=invs[i]['payment_hash'],
+                       payment_secret=invs[i]['payment_secret'])
+        if i % 2 == 1:
+            l1.rpc.waitsendpay(payment_hash=invs[i - 1]['payment_hash'])
+            l1.rpc.waitsendpay(payment_hash=invs[i]['payment_hash'])
+        else:
+            l2.rpc.plugin_start(plugin=dep_b)
+            l2.rpc.plugin_stop(plugin=dep_b)
+
+    # We should have deferred hook update at least once!
+    l2.daemon.wait_for_log("UNUSUAL plugin-dep_b.py: Deferring registration of hook htlc_accepted until it's not in use.")
+    l2.daemon.wait_for_log("UNUSUAL lightningd: Updating hooks for htlc_accepted now usage is done.")
 
 
 def test_htlc_accepted_hook_fwdto(node_factory):
@@ -3270,6 +3328,10 @@ def test_sql(node_factory, bitcoind):
                          'type': 'txid'},
                         {'name': 'funding_outnum',
                          'type': 'u32'},
+                        {'name': 'funding_psbt',
+                         'type': 'string'},
+                        {'name': 'funding_withheld',
+                         'type': 'boolean'},
                         {'name': 'leased',
                          'type': 'boolean'},
                         {'name': 'funding_fee_paid_msat',
@@ -3581,6 +3643,10 @@ def test_sql(node_factory, bitcoind):
                          'type': 'msat'},
                         {'name': 'funding_fee_rcvd_msat',
                          'type': 'msat'},
+                        {'name': 'funding_psbt',
+                         'type': 'string'},
+                        {'name': 'funding_withheld',
+                         'type': 'boolean'},
                         {'name': 'to_us_msat',
                          'type': 'msat'},
                         {'name': 'min_to_us_msat',

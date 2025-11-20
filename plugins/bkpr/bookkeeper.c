@@ -88,8 +88,7 @@ static void
 parse_and_log_channel_move(struct command *cmd,
 			   const char *buf,
 			   const jsmntok_t *channelmove,
-			   struct refresh_info *rinfo,
-			   bool log);
+			   struct refresh_info *rinfo);
 
 static struct command_result *datastore_done(struct command *cmd,
 					     const char *method,
@@ -110,6 +109,7 @@ static struct fee_sum *find_sum_for_txid(struct fee_sum **sums,
 	return NULL;
 }
 
+#define LISTCHANNELMOVES_LIMIT 10000
 static struct command_result *listchannelmoves_done(struct command *cmd,
 						    const char *method,
 						    const char *buf,
@@ -122,15 +122,8 @@ static struct command_result *listchannelmoves_done(struct command *cmd,
 	be64 be_index;
 
 	moves = json_get_member(buf, result, "channelmoves");
-	if (moves->size > 2) {
-		plugin_log(cmd->plugin, LOG_DBG,
-			   "%u channelmoves, only logging first and last",
-			   moves->size);
-	}
-
 	json_for_each_arr(i, t, moves)
-		parse_and_log_channel_move(cmd, buf, t, rinfo,
-					   i == 0 || i == moves->size - 1);
+		parse_and_log_channel_move(cmd, buf, t, rinfo);
 
 	be_index = cpu_to_be64(bkpr->channelmoves_index);
 	jsonrpc_set_datastore_binary(cmd, "bookkeeper/channelmoves_index",
@@ -139,7 +132,7 @@ static struct command_result *listchannelmoves_done(struct command *cmd,
 				     datastore_done, NULL, use_rinfo(rinfo));
 
 	/* If there might be more, try asking for more */
-	if (moves->size != 0)
+	if (moves->size == LISTCHANNELMOVES_LIMIT)
 		limited_listchannelmoves(cmd, rinfo);
 
 	return rinfo_one_done(cmd, rinfo);
@@ -158,7 +151,7 @@ static struct command_result *limited_listchannelmoves(struct command *cmd,
 				    use_rinfo(rinfo));
 	json_add_string(req->js, "index", "created");
 	json_add_u64(req->js, "start", bkpr->channelmoves_index + 1);
-	json_add_u64(req->js, "limit", 1000);
+	json_add_u64(req->js, "limit", LISTCHANNELMOVES_LIMIT);
 	return send_outreq(req);
 }
 
@@ -238,12 +231,12 @@ getblockheight_done(struct command *cmd,
 	if (!blockheight_tok)
 		plugin_err(cmd->plugin, "getblockheight: "
 			   "getinfo gave no 'blockheight'? '%.*s'",
-			   result->end - result->start, buf);
+			   result->end - result->start, buf + result->start);
 
 	if (!json_to_u32(buf, blockheight_tok, &blockheight))
 		plugin_err(cmd->plugin, "getblockheight: "
 			   "getinfo gave non-unsigned-32-bit 'blockheight'? '%.*s'",
-			   result->end - result->start, buf);
+			   result->end - result->start, buf + result->start);
 
 	/* Get the income events */
 	apys = compute_channel_apys(cmd, bkpr, cmd,
@@ -1013,7 +1006,7 @@ listinvoices_done(struct command *cmd,
 			   "listinvoices:"
 			   " description/bolt11/bolt12"
 			   " not found (%.*s)",
-			   result->end - result->start, buf);
+			   result->end - result->start, buf + result->start);
 
 	return rinfo_one_done(cmd, phinfo->rinfo);
 }
@@ -1053,7 +1046,7 @@ listsendpays_done(struct command *cmd,
 		plugin_log(cmd->plugin, LOG_DBG,
 			   "listpays: bolt11/bolt12 not found:"
 			   "(%.*s)",
-			   result->end - result->start, buf);
+			   result->end - result->start, buf + result->start);
 
 	return rinfo_one_done(cmd, phinfo->rinfo);
 }
@@ -1286,8 +1279,7 @@ static void
 parse_and_log_channel_move(struct command *cmd,
 			   const char *buf,
 			   const jsmntok_t *channelmove,
-			   struct refresh_info *rinfo,
-			   bool log)
+			   struct refresh_info *rinfo)
 {
 	struct channel_event *e = tal(cmd, struct channel_event);
 	struct account *acct;
@@ -1334,12 +1326,11 @@ parse_and_log_channel_move(struct command *cmd,
 		err = tal_free(err);
 	}
 
-	if (log)
-		plugin_log(cmd->plugin, LOG_DBG, "coin_move 2 (%s) %s -%s %s %"PRIu64,
-			   e->tag,
-			   fmt_amount_msat(tmpctx, e->credit),
-			   fmt_amount_msat(tmpctx, e->debit),
-			   CHANNEL_MOVE, e->timestamp);
+	plugin_log(cmd->plugin, LOG_DBG, "coin_move 2 (%s) %s -%s %s %"PRIu64,
+		   e->tag,
+		   fmt_amount_msat(tmpctx, e->credit),
+		   fmt_amount_msat(tmpctx, e->debit),
+		   CHANNEL_MOVE, e->timestamp);
 
 	/* Go find the account for this event */
 	acct = find_account(bkpr, acct_name);

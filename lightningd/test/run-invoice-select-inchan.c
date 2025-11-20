@@ -29,6 +29,16 @@ void bitcoind_getutxout_(const tal_t *ctx UNNEEDED,
 				    void *) UNNEEDED,
 			 void *arg UNNEEDED)
 { fprintf(stderr, "groestlcoind_getutxout_ called!\n"); abort(); }
+/* Generated stub for bitcoind_sendrawtx_ */
+void bitcoind_sendrawtx_(const tal_t *ctx UNNEEDED,
+			 struct bitcoind *bitcoind UNNEEDED,
+			 const char *id_prefix TAKES UNNEEDED,
+			 const char *hextx UNNEEDED,
+			 bool allowhighfees UNNEEDED,
+			 void (*cb)(struct bitcoind * UNNEEDED,
+				    bool success UNNEEDED, const char *msg UNNEEDED, void *) UNNEEDED,
+			 void *arg UNNEEDED)
+{ fprintf(stderr, "groestlcoind_sendrawtx_ called!\n"); abort(); }
 /* Generated stub for broadcast_tx_ */
 void broadcast_tx_(const tal_t *ctx UNNEEDED,
 		   struct chain_topology *topo UNNEEDED,
@@ -266,6 +276,9 @@ void force_peer_disconnect(struct lightningd *ld UNNEEDED,
 			   const struct peer *peer UNNEEDED,
 			   const char *why UNNEEDED)
 { fprintf(stderr, "force_peer_disconnect called!\n"); abort(); }
+/* Generated stub for free_htlcs */
+void free_htlcs(struct lightningd *ld UNNEEDED, const struct channel *channel UNNEEDED)
+{ fprintf(stderr, "free_htlcs called!\n"); abort(); }
 /* Generated stub for fromwire_channeld_dev_memleak_reply */
 bool fromwire_channeld_dev_memleak_reply(const void *p UNNEEDED, bool *leak UNNEEDED)
 { fprintf(stderr, "fromwire_channeld_dev_memleak_reply called!\n"); abort(); }
@@ -570,7 +583,9 @@ bool peer_start_openingd(struct peer *peer UNNEEDED,
 { fprintf(stderr, "peer_start_openingd called!\n"); abort(); }
 /* Generated stub for plugin_hook_call_ */
 bool plugin_hook_call_(struct lightningd *ld UNNEEDED,
-		       const struct plugin_hook *hook UNNEEDED,
+		       struct plugin_hook *hook UNNEEDED,
+		       const char *strfilterfield TAKES UNNEEDED,
+		       u64 intfilterfield UNNEEDED,
 		       const char *cmd_id TAKES UNNEEDED,
 		       tal_t *cb_arg STEALS UNNEEDED)
 { fprintf(stderr, "plugin_hook_call_ called!\n"); abort(); }

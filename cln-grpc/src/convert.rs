@@ -1249,8 +1249,10 @@ impl From<responses::ListpeerchannelsChannelsFunding> for pb::ListpeerchannelsCh
             fee_paid_msat: c.fee_paid_msat.map(|f| f.into()), // Rule #2 for type msat?
             fee_rcvd_msat: c.fee_rcvd_msat.map(|f| f.into()), // Rule #2 for type msat?
             local_funds_msat: Some(c.local_funds_msat.into()), // Rule #2 for type msat
+            psbt: c.psbt, // Rule #2 for type string?
             pushed_msat: c.pushed_msat.map(|f| f.into()), // Rule #2 for type msat?
             remote_funds_msat: Some(c.remote_funds_msat.into()), // Rule #2 for type msat
+            withheld: c.withheld, // Rule #2 for type boolean?
         }
     }
 }
@@ -1425,8 +1427,10 @@ impl From<responses::ListclosedchannelsClosedchannels> for pb::Listclosedchannel
             funding_fee_paid_msat: c.funding_fee_paid_msat.map(|f| f.into()), // Rule #2 for type msat?
             funding_fee_rcvd_msat: c.funding_fee_rcvd_msat.map(|f| f.into()), // Rule #2 for type msat?
             funding_outnum: c.funding_outnum, // Rule #2 for type u32
+            funding_psbt: c.funding_psbt, // Rule #2 for type string?
             funding_pushed_msat: c.funding_pushed_msat.map(|f| f.into()), // Rule #2 for type msat?
             funding_txid: hex::decode(&c.funding_txid).unwrap(), // Rule #2 for type txid
+            funding_withheld: c.funding_withheld, // Rule #2 for type boolean?
             last_commitment_fee_msat: c.last_commitment_fee_msat.map(|f| f.into()), // Rule #2 for type msat?
             last_commitment_txid: c.last_commitment_txid.map(|v| <Sha256 as AsRef<[u8]>>::as_ref(&v).to_vec()), // Rule #2 for type hash?
             last_stable_connection: c.last_stable_connection, // Rule #2 for type u64?
@@ -4518,7 +4522,7 @@ impl From<notifications::ChannelStateChangedNotification> for pb::ChannelStateCh
         Self {
             cause: c.cause as i32,
             channel_id: <Sha256 as AsRef<[u8]>>::as_ref(&c.channel_id).to_vec(), // Rule #2 for type hash
-            message: c.message, // Rule #2 for type string
+            message: c.message, // Rule #2 for type string?
             new_state: c.new_state as i32,
             old_state: c.old_state.map(|v| v as i32),
             peer_id: c.peer_id.serialize().to_vec(), // Rule #2 for type pubkey
@@ -5288,6 +5292,7 @@ impl From<requests::FundchannelCompleteRequest> for pb::FundchannelCompleteReque
         Self {
             id: c.id.serialize().to_vec(), // Rule #2 for type pubkey
             psbt: c.psbt, // Rule #2 for type string
+            withhold: c.withhold, // Rule #2 for type boolean?
         }
     }
 }
@@ -5983,6 +5988,7 @@ impl From<requests::AskreneunreservePath> for pb::AskreneunreservePath {
     fn from(c: requests::AskreneunreservePath) -> Self {
         Self {
             amount_msat: Some(c.amount_msat.into()), // Rule #2 for type msat
+            layer: c.layer, // Rule #2 for type string?
             short_channel_id_dir: c.short_channel_id_dir.map(|v| v.to_string()), // Rule #2 for type short_channel_id_dir?
         }
     }
@@ -6031,6 +6037,7 @@ impl From<requests::AskrenereservePath> for pb::AskrenereservePath {
     fn from(c: requests::AskrenereservePath) -> Self {
         Self {
             amount_msat: Some(c.amount_msat.into()), // Rule #2 for type msat
+            layer: c.layer, // Rule #2 for type string?
             short_channel_id_dir: c.short_channel_id_dir.map(|v| v.to_string()), // Rule #2 for type short_channel_id_dir?
         }
     }
@@ -6991,6 +6998,7 @@ impl From<pb::FundchannelCompleteRequest> for requests::FundchannelCompleteReque
         Self {
             id: PublicKey::from_slice(&c.id).unwrap(), // Rule #1 for type pubkey
             psbt: c.psbt, // Rule #1 for type string
+            withhold: c.withhold, // Rule #1 for type boolean?
         }
     }
 }
@@ -7673,6 +7681,7 @@ impl From<pb::AskreneunreservePath> for requests::AskreneunreservePath {
     fn from(c: pb::AskreneunreservePath) -> Self {
         Self {
             amount_msat: c.amount_msat.unwrap().into(), // Rule #1 for type msat
+            layer: c.layer, // Rule #1 for type string?
             short_channel_id_dir: c.short_channel_id_dir.map(|v| cln_rpc::primitives::ShortChannelIdDir::from_str(&v).unwrap()), // Rule #1 for type short_channel_id_dir?
         }
     }
@@ -7720,6 +7729,7 @@ impl From<pb::AskrenereservePath> for requests::AskrenereservePath {
     fn from(c: pb::AskrenereservePath) -> Self {
         Self {
             amount_msat: c.amount_msat.unwrap().into(), // Rule #1 for type msat
+            layer: c.layer, // Rule #1 for type string?
             short_channel_id_dir: c.short_channel_id_dir.map(|v| cln_rpc::primitives::ShortChannelIdDir::from_str(&v).unwrap()), // Rule #1 for type short_channel_id_dir?
         }
     }

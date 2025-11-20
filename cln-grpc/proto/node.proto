@@ -1502,6 +1502,8 @@ message ListpeerchannelsChannelsFunding {
 	Amount remote_funds_msat = 3;
 	optional Amount fee_paid_msat = 4;
 	optional Amount fee_rcvd_msat = 5;
+	optional string psbt = 6;
+	optional bool withheld = 7;
 }
 
 message ListpeerchannelsChannelsAlias {
@@ -1567,6 +1569,8 @@ message ListclosedchannelsClosedchannels {
 	optional Amount last_commitment_fee_msat = 23;
 	ListclosedchannelsClosedchannelsCloseCause close_cause = 24;
 	optional uint64 last_stable_connection = 25;
+	optional string funding_psbt = 26;
+	optional bool funding_withheld = 27;
 }
 
 message ListclosedchannelsClosedchannelsAlias {
@@ -2004,6 +2008,7 @@ message FundchannelCancelResponse {
 message FundchannelCompleteRequest {
 	bytes id = 1;
 	string psbt = 2;
+	optional bool withhold = 3;
 }
 
 message FundchannelCompleteResponse {
@@ -3814,6 +3819,7 @@ message AskreneunreserveResponse {
 message AskreneunreservePath {
 	Amount amount_msat = 3;
 	optional string short_channel_id_dir = 4;
+	optional string layer = 5;
 }
 
 message AskrenelistlayersRequest {
@@ -3950,6 +3956,7 @@ message AskrenereserveResponse {
 message AskrenereservePath {
 	Amount amount_msat = 3;
 	optional string short_channel_id_dir = 4;
+	optional string layer = 5;
 }
 
 message AskreneageRequest {
@@ -4225,5 +4232,5 @@ message ChannelStateChangedNotification {
 	optional ChannelState old_state = 5;
 	ChannelState new_state = 6;
 	ChannelStateChangedCause cause = 7;
-	string message = 8;
+	optional string message = 8;
 }

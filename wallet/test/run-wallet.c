@@ -67,6 +67,16 @@ void bitcoind_getutxout_(const tal_t *ctx UNNEEDED,
 				    void *) UNNEEDED,
 			 void *arg UNNEEDED)
 { fprintf(stderr, "bitcoind_getutxout_ called!\n"); abort(); }
+/* Generated stub for bitcoind_sendrawtx_ */
+void bitcoind_sendrawtx_(const tal_t *ctx UNNEEDED,
+			 struct bitcoind *bitcoind UNNEEDED,
+			 const char *id_prefix TAKES UNNEEDED,
+			 const char *hextx UNNEEDED,
+			 bool allowhighfees UNNEEDED,
+			 void (*cb)(struct bitcoind * UNNEEDED,
+				    bool success UNNEEDED, const char *msg UNNEEDED, void *) UNNEEDED,
+			 void *arg UNNEEDED)
+{ fprintf(stderr, "bitcoind_sendrawtx_ called!\n"); abort(); }
 /* Generated stub for broadcast_tx_ */
 void broadcast_tx_(const tal_t *ctx UNNEEDED,
 		   struct chain_topology *topo UNNEEDED,
@@ -503,17 +513,6 @@ void notify_channel_mvt(struct lightningd *ld UNNEEDED,
 void notify_channel_open_failed(struct lightningd *ld UNNEEDED,
                                 const struct channel_id *cid UNNEEDED)
 { fprintf(stderr, "notify_channel_open_failed called!\n"); abort(); }
-/* Generated stub for notify_channel_state_changed */
-void notify_channel_state_changed(struct lightningd *ld UNNEEDED,
-				  const struct node_id *peer_id UNNEEDED,
-				  const struct channel_id *cid UNNEEDED,
-				  const struct short_channel_id *scid UNNEEDED,
-				  struct timeabs timestamp UNNEEDED,
-				  enum channel_state old_state UNNEEDED,
-				  enum channel_state new_state UNNEEDED,
-				  enum state_change cause UNNEEDED,
-				  const char *message UNNEEDED)
-{ fprintf(stderr, "notify_channel_state_changed called!\n"); abort(); }
 /* Generated stub for notify_connect */
 void notify_connect(struct lightningd *ld UNNEEDED,
 		    const struct node_id *nodeid UNNEEDED,
@@ -605,7 +604,9 @@ bool peer_start_openingd(struct peer *peer UNNEEDED,
 { fprintf(stderr, "peer_start_openingd called!\n"); abort(); }
 /* Generated stub for plugin_hook_call_ */
 bool plugin_hook_call_(struct lightningd *ld UNNEEDED,
-		       const struct plugin_hook *hook UNNEEDED,
+		       struct plugin_hook *hook UNNEEDED,
+		       const char *strfilterfield TAKES UNNEEDED,
+		       u64 intfilterfield UNNEEDED,
 		       const char *cmd_id TAKES UNNEEDED,
 		       tal_t *cb_arg STEALS UNNEEDED)
 { fprintf(stderr, "plugin_hook_call_ called!\n"); abort(); }
@@ -808,6 +809,17 @@ u8 *wire_sync_read(const tal_t *ctx UNNEEDED, int fd UNNEEDED)
 	return NULL;
 }
 void plugin_hook_db_sync(struct db *db UNNEEDED)
+{
+}
+void notify_channel_state_changed(struct lightningd *ld UNNEEDED,
+				  const struct node_id *peer_id UNNEEDED,
+				  const struct channel_id *cid UNNEEDED,
+				  const struct short_channel_id *scid UNNEEDED,
+				  struct timeabs timestamp UNNEEDED,
+				  enum channel_state old_state UNNEEDED,
+				  enum channel_state new_state UNNEEDED,
+				  enum state_change cause UNNEEDED,
+				  const char *message UNNEEDED)
 {
 }
 bool fromwire_hsmd_get_channel_basepoints_reply(const void *p UNNEEDED,
@@ -1614,7 +1626,9 @@ static bool test_channel_inflight_crud(struct lightningd *ld, const tal_t *ctx)
 			   NULL,
 			   0,
 			   stats,
-			   tal_arr(NULL, struct channel_state_change *, 0));
+			   tal_arr(NULL, struct channel_state_change *, 0),
+			   NULL,
+			   false);
 	db_begin_transaction(w->db);
 	CHECK(!wallet_err);
 	wallet_channel_insert(w, chan);

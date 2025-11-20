@@ -506,7 +506,8 @@ The `htlc_accepted` hook is a chained hook, i.e., multiple plugins can register 
 
 ### `rpc_command`
 
-The `rpc_command` hook allows a plugin to take over any RPC command. It sends the received JSON-RPC request (for any method!) to the registered plugin,
+The `rpc_command` hook allows a plugin to take over any RPC command. It sends the received JSON-RPC request to the registered plugin.  You can optionally specify a "filters" array, containing the command names you want to intercept: without this, all commands will be sent to this hook.
+
 
 ```json
 {
@@ -584,7 +585,7 @@ Note: The `rpc_command` hook is chainable. If two or more plugins try to replace
 
 ### `custommsg`
 
-The `custommsg` plugin hook is the receiving counterpart to the [`sendcustommsg`](ref:sendcustommsg) RPC method and allows plugins to handle messages that are not handled internally. The goal of these two components is to allow the implementation of custom protocols or prototypes on top of a Core Lightning node, without having to change the node's implementation itself.
+The `custommsg` plugin hook is the receiving counterpart to the [`sendcustommsg`](ref:sendcustommsg) RPC method and allows plugins to handle messages that are not handled internally. The goal of these two components is to allow the implementation of custom protocols or prototypes on top of a Core Lightning node, without having to change the node's implementation itself.  Note that if the hook registration specifies "filters" then that should be a JSON array of message numbers, and the hook will only be called for those.  Otherwise, the hook is called for all messages not handled internally.
 
 The payload for a call follows this format:
 

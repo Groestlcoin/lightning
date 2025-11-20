@@ -85,7 +85,7 @@ struct payment {
 	struct amount_msat maxfee;
 	/* Maximum delay on the route we're ok with */
 	u32 maxdelay;
-	/* Maximum number of payment routes that can be pending. */
+	/* If non-zero: maximum number of payment routes that can be pending. */
 	u32 maxparts;
 	/* Do we have to do it all in a single part? */
 	bool disable_mpp;
@@ -148,6 +148,8 @@ struct hop {
 	u32 cltv_value_in;
 	/* This is the delay, out from node. */
 	u32 cltv_value_out;
+	/* This is a fake channel. */
+	bool fake_channel;
 };
 
 /* Each actual payment attempt */
@@ -179,7 +181,6 @@ static struct command_result *xpay_core(struct command *cmd,
 					u32 retryfor,
 					const struct amount_msat *partial,
 					u32 maxdelay,
-					u32 dev_maxparts,
 					bool as_pay);
 
 /* Wrapper for pending commands (ignores return) */
@@ -481,18 +482,6 @@ static void payment_give_up(struct command *aux_cmd,
 		cleanup(aux_cmd, payment);
 }
 
-/* We usually add things we learned to the global layer, but not
- * if it's a fake channel */
-static const char *layer_of(const struct payment *payment,
-			    const struct short_channel_id_dir *scidd)
-{
-	struct gossmap *gossmap = get_gossmap(xpay_of(payment->plugin));
-
-	if (gossmap_find_chan(gossmap, &scidd->scid))
-		return "xpay";
-	return payment->private_layer;
-}
-
 static void add_result_summary(struct attempt *attempt,
 			       enum log_level level,
 			       const char *fmt, ...)
@@ -713,8 +702,11 @@ static void update_knowledge_from_error(struct command *aux_cmd,
 	/* We learned something about prior nodes */
 	for (size_t i = 0; i < index; i++) {
 		req = payment_ignored_req(aux_cmd, attempt, "askrene-inform-channel");
+		/* Put what we learned in xpay, unless it's a fake channel */
 		json_add_string(req->js, "layer",
-				layer_of(attempt->payment, &attempt->hops[i].scidd));
+				attempt->hops[i].fake_channel
+				? attempt->payment->private_layer
+				: "xpay");
 		json_add_short_channel_id_dir(req->js,
 					      "short_channel_id_dir",
 					      attempt->hops[i].scidd);
@@ -881,8 +873,11 @@ disable_channel:
 
 channel_capacity:
 	req = payment_ignored_req(aux_cmd, attempt, "askrene-inform-channel");
+	/* Put what we learned in xpay, unless it's a fake channel */
 	json_add_string(req->js, "layer",
-			layer_of(attempt->payment, &attempt->hops[index].scidd));
+			attempt->hops[index].fake_channel
+			? attempt->payment->private_layer
+			: "xpay");
 	json_add_short_channel_id_dir(req->js,
 				      "short_channel_id_dir",
 				      attempt->hops[index].scidd);
@@ -918,6 +913,8 @@ static struct command_result *unreserve_path(struct command *aux_cmd,
 		json_object_start(req->js, NULL);
 		json_add_short_channel_id_dir(req->js, "short_channel_id_dir", hop->scidd);
 		json_add_amount_msat(req->js, "amount_msat", hop->amount_out);
+		if (hop->fake_channel)
+			json_add_string(req->js, "layer", attempt->payment->private_layer);
 		json_object_end(req->js);
 	}
 	json_array_end(req->js);
@@ -1203,6 +1200,7 @@ static struct command_result *getroutes_done(struct command *aux_cmd,
 	const jsmntok_t *t, *routes;
 	size_t i;
 	struct amount_msat needs_routing, was_routing;
+	struct gossmap *gossmap = get_gossmap(xpay_of(payment->plugin));
 
 	payment_log(payment, LOG_DBG, "getroutes_done: %s",
 		    payment->cmd ? "continuing" : "ignoring");
@@ -1270,6 +1268,7 @@ static struct command_result *getroutes_done(struct command *aux_cmd,
 			if (err)
 				plugin_err(aux_cmd->plugin, "Malformed routes: %s",
 					   err);
+			hop->fake_channel = !gossmap_find_chan(gossmap, &hop->scidd.scid);
 			if (j > 0) {
 				hops[j-1].amount_out = hop->amount_in;
 				hops[j-1].cltv_value_out = hop->cltv_value_in;
@@ -1294,6 +1293,8 @@ static struct command_result *getroutes_done(struct command *aux_cmd,
 			json_add_short_channel_id_dir(req->js, "short_channel_id_dir",
 						      hop->scidd);
 			json_add_amount_msat(req->js, "amount_msat", hop->amount_out);
+			if (hop->fake_channel)
+				json_add_string(req->js, "layer", payment->private_layer);
 			json_object_end(req->js);
 		}
 		json_array_end(req->js);
@@ -1316,6 +1317,16 @@ static struct command_result *getroutes_done_err(struct command *aux_cmd,
 	/* getroutes gives nice error messages: we may need to annotate though. */
 	msg = json_strdup(tmpctx, buf, json_get_member(buf, error, "message"));
 	json_to_int(buf, json_get_member(buf, error, "code"), &code);
+
+	/* If we were restricting the number of parts, we remove that
+	 * restriction and try again. */
+	if (payment->maxparts) {
+		payment_log(payment, LOG_INFORM,
+			    "getroute failed with maxparts=%u, so retrying without that restriction",
+			    payment->maxparts);
+		payment->maxparts = 0;
+		return getroutes_for(aux_cmd, payment, payment->amount_being_routed);
+	}
 
 	/* Simple case: failed immediately. */
 	if (payment->total_num_attempts == 0) {
@@ -1378,7 +1389,6 @@ static struct command_result *getroutes_for(struct command *aux_cmd,
 	struct out_req *req;
 	const struct pubkey *dst;
 	struct amount_msat maxfee;
-	size_t count_pending;
 
 	/* I would normally assert here, but we have reports of this happening... */
 	if (amount_msat_is_zero(deliver)) {
@@ -1461,9 +1471,11 @@ static struct command_result *getroutes_for(struct command *aux_cmd,
 	json_add_amount_msat(req->js, "maxfee_msat", maxfee);
 	json_add_u32(req->js, "final_cltv", payment->final_cltv);
 	json_add_u32(req->js, "maxdelay", payment->maxdelay);
-	count_pending = count_current_attempts(payment);
-	assert(payment->maxparts > count_pending);
-	json_add_u32(req->js, "maxparts", payment->maxparts - count_pending);
+	if (payment->maxparts) {
+		size_t count_pending = count_current_attempts(payment);
+		assert(payment->maxparts > count_pending);
+		json_add_u32(req->js, "maxparts", payment->maxparts - count_pending);
+	}
 
 	return send_payment_req(aux_cmd, payment, req);
 }
@@ -1774,7 +1786,7 @@ struct xpay_params {
 	struct amount_msat *msat, *maxfee, *partial;
 	const char **layers;
 	unsigned int retryfor;
-	u32 maxdelay, dev_maxparts;
+	u32 maxdelay;
 	const char *bip353;
 };
 
@@ -1791,7 +1803,7 @@ invoice_fetched(struct command *cmd,
 	return xpay_core(cmd, take(to_canonical_invstr(NULL, take(inv))),
 			 NULL, params->maxfee, params->layers,
 			 params->retryfor, params->partial, params->maxdelay,
-			 params->dev_maxparts, false);
+			 false);
 }
 
 static struct command_result *
@@ -1852,7 +1864,7 @@ static struct command_result *json_xpay_params(struct command *cmd,
 	struct amount_msat *msat, *maxfee, *partial;
 	const char *invstring;
 	const char **layers;
-	u32 *maxdelay, *maxparts;
+	u32 *maxdelay;
 	unsigned int *retryfor;
 	struct out_req *req;
 	struct xpay_params *xparams;
@@ -1865,13 +1877,8 @@ static struct command_result *json_xpay_params(struct command *cmd,
 			 p_opt_def("retry_for", param_number, &retryfor, 60),
 			 p_opt("partial_msat", param_msat, &partial),
 			 p_opt_def("maxdelay", param_u32, &maxdelay, 2016),
-			 p_opt_dev("dev_maxparts", param_u32, &maxparts, 100),
 			 NULL))
 		return command_param_failed();
-
-	if (*maxparts == 0)
-		return command_fail(cmd, JSONRPC2_INVALID_PARAMS,
-				    "maxparts cannot be zero");
 
 	/* Is this a one-shot vibe payment?  Kids these days! */
 	if (!as_pay && bolt12_has_offer_prefix(invstring)) {
@@ -1891,7 +1898,6 @@ static struct command_result *json_xpay_params(struct command *cmd,
 		xparams->layers = layers;
 		xparams->retryfor = *retryfor;
 		xparams->maxdelay = *maxdelay;
-		xparams->dev_maxparts = *maxparts;
 		xparams->bip353 = NULL;
 
 		return do_fetchinvoice(cmd, invstring, xparams);
@@ -1906,7 +1912,6 @@ static struct command_result *json_xpay_params(struct command *cmd,
 		xparams->layers = layers;
 		xparams->retryfor = *retryfor;
 		xparams->maxdelay = *maxdelay;
-		xparams->dev_maxparts = *maxparts;
 		xparams->bip353 = invstring;
 
 		req = jsonrpc_request_start(cmd, "fetchbip353",
@@ -1917,7 +1922,7 @@ static struct command_result *json_xpay_params(struct command *cmd,
 	}
 
 	return xpay_core(cmd, invstring,
-			 msat, maxfee, layers, *retryfor, partial, *maxdelay, *maxparts,
+			 msat, maxfee, layers, *retryfor, partial, *maxdelay,
 			 as_pay);
 }
 
@@ -1929,11 +1934,12 @@ static struct command_result *xpay_core(struct command *cmd,
 					u32 retryfor,
 					const struct amount_msat *partial,
 					u32 maxdelay,
-					u32 dev_maxparts,
 					bool as_pay)
 {
 	struct payment *payment = tal(cmd, struct payment);
 	struct xpay *xpay = xpay_of(cmd->plugin);
+	struct gossmap *gossmap = get_gossmap(xpay);
+	struct node_id dstid;
 	u64 now, invexpiry;
 	struct out_req *req;
 	char *err;
@@ -1957,10 +1963,8 @@ static struct command_result *xpay_core(struct command *cmd,
 	else
 		payment->layers = NULL;
 	payment->maxdelay = maxdelay;
-	payment->maxparts = dev_maxparts;
 
 	if (bolt12_has_prefix(payment->invstring)) {
-		struct gossmap *gossmap = get_gossmap(xpay);
 		struct tlv_invoice *b12inv
 			= invoice_decode(tmpctx, payment->invstring,
 					 strlen(payment->invstring),
@@ -2085,6 +2089,15 @@ static struct command_result *xpay_core(struct command *cmd,
 						  AMOUNT_MSAT(5000));
 	} else
 		payment->maxfee = *maxfee;
+
+	/* If we are using an unannounced channel, we assume we can
+	 * only do 6 HTLCs at a time.  This is currently true for
+	 * Phoenix, which is a large and significant node. */
+	node_id_from_pubkey(&dstid, &payment->destination);
+	if (!gossmap_find_node(gossmap, &dstid))
+		payment->maxparts = 6;
+	else
+		payment->maxparts = 0;
 
 	/* Now preapprove, then start payment. */
 	if (command_check_only(cmd)) {
@@ -2487,10 +2500,13 @@ dont_redirect:
 	return command_hook_success(cmd);
 }
 
+static const char *cmd_hook_filters[] = {"pay"};
 static const struct plugin_hook hooks[] = {
 	{
-		"rpc_command",
-		handle_rpc_command,
+		.name = "rpc_command",
+		.handle = handle_rpc_command,
+		.strfilters = cmd_hook_filters,
+		.num_strfilters = ARRAY_SIZE(cmd_hook_filters),
 	},
 };
 

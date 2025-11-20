@@ -85,7 +85,8 @@ static void destroy_channel(struct channel *channel)
 	list_del_from(&channel->peer->channels, &channel->list);
 }
 
-void delete_channel(struct channel *channel STEALS, bool completely_eliminate)
+void delete_channel(struct channel *channel STEALS,
+		    bool completely_eliminate)
 {
 	const u8 *msg;
 	struct peer *peer = channel->peer;
@@ -108,6 +109,16 @@ void delete_channel(struct channel *channel STEALS, bool completely_eliminate)
 		if (!fromwire_hsmd_forget_channel_reply(msg))
 			fatal("HSM gave bad hsm_forget_channel_reply %s", tal_hex(msg, msg));
 	}
+
+	notify_channel_state_changed(channel->peer->ld,
+				     &channel->peer->id,
+				     &channel->cid,
+				     channel->scid,
+				     clock_time(),
+				     channel->state,
+				     CLOSED,
+				     REASON_UNKNOWN,
+				     NULL);
 
 	tal_free(channel);
 
@@ -424,6 +435,8 @@ struct channel *new_unsaved_channel(struct peer *peer,
 	/* channel->channel_gossip gets populated once we know if it's public. */
 	channel->channel_gossip = NULL;
 	channel->forgets = tal_arr(channel, struct command *, 0);
+	channel->funding_psbt = NULL;
+	channel->withheld = false;
 	list_add_tail(&peer->channels, &channel->list);
 	channel->rr_number = peer->ld->rr_counter++;
 	tal_add_destructor(channel, destroy_channel);
@@ -545,7 +558,9 @@ struct channel *new_channel(struct peer *peer, u64 dbid,
 			    struct peer_update *peer_update STEALS,
 			    u64 last_stable_connection,
 			    const struct channel_stats *stats,
-			    struct channel_state_change **state_changes STEALS)
+			    struct channel_state_change **state_changes STEALS,
+			    const struct wally_psbt *funding_psbt STEALS,
+			    bool withheld)
 {
 	struct channel *channel = tal(peer->ld, struct channel);
 	struct amount_msat htlc_min, htlc_max;
@@ -721,7 +736,8 @@ struct channel *new_channel(struct peer *peer, u64 dbid,
 		channel->error = towire_errorfmt(peer->ld,
 						 &channel->cid,
 						 "We can't be together anymore.");
-
+	channel->funding_psbt = tal_steal(channel, funding_psbt);
+	channel->withheld = withheld;
 	return channel;
 }
 
@@ -1072,12 +1088,18 @@ static void channel_fail_perm(struct channel *channel,
 
 	channel_set_owner(channel, NULL);
 
-	if (channel_state_wants_onchain_fail(channel->state))
+	if (channel_state_wants_onchain_fail(channel->state) && !channel->withheld) {
 		channel_set_state(channel,
 				  channel->state,
 				  AWAITING_UNILATERAL,
 				  reason,
 				  why);
+	}
+
+	if (channel_state_open_uncommitted(channel->state)) {
+		delete_channel(channel, false);
+		return;
+	}
 
 	/* Drop non-cooperatively (unilateral) to chain. If we detect
 	 * the close from the blockchain, then we can observe
@@ -1085,8 +1107,6 @@ static void channel_fail_perm(struct channel *channel,
 	 * it doesn't stand a chance anyway. */
 	drop_to_chain(ld, channel, false, spent_by);
 
-	if (channel_state_open_uncommitted(channel->state))
-		delete_channel(channel, false);
 }
 
 void channel_fail_permanent(struct channel *channel,
