@@ -80,6 +80,7 @@ pub enum Request {
 	Feerates(requests::FeeratesRequest),
 	FetchBip353(requests::Fetchbip353Request),
 	FetchInvoice(requests::FetchinvoiceRequest),
+	CancelRecurringInvoice(requests::CancelrecurringinvoiceRequest),
 	#[serde(rename = "fundchannel_cancel")]
 	FundChannelCancel(requests::FundchannelCancelRequest),
 	#[serde(rename = "fundchannel_complete")]
@@ -181,12 +182,18 @@ pub enum Request {
 	AskReneUpdateChannel(requests::AskreneupdatechannelRequest),
 	#[serde(rename = "askrene-bias-channel")]
 	AskReneBiasChannel(requests::AskrenebiaschannelRequest),
+	#[serde(rename = "askrene-bias-node")]
+	AskreneBiasNode(requests::AskrenebiasnodeRequest),
 	#[serde(rename = "askrene-listreservations")]
 	AskReneListReservations(requests::AskrenelistreservationsRequest),
 	InjectPaymentOnion(requests::InjectpaymentonionRequest),
 	InjectOnionMessage(requests::InjectonionmessageRequest),
 	Xpay(requests::XpayRequest),
 	SignMessageWithKey(requests::SignmessagewithkeyRequest),
+	ListChannelMoves(requests::ListchannelmovesRequest),
+	ListChainMoves(requests::ListchainmovesRequest),
+	ListNetworkEvents(requests::ListnetworkeventsRequest),
+	DelNetworkEvent(requests::DelnetworkeventRequest),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -257,6 +264,7 @@ pub enum Response {
 	Feerates(responses::FeeratesResponse),
 	FetchBip353(responses::Fetchbip353Response),
 	FetchInvoice(responses::FetchinvoiceResponse),
+	CancelRecurringInvoice(responses::CancelrecurringinvoiceResponse),
 	#[serde(rename = "fundchannel_cancel")]
 	FundChannelCancel(responses::FundchannelCancelResponse),
 	#[serde(rename = "fundchannel_complete")]
@@ -358,12 +366,18 @@ pub enum Response {
 	AskReneUpdateChannel(responses::AskreneupdatechannelResponse),
 	#[serde(rename = "askrene-bias-channel")]
 	AskReneBiasChannel(responses::AskrenebiaschannelResponse),
+	#[serde(rename = "askrene-bias-node")]
+	AskreneBiasNode(responses::AskrenebiasnodeResponse),
 	#[serde(rename = "askrene-listreservations")]
 	AskReneListReservations(responses::AskrenelistreservationsResponse),
 	InjectPaymentOnion(responses::InjectpaymentonionResponse),
 	InjectOnionMessage(responses::InjectonionmessageResponse),
 	Xpay(responses::XpayResponse),
 	SignMessageWithKey(responses::SignmessagewithkeyResponse),
+	ListChannelMoves(responses::ListchannelmovesResponse),
+	ListChainMoves(responses::ListchainmovesResponse),
+	ListNetworkEvents(responses::ListnetworkeventsResponse),
+	DelNetworkEvent(responses::DelnetworkeventResponse),
 }
 
 
@@ -2382,6 +2396,36 @@ pub mod requests {
 
 	    fn method(&self) -> &str {
 	        "fetchinvoice"
+	    }
+	}
+	#[derive(Clone, Debug, Deserialize, Serialize)]
+	pub struct CancelrecurringinvoiceRequest {
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub bip353: Option<String>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub payer_note: Option<String>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub recurrence_start: Option<f64>,
+	    pub offer: String,
+	    pub recurrence_counter: u64,
+	    pub recurrence_label: String,
+	}
+
+	impl From<CancelrecurringinvoiceRequest> for Request {
+	    fn from(r: CancelrecurringinvoiceRequest) -> Self {
+	        Request::CancelRecurringInvoice(r)
+	    }
+	}
+
+	impl IntoRequest for CancelrecurringinvoiceRequest {
+	    type Response = super::responses::CancelrecurringinvoiceResponse;
+	}
+
+	impl TypedRequest for CancelrecurringinvoiceRequest {
+	    type Response = super::responses::CancelrecurringinvoiceResponse;
+
+	    fn method(&self) -> &str {
+	        "cancelrecurringinvoice"
 	    }
 	}
 	#[derive(Clone, Debug, Deserialize, Serialize)]
@@ -4676,6 +4720,35 @@ pub mod requests {
 	    }
 	}
 	#[derive(Clone, Debug, Deserialize, Serialize)]
+	pub struct AskrenebiasnodeRequest {
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub description: Option<String>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub relative: Option<bool>,
+	    pub bias: i64,
+	    pub direction: String,
+	    pub layer: String,
+	    pub node: PublicKey,
+	}
+
+	impl From<AskrenebiasnodeRequest> for Request {
+	    fn from(r: AskrenebiasnodeRequest) -> Self {
+	        Request::AskreneBiasNode(r)
+	    }
+	}
+
+	impl IntoRequest for AskrenebiasnodeRequest {
+	    type Response = super::responses::AskrenebiasnodeResponse;
+	}
+
+	impl TypedRequest for AskrenebiasnodeRequest {
+	    type Response = super::responses::AskrenebiasnodeResponse;
+
+	    fn method(&self) -> &str {
+	        "askrene-bias-node"
+	    }
+	}
+	#[derive(Clone, Debug, Deserialize, Serialize)]
 	pub struct AskrenelistreservationsRequest {
 	}
 
@@ -4809,6 +4882,189 @@ pub mod requests {
 
 	    fn method(&self) -> &str {
 	        "signmessagewithkey"
+	    }
+	}
+	/// ['How to interpret `start` and `limit`']
+	#[derive(Copy, Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+	#[allow(non_camel_case_types)]
+	pub enum ListchannelmovesIndex {
+	    #[serde(rename = "created")]
+	    CREATED = 0,
+	}
+
+	impl TryFrom<i32> for ListchannelmovesIndex {
+	    type Error = anyhow::Error;
+	    fn try_from(c: i32) -> Result<ListchannelmovesIndex, anyhow::Error> {
+	        match c {
+	    0 => Ok(ListchannelmovesIndex::CREATED),
+	            o => Err(anyhow::anyhow!("Unknown variant {} for enum ListchannelmovesIndex", o)),
+	        }
+	    }
+	}
+
+	impl ToString for ListchannelmovesIndex {
+	    fn to_string(&self) -> String {
+	        match self {
+	            ListchannelmovesIndex::CREATED => "CREATED",
+	        }.to_string()
+	    }
+	}
+
+	#[derive(Clone, Debug, Deserialize, Serialize)]
+	pub struct ListchannelmovesRequest {
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub index: Option<ListchannelmovesIndex>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub limit: Option<u32>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub start: Option<u64>,
+	}
+
+	impl From<ListchannelmovesRequest> for Request {
+	    fn from(r: ListchannelmovesRequest) -> Self {
+	        Request::ListChannelMoves(r)
+	    }
+	}
+
+	impl IntoRequest for ListchannelmovesRequest {
+	    type Response = super::responses::ListchannelmovesResponse;
+	}
+
+	impl TypedRequest for ListchannelmovesRequest {
+	    type Response = super::responses::ListchannelmovesResponse;
+
+	    fn method(&self) -> &str {
+	        "listchannelmoves"
+	    }
+	}
+	/// ['How to interpret `start` and `limit`']
+	#[derive(Copy, Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+	#[allow(non_camel_case_types)]
+	pub enum ListchainmovesIndex {
+	    #[serde(rename = "created")]
+	    CREATED = 0,
+	}
+
+	impl TryFrom<i32> for ListchainmovesIndex {
+	    type Error = anyhow::Error;
+	    fn try_from(c: i32) -> Result<ListchainmovesIndex, anyhow::Error> {
+	        match c {
+	    0 => Ok(ListchainmovesIndex::CREATED),
+	            o => Err(anyhow::anyhow!("Unknown variant {} for enum ListchainmovesIndex", o)),
+	        }
+	    }
+	}
+
+	impl ToString for ListchainmovesIndex {
+	    fn to_string(&self) -> String {
+	        match self {
+	            ListchainmovesIndex::CREATED => "CREATED",
+	        }.to_string()
+	    }
+	}
+
+	#[derive(Clone, Debug, Deserialize, Serialize)]
+	pub struct ListchainmovesRequest {
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub index: Option<ListchainmovesIndex>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub limit: Option<u32>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub start: Option<u64>,
+	}
+
+	impl From<ListchainmovesRequest> for Request {
+	    fn from(r: ListchainmovesRequest) -> Self {
+	        Request::ListChainMoves(r)
+	    }
+	}
+
+	impl IntoRequest for ListchainmovesRequest {
+	    type Response = super::responses::ListchainmovesResponse;
+	}
+
+	impl TypedRequest for ListchainmovesRequest {
+	    type Response = super::responses::ListchainmovesResponse;
+
+	    fn method(&self) -> &str {
+	        "listchainmoves"
+	    }
+	}
+	/// ['This controls the ordering of results.']
+	#[derive(Copy, Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+	#[allow(non_camel_case_types)]
+	pub enum ListnetworkeventsIndex {
+	    #[serde(rename = "created")]
+	    CREATED = 0,
+	}
+
+	impl TryFrom<i32> for ListnetworkeventsIndex {
+	    type Error = anyhow::Error;
+	    fn try_from(c: i32) -> Result<ListnetworkeventsIndex, anyhow::Error> {
+	        match c {
+	    0 => Ok(ListnetworkeventsIndex::CREATED),
+	            o => Err(anyhow::anyhow!("Unknown variant {} for enum ListnetworkeventsIndex", o)),
+	        }
+	    }
+	}
+
+	impl ToString for ListnetworkeventsIndex {
+	    fn to_string(&self) -> String {
+	        match self {
+	            ListnetworkeventsIndex::CREATED => "CREATED",
+	        }.to_string()
+	    }
+	}
+
+	#[derive(Clone, Debug, Deserialize, Serialize)]
+	pub struct ListnetworkeventsRequest {
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub id: Option<String>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub index: Option<ListnetworkeventsIndex>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub limit: Option<u32>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub start: Option<u64>,
+	}
+
+	impl From<ListnetworkeventsRequest> for Request {
+	    fn from(r: ListnetworkeventsRequest) -> Self {
+	        Request::ListNetworkEvents(r)
+	    }
+	}
+
+	impl IntoRequest for ListnetworkeventsRequest {
+	    type Response = super::responses::ListnetworkeventsResponse;
+	}
+
+	impl TypedRequest for ListnetworkeventsRequest {
+	    type Response = super::responses::ListnetworkeventsResponse;
+
+	    fn method(&self) -> &str {
+	        "listnetworkevents"
+	    }
+	}
+	#[derive(Clone, Debug, Deserialize, Serialize)]
+	pub struct DelnetworkeventRequest {
+	    pub created_index: u64,
+	}
+
+	impl From<DelnetworkeventRequest> for Request {
+	    fn from(r: DelnetworkeventRequest) -> Self {
+	        Request::DelNetworkEvent(r)
+	    }
+	}
+
+	impl IntoRequest for DelnetworkeventRequest {
+	    type Response = super::responses::DelnetworkeventResponse;
+	}
+
+	impl TypedRequest for DelnetworkeventRequest {
+	    type Response = super::responses::DelnetworkeventResponse;
+
+	    fn method(&self) -> &str {
+	        "delnetworkevent"
 	    }
 	}
 }
@@ -8233,6 +8489,22 @@ pub mod responses {
 	    fn try_from(response: Response) -> Result<Self, Self::Error> {
 	        match response {
 	            Response::FetchInvoice(response) => Ok(response),
+	            _ => Err(TryFromResponseError)
+	        }
+	    }
+	}
+
+	#[derive(Clone, Debug, Deserialize, Serialize)]
+	pub struct CancelrecurringinvoiceResponse {
+	    pub bolt12: String,
+	}
+
+	impl TryFrom<Response> for CancelrecurringinvoiceResponse {
+	    type Error = super::TryFromResponseError;
+
+	    fn try_from(response: Response) -> Result<Self, Self::Error> {
+	        match response {
+	            Response::CancelRecurringInvoice(response) => Ok(response),
 	            _ => Err(TryFromResponseError)
 	        }
 	    }
@@ -11878,6 +12150,33 @@ pub mod responses {
 	}
 
 	#[derive(Clone, Debug, Deserialize, Serialize)]
+	pub struct AskrenebiasnodeNodeBiases {
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub description: Option<String>,
+	    pub in_bias: i64,
+	    pub layer: String,
+	    pub node: PublicKey,
+	    pub out_bias: i64,
+	    pub timestamp: u64,
+	}
+
+	#[derive(Clone, Debug, Deserialize, Serialize)]
+	pub struct AskrenebiasnodeResponse {
+	    pub node_biases: Vec<AskrenebiasnodeNodeBiases>,
+	}
+
+	impl TryFrom<Response> for AskrenebiasnodeResponse {
+	    type Error = super::TryFromResponseError;
+
+	    fn try_from(response: Response) -> Result<Self, Self::Error> {
+	        match response {
+	            Response::AskreneBiasNode(response) => Ok(response),
+	            _ => Err(TryFromResponseError)
+	        }
+	    }
+	}
+
+	#[derive(Clone, Debug, Deserialize, Serialize)]
 	pub struct AskrenelistreservationsReservations {
 	    pub age_in_seconds: u64,
 	    pub amount_msat: Amount,
@@ -11969,6 +12268,263 @@ pub mod responses {
 	    fn try_from(response: Response) -> Result<Self, Self::Error> {
 	        match response {
 	            Response::SignMessageWithKey(response) => Ok(response),
+	            _ => Err(TryFromResponseError)
+	        }
+	    }
+	}
+
+	/// ['A set of one or more tags defining the nature of the change']
+	#[derive(Copy, Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+	#[allow(non_camel_case_types)]
+	pub enum ListchannelmovesChannelmovesPrimaryTag {
+	    #[serde(rename = "invoice")]
+	    INVOICE = 0,
+	    #[serde(rename = "routed")]
+	    ROUTED = 1,
+	    #[serde(rename = "pushed")]
+	    PUSHED = 2,
+	    #[serde(rename = "lease_fee")]
+	    LEASE_FEE = 3,
+	    #[serde(rename = "channel_proposed")]
+	    CHANNEL_PROPOSED = 4,
+	    #[serde(rename = "penalty_adj")]
+	    PENALTY_ADJ = 5,
+	    #[serde(rename = "journal_entry")]
+	    JOURNAL_ENTRY = 6,
+	}
+
+	impl TryFrom<i32> for ListchannelmovesChannelmovesPrimaryTag {
+	    type Error = anyhow::Error;
+	    fn try_from(c: i32) -> Result<ListchannelmovesChannelmovesPrimaryTag, anyhow::Error> {
+	        match c {
+	    0 => Ok(ListchannelmovesChannelmovesPrimaryTag::INVOICE),
+	    1 => Ok(ListchannelmovesChannelmovesPrimaryTag::ROUTED),
+	    2 => Ok(ListchannelmovesChannelmovesPrimaryTag::PUSHED),
+	    3 => Ok(ListchannelmovesChannelmovesPrimaryTag::LEASE_FEE),
+	    4 => Ok(ListchannelmovesChannelmovesPrimaryTag::CHANNEL_PROPOSED),
+	    5 => Ok(ListchannelmovesChannelmovesPrimaryTag::PENALTY_ADJ),
+	    6 => Ok(ListchannelmovesChannelmovesPrimaryTag::JOURNAL_ENTRY),
+	            o => Err(anyhow::anyhow!("Unknown variant {} for enum ListchannelmovesChannelmovesPrimaryTag", o)),
+	        }
+	    }
+	}
+
+	impl ToString for ListchannelmovesChannelmovesPrimaryTag {
+	    fn to_string(&self) -> String {
+	        match self {
+	            ListchannelmovesChannelmovesPrimaryTag::INVOICE => "INVOICE",
+	            ListchannelmovesChannelmovesPrimaryTag::ROUTED => "ROUTED",
+	            ListchannelmovesChannelmovesPrimaryTag::PUSHED => "PUSHED",
+	            ListchannelmovesChannelmovesPrimaryTag::LEASE_FEE => "LEASE_FEE",
+	            ListchannelmovesChannelmovesPrimaryTag::CHANNEL_PROPOSED => "CHANNEL_PROPOSED",
+	            ListchannelmovesChannelmovesPrimaryTag::PENALTY_ADJ => "PENALTY_ADJ",
+	            ListchannelmovesChannelmovesPrimaryTag::JOURNAL_ENTRY => "JOURNAL_ENTRY",
+	        }.to_string()
+	    }
+	}
+
+	#[derive(Clone, Debug, Deserialize, Serialize)]
+	pub struct ListchannelmovesChannelmoves {
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub group_id: Option<u64>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub part_id: Option<u64>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub payment_hash: Option<Sha256>,
+	    // Path `ListChannelMoves.channelmoves[].primary_tag`
+	    pub primary_tag: ListchannelmovesChannelmovesPrimaryTag,
+	    pub account_id: String,
+	    pub created_index: u64,
+	    pub credit_msat: Amount,
+	    pub debit_msat: Amount,
+	    pub fees_msat: Amount,
+	    pub timestamp: u64,
+	}
+
+	#[derive(Clone, Debug, Deserialize, Serialize)]
+	pub struct ListchannelmovesResponse {
+	    pub channelmoves: Vec<ListchannelmovesChannelmoves>,
+	}
+
+	impl TryFrom<Response> for ListchannelmovesResponse {
+	    type Error = super::TryFromResponseError;
+
+	    fn try_from(response: Response) -> Result<Self, Self::Error> {
+	        match response {
+	            Response::ListChannelMoves(response) => Ok(response),
+	            _ => Err(TryFromResponseError)
+	        }
+	    }
+	}
+
+	/// ['A set of one or more tags defining the nature of the change']
+	#[derive(Copy, Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+	#[allow(non_camel_case_types)]
+	pub enum ListchainmovesChainmovesPrimaryTag {
+	    #[serde(rename = "deposit")]
+	    DEPOSIT = 0,
+	    #[serde(rename = "withdrawal")]
+	    WITHDRAWAL = 1,
+	    #[serde(rename = "penalty")]
+	    PENALTY = 2,
+	    #[serde(rename = "channel_open")]
+	    CHANNEL_OPEN = 3,
+	    #[serde(rename = "channel_close")]
+	    CHANNEL_CLOSE = 4,
+	    #[serde(rename = "delayed_to_us")]
+	    DELAYED_TO_US = 5,
+	    #[serde(rename = "htlc_tx")]
+	    HTLC_TX = 6,
+	    #[serde(rename = "htlc_timeout")]
+	    HTLC_TIMEOUT = 7,
+	    #[serde(rename = "htlc_fulfill")]
+	    HTLC_FULFILL = 8,
+	    #[serde(rename = "to_wallet")]
+	    TO_WALLET = 9,
+	    #[serde(rename = "anchor")]
+	    ANCHOR = 10,
+	    #[serde(rename = "to_them")]
+	    TO_THEM = 11,
+	    #[serde(rename = "penalized")]
+	    PENALIZED = 12,
+	    #[serde(rename = "stolen")]
+	    STOLEN = 13,
+	    #[serde(rename = "ignored")]
+	    IGNORED = 14,
+	    #[serde(rename = "to_miner")]
+	    TO_MINER = 15,
+	}
+
+	impl TryFrom<i32> for ListchainmovesChainmovesPrimaryTag {
+	    type Error = anyhow::Error;
+	    fn try_from(c: i32) -> Result<ListchainmovesChainmovesPrimaryTag, anyhow::Error> {
+	        match c {
+	    0 => Ok(ListchainmovesChainmovesPrimaryTag::DEPOSIT),
+	    1 => Ok(ListchainmovesChainmovesPrimaryTag::WITHDRAWAL),
+	    2 => Ok(ListchainmovesChainmovesPrimaryTag::PENALTY),
+	    3 => Ok(ListchainmovesChainmovesPrimaryTag::CHANNEL_OPEN),
+	    4 => Ok(ListchainmovesChainmovesPrimaryTag::CHANNEL_CLOSE),
+	    5 => Ok(ListchainmovesChainmovesPrimaryTag::DELAYED_TO_US),
+	    6 => Ok(ListchainmovesChainmovesPrimaryTag::HTLC_TX),
+	    7 => Ok(ListchainmovesChainmovesPrimaryTag::HTLC_TIMEOUT),
+	    8 => Ok(ListchainmovesChainmovesPrimaryTag::HTLC_FULFILL),
+	    9 => Ok(ListchainmovesChainmovesPrimaryTag::TO_WALLET),
+	    10 => Ok(ListchainmovesChainmovesPrimaryTag::ANCHOR),
+	    11 => Ok(ListchainmovesChainmovesPrimaryTag::TO_THEM),
+	    12 => Ok(ListchainmovesChainmovesPrimaryTag::PENALIZED),
+	    13 => Ok(ListchainmovesChainmovesPrimaryTag::STOLEN),
+	    14 => Ok(ListchainmovesChainmovesPrimaryTag::IGNORED),
+	    15 => Ok(ListchainmovesChainmovesPrimaryTag::TO_MINER),
+	            o => Err(anyhow::anyhow!("Unknown variant {} for enum ListchainmovesChainmovesPrimaryTag", o)),
+	        }
+	    }
+	}
+
+	impl ToString for ListchainmovesChainmovesPrimaryTag {
+	    fn to_string(&self) -> String {
+	        match self {
+	            ListchainmovesChainmovesPrimaryTag::DEPOSIT => "DEPOSIT",
+	            ListchainmovesChainmovesPrimaryTag::WITHDRAWAL => "WITHDRAWAL",
+	            ListchainmovesChainmovesPrimaryTag::PENALTY => "PENALTY",
+	            ListchainmovesChainmovesPrimaryTag::CHANNEL_OPEN => "CHANNEL_OPEN",
+	            ListchainmovesChainmovesPrimaryTag::CHANNEL_CLOSE => "CHANNEL_CLOSE",
+	            ListchainmovesChainmovesPrimaryTag::DELAYED_TO_US => "DELAYED_TO_US",
+	            ListchainmovesChainmovesPrimaryTag::HTLC_TX => "HTLC_TX",
+	            ListchainmovesChainmovesPrimaryTag::HTLC_TIMEOUT => "HTLC_TIMEOUT",
+	            ListchainmovesChainmovesPrimaryTag::HTLC_FULFILL => "HTLC_FULFILL",
+	            ListchainmovesChainmovesPrimaryTag::TO_WALLET => "TO_WALLET",
+	            ListchainmovesChainmovesPrimaryTag::ANCHOR => "ANCHOR",
+	            ListchainmovesChainmovesPrimaryTag::TO_THEM => "TO_THEM",
+	            ListchainmovesChainmovesPrimaryTag::PENALIZED => "PENALIZED",
+	            ListchainmovesChainmovesPrimaryTag::STOLEN => "STOLEN",
+	            ListchainmovesChainmovesPrimaryTag::IGNORED => "IGNORED",
+	            ListchainmovesChainmovesPrimaryTag::TO_MINER => "TO_MINER",
+	        }.to_string()
+	    }
+	}
+
+	#[derive(Clone, Debug, Deserialize, Serialize)]
+	pub struct ListchainmovesChainmoves {
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub originating_account: Option<String>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub output_count: Option<u32>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub payment_hash: Option<Sha256>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub peer_id: Option<PublicKey>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub spending_txid: Option<String>,
+	    // Path `ListChainMoves.chainmoves[].primary_tag`
+	    pub primary_tag: ListchainmovesChainmovesPrimaryTag,
+	    pub account_id: String,
+	    pub blockheight: u32,
+	    pub created_index: u64,
+	    pub credit_msat: Amount,
+	    pub debit_msat: Amount,
+	    pub extra_tags: Vec<String>,
+	    pub output_msat: Amount,
+	    pub timestamp: u64,
+	    pub utxo: Outpoint,
+	}
+
+	#[derive(Clone, Debug, Deserialize, Serialize)]
+	pub struct ListchainmovesResponse {
+	    pub chainmoves: Vec<ListchainmovesChainmoves>,
+	}
+
+	impl TryFrom<Response> for ListchainmovesResponse {
+	    type Error = super::TryFromResponseError;
+
+	    fn try_from(response: Response) -> Result<Self, Self::Error> {
+	        match response {
+	            Response::ListChainMoves(response) => Ok(response),
+	            _ => Err(TryFromResponseError)
+	        }
+	    }
+	}
+
+	#[derive(Clone, Debug, Deserialize, Serialize)]
+	pub struct ListnetworkeventsNetworkevents {
+	    #[serde(rename = "type")]
+	    pub item_type: String,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub connect_attempted: Option<bool>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub duration_nsec: Option<u64>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub reason: Option<String>,
+	    pub created_index: u64,
+	    pub peer_id: PublicKey,
+	    pub timestamp: u64,
+	}
+
+	#[derive(Clone, Debug, Deserialize, Serialize)]
+	pub struct ListnetworkeventsResponse {
+	    pub networkevents: Vec<ListnetworkeventsNetworkevents>,
+	}
+
+	impl TryFrom<Response> for ListnetworkeventsResponse {
+	    type Error = super::TryFromResponseError;
+
+	    fn try_from(response: Response) -> Result<Self, Self::Error> {
+	        match response {
+	            Response::ListNetworkEvents(response) => Ok(response),
+	            _ => Err(TryFromResponseError)
+	        }
+	    }
+	}
+
+	#[derive(Clone, Debug, Deserialize, Serialize)]
+	pub struct DelnetworkeventResponse {
+	}
+
+	impl TryFrom<Response> for DelnetworkeventResponse {
+	    type Error = super::TryFromResponseError;
+
+	    fn try_from(response: Response) -> Result<Self, Self::Error> {
+	        match response {
+	            Response::DelNetworkEvent(response) => Ok(response),
 	            _ => Err(TryFromResponseError)
 	        }
 	    }
