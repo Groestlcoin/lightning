@@ -24,7 +24,9 @@
 #include <lightningd/peer_htlcs.h>
 #include <lightningd/runes.h>
 #include <onchaind/onchaind_wiregen.h>
+#include <wallet/datastore.h>
 #include <wallet/invoices.h>
+#include <wallet/migrations.h>
 #include <wallet/txfilter.h>
 #include <wallet/wallet.h>
 #include <wally_bip32.h>
@@ -178,11 +180,28 @@ static void our_addresses_init(struct wallet *w)
 	w->our_addresses_maxindex = w->keyscan_gap;
 }
 
-static void outpointfilters_init(struct wallet *w)
+/* Idempotent: outpointfilter_add is a noop if it already exists. */
+static void refill_outpointfilters(struct wallet *w)
 {
 	struct db_stmt *stmt;
+
+	stmt = db_prepare_v2(
+	    w->db,
+	    SQL("SELECT txid, outnum FROM utxoset WHERE spendheight is NULL"));
+	db_query_prepared(stmt);
+
+	while (db_step(stmt)) {
+		struct bitcoin_outpoint outpoint;
+		db_col_txid(stmt, "txid", &outpoint.txid);
+		outpoint.n = db_col_int(stmt, "outnum");
+		outpointfilter_add(w->utxoset_outpoints, &outpoint);
+	}
+	tal_free(stmt);
+}
+
+static void outpointfilters_init(struct wallet *w)
+{
 	struct utxo **utxos = wallet_get_all_utxos(NULL, w);
-	struct bitcoin_outpoint outpoint;
 
 	w->owned_outpoints = outpointfilter_new(w);
 	for (size_t i = 0; i < tal_count(utxos); i++)
@@ -191,17 +210,7 @@ static void outpointfilters_init(struct wallet *w)
 	tal_free(utxos);
 
 	w->utxoset_outpoints = outpointfilter_new(w);
-	stmt = db_prepare_v2(
-	    w->db,
-	    SQL("SELECT txid, outnum FROM utxoset WHERE spendheight is NULL"));
-	db_query_prepared(stmt);
-
-	while (db_step(stmt)) {
-		db_col_txid(stmt, "txid", &outpoint.txid);
-		outpoint.n = db_col_int(stmt, "outnum");
-		outpointfilter_add(w->utxoset_outpoints, &outpoint);
-	}
-	tal_free(stmt);
+	refill_outpointfilters(w);
 }
 
 struct wallet *wallet_new(struct lightningd *ld, struct timers *timers)
@@ -2545,6 +2554,22 @@ u32 wallet_blocks_maxheight(struct wallet *w)
 	return max;
 }
 
+u32 wallet_blocks_minheight(struct wallet *w)
+{
+	u32 min = 0;
+	struct db_stmt *stmt = db_prepare_v2(w->db, SQL("SELECT MIN(height) FROM blocks;"));
+	db_query_prepared(stmt);
+
+	/* If we ever processed a block we'll get the latest block in the chain */
+	if (db_step(stmt)) {
+		if (!db_col_is_null(stmt, "MIN(height)")) {
+			min = db_col_int(stmt, "MIN(height)");
+		}
+	}
+	tal_free(stmt);
+	return min;
+}
+
 static void wallet_channel_config_insert(struct wallet *w,
 					 struct channel_config *cc)
 {
@@ -4865,6 +4890,9 @@ void wallet_block_remove(struct wallet *w, struct block *b)
 	db_query_prepared(stmt);
 	assert(!db_step(stmt));
 	tal_free(stmt);
+
+	/* We might need to watch more now-unspent UTXOs */
+	refill_outpointfilters(w);
 }
 
 void wallet_blocks_rollback(struct wallet *w, u32 height)
@@ -4873,6 +4901,7 @@ void wallet_blocks_rollback(struct wallet *w, u32 height)
 							"WHERE height > ?"));
 	db_bind_int(stmt, height);
 	db_exec_prepared_v2(take(stmt));
+	refill_outpointfilters(w);
 }
 
 bool wallet_outpoint_spend(const tal_t *ctx, struct wallet *w, const u32 blockheight,
@@ -6332,63 +6361,9 @@ void wallet_invoice_request_mark_used(struct db *db, const struct sha256 *invreq
 	}
 }
 
-/* We join key parts with nuls for now. */
-static void db_bind_datastore_key(struct db_stmt *stmt,
-				  const char **key)
-{
-	u8 *joined;
-	size_t len;
-
-	if (tal_count(key) == 1) {
-		db_bind_blob(stmt, (u8 *)key[0], strlen(key[0]));
-		return;
-	}
-
-	len = strlen(key[0]);
-	joined = (u8 *)tal_strdup(tmpctx, key[0]);
-	for (size_t i = 1; i < tal_count(key); i++) {
-		tal_resize(&joined, len + 1 + strlen(key[i]));
-		joined[len] = '\0';
-		memcpy(joined + len + 1, key[i], strlen(key[i]));
-		len += 1 + strlen(key[i]);
-	}
-	db_bind_blob(stmt, joined, len);
-}
-
-static const char **db_col_datastore_key(const tal_t *ctx,
-					 struct db_stmt *stmt,
-					 const char *colname)
-{
-	char **key;
-	const u8 *joined = db_col_blob(stmt, colname);
-	size_t len = db_col_bytes(stmt, colname);
-
-	key = tal_arr(ctx, char *, 0);
-	do {
-		size_t partlen;
-		for (partlen = 0; partlen < len; partlen++) {
-			if (joined[partlen] == '\0') {
-				partlen++;
-				break;
-			}
-		}
-		tal_arr_expand(&key, tal_strndup(key, (char *)joined, partlen));
-		len -= partlen;
-		joined += partlen;
-	} while (len != 0);
-
-	return cast_const2(const char **, key);
-}
-
 void wallet_datastore_update(struct wallet *w, const char **key, const u8 *data)
 {
-	struct db_stmt *stmt;
-
-	stmt = db_prepare_v2(w->db,
-			     SQL("UPDATE datastore SET data=?, generation=generation+1 WHERE key=?;"));
-	db_bind_talarr(stmt, data);
-	db_bind_datastore_key(stmt, key);
-	db_exec_prepared_v2(take(stmt));
+	db_datastore_update(w->db, key, data);
 }
 
 static void db_datastore_create(struct db *db, const char **key, const u8 *data)
@@ -6457,121 +6432,12 @@ void wallet_datastore_remove(struct wallet *w, const char **key)
 	db_datastore_remove(w->db, key);
 }
 
-/* Does k1 match k2 as far as k2 goes? */
-bool datastore_key_startswith(const char **k1, const char **k2)
-{
-	size_t k1len = tal_count(k1), k2len = tal_count(k2);
-
-	if (k2len > k1len)
-		return false;
-
-	for (size_t i = 0; i < k2len; i++) {
-		if (!streq(k1[i], k2[i]))
-			return false;
-	}
-	return true;
-}
-
-bool datastore_key_eq(const char **k1, const char **k2)
-{
-	return tal_count(k1) == tal_count(k2)
-		&& datastore_key_startswith(k1, k2);
-}
-
-static u8 *db_datastore_get(const tal_t *ctx,
-			    struct db *db,
-			    const char **key,
-			    u64 *generation)
-{
-	struct db_stmt *stmt;
-	u8 *ret;
-
-	stmt = db_prepare_v2(db,
-			     SQL("SELECT data, generation"
-				 " FROM datastore"
-				 " WHERE key = ?"));
-	db_bind_datastore_key(stmt, key);
-	db_query_prepared(stmt);
-
-	if (!db_step(stmt)) {
-		tal_free(stmt);
-		return NULL;
-	}
-
-	ret = db_col_arr(ctx, stmt, "data", u8);
-	if (generation)
-		*generation = db_col_u64(stmt, "generation");
-	else
-		db_col_ignore(stmt, "generation");
-	tal_free(stmt);
-	return ret;
-}
-
 u8 *wallet_datastore_get(const tal_t *ctx,
 			 struct wallet *w,
 			 const char **key,
 			 u64 *generation)
 {
 	return db_datastore_get(ctx, w->db, key, generation);
-}
-
-static struct db_stmt *db_datastore_next(const tal_t *ctx,
-					 struct db_stmt *stmt,
-					 const char **startkey,
-					 const char ***key,
-					 const u8 **data,
-					 u64 *generation)
-{
-	if (!db_step(stmt))
-		return tal_free(stmt);
-
-	*key = db_col_datastore_key(ctx, stmt, "key");
-
-	/* We select from startkey onwards, so once we're past it, stop */
-	if (startkey && !datastore_key_startswith(*key, startkey)) {
-		db_col_ignore(stmt, "data");
-		db_col_ignore(stmt, "generation");
-		return tal_free(stmt);
-	}
-
-	if (data)
-		*data = db_col_arr(ctx, stmt, "data", u8);
-	else
-		db_col_ignore(stmt, "data");
-
-	if (generation)
-		*generation = db_col_u64(stmt, "generation");
-	else
-		db_col_ignore(stmt, "generation");
-
-	return stmt;
-}
-
-static struct db_stmt *db_datastore_first(const tal_t *ctx,
-					  struct db *db,
-					  const char **startkey,
-					  const char ***key,
-					  const u8 **data,
-					  u64 *generation)
-{
-	struct db_stmt *stmt;
-
-	if (startkey) {
-		stmt = db_prepare_v2(db,
-				     SQL("SELECT key, data, generation"
-					 " FROM datastore"
-					 " WHERE key >= ?"
-					 " ORDER BY key;"));
-		db_bind_datastore_key(stmt, startkey);
-	} else {
-		stmt = db_prepare_v2(db,
-				     SQL("SELECT key, data, generation"
-					 " FROM datastore"
-					 " ORDER BY key;"));
-	}
-	db_query_prepared(stmt);
-
-	return db_datastore_next(ctx, stmt, startkey, key, data, generation);
 }
 
 struct db_stmt *wallet_datastore_first(const tal_t *ctx,

@@ -11,26 +11,24 @@ privacy:
 #### Regtest (local, fast-start) option
 
 If you want to experiment with `lightningd`, there's a script to set up a `groestlcoind` regtest test network of two local lightning nodes, which provides a convenient `start_ln` helper. See the notes at the top of the `startup_regtest.sh` file for details on how to use it.
-
 ```bash
 . contrib/startup_regtest.sh
 ```
 
 #### Mainnet Option
 
-To test with real groestlcoin,  you will need to have a local `groestlcoind` node running:
-
+To test with real groestlcoin, you will need to have a local `groestlcoind` node running:
 ```bash
 groestlcoind -daemon
 ```
 
 Wait until `groestlcoind` has synchronized with the network.
 
-Make sure that you do not have `walletbroadcast=0` in your `~/.groestlcoin/groestlcoin.conf`, or you may run into trouble.  
+Make sure that you do not have `walletbroadcast=0` in your `~/.groestlcoin/groestlcoin.conf`, or you may run into trouble.
+
 Notice that running `lightningd` against a pruned node may cause some issues if not managed carefully, see [pruning](doc:groestlcoin-core##using-a-pruned-groestlcoin-core-node) for more information.
 
 You can start `lightningd` with the following command:
-
 ```bash
 lightningd --network=groestlcoin --log-level=debug
 ```
@@ -57,6 +55,6 @@ Useful commands:
 
 Once you've started for the first time, there's a script called `contrib/bootstrap-node.sh` which will connect you to other nodes on the lightning network.
 
-There are also numerous plugins available for Core Lightning which add capabilities: see the [Plugins](doc:plugins) guide, and check out the plugin collection at: <https://github.com/lightningd/plugins>.
+There are also numerous plugins available for Core Lightning which add capabilities: see the [Plugins](doc:plugins) guide, and check out the plugin collection at: https://github.com/lightningd/plugins.
 
 For a less reckless experience, you can encrypt the HD wallet seed: see [HD wallet encryption](doc:backup-and-recovery#hsm-secret-backup).

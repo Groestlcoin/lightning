@@ -790,6 +790,15 @@ void wallet_channel_stats_incr_out_fulfilled(struct wallet *w, u64 cdbid, struct
 u32 wallet_blocks_maxheight(struct wallet *w);
 
 /**
+ * Retrieve the blockheight of the first block processed by lightningd.
+ *
+ * Will return the 0 if the wallet was never used before.
+ *
+ * @w: wallet to load from.
+ */
+u32 wallet_blocks_minheight(struct wallet *w);
+
+/**
  * wallet_extract_owned_outputs - given a tx, extract all of our outputs
  */
 int wallet_extract_owned_outputs(struct wallet *w, const struct wally_tx *tx,
@@ -2006,6 +2015,5 @@ void wallet_datastore_save_payment_description(struct db *db,
 					       const struct sha256 *payment_hash,
 					       const char *desc);
 void migrate_setup_coinmoves(struct lightningd *ld, struct db *db);
-void migrate_remove_chain_moves_duplicates(struct lightningd *ld, struct db *db);
 
 #endif /* LIGHTNING_WALLET_WALLET_H */

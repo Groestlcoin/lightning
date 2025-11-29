@@ -8,6 +8,7 @@ MARKDOWNPAGES := doc/addgossip.7 \
 	doc/addpsbtoutput.7 \
 	doc/askrene-age.7 \
 	doc/askrene-bias-channel.7 \
+	doc/askrene-bias-node.7 \
 	doc/askrene-create-layer.7 \
 	doc/askrene-remove-layer.7 \
 	doc/askrene-create-channel.7 \
@@ -162,6 +163,7 @@ NON_PREFIXED_MANPAGES := doc/lightning-cli.1 \
 	doc/lightningd-config.5 \
 	doc/lightningd-rpc.7 \
 	doc/lightning-hsmtool.8 \
+	doc/lightning-downgrade.8 \
 	doc/lightning-reckless.1
 
 MANPAGES := $(PREFIXED_MANPAGES) $(NON_PREFIXED_MANPAGES)

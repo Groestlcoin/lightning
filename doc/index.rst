@@ -16,6 +16,7 @@ Core Lightning Documentation
    addpsbtoutput <addpsbtoutput.7.md>
    askrene-age <askrene-age.7.md>
    askrene-bias-channel <askrene-bias-channel.7.md>
+   askrene-bias-node <askrene-bias-node.7.md>
    askrene-create-channel <askrene-create-channel.7.md>
    askrene-create-layer <askrene-create-layer.7.md>
    askrene-disable-node <askrene-disable-node.7.md>
@@ -87,6 +88,7 @@ Core Lightning Documentation
    invoicerequest <invoicerequest.7.md>
    keysend <keysend.7.md>
    lightning-cli <lightning-cli.1.md>
+   lightning-downgrade <lightning-downgrade.8.md>
    lightning-hsmtool <lightning-hsmtool.8.md>
    lightning-reckless <lightning-reckless.1.md>
    lightningd <lightningd.8.md>
