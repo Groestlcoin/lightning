@@ -1,4 +1,4 @@
-name: Build and push multi-platform docker images
+name: Publish multi-platform docker images
 
 on:
   push:
@@ -21,7 +21,7 @@ on:
         description: 'List of platforms to build'
         default: 'linux/amd64,linux/arm64,linux/arm/v7'
         required: false
-  
+
       push-latest:
         description: 'Push the latest tag also?'
         default: 'false'
@@ -30,6 +30,14 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false    # Let each tag finish.
+      matrix:
+        include:
+          - target: lightningd
+            tag_suffix: ''
+          - target: lightningd-vls-signer
+            tag_suffix: '-vls'
 
     steps:
     - name: Checkout repository
@@ -50,7 +58,7 @@ jobs:
         username: ${{ secrets.DOCKER_USERNAME }}
         password: ${{ secrets.DOCKER_PASSWORD }}
 
-    - name: Set up values
+    - name: Set up values for ${{ matrix.target }}
       id: set-values
       run: |
         if [[ "${{ github.event.inputs.version }}" != "" ]]; then
@@ -79,7 +87,7 @@ jobs:
         fi
         echo "PLATFORMS=$PLATFORMS" >> $GITHUB_ENV
 
-        if [[ "${{ github.event.inputs.push-latest }}" == "true" ]] || 
+        if [[ "${{ github.event.inputs.push-latest }}" == "true" ]] ||
           ([[ "${{ github.ref_type }}" == "tag" ]] && [[ ! "$VERSION" =~ rc ]]); then
           echo "Latest true"
           PUSHLATEST="true"
@@ -89,14 +97,16 @@ jobs:
         fi
         echo "PUSHLATEST=$PUSHLATEST" >> $GITHUB_ENV
 
-        TAGS="$REPONAME/lightningd:$VERSION"
+        TAGS="$REPONAME/lightningd:$VERSION${{ matrix.tag_suffix }}"
         if [[ "$PUSHLATEST" == "true" ]]; then
-          TAGS="$TAGS,$REPONAME/lightningd:latest"
+          TAGS="$TAGS,$REPONAME/lightningd:latest${{ matrix.tag_suffix }}"
         fi
         echo "TAGS=$TAGS" >> $GITHUB_ENV
 
     - name: Print GitHub Ref Values
       run: |
+        echo "TARGET: ${{ matrix.target }}"
+        echo "TAG SUFFIX: ${{ matrix.tag_suffix }}"
         echo "GITHUB REF TYPE: ${{ github.ref_type }}"
         echo "GITHUB REF NAME: ${{ github.ref_name }}"
         echo "EVENT INPUT VERSION: ${{ github.event.inputs.version }}"
@@ -109,13 +119,16 @@ jobs:
         echo "ENV PUSH LATEST: ${{ env.PUSHLATEST }}"
         echo "ENV TAGS: ${{ env.TAGS }}"
 
-    - name: Build and push Docker image
+    - name: Build and push Docker tag - ${{ env.TAGS }}
       uses: docker/build-push-action@v5
       with:
         context: .
         file: ./Dockerfile
+        target: ${{ matrix.target }}
         push: true
         platforms: ${{ env.PLATFORMS }}
         tags: ${{ env.TAGS }}
         build-args: |
           VERSION=${{ env.VERSION }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
