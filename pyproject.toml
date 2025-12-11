@@ -15,23 +15,27 @@ dependencies = [
   "pyln-client",
   "pyln-proto",
   "pyln-grpc-proto",
+  "pytest-trackflaky",
+  "pytest-rerunfailures>=16.0.1",
+  "pyln-testing",
+  "pyln-proto",
 ]
 package-mode = false
 [dependency-groups]
 dev = [
   # Test dependencies and inherited dependencies belong here
-  "crc32c>=2.2.post0",              # Belongs to lnprototest
+  "crc32c>=2.2.post0", # Belongs to lnprototest
   "pytest>=8.0.0",
   "pytest-xdist>=3.6.0",
   "pytest-test-groups>=1.2.0",
   "pytest-timeout>=2.4.0",
   "flake8>=7.0",
   "pytest-custom-exit-code==0.3.0",
-  "flaky>=3.7.0",
   "requests>=2.32.0",
   "flask-socketio>=5",
   "tqdm",
   "pytest-benchmark",
+  "pdoc3>=0.11.6",
 ]
 
 [project.optional-dependencies]
@@ -54,6 +58,7 @@ members = [
   "contrib/pyln-spec/bolt2",
   "contrib/pyln-spec/bolt4",
   "contrib/pyln-spec/bolt7",
+  "contrib/pytest-trackflaky",
 ]
 
 [tool.uv.sources]
@@ -61,8 +66,9 @@ pyln-client = { workspace = true }
 pyln-proto = { workspace = true }
 pyln-grpc-proto = { workspace = true }
 wss-proxy = { workspace = true }
-pyln-testing = { workspace = true }
 pyln-bolt1 = { workspace = true }
 pyln-bolt2 = { workspace = true }
 pyln-bolt4 = { workspace = true }
 pyln-bolt7 = { workspace = true }
+pytest-trackflaky = { workspace = true }
+pyln-testing = { workspace = true }
