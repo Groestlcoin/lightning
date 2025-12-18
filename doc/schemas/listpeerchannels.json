@@ -311,6 +311,12 @@
                 "The short_channel_id (once locked in)."
               ]
             },
+            "direction": {
+              "type": "integer",
+              "description": [
+                "The direction of the channel (i.e. 0 if we are the lesser node id, 1 if we are the greater)."
+              ]
+            },
             "channel_id": {
               "type": "hash",
               "description": [
@@ -1453,16 +1459,16 @@
     "- -32602: If the given parameters are wrong."
   ],
   "author": [
-    "Michael Hawkins <<michael.hawkins@protonmail.com>>."
+    "Michael Hawkins [michael.hawkins@protonmail.com](mailto:michael.hawkins@protonmail.com)."
   ],
   "see_also": [
     "lightning-connect(7)",
     "lightning-fundchannel_start(7)"
   ],
   "resources": [
-    "Main web site: <https://github.com/ElementsProject/lightning>",
+    "Main web site: [https://github.com/ElementsProject/lightning](https://github.com/ElementsProject/lightning)",
     "Lightning RFC site (BOLT #9): ",
-    "<https://github.com/lightningnetwork/lightning-rfc/blob/master/09-features.md>"
+    "[https://github.com/lightningnetwork/lightning-rfc/blob/master/09-features.md](https://github.com/lightningnetwork/lightning-rfc/blob/master/09-features.md)"
   ],
   "examples": [
     {
