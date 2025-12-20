@@ -28,6 +28,7 @@ RUN dnf update -y && \
         autoconf \
         automake \
         libtool \
+        protobuf-compiler \
         openssl-devel && \
     dnf remove -y python-setuptools && \
     dnf clean all
