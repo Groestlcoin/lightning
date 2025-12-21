@@ -150,6 +150,17 @@ def test_pay_limits(node_factory):
     assert status[0]['strategy'] == "Initial attempt"
 
 
+def test_pay_maxdelay_direct_channel(node_factory):
+    """Test that maxdelay is enforced even for direct channel payments"""
+    l1, l2 = node_factory.line_graph(2, wait_for_announce=True)
+
+    inv = l2.rpc.invoice('10000msat', 'test_pay_maxdelay_direct', 'description')['bolt11']
+
+    # Delay too low for direct channel.
+    with pytest.raises(RpcError, match=r'CLTV delay exceeds our CLTV budget'):
+        l1.rpc.call('pay', {'bolt11': inv, 'maxdelay': 1})
+
+
 def test_pay_exclude_node(node_factory, bitcoind):
     """Test excluding the node if there's the NODE-level error in the failure_code
     """
@@ -4480,6 +4491,20 @@ def test_offer(node_factory, bitcoind):
     output = subprocess.check_output([bolt12tool, 'decode',
                                       offer['bolt12']]).decode('UTF-8')
     assert 'recurrence_optional: every 600 seconds limit 5\n' in output
+
+    # Test that description is returned in disableoffer and enableoffer
+    offer_desc = 'Test description returned'
+    ret = l1.rpc.call('offer', {'amount': '100000sat',
+                                'description': offer_desc})
+
+    # Description is not present in offer response
+    assert 'description' not in ret
+    # Description is returned in disableoffer
+    disable_ret = l1.rpc.call('disableoffer', {'offer_id': ret['offer_id']})
+    assert disable_ret['description'] == offer_desc
+    # Description is returned in enableoffer
+    enable_ret = l1.rpc.call('enableoffer', {'offer_id': ret['offer_id']})
+    assert enable_ret['description'] == offer_desc
 
 
 def test_offer_deprecated_api(node_factory, bitcoind):
