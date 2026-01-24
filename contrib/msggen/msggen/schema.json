@@ -252,10 +252,10 @@
         "lightning-askrene-listlayers(7)"
       ],
       "author": [
-        "Rusty Russell <<rusty@rustcorp.com.au>> is mainly responsible."
+        "Rusty Russell [rusty@rustcorp.com.au](mailto:rusty@rustcorp.com.au) is mainly responsible."
       ],
       "resources": [
-        "Main web site: <https://github.com/ElementsProject/lightning>"
+        "Main web site: [https://github.com/ElementsProject/lightning](https://github.com/ElementsProject/lightning)"
       ],
       "examples": [
         {
@@ -3772,9 +3772,9 @@
       "type": "object",
       "additionalProperties": false,
       "rpc": "bkpr-editdescriptionbypaymentid",
-      "title": "Command to change the description for events with {payment_id} after they're made",
+      "title": "Command to change the description for events with `payment_id` after they're made",
       "description": [
-        "The **bkpr-editdescriptionbypaymentid** RPC command updates all chain and channel events that match the {payment_id} with the provided {description}"
+        "The **bkpr-editdescriptionbypaymentid** RPC command updates all chain and channel events that match the `payment_id` with the provided `description`"
       ],
       "request": {
         "required": [
@@ -5678,6 +5678,123 @@
         }
       ]
     },
+    "clnrest-register-path.json": {
+      "$schema": "../rpc-schema-draft.json",
+      "type": "object",
+      "added": "v26.04",
+      "rpc": "clnrest-register-path",
+      "title": "Command to add a path to clnrest",
+      "description": [
+        "`clnrest-register-path` is a low-level rpc command for plugin developers to register a custom REST API path with an associated RPC method and optional rune validation."
+      ],
+      "request": {
+        "required": [
+          "path",
+          "rpc_method"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": [
+              "The REST API path to register (e.g., '/v1/custom/endpoint'). Captures which translate to an rpc parameter of 'key:value' are written like this: '/user/{key}'"
+            ]
+          },
+          "rpc_method": {
+            "type": "string",
+            "description": [
+              "The RPC method name to invoke when this ``path`` and ``http_method`` combination is accessed."
+            ]
+          },
+          "http_method": {
+            "type": "string",
+            "description": [
+              "HTTP method for this ``path``. Valid values are: ``GET``, ``POST``, ``PUT``, ``PATCH`` or ``DELETE``. Defaults to ``POST``."
+            ]
+          },
+          "rune_required": {
+            "type": "boolean",
+            "description": [
+              "Whether a rune is required to access this ``path``. Is only allowed to be ``false`` for ``GET`` requests. Defaults to true"
+            ]
+          },
+          "rune_restrictions": {
+            "type": "object",
+            "description": [
+              "Optional rune validation parameters to check before allowing access. These are passed to the checkrune RPC command. Omitting the rune_restrictions parameter means using your matched rpc method and the rpc params used. You can use this for example to not require the user to create a new rune for your rpc_method but rather require something like method=pay."
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "nodeid": {
+                "type": "string",
+                "description": [
+                  "Node id of requesting node *(required until v23.11)*."
+                ]
+              },
+              "method": {
+                "type": "string",
+                "description": [
+                  "Method for which rune needs to be validated *(required until v23.11)*. Omitting this means your rpc_method will be used."
+                ]
+              },
+              "params": {
+                "type": "object",
+                "description": [
+                  "Parameters for method. Omitting this means the rpc params from the request will be used."
+                ]
+              }
+            }
+          }
+        }
+      },
+      "response": {
+        "required": [],
+        "additionalProperties": false,
+        "properties": {}
+      },
+      "examples": [
+        {
+          "request": {
+            "id": "example:clnrest-register-path#1",
+            "method": "clnrest-register-path",
+            "params": {
+              "path": "/custom/endpoint/{user}",
+              "rpc_method": "custom-rpc-method",
+              "http_method": "GET",
+              "rune_required": false
+            }
+          },
+          "response": {}
+        },
+        {
+          "request": {
+            "id": "example:clnrest-register-path#2",
+            "method": "clnrest-register-path",
+            "params": {
+              "path": "/v1/superpay",
+              "rpc_method": "superpay",
+              "http_method": "POST",
+              "rune_required": true,
+              "rune_restrictions": {
+                "method": "pay"
+              }
+            }
+          },
+          "response": {}
+        }
+      ],
+      "errors": [
+        "The following errors may be reported:",
+        "",
+        "- 32700: Message either indicating conflicting paths or invalid/missing parameters."
+      ],
+      "author": [
+        "daywalker90 is mainly responsible for this command."
+      ],
+      "see_also": [
+        "lightning-createrune(7)",
+        "lightning-checkrune(7)"
+      ]
+    },
     "close.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
@@ -5791,26 +5908,6 @@
               ],
               "properties": {
                 "type": {},
-                "tx": {
-                  "type": "hex",
-                  "deprecated": [
-                    "v24.11",
-                    "v25.12"
-                  ],
-                  "description": [
-                    "The raw bitcoin transaction used to close the channel (if it was open)."
-                  ]
-                },
-                "txid": {
-                  "type": "txid",
-                  "deprecated": [
-                    "v24.11",
-                    "v25.12"
-                  ],
-                  "description": [
-                    "The transaction id of the *tx* field."
-                  ]
-                },
                 "txs": {
                   "added": "v24.11",
                   "type": "array",
@@ -6730,14 +6827,14 @@
                 "type": "array",
                 "description": [
                   "Alternatives use a simple language to examine the command which is being run:",
-                  "    * time: the current UNIX time, e.g. \"time<1656759180\".",
-                  "    * id: the node_id of the peer, e.g. \"id=024b9a1fa8e006f1e3937f65f66c408e6da8e1ca728ea43222a7381df1cc449605\".",
-                  "    * method: the command being run, e.g. \"method=withdraw\".",
-                  "    * per: how often the rune can be used, with suffix \"sec\" (default), \"min\", \"hour\", \"day\" or \"msec\", \"usec\" or \"nsec\". e.g. \"per=5sec\".",
-                  "    * rate: the rate limit, per minute, e.g. \"rate=60\" is equivalent to \"per=1sec\".",
-                  "    * pnum: the number of parameters. e.g. \"pnum<2\".",
-                  "    * pnameX: the parameter named X e.g. \"pnamedestination=1RustyRX2oai4EYYDpQGWvEL62BBGqN9T\".  NOTE: until v24.05, X had to remove underscores from the parameter name (e.g. `pnameamount_msat` had to be specified as `pnameamountmsat`) but that is now fixed.",
-                  "    * parrN: the N'th parameter. e.g. \"parr0=1RustyRX2oai4EYYDpQGWvEL62BBGqN9T\".",
+                  "    * time: the current UNIX time, e.g. `time<1656759180`.",
+                  "    * id: the node_id of the peer, e.g. `id=024b9a1fa8e006f1e3937f65f66c408e6da8e1ca728ea43222a7381df1cc449605`.",
+                  "    * method: the command being run, e.g. `method=withdraw`.",
+                  "    * per: how often the rune can be used, with suffix \"sec\" (default), \"min\", \"hour\", \"day\" or \"msec\", \"usec\" or \"nsec\". e.g. `per=5sec`.",
+                  "    * rate: the rate limit, per minute, e.g. `rate=60` is equivalent to `per=1sec`.",
+                  "    * pnum: the number of parameters. e.g. `pnum<2`.",
+                  "    * pnameX: the parameter named X e.g. `pnamedestination=1RustyRX2oai4EYYDpQGWvEL62BBGqN9T`.  NOTE: until v24.05, X had to remove underscores from the parameter name (e.g. `pnameamount_msat` had to be specified as `pnameamountmsat`) but that is now fixed.",
+                  "    * parrN: the N'th parameter. e.g. `parr0=1RustyRX2oai4EYYDpQGWvEL62BBGqN9T`.",
                   "    * pinvX_N: parse the parameter X as an invoice (bolt11 or bolt12) and extract field N for comparison.  Fails if parameter X is not present, does not parse, or N is not one of the following field names:",
                   "      * amount",
                   "      * description",
@@ -7085,12 +7182,12 @@
             "",
             "However, since brackets and AND conditions within OR are currently not supported for rune creation, we can restructure the conditions as follows:",
             "",
-            "- method^list|method^get|method=summary|method=pay|method=xpay",
-            "- method/listdatastore",
-            "- method/pay|per=1day",
-            "- method/pay|pnameamount\\_msat<100000001",
-            "- method/xpay|per=1day",
-            "- method/xpay|pnameamount\\_msat<100000001"
+            "- `method^list|method^get|method=summary|method=pay|method=xpay`",
+            "- `method/listdatastore`",
+            "- `method/pay|per=1day`",
+            "- `method/pay|pnameamount_msat<100000001`",
+            "- `method/xpay|per=1day`",
+            "- `method/xpay|pnameamount_msat<100000001`"
           ],
           "request": {
             "id": "example:createrune#9",
@@ -9907,311 +10004,6 @@
             "payment_hash": "paymenthashinvl0220022002200220022002200220022002200220022002200",
             "signature": "dcde30c4bb50bed221009d010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101",
             "valid": true
-          }
-        }
-      ]
-    },
-    "decodepay.json": {
-      "$schema": "../rpc-schema-draft.json",
-      "type": "object",
-      "added": "v23.05",
-      "depecated": [
-        "v24.11",
-        "v25.12"
-      ],
-      "rpc": "decodepay",
-      "title": "Command for decoding a bolt11 string (low-level)",
-      "description": [
-        "WARNING: deprecated: use *decode* which also handles bolt12.",
-        "",
-        "The **decodepay** RPC command checks and parses a *bolt11* string as specified by the BOLT 11 specification."
-      ],
-      "request": {
-        "required": [
-          "bolt11"
-        ],
-        "additionalProperties": false,
-        "properties": {
-          "bolt11": {
-            "type": "string",
-            "description": [
-              "Bolt11 invoice to decode."
-            ]
-          },
-          "description": {
-            "type": "string",
-            "description": [
-              "Description of the invoice to decode."
-            ]
-          }
-        }
-      },
-      "response": {
-        "required": [
-          "currency",
-          "created_at",
-          "expiry",
-          "payee",
-          "min_final_cltv_expiry",
-          "payment_hash",
-          "signature"
-        ],
-        "additionalProperties": false,
-        "properties": {
-          "currency": {
-            "type": "string",
-            "description": [
-              "The BIP173 name for the currency."
-            ]
-          },
-          "created_at": {
-            "type": "u64",
-            "description": [
-              "The UNIX-style timestamp of the invoice."
-            ]
-          },
-          "expiry": {
-            "type": "u64",
-            "description": [
-              "The number of seconds this is valid after *timestamp*."
-            ]
-          },
-          "payee": {
-            "type": "pubkey",
-            "description": [
-              "The public key of the recipient."
-            ]
-          },
-          "amount_msat": {
-            "type": "msat",
-            "description": [
-              "Amount the invoice asked for."
-            ]
-          },
-          "payment_hash": {
-            "type": "hash",
-            "description": [
-              "The hash of the *payment_preimage*."
-            ]
-          },
-          "signature": {
-            "type": "signature",
-            "description": [
-              "Signature of the *payee* on this invoice."
-            ]
-          },
-          "description": {
-            "type": "string",
-            "description": [
-              "The description of the purpose of the purchase."
-            ]
-          },
-          "description_hash": {
-            "type": "hash",
-            "description": [
-              "The hash of the description, in place of *description*."
-            ]
-          },
-          "min_final_cltv_expiry": {
-            "type": "u32",
-            "description": [
-              "The minimum CLTV delay for the final node."
-            ]
-          },
-          "payment_secret": {
-            "type": "hash",
-            "description": [
-              "The secret to hand to the payee node."
-            ]
-          },
-          "features": {
-            "type": "hex",
-            "description": [
-              "The features bitmap for this invoice."
-            ]
-          },
-          "payment_metadata": {
-            "type": "hex",
-            "description": [
-              "The payment_metadata to put in the payment."
-            ]
-          },
-          "fallbacks": {
-            "type": "array",
-            "description": [
-              "Onchain addresses."
-            ],
-            "items": {
-              "type": "object",
-              "required": [
-                "type",
-                "hex"
-              ],
-              "additionalProperties": false,
-              "properties": {
-                "type": {
-                  "type": "string",
-                  "description": [
-                    "The address type (if known)."
-                  ],
-                  "enum": [
-                    "P2PKH",
-                    "P2SH",
-                    "P2WPKH",
-                    "P2WSH",
-                    "P2TR"
-                  ]
-                },
-                "addr": {
-                  "type": "string",
-                  "description": [
-                    "The address in appropriate format for *type*."
-                  ]
-                },
-                "hex": {
-                  "type": "hex",
-                  "description": [
-                    "Raw encoded address."
-                  ]
-                }
-              }
-            }
-          },
-          "routes": {
-            "type": "array",
-            "description": [
-              "Route hints to the *payee*."
-            ],
-            "items": {
-              "type": "array",
-              "description": [
-                "Hops in the route."
-              ],
-              "items": {
-                "type": "object",
-                "required": [
-                  "pubkey",
-                  "short_channel_id",
-                  "fee_base_msat",
-                  "fee_proportional_millionths",
-                  "cltv_expiry_delta"
-                ],
-                "additionalProperties": false,
-                "properties": {
-                  "pubkey": {
-                    "type": "pubkey",
-                    "description": [
-                      "The public key of the node."
-                    ]
-                  },
-                  "short_channel_id": {
-                    "type": "short_channel_id",
-                    "description": [
-                      "A channel to the next peer."
-                    ]
-                  },
-                  "fee_base_msat": {
-                    "type": "msat",
-                    "description": [
-                      "The base fee for payments."
-                    ]
-                  },
-                  "fee_proportional_millionths": {
-                    "type": "u32",
-                    "description": [
-                      "The parts-per-million fee for payments."
-                    ]
-                  },
-                  "cltv_expiry_delta": {
-                    "type": "u32",
-                    "description": [
-                      "The CLTV delta across this hop."
-                    ]
-                  }
-                }
-              }
-            }
-          },
-          "extra": {
-            "type": "array",
-            "description": [
-              "Any extra fields we didn't know how to parse."
-            ],
-            "items": {
-              "type": "object",
-              "required": [
-                "tag",
-                "data"
-              ],
-              "additionalProperties": false,
-              "properties": {
-                "tag": {
-                  "type": "string",
-                  "description": [
-                    "The bech32 letter which identifies this field."
-                  ],
-                  "maxLength": 1,
-                  "minLength": 1
-                },
-                "data": {
-                  "type": "string",
-                  "description": [
-                    "The bech32 data for this field."
-                  ]
-                }
-              }
-            }
-          }
-        },
-        "post_return_value_notes": [
-          "Technically, the *description* field is optional if a *description_hash* field is given, but in this case **decodepay** will only succeed if the optional *description* field is passed and matches the *description_hash*. In practice, these are currently unused."
-        ]
-      },
-      "author": [
-        "Rusty Russell [rusty@rustcorp.com.au](mailto:rusty@rustcorp.com.au) is mainly responsible."
-      ],
-      "see_also": [
-        "lightning-pay(7)",
-        "lightning-getroute(7)",
-        "lightning-sendpay(7)"
-      ],
-      "resources": [
-        "[BOLT #11](https://github.com/lightning/bolts/blob/master/11-payment-encoding.md)",
-        "",
-        "Main web site: [https://github.com/ElementsProject/lightning](https://github.com/ElementsProject/lightning)"
-      ],
-      "examples": [
-        {
-          "request": {
-            "id": "example:decodepay#1",
-            "method": "decodepay",
-            "params": {
-              "bolt11": "lnbcrt100n1pnt2bolt11invl010100000000bolt11invl010100000000bolt11invl010100000000bolt11invl010100000000bolt11invl010100000000bolt11invl010100000000bolt11invl010100000000bolt11invl010100000000bolt11invl010100000000bolt11invl010100000000"
-            }
-          },
-          "response": {
-            "currency": "bcrt",
-            "created_at": 1738000000,
-            "expiry": 604800,
-            "payee": "nodeid010101010101010101010101010101010101010101010101010101010101",
-            "amount_msat": 10000,
-            "description": "l11 description",
-            "min_final_cltv_expiry": 5,
-            "payment_secret": "paymentsecretinvl00110001100011000110001100011000110001100011000",
-            "features": "02024100",
-            "routes": [
-              [
-                {
-                  "pubkey": "nodeid020202020202020202020202020202020202020202020202020202020202",
-                  "short_channel_id": "109x1x1",
-                  "fee_base_msat": 1,
-                  "fee_proportional_millionths": 10,
-                  "cltv_expiry_delta": 6
-                }
-              ]
-            ],
-            "payment_hash": "paymenthashinvl0110011001100110011001100110011001100110011001100",
-            "signature": "dcdepay30c4bb50bed209d020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202"
           }
         }
       ]
@@ -16763,7 +16555,7 @@
       ],
       "see_also": [
         "lightning-listpays(7)",
-        "lightning-decodepay(7)",
+        "lightning-decode(7)",
         "lightning-listinvoices(7)",
         "lightning-delinvoice(7)",
         "lightning-getroute(7)",
@@ -24175,12 +23967,11 @@
                       "option_static_remotekey",
                       "option_anchor_outputs",
                       "option_anchors",
-                      "option_anchors_zero_fee_htlc_tx",
                       "option_scid_alias",
                       "option_zeroconf"
                     ],
                     "description": [
-                      "BOLT #9 features which apply to this channel. Note that *anchors_zero_fee_htlc_tx* is a deprecated synonym for *anchors*."
+                      "BOLT #9 features which apply to this channel."
                     ]
                   }
                 },
@@ -24287,7 +24078,7 @@
                   ],
                   "deprecated": [
                     "v25.02",
-                    "v26.06"
+                    "v26.03"
                   ]
                 },
                 "their_max_htlc_value_in_flight_msat": {
@@ -25249,7 +25040,6 @@
                 },
                 "features": [
                   "option_static_remotekey",
-                  "option_anchors_zero_fee_htlc_tx",
                   "option_anchors"
                 ],
                 "funding": {
@@ -25381,7 +25171,6 @@
                 },
                 "features": [
                   "option_static_remotekey",
-                  "option_anchors_zero_fee_htlc_tx",
                   "option_anchors"
                 ],
                 "funding": {
@@ -25507,7 +25296,6 @@
                 },
                 "features": [
                   "option_static_remotekey",
-                  "option_anchors_zero_fee_htlc_tx",
                   "option_anchors"
                 ],
                 "funding": {
@@ -29416,7 +29204,7 @@
       ],
       "see_also": [
         "lightning-listpays(7)",
-        "lightning-decodepay(7)",
+        "lightning-decode(7)",
         "lightning-listinvoices(7)",
         "lightning-delinvoice(7)",
         "lightning-getroute(7)",
@@ -34418,12 +34206,6 @@
                 "option_static_remotekey"
               ],
               [
-                29,
-                23,
-                1,
-                "option_anchors_zero_fee_htlc_tx"
-              ],
-              [
                 30,
                 23,
                 2,
@@ -34650,7 +34432,7 @@
           "outputs": {
             "type": "array",
             "description": [
-              "Format is like: [{destination1: amount1}, {destination2: amount2}] or [{destination: *all*}]. It supports any number of **confirmed** outputs."
+              "Format is like: `[{destination1: amount1}, {destination2: amount2}]` or `[{destination: *all*}]`. It supports any number of **confirmed** outputs."
             ],
             "items": {
               "type": "outputdesc"
@@ -37407,7 +37189,7 @@
       ],
       "see_also": [
         "lightning-pay(7)",
-        "lightning-decodepay(7)"
+        "lightning-decode(7)"
       ],
       "resources": [
         "Main web site: [https://github.com/ElementsProject/lightning](https://github.com/ElementsProject/lightning)"

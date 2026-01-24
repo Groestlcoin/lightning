@@ -9,6 +9,7 @@ use cln_rpc::model::{responses,requests};
 use cln_rpc::notifications;
 use crate::pb;
 use std::str::FromStr;
+use std::collections::HashMap;
 use bitcoin::hashes::sha256::Hash as Sha256;
 use bitcoin::hashes::Hash;
 use cln_rpc::primitives::PublicKey;
@@ -448,14 +449,10 @@ impl From<responses::CheckmessageResponse> for pb::CheckmessageResponse {
     }
 }
 
-#[allow(unused_variables,deprecated)]
+#[allow(unused_variables)]
 impl From<responses::CloseResponse> for pb::CloseResponse {
     fn from(c: responses::CloseResponse) -> Self {
         Self {
-            #[allow(deprecated)]
-            tx: c.tx.map(|v| hex::decode(v).unwrap()), // Rule #2 for type hex?
-            #[allow(deprecated)]
-            txid: c.txid.map(|v| hex::decode(v).unwrap()), // Rule #2 for type txid?
             // Field: Close.txids[]
             txids: c.txids.map(|arr| arr.into_iter().map(|i| i.into()).collect()).unwrap_or(vec![]), // Rule #3
             // Field: Close.txs[]
@@ -1455,53 +1452,6 @@ impl From<responses::ListclosedchannelsResponse> for pb::ListclosedchannelsRespo
         Self {
             // Field: ListClosedChannels.closedchannels[]
             closedchannels: c.closedchannels.into_iter().map(|i| i.into()).collect(), // Rule #3 for type ListclosedchannelsClosedchannels
-        }
-    }
-}
-
-#[allow(unused_variables)]
-impl From<responses::DecodepayExtra> for pb::DecodepayExtra {
-    fn from(c: responses::DecodepayExtra) -> Self {
-        Self {
-            data: c.data, // Rule #2 for type string
-            tag: c.tag, // Rule #2 for type string
-        }
-    }
-}
-
-#[allow(unused_variables)]
-impl From<responses::DecodepayFallbacks> for pb::DecodepayFallbacks {
-    fn from(c: responses::DecodepayFallbacks) -> Self {
-        Self {
-            addr: c.addr, // Rule #2 for type string?
-            hex: hex::decode(&c.hex).unwrap(), // Rule #2 for type hex
-            item_type: c.item_type as i32,
-        }
-    }
-}
-
-#[allow(unused_variables)]
-impl From<responses::DecodepayResponse> for pb::DecodepayResponse {
-    fn from(c: responses::DecodepayResponse) -> Self {
-        Self {
-            amount_msat: c.amount_msat.map(|f| f.into()), // Rule #2 for type msat?
-            created_at: c.created_at, // Rule #2 for type u64
-            currency: c.currency, // Rule #2 for type string
-            description: c.description, // Rule #2 for type string?
-            description_hash: c.description_hash.map(|v| <Sha256 as AsRef<[u8]>>::as_ref(&v).to_vec()), // Rule #2 for type hash?
-            expiry: c.expiry, // Rule #2 for type u64
-            // Field: DecodePay.extra[]
-            extra: c.extra.map(|arr| arr.into_iter().map(|i| i.into()).collect()).unwrap_or(vec![]), // Rule #3
-            // Field: DecodePay.fallbacks[]
-            fallbacks: c.fallbacks.map(|arr| arr.into_iter().map(|i| i.into()).collect()).unwrap_or(vec![]), // Rule #3
-            features: c.features.map(|v| hex::decode(v).unwrap()), // Rule #2 for type hex?
-            min_final_cltv_expiry: c.min_final_cltv_expiry, // Rule #2 for type u32
-            payee: c.payee.serialize().to_vec(), // Rule #2 for type pubkey
-            payment_hash: <Sha256 as AsRef<[u8]>>::as_ref(&c.payment_hash).to_vec(), // Rule #2 for type hash
-            payment_metadata: c.payment_metadata.map(|v| hex::decode(v).unwrap()), // Rule #2 for type hex?
-            payment_secret: c.payment_secret.map(|v| <Sha256 as AsRef<[u8]>>::as_ref(&v).to_vec()), // Rule #2 for type hash?
-            routes: c.routes.map(|drl| drl.into()), // Rule #2 for type DecodeRoutehintList?
-            signature: c.signature, // Rule #2 for type signature
         }
     }
 }
@@ -4584,6 +4534,14 @@ impl From<responses::DelnetworkeventResponse> for pb::DelnetworkeventResponse {
 }
 
 #[allow(unused_variables)]
+impl From<responses::ClnrestregisterpathResponse> for pb::ClnrestregisterpathResponse {
+    fn from(c: responses::ClnrestregisterpathResponse) -> Self {
+        Self {
+        }
+    }
+}
+
+#[allow(unused_variables)]
 impl From<notifications::BlockAddedNotification> for pb::BlockAddedNotification {
     fn from(c: notifications::BlockAddedNotification) -> Self {
         Self {
@@ -5298,16 +5256,6 @@ impl From<requests::ListclosedchannelsRequest> for pb::ListclosedchannelsRequest
     fn from(c: requests::ListclosedchannelsRequest) -> Self {
         Self {
             id: c.id.map(|v| v.serialize().to_vec()), // Rule #2 for type pubkey?
-        }
-    }
-}
-
-#[allow(unused_variables)]
-impl From<requests::DecodepayRequest> for pb::DecodepayRequest {
-    fn from(c: requests::DecodepayRequest) -> Self {
-        Self {
-            bolt11: c.bolt11, // Rule #2 for type string
-            description: c.description, // Rule #2 for type string?
         }
     }
 }
@@ -6410,6 +6358,30 @@ impl From<requests::DelnetworkeventRequest> for pb::DelnetworkeventRequest {
 }
 
 #[allow(unused_variables)]
+impl From<requests::ClnrestregisterpathRuneRestrictions> for pb::ClnrestregisterpathRuneRestrictions {
+    fn from(c: requests::ClnrestregisterpathRuneRestrictions) -> Self {
+        Self {
+            method: c.method, // Rule #2 for type string?
+            nodeid: c.nodeid, // Rule #2 for type string?
+            params: c.params.unwrap_or(HashMap::new()), // Rule #2 for type string_map?
+        }
+    }
+}
+
+#[allow(unused_variables)]
+impl From<requests::ClnrestregisterpathRequest> for pb::ClnrestregisterpathRequest {
+    fn from(c: requests::ClnrestregisterpathRequest) -> Self {
+        Self {
+            http_method: c.http_method, // Rule #2 for type string?
+            path: c.path, // Rule #2 for type string
+            rpc_method: c.rpc_method, // Rule #2 for type string
+            rune_required: c.rune_required, // Rule #2 for type boolean?
+            rune_restrictions: c.rune_restrictions.map(|v| v.into()),
+        }
+    }
+}
+
+#[allow(unused_variables)]
 impl From<notifications::requests::StreamBlockAddedRequest> for pb::StreamBlockAddedRequest {
     fn from(c: notifications::requests::StreamBlockAddedRequest) -> Self {
         Self {
@@ -7076,16 +7048,6 @@ impl From<pb::ListclosedchannelsRequest> for requests::ListclosedchannelsRequest
     fn from(c: pb::ListclosedchannelsRequest) -> Self {
         Self {
             id: c.id.map(|v| PublicKey::from_slice(&v).unwrap()), // Rule #1 for type pubkey?
-        }
-    }
-}
-
-#[allow(unused_variables)]
-impl From<pb::DecodepayRequest> for requests::DecodepayRequest {
-    fn from(c: pb::DecodepayRequest) -> Self {
-        Self {
-            bolt11: c.bolt11, // Rule #1 for type string
-            description: c.description, // Rule #1 for type string?
         }
     }
 }
@@ -8166,6 +8128,30 @@ impl From<pb::DelnetworkeventRequest> for requests::DelnetworkeventRequest {
     fn from(c: pb::DelnetworkeventRequest) -> Self {
         Self {
             created_index: c.created_index, // Rule #1 for type u64
+        }
+    }
+}
+
+#[allow(unused_variables)]
+impl From<pb::ClnrestregisterpathRuneRestrictions> for requests::ClnrestregisterpathRuneRestrictions {
+    fn from(c: pb::ClnrestregisterpathRuneRestrictions) -> Self {
+        Self {
+            method: c.method, // Rule #1 for type string?
+            nodeid: c.nodeid, // Rule #1 for type string?
+            params: Some(c.params), // Rule #1 for type string_map?
+        }
+    }
+}
+
+#[allow(unused_variables)]
+impl From<pb::ClnrestregisterpathRequest> for requests::ClnrestregisterpathRequest {
+    fn from(c: pb::ClnrestregisterpathRequest) -> Self {
+        Self {
+            http_method: c.http_method, // Rule #1 for type string?
+            path: c.path, // Rule #1 for type string
+            rpc_method: c.rpc_method, // Rule #1 for type string
+            rune_required: c.rune_required, // Rule #1 for type boolean?
+            rune_restrictions: c.rune_restrictions.map(|v| v.into()),
         }
     }
 }

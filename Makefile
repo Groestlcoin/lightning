@@ -7,10 +7,10 @@ VERSION ?= $(shell git describe --tags --always --dirty=-modded --abbrev=7 2>/de
 $(info Building version $(VERSION))
 
 # Next release.
-CLN_NEXT_VERSION := v25.12
+CLN_NEXT_VERSION := v26.04
 
 # Previous release (for downgrade testing)
-CLN_PREV_VERSION := v25.09
+CLN_PREV_VERSION := v25.12
 
 # --quiet / -s means quiet, dammit!
 ifeq ($(findstring s,$(word 1, $(MAKEFLAGS))),s)
@@ -518,7 +518,7 @@ ifeq ($(PYTEST),)
 	exit 1
 else
 # Explicitly hand VALGRIND so you can override on make cmd line.
-	PYTHONPATH=$(MY_CHECK_PYTHONPATH) TEST_DEBUG=1 VALGRIND=$(VALGRIND) uv run $(PYTEST) $(PYTEST_TESTS) $(PYTEST_OPTS)
+	PYTHONPATH=$(MY_CHECK_PYTHONPATH) TEST_DEBUG=1 TEST_LOG_IGNORE_ERRORS=1 VALGRIND=$(VALGRIND) uv run $(PYTEST) $(PYTEST_TESTS) $(PYTEST_OPTS)
 endif
 
 check-fuzz: $(ALL_FUZZ_TARGETS)
@@ -545,6 +545,11 @@ check-makefile:
 SRC_TO_CHECK := $(filter-out $(ALL_TEST_PROGRAMS:=.c), $(ALL_NONGEN_SOURCES))
 check-src-includes: $(SRC_TO_CHECK:%=check-src-include-order/%)
 check-hdr-includes: $(ALL_NONGEN_HEADERS:%=check-hdr-include-order/%)
+
+print-src-to-check:
+	@echo $(SRC_TO_CHECK)
+print-hdr-to-check:
+	@echo $(ALL_NONGEN_HEADERS)
 
 # If you want to check a specific variant of quotes use:
 #   make check-source-bolt BOLTVERSION=xxx

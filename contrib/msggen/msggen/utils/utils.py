@@ -57,7 +57,6 @@ grpc_method_names = [
     "TxSend",
     "ListPeerChannels",
     "ListClosedChannels",
-    "DecodePay",
     "Decode",
     "DelPay",
     "DelForward",
@@ -151,6 +150,7 @@ grpc_method_names = [
     "ListChainMoves",
     "ListNetworkEvents",
     "DelNetworkEvent",
+    "Clnrest-Register-Path",
 ]
 
 grpc_notification_names = [
