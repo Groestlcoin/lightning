@@ -349,7 +349,7 @@ You are using brew in Intel compatibility mode. The simplest solution is to remo
 
 Install dependencies:
 ```shell
-brew install autoconf automake libtool python3 gnu-sed gettext libsodium protobuf lowdown pkgconf openssl
+brew install autoconf automake libtool python3 gnu-sed gettext libsodium protobuf lowdown pkgconf openssl make
 export PATH="/opt/homebrew/opt/:$PATH"
 export CPATH=/opt/homebrew/include
 export LIBRARY_PATH=/opt/homebrew/lib
@@ -396,7 +396,7 @@ uv sync --all-extras --all-groups --frozen
 
 If you see `/usr/local` in the log, an Intel compatability dependency has been picked up. The simplest solution is to remove brew entirely, reinstall it, and start these instructions over.
 ```shell
-uv run make
+uv run gmake
 ```
 
 Running lightning:
@@ -410,14 +410,14 @@ groestlcoind &
 ./cli/lightning-cli help
 ```
 
-To install the built binaries into your system, you'll need to run `make install`:
+To install the built binaries into your system, you'll need to run `gmake install`:
 ```shell
-make install
+gmake install
 ```
 
 You may need to use this command instead. Confirm the exported PATH, CPATH, and LIBRARY_PATH environment variables set earlier are still present.
 ```shell
-sudo make install
+sudo gmake install
 ```
 
 ## To Build on macOS Intel
@@ -426,7 +426,7 @@ Assuming you have Xcode and Homebrew installed.
 
 Install dependencies:
 ```shell
-brew install autoconf automake libtool python3 gnu-sed gettext libsodium protobuf lowdown pkgconf openssl
+brew install autoconf automake libtool python3 gnu-sed gettext libsodium protobuf lowdown pkgconf openssl make
 export PATH="/usr/local/opt/:$PATH"
 export CPATH=/usr/local/include
 export LIBRARY_PATH=/usr/local/lib
@@ -469,7 +469,7 @@ Build lightning:
 ```shell
 uv sync --all-extras --all-groups --frozen
 ./configure
-uv run make
+uv run gmake
 ```
 
 Running lightning:
@@ -483,9 +483,9 @@ groestlcoind &
 ./cli/lightning-cli help
 ```
 
-To install the built binaries into your system, you'll need to run `make install`:
+To install the built binaries into your system, you'll need to run `gmake install`:
 ```shell
-make install
+gmake install
 ```
 
 ## To Build on Arch Linux

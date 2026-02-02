@@ -313,6 +313,10 @@ else
 LDLIBS = -L$(CPATH) -lm $(SQLITE3_LDLIBS) $(COVFLAGS)
 endif
 
+ifeq ($(HAVE_FUNCTION_SECTIONS),1)
+LDLIBS += -Wl,--gc-sections
+endif
+
 # If we have the postgres client library we need to link against it as well
 ifeq ($(HAVE_POSTGRES),1)
 LDLIBS += $(POSTGRES_LDLIBS)
@@ -1152,7 +1156,8 @@ ccan-rune-rune.o: $(CCANDIR)/ccan/rune/rune.c
 ccan-rune-coding.o: $(CCANDIR)/ccan/rune/coding.c
 	@$(call VERBOSE, "cc $<", $(CC) $(CFLAGS) -c -o $@ $<)
 
-print-binary-sizes: $(ALL_PROGRAMS) $(ALL_TEST_PROGRAMS)
-	@find $(ALL_PROGRAMS) $(ALL_TEST_PROGRAMS) -printf '%p\t%s\n'
-	@echo 'Total program size:	'`find $(ALL_PROGRAMS) -printf '%s\n' | awk '{TOTAL+= $$1} END {print TOTAL}'`
-	@echo 'Total tests size:	'`find $(ALL_TEST_PROGRAMS) -printf '%s\n' | awk '{TOTAL+= $$1} END {print TOTAL}'`
+print-binary-sizes: $(ALL_PROGRAMS) $(ALL_TEST_PROGRAMS) $(BIN_PROGRAMS)
+	@echo User programs:
+	@size -t $(PKGLIBEXEC_PROGRAMS) $(filter-out tools/reckless,$(BIN_PROGRAMS)) $(PLUGINS)
+	@echo All programs:
+	@size -t $(ALL_PROGRAMS) $(ALL_TEST_PROGRAMS) | tail -n1
