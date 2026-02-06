@@ -132,7 +132,8 @@ static u64 channel_range(const struct info *info,
 			 const struct short_channel_id_dir *scidd,
 			 u64 min, u64 max)
 {
-	return min + (siphash24(&info->seed, scidd, sizeof(scidd)) % max);
+	assert(max != min);
+	return min + (siphash24(&info->seed, scidd, sizeof(scidd)) % (max - min));
 }
 
 void ecdh(const struct pubkey *point, struct secret *ss)
@@ -839,9 +840,9 @@ found_next:
 	dfwd->path_key = tal_steal(dfwd, next_path_key);
 	dfwd->expected = next;
 
-	/* Delay 0.1 - 1 seconds, but skewed lower */
-	msec_delay = channel_range(info, &scidd, 0, 900);
-	msec_delay = 100 + channel_range(info, &scidd, 0, msec_delay);
+	/* Delay 1 - 100 milliseconds, but skewed lower */
+	msec_delay = channel_range(info, &scidd, 1, 90);
+	msec_delay = 10 + channel_range(info, &scidd, 0, msec_delay);
 
 	status_debug("Delaying %u msec for %s",
 		     msec_delay, fmt_short_channel_id_dir(tmpctx, &scidd));
