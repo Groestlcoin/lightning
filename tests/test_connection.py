@@ -3082,6 +3082,12 @@ def test_dataloss_protection(node_factory, bitcoind):
     Path(dbpath).write_bytes(orig_db)
     l2.start()
 
+    # l1 will keep trying to reconnect, but it's using exponential backoff,
+    # which only gets reset after the connection has lasted MAX_WAIT_SECONDS (300)
+    # which it hasn't.  Speed things up (and avoid a timeout flake!) by reconnecting
+    # manually now.
+    l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
+
     # l2 should freak out!
     l2.daemon.wait_for_log("Peer permanent failure in CHANNELD_NORMAL:.*Awaiting unilateral close")
 
@@ -4576,10 +4582,11 @@ def test_private_channel_no_reconnect(node_factory):
     assert only_one(l1.rpc.listpeers()['peers'])['connected'] is False
 
 
-@unittest.skipIf(VALGRIND, "We assume machine is reasonably fast")
+@pytest.mark.slow_test
 def test_no_delay(node_factory):
     """Is our Nagle disabling for critical messages working?"""
-    l1, l2 = node_factory.line_graph(2)
+    l1, l2 = node_factory.line_graph(2, opts={'dev-keep-nagle': None,
+                                              'may_reconnect': True})
 
     scid = only_one(l1.rpc.listpeerchannels()['channels'])['short_channel_id']
     routestep = {
@@ -4588,16 +4595,36 @@ def test_no_delay(node_factory):
         'delay': 5,
         'channel': scid
     }
+
+    # Test with nagle
     start = time.time()
-    # If we were stupid enough to leave Nagle enabled, this would add 200ms
-    # seconds delays each way!
     for _ in range(100):
         phash = random.randbytes(32).hex()
         l1.rpc.sendpay([routestep], phash)
         with pytest.raises(RpcError, match="WIRE_INCORRECT_OR_UNKNOWN_PAYMENT_DETAILS"):
             l1.rpc.waitsendpay(phash)
     end = time.time()
-    assert end < start + 100 * 0.5
+    nagle_time = end - start
+
+    del l1.daemon.opts['dev-keep-nagle']
+    del l2.daemon.opts['dev-keep-nagle']
+    l1.restart()
+    l2.restart()
+    l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
+
+    # Test without nagle
+    start = time.time()
+    for _ in range(100):
+        phash = random.randbytes(32).hex()
+        l1.rpc.sendpay([routestep], phash)
+        with pytest.raises(RpcError, match="WIRE_INCORRECT_OR_UNKNOWN_PAYMENT_DETAILS"):
+            l1.rpc.waitsendpay(phash)
+    end = time.time()
+    normal_time = end - start
+
+    # 100 round trips, average delay 1/2 of 200ms -> 10 seconds extra.
+    # Make it half that for variance.
+    assert normal_time < nagle_time - 100 * (0.2 / 2) / 2
 
 
 def test_listpeerchannels_by_scid(node_factory):
@@ -4772,3 +4799,28 @@ def test_networkevents(node_factory, executor):
                                                 'type': 'connect_fail'},
                                                {'created_index': 7,
                                                 'type': 'connect'}]}
+
+
+def test_constant_packet_size(node_factory, tcp_capture):
+    """
+    Test that TCP packets between nodes are constant size.  This will be skipped unless
+    you can run `dumpcap` (usually means you have to be in the `wireshark` group).
+    """
+    l1, l2, l3, l4 = node_factory.get_nodes(4)
+
+    # Encrypted setup BOLT 8 has some short packets.
+    l1.connect(l2)
+    l2.connect(l3)
+
+    tcp_capture.start(l2.port)
+
+    # This gives us gossip send a recv, and channel establishment.
+    node_factory.join_nodes([l1, l2, l3, l4], wait_for_announce=True)
+
+    # Forwarding, incoming and outgoing payments.
+    for src, dest in (l1, l2), (l2, l3), (l1, l4):
+        inv = dest.rpc.invoice(10000000, "test_constant_packet_size", "test_constant_packet_size")
+        src.rpc.xpay(inv['bolt11'])
+
+    # Padding pings don't elicit a response
+    assert not l2.daemon.is_in_log("connectd: Unexpected pong")

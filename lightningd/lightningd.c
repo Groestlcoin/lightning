@@ -150,6 +150,7 @@ static struct lightningd *new_lightningd(const tal_t *ctx)
 	ld->dev_handshake_no_reply = false;
 	ld->dev_strict_forwarding = false;
 	ld->dev_limit_connections_inflight = false;
+	ld->dev_keep_nagle = false;
 
 	/*~ We try to ensure enough fds for twice the number of channels
 	 * we start with.  We have a developer option to change that factor
@@ -381,9 +382,10 @@ static const char *subdaemons[] = {
 	"lightning_closingd",
 	"lightning_connectd",
 	"lightning_gossipd",
+	"lightning_gossip_compactd",
 	"lightning_hsmd",
 	"lightning_onchaind",
-	"lightning_openingd"
+	"lightning_openingd",
 };
 
 /* Return true if called with a recognized subdaemon e.g. "hsmd" */

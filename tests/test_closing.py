@@ -4286,7 +4286,7 @@ def test_onchain_reestablish_reply(node_factory, bitcoind, executor):
 
     # We block l3 from seeing close, so it will try to reestablish.
     def no_new_blocks(req):
-        return {"error": "go away"}
+        return {"error": {"code": -8, "message": "Block height out of range"}}
     l3.daemon.rpcproxy.mock_rpc('getblockhash', no_new_blocks)
 
     l2.rpc.disconnect(l3.info['id'], force=True)
@@ -4307,6 +4307,10 @@ def test_onchain_reestablish_reply(node_factory, bitcoind, executor):
     # Then we get the error, close.
     l3.daemon.wait_for_log("peer_in WIRE_ERROR")
     wait_for(lambda: only_one(l3.rpc.listpeerchannels(l2.info['id'])['channels'])['state'] == 'AWAITING_UNILATERAL')
+
+    # If we're slow enough, l3 can get upset with the invalid
+    # responses from bitcoind, so stop that now.
+    l3.daemon.rpcproxy.mock_rpc('getblockhash', None)
 
 
 @unittest.skipIf(TEST_NETWORK != 'regtest', 'elementsd anchors not supportd')
@@ -4369,7 +4373,7 @@ def test_reestablish_closed_channels(node_factory, bitcoind):
 
     # We block l2 from seeing close, so it will try to reestablish.
     def no_new_blocks(req):
-        return {"error": "go away"}
+        return {"error": {"code": -8, "message": "Block height out of range"}}
     l2.daemon.rpcproxy.mock_rpc('getblockhash', no_new_blocks)
 
     # Make a payment, make sure it's entirely finished before we close.
@@ -4394,6 +4398,10 @@ def test_reestablish_closed_channels(node_factory, bitcoind):
 
     # Make sure l2 was happy with the reestablish message.
     assert not l2.daemon.is_in_log('bad reestablish')
+
+    # If we're slow enough, l2 can get upset with the invalid
+    # responses from bitcoind, so stop that now.
+    l2.daemon.rpcproxy.mock_rpc('getblockhash', None)
 
 
 @unittest.skipIf(TEST_NETWORK != 'regtest', "elementsd doesn't use p2tr anyway")

@@ -1,3 +1,4 @@
+from bitcoin.rpc import RawProxy
 from collections import OrderedDict
 from datetime import datetime
 from fixtures import *  # noqa: F401,F403
@@ -512,6 +513,29 @@ def test_plugin_connected_hook_chaining(node_factory):
 
     wait_for(check_disconnect)
     assert not l1.daemon.is_in_log(f"peer_connected_logger_b {l3id}")
+
+
+def test_plugin_connected_hook_disconnect_crash(node_factory, executor):
+    """A peer disconnnects between plugin hook invocations"""
+    opts = [{},
+            {'plugin':
+             [os.path.join(os.getcwd(),
+                           'tests/plugins/peer_connected_logger_a.py'),
+              os.path.join(os.getcwd(),
+                           'tests/plugins/peer_connected_logger_b.py')],
+             'logger_a_sleep': True},
+            ]
+
+    l1, l2 = node_factory.get_nodes(2, opts=opts)
+    executor.submit(l1.rpc.connect, l2.info['id'], 'localhost', l2.port)
+    l2.daemon.wait_for_log(f'plugin-peer_connected_logger_a.py: peer_connected_logger_a {l1.info["id"]}')
+    l1.stop()
+
+    # Now make first plugin continue...
+    open(os.path.join(l2.daemon.lightning_dir, TEST_NETWORK, "unsleep"), "w").close()
+
+    # Should get log from second
+    l2.daemon.wait_for_log(f'plugin-peer_connected_logger_b.py: peer_connected_logger_b {l1.info["id"]}')
 
 
 def test_peer_connected_remote_addr(node_factory):
@@ -1998,6 +2022,111 @@ def test_bcli(node_factory, bitcoind, chainparams):
     assert not resp["success"] and "decode failed" in resp["errmsg"]
 
 
+def test_bcli_concurrent(node_factory, bitcoind, executor):
+    """Test bcli handles concurrent requests while `getblockfrompeer` retry is active.
+
+    Simulates a pruned node scenario where getblock initially fails. The bcli
+    plugin should use getblockfrompeer to fetch the block from peers, then
+    retry `getblock` successfully. Meanwhile, other concurrent requests
+    (`getchaininfo`, `estimatefees`) should complete normally.
+    """
+    retry_count = 5
+    getblockfrompeer_count = 0
+
+    def mock_getblock(r):
+        if getblockfrompeer_count >= retry_count:
+            conf_file = os.path.join(bitcoind.bitcoin_dir, "bitcoin.conf")
+            brpc = RawProxy(btc_conf_file=conf_file)
+            return {
+                "result": brpc._call(r["method"], *r["params"]),
+                "error": None,
+                "id": r["id"]
+            }
+        return {
+            "id": r["id"],
+            "result": None,
+            "error": {"code": -1, "message": "Block not available (pruned data)"}
+        }
+
+    def mock_getpeerinfo(r):
+        return {"id": r["id"], "result": [{"id": 1, "services": "000000000000040d"}]}
+
+    def mock_getblockfrompeer(r):
+        nonlocal getblockfrompeer_count
+        getblockfrompeer_count += 1
+        return {"id": r["id"], "result": {}}
+
+    l1 = node_factory.get_node(start=False)
+    l1.daemon.rpcproxy.mock_rpc("getblock", mock_getblock)
+    l1.daemon.rpcproxy.mock_rpc("getpeerinfo", mock_getpeerinfo)
+    l1.daemon.rpcproxy.mock_rpc("getblockfrompeer", mock_getblockfrompeer)
+    l1.start(wait_for_bitcoind_sync=False)
+
+    # Submit concurrent bcli requests, `getrawblockbyheight` hits a retry path.
+    block_future = executor.submit(l1.rpc.call, "getrawblockbyheight", {"height": 1})
+    chaininfo_futures = []
+    fees_futures = []
+    for _ in range(5):
+        chaininfo_futures.append(executor.submit(l1.rpc.call, "getchaininfo", {"last_height": 0}))
+        fees_futures.append(executor.submit(l1.rpc.call, "estimatefees"))
+
+    block_result = block_future.result(TIMEOUT)
+    assert "blockhash" in block_result
+    assert "block" in block_result
+
+    for fut in chaininfo_futures:
+        result = fut.result(TIMEOUT)
+        assert "chain" in result
+        assert "blockcount" in result
+
+    for fut in fees_futures:
+        result = fut.result(TIMEOUT)
+        assert "feerates" in result
+        assert "feerate_floor" in result
+
+    assert getblockfrompeer_count == retry_count
+
+
+def test_bcli_retry_timeout(node_factory, bitcoind):
+    """Test that lightningd crashes when getblock retries are exhausted.
+
+    Currently, when bcli returns an error after retry timeout, lightningd's
+    get_bitcoin_result() calls fatal(). This test documents that behavior.
+    """
+    getblockfrompeer_count = 0
+
+    def mock_getblock(r):
+        return {
+            "id": r["id"],
+            "result": None,
+            "error": {"code": -1, "message": "Block not available (pruned data)"}
+        }
+
+    def mock_getpeerinfo(r):
+        return {"id": r["id"], "result": [{"id": 1, "services": "000000000000040d"}]}
+
+    def mock_getblockfrompeer(r):
+        nonlocal getblockfrompeer_count
+        getblockfrompeer_count += 1
+        return {"id": r["id"], "result": {}}
+
+    l1 = node_factory.get_node(may_fail=True,
+                               broken_log=r'getrawblockbyheight|FATAL SIGNAL|backtrace',
+                               options={"bitcoin-retry-timeout": 3})
+    sync_blockheight(bitcoind, [l1])
+
+    l1.daemon.rpcproxy.mock_rpc("getblock", mock_getblock)
+    l1.daemon.rpcproxy.mock_rpc("getpeerinfo", mock_getpeerinfo)
+    l1.daemon.rpcproxy.mock_rpc("getblockfrompeer", mock_getblockfrompeer)
+
+    # Mine a new block - lightningd will try to fetch it and crash.
+    bitcoind.generate_block(1)
+
+    l1.daemon.wait_for_log(r"timed out after 3 seconds")
+    assert l1.daemon.wait() != 0
+    assert getblockfrompeer_count > 0
+
+
 @unittest.skipIf(TEST_NETWORK != 'regtest', 'p2tr addresses not supported by elementsd')
 def test_hook_crash(node_factory, executor, bitcoind):
     """Verify that we fail over if a plugin crashes while handling a hook.
@@ -2326,7 +2455,7 @@ def test_important_plugin(node_factory):
     n = node_factory.get_node(options={"important-plugin": os.path.join(pluginsdir, "nonexistent")},
                               may_fail=True, expect_fail=True,
                               # Other plugins can complain as lightningd stops suddenly:
-                              broken_log='Plugin marked as important, shutting down lightningd|Reading sync lightningd: Connection reset by peer|Lost connection to the RPC socket|Plugin terminated before replying to RPC call',
+                              broken_log='Plugin marked as important, shutting down lightningd|Reading sync lightningd: Connection reset by peer|Lost connection to the RPC socket|Plugin terminated before replying to RPC call|plugin-cln-xpay: askrene-create-layer failed with.*Unkown command',
                               start=False)
 
     n.daemon.start(wait_for_initialized=False, stderr_redir=True)
@@ -2855,8 +2984,7 @@ def test_plugin_shutdown(node_factory):
 
 def test_commando(node_factory, executor):
     l1, l2 = node_factory.line_graph(2, fundchannel=False,
-                                     # Under valgrind, checkrune of 400k command can be slow!
-                                     opts={'log-level': 'io', 'broken_log': "That's weird: Request .* took"})
+                                     opts={'log-level': 'io'})
 
     rune = l1.rpc.createrune()['rune']
 
