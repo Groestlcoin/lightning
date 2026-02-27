@@ -2010,6 +2010,8 @@ pub mod requests {
 	#[derive(Clone, Debug, Deserialize, Serialize)]
 	pub struct ListpeerchannelsRequest {
 	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub channel_id: Option<Sha256>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
 	    pub id: Option<PublicKey>,
 	    #[serde(skip_serializing_if = "Option::is_none")]
 	    pub short_channel_id: Option<ShortChannelId>,
@@ -3141,6 +3143,8 @@ pub mod requests {
 	    pub recurrence_paywindow: Option<String>,
 	    #[serde(skip_serializing_if = "Option::is_none")]
 	    pub single_use: Option<bool>,
+	    #[serde(skip_serializing_if = "crate::is_none_or_empty")]
+	    pub fronting_nodes: Option<Vec<PublicKey>>,
 	    pub amount: String,
 	}
 
