@@ -19,7 +19,7 @@ jobs:
     timeout-minutes: 60
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6
 
     - name: Setup protoc
       uses: arduino/setup-protoc@v3
@@ -54,7 +54,7 @@ jobs:
         cargo release version -p ${{ github.event.inputs.dist-location }} ${{ steps.determine-version.outputs.bump }} --execute --no-confirm
 
     - name: Create Pull Request
-      uses: peter-evans/create-pull-request@v7
+      uses: peter-evans/create-pull-request@v8
       with:
         token: ${{ secrets.GITHUB_TOKEN }}
         commit-message: "${{ github.event.inputs.dist-location }}: Bump the ${{ steps.determine-version.outputs.bump }} version"

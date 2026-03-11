@@ -8,7 +8,7 @@ jobs:
     name: Build on FreeBSD
     timeout-minutes: 120
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v6
     - name: Clean up disk space
       run: |
         sudo rm -rf /usr/share/dotnet
@@ -66,7 +66,7 @@ jobs:
           gmake -j2
           gmake install
     - name: Upload artifacts
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: clightning-${{ github.sha }}-freebsd
         path: |
@@ -83,6 +83,6 @@ jobs:
         retention-days: 7
 
     - name: Download artifacts
-      uses: actions/download-artifact@v4
+      uses: actions/download-artifact@v8
       with:
         name: clightning-${{ github.sha }}-freebsd

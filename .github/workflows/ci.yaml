@@ -9,17 +9,17 @@ jobs:
         os: ['Ubuntu-22.04']
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Python 3.10
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.10"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v7
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@v5
         with:
           path: ~/ci-cache
           key: apt-${{ runner.os }}
@@ -36,7 +36,7 @@ jobs:
           uv run make install DESTDIR=inst RUST_PROFILE=release
           cd inst/ && tar --sort=name --owner=0 --group=0 --numeric-owner -cvaf ../clightning-v-${{ matrix.os }}.tar.xz .
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: clightning-${{ github.sha }}-${{ matrix.os }}
           path: |
@@ -44,6 +44,6 @@ jobs:
           if-no-files-found: error
           retention-days: 7
       - name: Download artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: clightning-${{ github.sha }}-${{ matrix.os }}

@@ -7,7 +7,7 @@ jobs:
   jammy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Builder image setup
         run: sudo docker build -t cl-repro-jammy - < contrib/reprobuild/Dockerfile.jammy
       - name: create release folder
@@ -15,21 +15,21 @@ jobs:
       - name: Building using the builder image
         run: sudo docker run --rm -v $(pwd):/repo -t cl-repro-jammy
       - name: Upload Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: clightning-${{ github.sha }}-Ubuntu-22.04
           path: release/*.tar.xz
           if-no-files-found: error
           retention-days: 7
       - name: Download artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: clightning-${{ github.sha }}-Ubuntu-22.04
 
   noble:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Builder image setup
         run: sudo docker build -t cl-repro-noble - < contrib/reprobuild/Dockerfile.noble
       - name: create release folder
@@ -37,13 +37,13 @@ jobs:
       - name: Building using the builder image
         run: sudo docker run --rm -v $(pwd):/repo -t cl-repro-noble
       - name: Upload Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: clightning-${{ github.sha }}-Ubuntu-24.04
           path: release/*.tar.xz
           if-no-files-found: error
           retention-days: 7
       - name: Download artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: clightning-${{ github.sha }}-Ubuntu-24.04

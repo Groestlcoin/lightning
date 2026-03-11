@@ -6,7 +6,7 @@ jobs:
   release:
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Builder jammy image setup
         run: sudo docker build -t cl-repro-jammy - < contrib/reprobuild/Dockerfile.jammy
       - name: Builder noble image setup
@@ -14,13 +14,13 @@ jobs:
       - name: Building using the builder image
         run: ./tools/build-release.sh bin-Fedora bin-Ubuntu
       - name: Upload Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: clightning-${{ github.sha }}-all-releases
           path: release/*.*
           if-no-files-found: error
           retention-days: 7
       - name: Download artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: clightning-${{ github.sha }}-all-releases

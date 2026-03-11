@@ -12,7 +12,7 @@ jobs:
         groestlcoind-version: ["27.0"]
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Download Groestlcoin ${{ matrix.groestlcoind-version }} & install binaries
         run: |
@@ -25,12 +25,12 @@ jobs:
           rm -rf groestlcoin-${GROESTLCOIND_VERSION}-${TARGET_ARCH}.tar.gz groestlcoin-${GROESTLCOIND_VERSION}
 
       - name: Set up Python 3.10
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.10"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v7
 
       - name: Install dependencies
         run: |
@@ -64,7 +64,7 @@ jobs:
           sudo PATH="/usr/local/opt:$PATH" LIBRARY_PATH=/opt/homebrew/lib CPATH=/opt/homebrew/include make install
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: clightning-${{ github.sha }}-macos
           path: |
@@ -81,6 +81,6 @@ jobs:
           retention-days: 7
 
       - name: Download artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: clightning-${{ github.sha }}-macos
