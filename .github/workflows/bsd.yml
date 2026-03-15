@@ -60,7 +60,7 @@ jobs:
           # for d in libwally-core gheap jsmn libbacktrace; do git config --global --add safe.directory `pwd`/external/$d; done
           # git submodule update --init --recursive
 
-          ./configure CC="$CC" --disable-valgrind
+          ./configure --disable-valgrind
           # uv run gmake
           # uv run gmake install
           gmake -j2
