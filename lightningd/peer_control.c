@@ -11,6 +11,7 @@
 #include <common/initial_commit_tx.h>
 #include <common/json_channel_type.h>
 #include <common/json_command.h>
+#include <common/psbt_open.h>
 #include <common/timeout.h>
 #include <common/version.h>
 #include <common/wire_error.h>
@@ -356,8 +357,45 @@ void drop_to_chain(struct lightningd *ld, struct channel *channel,
 
 	/* If we withheld the funding tx, we simply close */
 	if (channel->withheld) {
+		struct htlc_out_map_iter outi;
+		struct htlc_out *hout;
+
 		log_info(channel->log,
 			 "Withheld channel: not sending a close transaction");
+
+		for (hout = htlc_out_map_first(ld->htlcs_out, &outi);
+		     hout;
+		     hout = htlc_out_map_next(ld->htlcs_out, &outi)) {
+			if (hout->key.channel != channel)
+				continue;
+			/* Has already been settled or failed */
+			if (!hout->in
+			    || hout->in->badonion != 0
+			    || hout->in->failonion
+			    || hout->in->preimage)
+				continue;
+			local_fail_in_htlc(hout->in,
+					   take(towire_permanent_channel_failure(NULL)));
+		}
+
+		/* Unreserve any UTXOs from the withheld funding PSBT */
+		if (channel->funding_psbt) {
+			for (size_t i = 0; i < channel->funding_psbt->num_inputs; i++) {
+				struct bitcoin_outpoint outpoint;
+				struct utxo *utxo;
+
+				wally_psbt_input_get_outpoint(
+					&channel->funding_psbt->inputs[i], &outpoint);
+				utxo = wallet_utxo_get(tmpctx, ld->wallet, &outpoint);
+				if (!utxo || utxo->status != OUTPUT_STATE_RESERVED)
+					continue;
+
+				wallet_unreserve_utxo(ld->wallet, utxo,
+						      get_block_height(ld->topology),
+						      utxo->reserved_til);
+			}
+		}
+
 		resolve_close_command(ld, channel, cooperative,
 				      tal_arr(tmpctx, const struct bitcoin_tx *, 0));
 		free_htlcs(ld, channel);
@@ -1197,7 +1235,7 @@ static void NON_NULL_ARGS(1, 2, 4, 5) json_add_channel(struct command *cmd,
 	json_add_amount_sat_msat(response, "dust_limit_msat",
 				 channel->our_config.dust_limit);
 	if (command_deprecated_out_ok(cmd, "max_total_htlc_in_msat",
-				      "v25.02", "v26.03"))
+				      "v25.02", "v26.04"))
 		json_add_amount_msat(response, "max_total_htlc_in_msat",
 				     channel->our_config.max_htlc_value_in_flight);
 	json_add_amount_msat(

@@ -1011,6 +1011,30 @@ def test_malformed_rpc(node_factory):
     sock.close()
 
 
+def test_valid_json_cli(node_factory):
+    """Make sure lightning-cli passes valid json values, so that rust and python plugins
+    don't crash."""
+    l1 = node_factory.get_node(
+        options={
+            "log-level": "io",
+            "plugin": os.path.join(os.getcwd(), "tests/plugins/validatejson.py"),
+        }
+    )
+    # If passed as a literal number rust's serde_json::from_str will fail as the
+    # leading zero makes it invalid for an integer.
+    nodeid = "030000000000000000000000000000000000000000000000000000000000000001"
+    subprocess.check_output(
+        [
+            "cli/lightning-cli",
+            "--network={}".format(TEST_NETWORK),
+            "--lightning-dir={}".format(l1.daemon.lightning_dir),
+            "-k",
+            "validate-json-rpc",
+            f"nodeid={nodeid}",
+        ]
+    ).decode("utf-8")
+
+
 def test_cli(node_factory):
     l1 = node_factory.get_node(options={'log-level': 'io'})
 
@@ -5008,7 +5032,7 @@ def test_tracing(node_factory):
         with open(fname, "rt") as f:
             for linenum, l in enumerate(f.readlines(), 1):
                 # In case an assertion fails
-                print(f"Parsing {fname}:{linenum}")
+                print(f"Parsing {fname}:{linenum}: {l.strip()}")
                 parts = l.split(maxsplit=2)
                 cmd = parts[0]
                 spanid = parts[1]
@@ -5046,8 +5070,9 @@ def test_tracing(node_factory):
                 else:
                     assert False, "Unknown trace line"
 
-        assert suspended == set()
-        assert traces == set()
+        # We can actually have a calls suspended when we shut down!
+        assert len(suspended) <= 1
+        assert suspended == traces
 
     # Test parent trace
     trace_fnamebase = os.path.join(l1.daemon.lightning_dir, TEST_NETWORK, "l1.parent.trace")
