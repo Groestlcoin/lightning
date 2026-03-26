@@ -150,6 +150,9 @@ service Node {
 	rpc ListNetworkEvents(ListnetworkeventsRequest) returns (ListnetworkeventsResponse) {}
 	rpc DelNetworkEvent(DelnetworkeventRequest) returns (DelnetworkeventResponse) {}
 	rpc ClnrestRegisterPath(ClnrestregisterpathRequest) returns (ClnrestregisterpathResponse) {}
+	rpc ListCurrencyRates(ListcurrencyratesRequest) returns (ListcurrencyratesResponse) {}
+	rpc CurrencyConvert(CurrencyconvertRequest) returns (CurrencyconvertResponse) {}
+	rpc CurrencyRate(CurrencyrateRequest) returns (CurrencyrateResponse) {}
 
 	rpc SubscribeBlockAdded(StreamBlockAddedRequest) returns (stream BlockAddedNotification) {}
 	rpc SubscribeChannelOpenFailed(StreamChannelOpenFailedRequest) returns (stream ChannelOpenFailedNotification) {}
@@ -1460,7 +1463,7 @@ message ListpeerchannelsChannels {
 	optional bool lost_state = 57;
 	optional bool reestablished = 58;
 	optional Amount last_tx_fee_msat = 59;
-	optional sint64 direction = 60;
+	optional uint32 direction = 60;
 	optional Amount their_max_htlc_value_in_flight_msat = 61;
 	optional Amount our_max_htlc_value_in_flight_msat = 62;
 }
@@ -1872,6 +1875,7 @@ message FeeratesPerkb {
 	repeated FeeratesPerkbEstimates estimates = 9;
 	uint32 floor = 10;
 	optional uint32 unilateral_anchor_close = 11;
+	optional uint32 splice = 12;
 }
 
 message FeeratesPerkbEstimates {
@@ -1892,6 +1896,7 @@ message FeeratesPerkw {
 	repeated FeeratesPerkwEstimates estimates = 9;
 	uint32 floor = 10;
 	optional uint32 unilateral_anchor_close = 11;
+	optional uint32 splice = 12;
 }
 
 message FeeratesPerkwEstimates {
@@ -3621,6 +3626,7 @@ message BkprlistaccounteventsEvents {
 	optional Amount fees_msat = 14;
 	optional bool is_rebalance = 15;
 	optional uint32 part_id = 16;
+	optional double currencyrate = 17;
 }
 
 message BkprlistbalancesRequest {
@@ -4301,6 +4307,36 @@ message ClnrestregisterpathRuneRestrictions {
 	optional string nodeid = 1;
 	optional string method = 2;
 	map<string, string> params = 3;
+}
+
+message ListcurrencyratesRequest {
+	string currency = 1;
+}
+
+message ListcurrencyratesResponse {
+	repeated ListcurrencyratesCurrencyrates currencyrates = 1;
+}
+
+message ListcurrencyratesCurrencyrates {
+	string source = 1;
+	double amount = 2;
+}
+
+message CurrencyconvertRequest {
+	double amount = 1;
+	string currency = 2;
+}
+
+message CurrencyconvertResponse {
+	Amount msat = 1;
+}
+
+message CurrencyrateRequest {
+	string currency = 1;
+}
+
+message CurrencyrateResponse {
+	double rate = 1;
 }
 
 message StreamBlockAddedRequest {

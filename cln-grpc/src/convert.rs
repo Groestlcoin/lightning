@@ -1330,7 +1330,7 @@ impl From<responses::ListpeerchannelsChannels> for pb::ListpeerchannelsChannels 
             close_to: c.close_to.map(|v| hex::decode(v).unwrap()), // Rule #2 for type hex?
             close_to_addr: c.close_to_addr, // Rule #2 for type string?
             closer: c.closer.map(|v| v as i32),
-            direction: c.direction, // Rule #2 for type integer?
+            direction: c.direction, // Rule #2 for type u32?
             dust_limit_msat: c.dust_limit_msat.map(|f| f.into()), // Rule #2 for type msat?
             fee_base_msat: c.fee_base_msat.map(|f| f.into()), // Rule #2 for type msat?
             fee_proportional_millionths: c.fee_proportional_millionths, // Rule #2 for type u32?
@@ -1772,6 +1772,7 @@ impl From<responses::FeeratesPerkb> for pb::FeeratesPerkb {
             mutual_close: c.mutual_close, // Rule #2 for type u32?
             opening: c.opening, // Rule #2 for type u32?
             penalty: c.penalty, // Rule #2 for type u32?
+            splice: c.splice, // Rule #2 for type u32?
             unilateral_anchor_close: c.unilateral_anchor_close, // Rule #2 for type u32?
             unilateral_close: c.unilateral_close, // Rule #2 for type u32?
         }
@@ -1805,6 +1806,7 @@ impl From<responses::FeeratesPerkw> for pb::FeeratesPerkw {
             mutual_close: c.mutual_close, // Rule #2 for type u32?
             opening: c.opening, // Rule #2 for type u32?
             penalty: c.penalty, // Rule #2 for type u32?
+            splice: c.splice, // Rule #2 for type u32?
             unilateral_anchor_close: c.unilateral_anchor_close, // Rule #2 for type u32?
             unilateral_close: c.unilateral_close, // Rule #2 for type u32?
         }
@@ -3793,6 +3795,7 @@ impl From<responses::BkprlistaccounteventsEvents> for pb::BkprlistaccounteventsE
             blockheight: c.blockheight, // Rule #2 for type u32?
             credit_msat: Some(c.credit_msat.into()), // Rule #2 for type msat
             currency: c.currency, // Rule #2 for type string
+            currencyrate: c.currencyrate, // Rule #2 for type number?
             debit_msat: Some(c.debit_msat.into()), // Rule #2 for type msat
             description: c.description, // Rule #2 for type string?
             fees_msat: c.fees_msat.map(|f| f.into()), // Rule #2 for type msat?
@@ -4565,6 +4568,44 @@ impl From<responses::DelnetworkeventResponse> for pb::DelnetworkeventResponse {
 impl From<responses::ClnrestregisterpathResponse> for pb::ClnrestregisterpathResponse {
     fn from(c: responses::ClnrestregisterpathResponse) -> Self {
         Self {
+        }
+    }
+}
+
+#[allow(unused_variables)]
+impl From<responses::ListcurrencyratesCurrencyrates> for pb::ListcurrencyratesCurrencyrates {
+    fn from(c: responses::ListcurrencyratesCurrencyrates) -> Self {
+        Self {
+            amount: c.amount, // Rule #2 for type number
+            source: c.source, // Rule #2 for type string
+        }
+    }
+}
+
+#[allow(unused_variables)]
+impl From<responses::ListcurrencyratesResponse> for pb::ListcurrencyratesResponse {
+    fn from(c: responses::ListcurrencyratesResponse) -> Self {
+        Self {
+            // Field: ListCurrencyRates.currencyrates[]
+            currencyrates: c.currencyrates.into_iter().map(|i| i.into()).collect(), // Rule #3 for type ListcurrencyratesCurrencyrates
+        }
+    }
+}
+
+#[allow(unused_variables)]
+impl From<responses::CurrencyconvertResponse> for pb::CurrencyconvertResponse {
+    fn from(c: responses::CurrencyconvertResponse) -> Self {
+        Self {
+            msat: Some(c.msat.into()), // Rule #2 for type msat
+        }
+    }
+}
+
+#[allow(unused_variables)]
+impl From<responses::CurrencyrateResponse> for pb::CurrencyrateResponse {
+    fn from(c: responses::CurrencyrateResponse) -> Self {
+        Self {
+            rate: c.rate, // Rule #2 for type number
         }
     }
 }
@@ -6414,6 +6455,34 @@ impl From<requests::ClnrestregisterpathRequest> for pb::ClnrestregisterpathReque
 }
 
 #[allow(unused_variables)]
+impl From<requests::ListcurrencyratesRequest> for pb::ListcurrencyratesRequest {
+    fn from(c: requests::ListcurrencyratesRequest) -> Self {
+        Self {
+            currency: c.currency, // Rule #2 for type string
+        }
+    }
+}
+
+#[allow(unused_variables)]
+impl From<requests::CurrencyconvertRequest> for pb::CurrencyconvertRequest {
+    fn from(c: requests::CurrencyconvertRequest) -> Self {
+        Self {
+            amount: c.amount, // Rule #2 for type number
+            currency: c.currency, // Rule #2 for type string
+        }
+    }
+}
+
+#[allow(unused_variables)]
+impl From<requests::CurrencyrateRequest> for pb::CurrencyrateRequest {
+    fn from(c: requests::CurrencyrateRequest) -> Self {
+        Self {
+            currency: c.currency, // Rule #2 for type string
+        }
+    }
+}
+
+#[allow(unused_variables)]
 impl From<notifications::requests::StreamBlockAddedRequest> for pb::StreamBlockAddedRequest {
     fn from(c: notifications::requests::StreamBlockAddedRequest) -> Self {
         Self {
@@ -8187,6 +8256,34 @@ impl From<pb::ClnrestregisterpathRequest> for requests::ClnrestregisterpathReque
             rpc_method: c.rpc_method, // Rule #1 for type string
             rune_required: c.rune_required, // Rule #1 for type boolean?
             rune_restrictions: c.rune_restrictions.map(|v| v.into()),
+        }
+    }
+}
+
+#[allow(unused_variables)]
+impl From<pb::ListcurrencyratesRequest> for requests::ListcurrencyratesRequest {
+    fn from(c: pb::ListcurrencyratesRequest) -> Self {
+        Self {
+            currency: c.currency, // Rule #1 for type string
+        }
+    }
+}
+
+#[allow(unused_variables)]
+impl From<pb::CurrencyconvertRequest> for requests::CurrencyconvertRequest {
+    fn from(c: pb::CurrencyconvertRequest) -> Self {
+        Self {
+            amount: c.amount, // Rule #1 for type number
+            currency: c.currency, // Rule #1 for type string
+        }
+    }
+}
+
+#[allow(unused_variables)]
+impl From<pb::CurrencyrateRequest> for requests::CurrencyrateRequest {
+    fn from(c: pb::CurrencyrateRequest) -> Self {
+        Self {
+            currency: c.currency, // Rule #1 for type string
         }
     }
 }
