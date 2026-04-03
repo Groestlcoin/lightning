@@ -1151,6 +1151,8 @@ def decode_invoice_paths_payinfo2py(m):
         "features": hexlify(m.features),  # PrimitiveField in generate_composite
         "fee_base_msat": amount2msat(m.fee_base_msat),  # PrimitiveField in generate_composite
         "fee_proportional_millionths": m.fee_proportional_millionths,  # PrimitiveField in generate_composite
+        "htlc_maximum_msat": amount2msat(m.htlc_maximum_msat),  # PrimitiveField in generate_composite
+        "htlc_minimum_msat": amount2msat(m.htlc_minimum_msat),  # PrimitiveField in generate_composite
     })
 
 
@@ -1386,6 +1388,7 @@ def disableoffer2py(m):
         "active": m.active,  # PrimitiveField in generate_composite
         "bolt12": m.bolt12,  # PrimitiveField in generate_composite
         "description": m.description,  # PrimitiveField in generate_composite
+        "force_paths": m.force_paths,  # PrimitiveField in generate_composite
         "label": m.label,  # PrimitiveField in generate_composite
         "offer_id": hexlify(m.offer_id),  # PrimitiveField in generate_composite
         "single_use": m.single_use,  # PrimitiveField in generate_composite
@@ -1398,6 +1401,7 @@ def enableoffer2py(m):
         "active": m.active,  # PrimitiveField in generate_composite
         "bolt12": m.bolt12,  # PrimitiveField in generate_composite
         "description": m.description,  # PrimitiveField in generate_composite
+        "force_paths": m.force_paths,  # PrimitiveField in generate_composite
         "label": m.label,  # PrimitiveField in generate_composite
         "offer_id": hexlify(m.offer_id),  # PrimitiveField in generate_composite
         "single_use": m.single_use,  # PrimitiveField in generate_composite
@@ -1679,6 +1683,7 @@ def listoffers_offers2py(m):
         "active": m.active,  # PrimitiveField in generate_composite
         "bolt12": m.bolt12,  # PrimitiveField in generate_composite
         "description": m.description,  # PrimitiveField in generate_composite
+        "force_paths": m.force_paths,  # PrimitiveField in generate_composite
         "label": m.label,  # PrimitiveField in generate_composite
         "offer_id": hexlify(m.offer_id),  # PrimitiveField in generate_composite
         "single_use": m.single_use,  # PrimitiveField in generate_composite
@@ -1790,6 +1795,7 @@ def offer2py(m):
         "active": m.active,  # PrimitiveField in generate_composite
         "bolt12": m.bolt12,  # PrimitiveField in generate_composite
         "created": m.created,  # PrimitiveField in generate_composite
+        "force_paths": m.force_paths,  # PrimitiveField in generate_composite
         "label": m.label,  # PrimitiveField in generate_composite
         "offer_id": hexlify(m.offer_id),  # PrimitiveField in generate_composite
         "single_use": m.single_use,  # PrimitiveField in generate_composite
