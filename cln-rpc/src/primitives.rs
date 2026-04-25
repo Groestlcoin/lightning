@@ -1,6 +1,6 @@
 //! Primitive types representing [`Amount`]s, [`PublicKey`]s, ...
 use anyhow::Context;
-use anyhow::{anyhow, Error, Result};
+use anyhow::{Error, Result, anyhow};
 use bitcoin::hashes::Hash as BitcoinHash;
 use serde::{Deserialize, Serialize};
 use serde::{Deserializer, Serializer};
@@ -1172,4 +1172,20 @@ impl Serialize for TlvStream {
         }
         map.end()
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(untagged)]
+pub enum JsonObjectOrArray {
+    Object(serde_json::Map<String, Value>),
+    Array(Vec<Value>),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(untagged)]
+pub enum JsonScalar {
+    String(String),
+    Number(serde_json::Number),
+    Bool(bool),
+    Null,
 }

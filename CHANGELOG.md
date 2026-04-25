@@ -4,13 +4,30 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [26.04rc3] - 2026-04-13: Negative Routing Fees
+## [26.04.1] - 2026-04-25: "Negative Routing Fees II"
+
+This point release is recommended: it fixes a build failure in some environments and a gossip protocol issue.
+
+### Fixed
+
+ - **Protocol:** we now reject `channel_announcement` messages where `node_id_1` is not lexicographically less than `node_id_2` (per BOLT; see [lightning/bolts#1333](https://github.com/lightning/bolts/pull/1333)), so malformed announcements no longer stress the gossip store and other readers. ([#9082])
+ - **Build:** correct `printf` format for splice weight logging (`%zu` for `size_t` in `lightningd`, `channeld`, and the spender plugin), fixing `-Werror` / `-Wformat` failures (e.g. Docker and 32-bit ARM cross-compiles). ([#9083], [#9086])
+ - **Build:** bookkeeper no longer uses `__int128` for currency rate math, so 32-bit targets build again. ([#9085])
+
+[#9082]: https://github.com/ElementsProject/lightning/pull/9082
+[#9083]: https://github.com/ElementsProject/lightning/pull/9083
+[#9085]: https://github.com/ElementsProject/lightning/pull/9085
+[#9086]: https://github.com/ElementsProject/lightning/pull/9086
+[26.04.1]: https://github.com/ElementsProject/lightning/releases/tag/v26.04.1
+
+## [26.04] - 2026-04-20: Negative Routing Fees
 
 This release is named by @Chand-ra.
 
 ### Added
 
  - Protocol: we now pad all peer messages to make them the same length (excluding LND < v21 and current Eclair). ([#8893], [#9022])
+ - Config: `message-padding` option can be set to `false` to disable it for all peers. ([#9068])
  - JSON-RPC: `bkpr-report` allows flexible summaries of bookkeeper income. ([#8937])
  - Config: `bkpr-currency` option to record conversion rate at each bookkeeper event. ([#8937])
  - JSON-RPC: `currencyconvert` and `currencyrate` via the new plugin `cln-currencyrate` ([#8842], [#8937])
@@ -137,7 +154,8 @@ Note: You should always set `allow-deprecated-apis=false` to test for changes.
 [#9022]: https://github.com/ElementsProject/lightning/pull/9022
 [#9046]: https://github.com/ElementsProject/lightning/pull/9046
 [#9047]: https://github.com/ElementsProject/lightning/pull/9047
-[v26.04rc3]: https://github.com/ElementsProject/lightning/releases/tag/v26.04rc3
+[#9068]: https://github.com/ElementsProject/lightning/pull/9068
+[v26.04]: https://github.com/ElementsProject/lightning/releases/tag/v26.04
 
 
 ## [25.12.1] - 2026-1-14: "Boltz's Seamless Upgrade Experience II"
