@@ -36,7 +36,6 @@ jobs:
             autoconf \
             automake \
             libtool \
-            bash \
             gettext \
             sqlite3 \
             libsodium \
