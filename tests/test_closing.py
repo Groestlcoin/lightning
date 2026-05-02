@@ -8,7 +8,7 @@ from utils import (
     scriptpubkey_addr, calc_lease_fee,
     check_utxos_channel, check_coin_moves,
     mine_funding_to_announce, check_inspect_channel,
-    first_scid, check_feerate, did_short_sig
+    first_scid, check_feerate
 )
 
 from typing import List, Optional
@@ -3337,9 +3337,9 @@ Try a range of future segwit versions as shutdown scripts.  We create many nodes
     l1 = node_factory.get_node(allow_warning=True)
 
     # BOLT #2:
-    # 5. if (and only if) `option_shutdown_anysegwit` is negotiated:
+    # 3. if (and only if) `option_shutdown_anysegwit` is negotiated:
     #    * `OP_1` through `OP_16` inclusive, followed by a single push of 2 to 40 bytes
-    #    (witness program versions 1 through 16)
+    #      (witness program versions 1 through 16)
     edge_valid = ['51020000', '5128' + '00' * 0x28,
                   '60020000', '6028' + '00' * 0x28]
     other_valid = ['52020000', '5228' + '00' * 0x28,
@@ -3836,7 +3836,7 @@ def test_closing_anchorspend_htlc_tx_rbf(node_factory, bitcoind):
     total_weight = sum([d['weight'] for d in details])
     total_fees = sum([float(d['fees']['base']) * 100_000_000 for d in details])
     total_feerate_perkw = total_fees / total_weight * 1000
-    assert did_short_sig(l1) or 2000 - 1 < total_feerate_perkw < 2000 + 1
+    check_feerate([l1], total_feerate_perkw, 2000)
 
     # But we don't mine it!  And fees go up again!
     l1.set_feerates((3000, 3000, 3000, 3000))
@@ -3851,7 +3851,7 @@ def test_closing_anchorspend_htlc_tx_rbf(node_factory, bitcoind):
     total_weight = sum([d['weight'] for d in details])
     total_fees = sum([float(d['fees']['base']) * 100_000_000 for d in details])
     total_feerate_perkw = total_fees / total_weight * 1000
-    assert did_short_sig(l1) or 3000 - 1 < total_feerate_perkw < 3000 + 1
+    check_feerate([l1], total_feerate_perkw, 3000)
 
     # And now we'll get it in (there's some rounding, so feerate a bit lower!)
     bitcoind.generate_block(1, needfeerate=2990)
