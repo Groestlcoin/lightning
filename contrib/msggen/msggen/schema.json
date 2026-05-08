@@ -14678,7 +14678,9 @@
       },
       "response": {
         "required": [
-          "filedata"
+          "filedata",
+          "can_create_penalty",
+          "backed_up_channel_ids"
         ],
         "additionalProperties": false,
         "properties": {
@@ -14687,6 +14689,21 @@
             "description": [
               "The raw, hex-encoded, emergency.recover file"
             ]
+          },
+          "can_create_penalty": {
+            "type": "boolean",
+            "description": [
+              "If false, you are using legacy file version, which can not create penalty transactions, kindly delete emergency.recover and restart the node!"
+            ]
+          },
+          "backed_up_channel_ids": {
+            "type": "array",
+            "items": {
+              "type": "hash",
+              "description": [
+                "Channel IDs of channels backed up inside emergency.recover"
+              ]
+            }
           }
         }
       },
@@ -16124,7 +16141,7 @@
           "amount_msat": {
             "type": "msat",
             "description": [
-              "The amount for the first HTLC in millisatoshis.  This is also the amount which will be forwarded to the first peer (if any) as we do not charge fees on our own payments.  Note: this is shown in listsendpays as `amount_sent_msat`."
+              "The amount in millisatoshis this node would receive from a peer before forwarding the payment to the next."
             ]
           },
           "cltv_expiry": {
