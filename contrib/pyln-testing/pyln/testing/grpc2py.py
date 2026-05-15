@@ -1223,6 +1223,7 @@ def decode_offer_recurrence_paywindow2py(m):
 def decode_offer_recurrence2py(m):
     return remove_default({
         "basetime": m.basetime,  # PrimitiveField in generate_composite
+        "compulsory_field": m.compulsory_field,  # PrimitiveField in generate_composite
         "limit": m.limit,  # PrimitiveField in generate_composite
         "period": m.period,  # PrimitiveField in generate_composite
         "time_unit": m.time_unit,  # PrimitiveField in generate_composite
@@ -1261,6 +1262,14 @@ def decode_unknown_offer_tlvs2py(m):
     })
 
 
+def decode_unknown_payer_proof_tlvs2py(m):
+    return remove_default({
+        "length": m.length,  # PrimitiveField in generate_composite
+        "item_type": m.type,  # PrimitiveField in generate_composite
+        "value": hexlify(m.value),  # PrimitiveField in generate_composite
+    })
+
+
 def decode2py(m):
     return remove_default({
         "extra": [decode_extra2py(i) for i in m.extra],  # ArrayField[composite] in generate_composite
@@ -1270,11 +1279,15 @@ def decode2py(m):
         "invreq_paths": [decode_invreq_paths2py(i) for i in m.invreq_paths],  # ArrayField[composite] in generate_composite
         "offer_chains": [hexlify(m.offer_chains) for i in hexlify(m.offer_chains)], # ArrayField[primitive] in generate_composite
         "offer_paths": [decode_offer_paths2py(i) for i in m.offer_paths],  # ArrayField[composite] in generate_composite
+        "proof_leaf_hashes": [hexlify(m.proof_leaf_hashes) for i in hexlify(m.proof_leaf_hashes)], # ArrayField[primitive] in generate_composite
+        "proof_missing_hashes": [hexlify(m.proof_missing_hashes) for i in hexlify(m.proof_missing_hashes)], # ArrayField[primitive] in generate_composite
+        "proof_omitted_tlvs": [m.proof_omitted_tlvs for i in m.proof_omitted_tlvs], # ArrayField[primitive] in generate_composite
         "restrictions": [decode_restrictions2py(i) for i in m.restrictions],  # ArrayField[composite] in generate_composite
         "type": str(m.item_type),  # EnumField in generate_composite
         "unknown_invoice_request_tlvs": [decode_unknown_invoice_request_tlvs2py(i) for i in m.unknown_invoice_request_tlvs],  # ArrayField[composite] in generate_composite
         "unknown_invoice_tlvs": [decode_unknown_invoice_tlvs2py(i) for i in m.unknown_invoice_tlvs],  # ArrayField[composite] in generate_composite
         "unknown_offer_tlvs": [decode_unknown_offer_tlvs2py(i) for i in m.unknown_offer_tlvs],  # ArrayField[composite] in generate_composite
+        "unknown_payer_proof_tlvs": [decode_unknown_payer_proof_tlvs2py(i) for i in m.unknown_payer_proof_tlvs],  # ArrayField[composite] in generate_composite
         "amount_msat": amount2msat(m.amount_msat),  # PrimitiveField in generate_composite
         "created_at": m.created_at,  # PrimitiveField in generate_composite
         "currency": m.currency,  # PrimitiveField in generate_composite
@@ -1299,6 +1312,7 @@ def decode2py(m):
         "invreq_payer_id": hexlify(m.invreq_payer_id),  # PrimitiveField in generate_composite
         "invreq_payer_note": m.invreq_payer_note,  # PrimitiveField in generate_composite
         "invreq_quantity": m.invreq_quantity,  # PrimitiveField in generate_composite
+        "invreq_recurrence_cancel": m.invreq_recurrence_cancel,  # PrimitiveField in generate_composite
         "invreq_recurrence_counter": m.invreq_recurrence_counter,  # PrimitiveField in generate_composite
         "invreq_recurrence_start": m.invreq_recurrence_start,  # PrimitiveField in generate_composite
         "min_final_cltv_expiry": m.min_final_cltv_expiry,  # PrimitiveField in generate_composite
@@ -1318,6 +1332,9 @@ def decode2py(m):
         "payment_hash": hexlify(m.payment_hash),  # PrimitiveField in generate_composite
         "payment_metadata": hexlify(m.payment_metadata),  # PrimitiveField in generate_composite
         "payment_secret": hexlify(m.payment_secret),  # PrimitiveField in generate_composite
+        "proof_note": m.proof_note,  # PrimitiveField in generate_composite
+        "proof_preimage": hexlify(m.proof_preimage),  # PrimitiveField in generate_composite
+        "proof_signature": hexlify(m.proof_signature),  # PrimitiveField in generate_composite
         "routes": [[decodepay_routes2py(i) for i in routehints] for routehints in m.routes],  # OverrideField in DecodeRoutehintList
         "signature": hexlify(m.signature),  # PrimitiveField in generate_composite
         "string": m.string,  # PrimitiveField in generate_composite
@@ -1333,6 +1350,8 @@ def decode2py(m):
         "warning_invalid_offer_issuer": m.warning_invalid_offer_issuer,  # PrimitiveField in generate_composite
         "warning_invreq_bip_353_name_domain_invalid": m.warning_invreq_bip_353_name_domain_invalid,  # PrimitiveField in generate_composite
         "warning_invreq_bip_353_name_name_invalid": m.warning_invreq_bip_353_name_name_invalid,  # PrimitiveField in generate_composite
+        "warning_invreq_recurrence_cancel_with_zero_counter": m.warning_invreq_recurrence_cancel_with_zero_counter,  # PrimitiveField in generate_composite
+        "warning_invreq_recurrence_cancel_without_counter": m.warning_invreq_recurrence_cancel_without_counter,  # PrimitiveField in generate_composite
         "warning_missing_invoice_amount": m.warning_missing_invoice_amount,  # PrimitiveField in generate_composite
         "warning_missing_invoice_blindedpay": m.warning_missing_invoice_blindedpay,  # PrimitiveField in generate_composite
         "warning_missing_invoice_created_at": m.warning_missing_invoice_created_at,  # PrimitiveField in generate_composite
@@ -1996,6 +2015,8 @@ def setchannel2py(m):
 
 def setconfig_config2py(m):
     return remove_default({
+        "sources": [m.sources for i in m.sources], # ArrayField[primitive] in generate_composite
+        "values_str": [m.values_str for i in m.values_str], # ArrayField[primitive] in generate_composite
         "config": m.config,  # PrimitiveField in generate_composite
         "dynamic": m.dynamic,  # PrimitiveField in generate_composite
         "plugin": m.plugin,  # PrimitiveField in generate_composite
@@ -3171,6 +3192,11 @@ def askrene_remove_layer2py(m):
     })
 
 
+def askrene_remove_channel_update2py(m):
+    return remove_default({
+    })
+
+
 def askrene_reserve2py(m):
     return remove_default({
     })
@@ -3185,9 +3211,15 @@ def askrene_age2py(m):
 
 def getroutes_routes_path2py(m):
     return remove_default({
+        "amount_in_msat": amount2msat(m.amount_in_msat),  # PrimitiveField in generate_composite
         "amount_msat": amount2msat(m.amount_msat),  # PrimitiveField in generate_composite
+        "amount_out_msat": amount2msat(m.amount_out_msat),  # PrimitiveField in generate_composite
+        "cltv_in": m.cltv_in,  # PrimitiveField in generate_composite
+        "cltv_out": m.cltv_out,  # PrimitiveField in generate_composite
         "delay": m.delay,  # PrimitiveField in generate_composite
         "next_node_id": hexlify(m.next_node_id),  # PrimitiveField in generate_composite
+        "node_id_in": hexlify(m.node_id_in),  # PrimitiveField in generate_composite
+        "node_id_out": hexlify(m.node_id_out),  # PrimitiveField in generate_composite
         "short_channel_id_dir": m.short_channel_id_dir,  # PrimitiveField in generate_composite
     })
 
@@ -3417,6 +3449,16 @@ def currencyconvert2py(m):
 def currencyrate2py(m):
     return remove_default({
         "rate": m.rate,  # PrimitiveField in generate_composite
+    })
+
+
+def sendamount2py(m):
+    return remove_default({
+        "amount_msat": amount2msat(m.amount_msat),  # PrimitiveField in generate_composite
+        "amount_sent_msat": amount2msat(m.amount_sent_msat),  # PrimitiveField in generate_composite
+        "failed_parts": m.failed_parts,  # PrimitiveField in generate_composite
+        "payment_preimage": hexlify(m.payment_preimage),  # PrimitiveField in generate_composite
+        "successful_parts": m.successful_parts,  # PrimitiveField in generate_composite
     })
 
 

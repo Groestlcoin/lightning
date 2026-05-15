@@ -50,6 +50,7 @@ Core Lightning Documentation
    connect <connect.7.md>
    createinvoice <createinvoice.7.md>
    createonion <createonion.7.md>
+   createproof <createproof.7.md>
    createrune <createrune.7.md>
    currencyconvert <currencyconvert.7.md>
    currencyrate <currencyrate.7.md>
@@ -84,6 +85,7 @@ Core Lightning Documentation
    getlog <getlog.7.md>
    getroute <getroute.7.md>
    getroutes <getroutes.7.md>
+   graceful <graceful.7.md>
    help <help.7.md>
    hook-commitment_revocation <hook-commitment_revocation.7.md>
    hook-custommsg <hook-custommsg.7.md>
@@ -181,6 +183,7 @@ Core Lightning Documentation
    renepay <renepay.7.md>
    renepaystatus <renepaystatus.7.md>
    reserveinputs <reserveinputs.7.md>
+   sendamount <sendamount.7.md>
    sendcustommsg <sendcustommsg.7.md>
    sendinvoice <sendinvoice.7.md>
    sendonion <sendonion.7.md>
@@ -214,5 +217,6 @@ Core Lightning Documentation
    waitinvoice <waitinvoice.7.md>
    waitsendpay <waitsendpay.7.md>
    withdraw <withdraw.7.md>
+   xkeysend <xkeysend.7.md>
    xpay <xpay.7.md>
 .. block_end manpages

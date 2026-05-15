@@ -17,7 +17,7 @@ def test_splice(node_factory, bitcoind):
     chan_id = l1.get_channel_id(l2)
 
     # add extra sats to pay fee
-    funds_result = l1.rpc.fundpsbt("105790sat", 0, 0, excess_as_change=True)
+    funds_result = l1.rpc.fundpsbt("111722sat", 0, 0, excess_as_change=True)
 
     result = l1.rpc.splice_init(chan_id, 100000, funds_result['psbt'])
     result = l1.rpc.splice_update(chan_id, result['psbt'])
@@ -40,7 +40,7 @@ def test_splice(node_factory, bitcoind):
     l1.daemon.wait_for_log(r'CHANNELD_AWAITING_SPLICE to CHANNELD_NORMAL')
 
     inv = l2.rpc.invoice(10**2, '3', 'no_3')
-    l1.rpc.pay(inv['bolt11'])
+    l1.rpc.xpay(inv['bolt11'])
 
     # Check that the splice doesn't generate a unilateral close transaction
     time.sleep(5)
@@ -59,7 +59,7 @@ def test_two_chan_splice_in(node_factory, bitcoind):
     chan_id2 = l2.get_channel_id(l3)
 
     # add extra sats to pay fee
-    funds_result = l2.rpc.fundpsbt("205790sat", 0, 0, excess_as_change=True)
+    funds_result = l2.rpc.fundpsbt("211722sat", 0, 0, excess_as_change=True)
 
     # Intiate splices to both channels
     result = l2.rpc.splice_init(chan_id1, 100000, funds_result['psbt'])
@@ -114,10 +114,10 @@ def test_two_chan_splice_in(node_factory, bitcoind):
     l1.daemon.wait_for_log(r'CHANNELD_AWAITING_SPLICE to CHANNELD_NORMAL')
 
     inv = l2.rpc.invoice(10**2, '1', 'no_1')
-    l1.rpc.pay(inv['bolt11'])
+    l1.rpc.xpay(inv['bolt11'])
 
     inv = l3.rpc.invoice(10**2, '2', 'no_2')
-    l2.rpc.pay(inv['bolt11'])
+    l2.rpc.xpay(inv['bolt11'])
 
 
 @pytest.mark.openchannel('v1')
@@ -130,8 +130,8 @@ def test_splice_rbf(node_factory, bitcoind):
 
     funds_result = l1.rpc.addpsbtoutput(100000)
 
-    # Pay with fee by subtracting 5000 from channel balance
-    result = l1.rpc.splice_init(chan_id, -105000, funds_result['psbt'])
+    # Pay with fee by subtracting 5801 from channel balance
+    result = l1.rpc.splice_init(chan_id, -105801, funds_result['psbt'])
     result = l1.rpc.splice_update(chan_id, result['psbt'])
     assert(result['commitments_secured'] is False)
     result = l1.rpc.splice_update(chan_id, result['psbt'])
@@ -146,12 +146,12 @@ def test_splice_rbf(node_factory, bitcoind):
     assert result['txid'] in list(mempool.keys())
 
     inv = l2.rpc.invoice(10**2, '1', 'no_1')
-    l1.rpc.pay(inv['bolt11'])
+    l1.rpc.xpay(inv['bolt11'])
 
     funds_result = l1.rpc.addpsbtoutput(100000)
 
     # Pay with fee by subtracting 5790 from channel balance
-    result = l1.rpc.splice_init(chan_id, -105790, funds_result['psbt'])
+    result = l1.rpc.splice_init(chan_id, -111722, funds_result['psbt'])
     result = l1.rpc.splice_update(chan_id, result['psbt'])
     assert(result['commitments_secured'] is False)
     result = l1.rpc.splice_update(chan_id, result['psbt'])
@@ -162,7 +162,7 @@ def test_splice_rbf(node_factory, bitcoind):
     l1.daemon.wait_for_log(r'CHANNELD_AWAITING_SPLICE to CHANNELD_AWAITING_SPLICE')
 
     inv = l2.rpc.invoice(10**2, '2', 'no_2')
-    l1.rpc.pay(inv['bolt11'])
+    l1.rpc.xpay(inv['bolt11'])
 
     # Make sure l1 doesn't unilateral close if HTLC hasn't completely settled before deadline.
     wait_for(lambda: only_one(l1.rpc.listpeerchannels()['channels'])['htlcs'] == [])
@@ -173,7 +173,7 @@ def test_splice_rbf(node_factory, bitcoind):
     l1.daemon.wait_for_log(r'CHANNELD_AWAITING_SPLICE to CHANNELD_NORMAL')
 
     inv = l2.rpc.invoice(10**2, '3', 'no_3')
-    l1.rpc.pay(inv['bolt11'])
+    l1.rpc.xpay(inv['bolt11'])
 
     # Check that the splice doesn't generate a unilateral close transaction
     time.sleep(5)
@@ -189,7 +189,7 @@ def test_splice_nosign(node_factory, bitcoind):
     chan_id = l1.get_channel_id(l2)
 
     # add extra sats to pay fee
-    funds_result = l1.rpc.fundpsbt("105790sat", 0, 0, excess_as_change=True)
+    funds_result = l1.rpc.fundpsbt("111722sat", 0, 0, excess_as_change=True)
 
     result = l1.rpc.splice_init(chan_id, 100000, funds_result['psbt'])
     result = l1.rpc.splice_update(chan_id, result['psbt'])
@@ -214,7 +214,7 @@ def test_splice_gossip(node_factory, bitcoind):
     pre_splice_scid = first_scid(l1, l2)
 
     # add extra sats to pay fee
-    funds_result = l1.rpc.fundpsbt("105790sat", 0, 0, excess_as_change=True)
+    funds_result = l1.rpc.fundpsbt("111722sat", 0, 0, excess_as_change=True)
 
     result = l1.rpc.splice_init(chan_id, 100000, funds_result['psbt'])
     result = l1.rpc.splice_update(chan_id, result['psbt'])
@@ -277,7 +277,7 @@ def test_splice_listnodes(node_factory, bitcoind):
     chan_id = l1.get_channel_id(l2)
 
     # add extra sats to pay fee
-    funds_result = l1.rpc.fundpsbt("105790sat", 0, 0, excess_as_change=True)
+    funds_result = l1.rpc.fundpsbt("111722sat", 0, 0, excess_as_change=True)
 
     result = l1.rpc.splice_init(chan_id, 100000, funds_result['psbt'])
     result = l1.rpc.splice_update(chan_id, result['psbt'])
@@ -314,8 +314,8 @@ def test_splice_out(node_factory, bitcoind):
 
     funds_result = l1.rpc.addpsbtoutput(100000)
 
-    # Pay with fee by subjtracting 5000 from channel balance
-    result = l1.rpc.splice_init(chan_id, -105000, funds_result['psbt'])
+    # Pay with fee by subjtracting 5801 from channel balance
+    result = l1.rpc.splice_init(chan_id, -105801, funds_result['psbt'])
     result = l1.rpc.splice_update(chan_id, result['psbt'])
     assert(result['commitments_secured'] is False)
     result = l1.rpc.splice_update(chan_id, result['psbt'])
@@ -335,7 +335,7 @@ def test_splice_out(node_factory, bitcoind):
     l1.daemon.wait_for_log(r'CHANNELD_AWAITING_SPLICE to CHANNELD_NORMAL')
 
     inv = l2.rpc.invoice(10**2, '3', 'no_3')
-    l1.rpc.pay(inv['bolt11'])
+    l1.rpc.xpay(inv['bolt11'])
 
     # Check that the splice doesn't generate a unilateral close transaction
     time.sleep(5)
@@ -372,7 +372,7 @@ def test_invalid_splice(node_factory, bitcoind):
     assert l1.db_query("SELECT count(*) as c FROM channel_funding_inflights;")[0]['c'] == 0
 
     # Now we do a real splice to confirm everything works after restart
-    funds_result = l1.rpc.fundpsbt("105790sat", 0, 0, excess_as_change=True)
+    funds_result = l1.rpc.fundpsbt("111722sat", 0, 0, excess_as_change=True)
 
     result = l1.rpc.splice_init(chan_id, 100000, funds_result['psbt'])
     result = l1.rpc.splice_update(chan_id, result['psbt'])
@@ -392,7 +392,7 @@ def test_invalid_splice(node_factory, bitcoind):
     l1.daemon.wait_for_log(r'CHANNELD_AWAITING_SPLICE to CHANNELD_NORMAL')
 
     inv = l2.rpc.invoice(10**2, '3', 'no_3')
-    l1.rpc.pay(inv['bolt11'])
+    l1.rpc.xpay(inv['bolt11'])
 
     # Check that the splice doesn't generate a unilateral close transaction
     time.sleep(5)
@@ -408,7 +408,7 @@ def test_commit_crash_splice(node_factory, bitcoind):
 
     chan_id = l1.get_channel_id(l2)
 
-    result = l1.rpc.splice_init(chan_id, -105000, l1.rpc.addpsbtoutput(100000)['psbt'])
+    result = l1.rpc.splice_init(chan_id, -105801, l1.rpc.addpsbtoutput(100000)['psbt'])
     result = l1.rpc.splice_update(chan_id, result['psbt'])
     assert(result['commitments_secured'] is False)
     result = l1.rpc.splice_update(chan_id, result['psbt'])
@@ -443,7 +443,7 @@ def test_commit_crash_splice(node_factory, bitcoind):
     assert l1.db_query("SELECT count(*) as c FROM channel_funding_inflights;")[0]['c'] == 0
 
     inv = l2.rpc.invoice(10**2, '3', 'no_3')
-    l1.rpc.pay(inv['bolt11'])
+    l1.rpc.xpay(inv['bolt11'])
 
     # Check that the splice doesn't generate a unilateral close transaction
     time.sleep(5)
@@ -459,7 +459,7 @@ def test_splice_stuck_htlc(node_factory, bitcoind, executor):
     l3.rpc.dev_ignore_htlcs(id=l2.info['id'], ignore=True)
 
     inv = l3.rpc.invoice(10000000, '1', 'no_1')
-    executor.submit(l1.rpc.pay, inv['bolt11'])
+    executor.submit(l1.rpc.xpay, inv['bolt11'])
     l3.daemon.wait_for_log('their htlc 0 dev_ignore_htlcs')
 
     # Now we should have a stuck invoice between l1 -> l2
@@ -467,7 +467,7 @@ def test_splice_stuck_htlc(node_factory, bitcoind, executor):
     chan_id = l1.get_channel_id(l2)
 
     # add extra sats to pay fee
-    funds_result = l1.rpc.fundpsbt("105790sat", 0, 0, excess_as_change=True)
+    funds_result = l1.rpc.fundpsbt("111722sat", 0, 0, excess_as_change=True)
 
     result = l1.rpc.splice_init(chan_id, 100000, funds_result['psbt'])
     result = l1.rpc.splice_update(chan_id, result['psbt'])
@@ -510,10 +510,10 @@ def test_route_by_old_scid(node_factory, bitcoind):
     # Get pre-splice route.
     inv = l3.rpc.invoice(10000000, 'test_route_by_old_scid', 'test_route_by_old_scid')
     inv2 = l3.rpc.invoice(10000000, 'test_route_by_old_scid2', 'test_route_by_old_scid2')
-    route = l1.rpc.getroute(l3.info['id'], 10000000, 1, cltv=16)['route']
+    route = l1.single_route(l3.info['id'], 10000000, cltv=16)
 
     # Do a splice
-    funds_result = l2.rpc.fundpsbt("105790sat", 0, 0, excess_as_change=True)
+    funds_result = l2.rpc.fundpsbt("111722sat", 0, 0, excess_as_change=True)
     chan_id = l2.get_channel_id(l3)
     result = l2.rpc.splice_init(chan_id, 100000, funds_result['psbt'])
     result = l2.rpc.splice_update(chan_id, result['psbt'])
@@ -533,7 +533,7 @@ def test_route_by_old_scid(node_factory, bitcoind):
 
     # Let's splice again, so the original scid is two behind the times.
     l3.fundwallet(200000)
-    funds_result = l3.rpc.fundpsbt("105790sat", 0, 0, excess_as_change=True)
+    funds_result = l3.rpc.fundpsbt("111722sat", 0, 0, excess_as_change=True)
     chan_id = l3.get_channel_id(l2)
     result = l3.rpc.splice_init(chan_id, 100000, funds_result['psbt'])
     result = l3.rpc.splice_update(chan_id, result['psbt'])
@@ -566,7 +566,7 @@ def test_splice_unannounced(node_factory, bitcoind):
     chan_id = l1.get_channel_id(l2)
 
     # add extra sats to pay fee
-    funds_result = l1.rpc.fundpsbt("105790sat", 0, 0, excess_as_change=True)
+    funds_result = l1.rpc.fundpsbt("111722sat", 0, 0, excess_as_change=True)
     result = l1.rpc.splice_init(chan_id, 100000, funds_result['psbt'])
     result = l1.rpc.splice_update(chan_id, result['psbt'])
     assert(result['commitments_secured'] is False)

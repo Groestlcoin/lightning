@@ -134,6 +134,7 @@ service Node {
 	rpc AskReneListLayers(AskrenelistlayersRequest) returns (AskrenelistlayersResponse) {}
 	rpc AskReneCreateLayer(AskrenecreatelayerRequest) returns (AskrenecreatelayerResponse) {}
 	rpc AskReneRemoveLayer(AskreneremovelayerRequest) returns (AskreneremovelayerResponse) {}
+	rpc AskReneRemoveChannelUpdate(AskreneremovechannelupdateRequest) returns (AskreneremovechannelupdateResponse) {}
 	rpc AskReneReserve(AskrenereserveRequest) returns (AskrenereserveResponse) {}
 	rpc AskReneAge(AskreneageRequest) returns (AskreneageResponse) {}
 	rpc GetRoutes(GetroutesRequest) returns (GetroutesResponse) {}
@@ -156,6 +157,7 @@ service Node {
 	rpc ListCurrencyRates(ListcurrencyratesRequest) returns (ListcurrencyratesResponse) {}
 	rpc CurrencyConvert(CurrencyconvertRequest) returns (CurrencyconvertResponse) {}
 	rpc CurrencyRate(CurrencyrateRequest) returns (CurrencyrateResponse) {}
+	rpc SendAmount(SendamountRequest) returns (SendamountResponse) {}
 
 	rpc SubscribeBalanceSnapshot(StreamBalanceSnapshotRequest) returns (stream BalanceSnapshotNotification) {}
 	rpc SubscribeBlockAdded(StreamBlockAddedRequest) returns (stream BlockAddedNotification) {}
@@ -373,10 +375,14 @@ message SendpayResponse {
 }
 
 message SendpayRoute {
-	bytes id = 2;
-	uint32 delay = 3;
-	string channel = 4;
-	Amount amount_msat = 5;
+	optional bytes id = 2;
+	optional uint32 delay = 3;
+	optional string channel = 4;
+	optional Amount amount_msat = 5;
+	optional string short_channel_id_dir = 6;
+	optional bytes node_id_out = 7;
+	optional Amount amount_out_msat = 8;
+	optional uint32 cltv_out = 9;
 }
 
 message ListchannelsRequest {
@@ -1622,6 +1628,7 @@ message DecodeResponse {
 		BOLT11_INVOICE = 3;
 		RUNE = 4;
 		EMERGENCY_RECOVER = 5;
+		BOLT12_PAYER_PROOF = 6;
 	}
 	DecodeType item_type = 1;
 	bool valid = 2;
@@ -1706,6 +1713,16 @@ message DecodeResponse {
 	optional DecodeInvreqBip353Name invreq_bip_353_name = 87;
 	optional string warning_invreq_bip_353_name_name_invalid = 88;
 	optional string warning_invreq_bip_353_name_domain_invalid = 89;
+	optional bool invreq_recurrence_cancel = 90;
+	optional string warning_invreq_recurrence_cancel_without_counter = 91;
+	optional string warning_invreq_recurrence_cancel_with_zero_counter = 92;
+	optional bytes proof_preimage = 93;
+	repeated uint64 proof_omitted_tlvs = 94;
+	repeated bytes proof_missing_hashes = 95;
+	repeated bytes proof_leaf_hashes = 96;
+	optional string proof_note = 97;
+	optional string proof_signature = 98;
+	repeated DecodeUnknownPayerProofTlvs unknown_payer_proof_tlvs = 99;
 }
 
 message DecodeOfferPaths {
@@ -1770,6 +1787,12 @@ message DecodeFallbacks {
 message DecodeExtra {
 	string tag = 1;
 	string data = 2;
+}
+
+message DecodeUnknownPayerProofTlvs {
+	uint64 item_type = 1;
+	uint64 length = 2;
+	bytes value = 3;
 }
 
 message DecodeRestrictions {
@@ -2746,7 +2769,7 @@ message SetconfigResponse {
 
 message SetconfigConfig {
 	string config = 1;
-	string source = 2;
+	optional string source = 2;
 	optional string plugin = 3;
 	bool dynamic = 4;
 	optional bool set = 5;
@@ -2754,6 +2777,8 @@ message SetconfigConfig {
 	optional Amount value_msat = 7;
 	optional sint64 value_int = 8;
 	optional bool value_bool = 9;
+	repeated string sources = 10;
+	repeated string values_str = 11;
 }
 
 message SetpsbtversionRequest {
@@ -4009,6 +4034,14 @@ message AskreneremovelayerRequest {
 message AskreneremovelayerResponse {
 }
 
+message AskreneremovechannelupdateRequest {
+	string layer = 1;
+	string short_channel_id_dir = 2;
+}
+
+message AskreneremovechannelupdateResponse {
+}
+
 message AskrenereserveRequest {
 	repeated AskrenereservePath path = 1;
 }
@@ -4056,10 +4089,16 @@ message GetroutesRoutes {
 }
 
 message GetroutesRoutesPath {
-	Amount amount_msat = 3;
-	bytes next_node_id = 4;
-	uint32 delay = 5;
+	optional Amount amount_msat = 3;
+	optional bytes next_node_id = 4;
+	optional uint32 delay = 5;
 	string short_channel_id_dir = 6;
+	optional Amount amount_in_msat = 7;
+	optional Amount amount_out_msat = 8;
+	optional bytes node_id_in = 9;
+	optional bytes node_id_out = 10;
+	optional uint32 cltv_in = 11;
+	optional uint32 cltv_out = 12;
 }
 
 message AskrenedisablenodeRequest {
@@ -4187,6 +4226,7 @@ message InjectpaymentonionRequest {
 	optional string invstring = 8;
 	optional bytes localinvreqid = 9;
 	optional Amount destination_msat = 10;
+	optional bytes destination = 11;
 }
 
 message InjectpaymentonionResponse {
@@ -4213,6 +4253,9 @@ message XpayRequest {
 	optional Amount partial_msat = 6;
 	optional uint32 maxdelay = 7;
 	optional string payer_note = 8;
+	optional string label = 9;
+	optional bytes localinvreqid = 10;
+	optional bool dev_use_shadow = 11;
 }
 
 message XpayResponse {
@@ -4396,10 +4439,30 @@ message CurrencyconvertResponse {
 
 message CurrencyrateRequest {
 	string currency = 1;
+	optional string source = 2;
 }
 
 message CurrencyrateResponse {
 	double rate = 1;
+}
+
+message SendamountRequest {
+	string invstring = 1;
+	Amount amount_msat = 2;
+	optional Amount maxfee = 3;
+	repeated string layers = 4;
+	optional uint32 retry_for = 5;
+	optional uint32 maxdelay = 6;
+	optional string payer_note = 7;
+	optional string label = 8;
+}
+
+message SendamountResponse {
+	bytes payment_preimage = 1;
+	uint64 failed_parts = 2;
+	uint64 successful_parts = 3;
+	Amount amount_msat = 4;
+	Amount amount_sent_msat = 5;
 }
 
 message StreamBalanceSnapshotRequest {

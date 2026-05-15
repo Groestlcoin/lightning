@@ -238,6 +238,7 @@ static struct lightningd *new_lightningd(const tal_t *ctx)
 	list_head_init(&ld->splice_commands);
 	list_head_init(&ld->waitblockheight_commands);
 	list_head_init(&ld->wait_commands);
+	list_head_init(&ld->graceful_commands);
 
 	/*~ Tal also explicitly supports arrays: it stores the number of
 	 * elements, which can be accessed with tal_count() (or tal_bytelen()
@@ -376,7 +377,7 @@ static struct lightningd *new_lightningd(const tal_t *ctx)
 	/*~ connectd usually uses "no-reply" pings to fill out messages
 	 * where needed to make them uniform length.  Some implementations
 	 * don't like it, so it can be disabled. */
-	ld->message_padding = true;
+	ld->message_padding = false;
 
 	return ld;
 }

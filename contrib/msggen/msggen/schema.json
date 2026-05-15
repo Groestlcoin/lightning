@@ -34,7 +34,7 @@
         "Rusty Russell [rusty@rustcorp.com.au](mailto:rusty@rustcorp.com.au) is mainly responsible."
       ],
       "see_also": [
-        "lightning-pay(7)"
+        "lightning-xpay(7)"
       ],
       "resources": [
         "Main web site: [https://github.com/ElementsProject/lightning](https://github.com/ElementsProject/lightning)"
@@ -1788,6 +1788,53 @@
             ]
           }
         }
+      ]
+    },
+    "askrene-remove-channel-update.json": {
+      "$schema": "../rpc-schema-draft.json",
+      "type": "object",
+      "rpc": "askrene-remove-channel-update",
+      "title": "Command to remove a channel update entry in a layer",
+      "added": "v26.06",
+      "description": [
+        "The **askrene-remove-channel-update** RPC command removes a channel update entry in the layer."
+      ],
+      "request": {
+        "required": [
+          "layer",
+          "short_channel_id_dir"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "layer": {
+            "type": "string",
+            "description": [
+              "The name of the layer to apply this change to."
+            ]
+          },
+          "short_channel_id_dir": {
+            "type": "short_channel_id_dir",
+            "description": [
+              "The channel and direction to apply the change to."
+            ]
+          }
+        }
+      },
+      "response": {
+        "required": [],
+        "additionalProperties": false,
+        "properties": {}
+      },
+      "see_also": [
+        "lightning-getroutes(7)",
+        "lightning-askrene-create-channel(7)",
+        "lightning-askrene-update-channel(7)"
+      ],
+      "author": [
+        "Lagrang3 is mainly responsible."
+      ],
+      "resources": [
+        "Main web site: [https://github.com/ElementsProject/lightning](https://github.com/ElementsProject/lightning)"
       ]
     },
     "askrene-remove-layer.json": {
@@ -6964,6 +7011,170 @@
         }
       ]
     },
+    "createproof.json": {
+      "$schema": "../rpc-schema-draft.json",
+      "type": "object",
+      "rpc": "createproof",
+      "added": "v26.06",
+      "title": "Create a BOLT12 payer proof (EXPERIMENTAL)",
+      "description": [
+        "NOTE: The proof format is still a draft: IT MAY CHANGE IN INCOMPATIBLE WAYS IN FUTURE.",
+        "",
+        "The **createproof** RPC command creates a proofs that we have made a BOLT12 payment according to the current draft specification.",
+        "In case we have made multiple payments to the same thing, we will create multiple proofs.",
+        "Each returned proof includes enough fields from the offer and invoice itself that a reader can verify it: see `decode`."
+      ],
+      "request": {
+        "required": [
+          "invstring"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "invstring": {
+            "type": "string",
+            "description": [
+              "bolt12 invoice, a bolt12 (non-recursive) offer or a BIP353 name."
+            ]
+          },
+          "note": {
+            "type": "string",
+            "description": [
+              "A note to include in the proof: someone can challenge you to create a proof with a given note, and so you can demonstrate that you can indeed make a new proof.  Default is an empty string."
+            ]
+          },
+          "include": {
+            "type": "array",
+            "description": [
+              "An explicit list of TLV field names or numbers to include in the proof if they are present.  The default values are:",
+              "* 10 (offer_description): identifies what was purchased",
+              "* 22 (offer_issuer_id): identifies who issued the offer being proved",
+              "* 164 (invoice_created_at): timestamp of invoice",
+              "* 170 (invoice_amount): the amount actually paid",
+              "",
+              "Note that the following fields are always included: 88 (invreq_payer_id), 168 (invoice_payment_hash), 174 (invoice_features), 176 (invoice_node_id) and 240 (signature)."
+            ],
+            "items": {
+              "oneOf": [
+                {
+                  "type": "string",
+                  "description": [
+                    "Name of an offer, invoice_request or invoice field to include"
+                  ]
+                },
+                {
+                  "type": "u64",
+                  "description": [
+                    "Number of an offer, invoice_request or invoice field to include (allows reference to unknown fields)"
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      },
+      "response": {
+        "required": [
+          "proofs"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "proofs": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "bolt12",
+                "offer_fields_included",
+                "invreq_fields_included",
+                "invoice_fields_included"
+              ],
+              "properties": {
+                "bolt12": {
+                  "type": "string",
+                  "description": [
+                    "The payer_proof."
+                  ]
+                },
+                "offer_fields_included": {
+                  "type": "array",
+                  "items": {
+                    "oneOf": [
+                      {
+                        "type": "string",
+                        "description": [
+                          "The name of the field from the offer we included in the proof."
+                        ]
+                      },
+                      {
+                        "type": "u64",
+                        "description": [
+                          "The number of the field from the offer we included in the proof (if we don't know the name)."
+                        ]
+                      }
+                    ]
+                  }
+                },
+                "invreq_fields_included": {
+                  "type": "array",
+                  "items": {
+                    "oneOf": [
+                      {
+                        "type": "string",
+                        "description": [
+                          "The name of the field from the invoice_request we included in the proof."
+                        ]
+                      },
+                      {
+                        "type": "u64",
+                        "description": [
+                          "The number of the field from the invoice_request we included in the proof (if we don't know the name)."
+                        ]
+                      }
+                    ]
+                  }
+                },
+                "invoice_fields_included": {
+                  "type": "array",
+                  "items": {
+                    "oneOf": [
+                      {
+                        "type": "string",
+                        "description": [
+                          "The name of the field from the invoice we included in the proof."
+                        ]
+                      },
+                      {
+                        "type": "u64",
+                        "description": [
+                          "The number of the field from the invoice we included in the proof (if we don't know the name)."
+                        ]
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "errors": [
+        "The following error codes may occur:",
+        "",
+        "- -1: Catchall nonspecific error.",
+        "- 1700: We could not find a successful payment for that invstring."
+      ],
+      "author": [
+        "Rusty Russell [rusty@rustcorp.com.au](mailto:rusty@rustcorp.com.au) is mainly responsible."
+      ],
+      "see_also": [
+        "lightning-xpay(7)",
+        "lightning-decode(7)"
+      ],
+      "resources": [
+        "Main web site: [https://github.com/ElementsProject/lightning](https://github.com/ElementsProject/lightning)"
+      ]
+    },
     "createrune.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
@@ -7458,11 +7669,24 @@
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
       "rpc": "currencyrate",
-      "title": "Command to determine a reasonable rate of conversion for a given currency",
+      "title": "Command to determine a reasonable BTC exchange rate for a given currency",
       "added": "v26.04",
       "description": [
-        "The **currencyrate** RPC command provides the conversion of one BTC into the given currency",
-        "It uses the median of the available exchange-rate sources for the requested currency."
+        "The **currencyrate** RPC command returns the exchange rate of one BTC in the given currency.",
+        "Rates are rounded to 3 decimal places as specified by ISO 4217.",
+        "",
+        "Without the optional *source* argument the command returns the median rate across all",
+        "configured exchange-rate sources.",
+        "",
+        "With *source* specified, the rate reported by that specific source is returned.",
+        "The list of active source names can be obtained via **listcurrencyrates**.",
+        "",
+        "To add or disable sources see the *currencyrate-add-source* and *currencyrate-disable-source*",
+        "options in **lightningd-config(5)**.",
+        "",
+        "EXAMPLE USAGE:",
+        "Get the median USD rate: `lightning-cli currencyrate USD`",
+        "Get the Binance USD rate: `lightning-cli currencyrate USD binance`"
       ],
       "request": {
         "required": [
@@ -7473,8 +7697,18 @@
           "currency": {
             "type": "string",
             "description": [
-              "The ISO-4217 currency code (e.g. USD) to convert to.",
-              "The plugin normalizes this value to uppercase before querying sources."
+              "The ISO 4217 currency code (e.g. USD) to convert to.",
+              "The plugin normalises this value to uppercase before querying sources."
+            ]
+          },
+          "source": {
+            "added": "v26.06",
+            "type": "string",
+            "description": [
+              "The name of a specific exchange-rate source to query.",
+              "If omitted, the median across all available sources is returned.",
+              "An error is returned if the source name is not recognised or has no",
+              "cached data for the requested currency."
             ]
           }
         }
@@ -7488,7 +7722,9 @@
           "rate": {
             "type": "number",
             "description": [
-              "The median value of one BTC, computed using the median result from the available sources."
+              "The number of currency units per 1 BTC, rounded to 3 decimal places (ISO 4217).",
+              "When *source* is omitted this is the median across all available sources.",
+              "When *source* is specified this is the rate reported by that source."
             ]
           }
         }
@@ -7497,10 +7733,45 @@
         "daywalker90 is mainly responsible."
       ],
       "see_also": [
-        "lightning-listcurrencyrates(7)"
+        "lightning-listcurrencyrates(7)",
+        "lightning-currencyconvert(7)",
+        "lightningd-config(5)"
       ],
       "resources": [
         "Main web site: [https://github.com/ElementsProject/lightning](https://github.com/ElementsProject/lightning)"
+      ],
+      "examples": [
+        {
+          "description": [
+            "Get the median BTC/USD rate across all configured sources:"
+          ],
+          "request": {
+            "id": "example:currencyrate#1",
+            "method": "currencyrate",
+            "params": {
+              "currency": "USD"
+            }
+          },
+          "response": {
+            "rate": 67889.825
+          }
+        },
+        {
+          "description": [
+            "Get the BTC/USD rate from the Binance source only:"
+          ],
+          "request": {
+            "id": "example:currencyrate#2",
+            "method": "currencyrate",
+            "params": {
+              "currency": "USD",
+              "source": "binance"
+            }
+          },
+          "response": {
+            "rate": 67931.9
+          }
+        }
       ]
     },
     "datastore.json": {
@@ -7862,7 +8133,8 @@
               "bolt12 invoice_request",
               "bolt11 invoice",
               "rune",
-              "emergency recover"
+              "emergency recover",
+              "bolt12 payer_proof"
             ],
             "description": [
               "What kind of object it decoded to."
@@ -8102,7 +8374,8 @@
                   ],
                   "required": [
                     "period",
-                    "time_unit"
+                    "time_unit",
+                    "compulsory_field"
                   ],
                   "additionalProperties": false,
                   "properties": {
@@ -8134,6 +8407,13 @@
                       "type": "u32",
                       "description": [
                         "Maximum period number for recurrence."
+                      ]
+                    },
+                    "compulsory_field": {
+                      "added": "v26.06",
+                      "type": "boolean",
+                      "description": [
+                        "True if this is the `offer_recurrence_compulsory` field (which means readers which don't understand recurrence cannot use it), false if this is the `offer_recurrence_optional` field."
                       ]
                     },
                     "paywindow": {
@@ -8554,6 +8834,13 @@
                         "Maximum period number for recurrence."
                       ]
                     },
+                    "compulsory_field": {
+                      "added": "v26.06",
+                      "type": "boolean",
+                      "description": [
+                        "True if this is the `offer_recurrence_compulsory` field (which means readers which don't understand recurrence cannot use it), false if this is the `offer_recurrence_optional` field."
+                      ]
+                    },
                     "paywindow": {
                       "type": "object",
                       "description": [
@@ -8758,6 +9045,15 @@
                     "When we're requesting to start an invoice at a non-zero period."
                   ]
                 },
+                "invreq_recurrence_cancel": {
+                  "type": "boolean",
+                  "enum": [
+                    true
+                  ],
+                  "description": [
+                    "Present to cancel a recurring invoice"
+                  ]
+                },
                 "signature": {
                   "type": "bip340sig",
                   "description": [
@@ -8854,6 +9150,7 @@
                 "invreq_bip_353_name": {},
                 "invreq_recurrence_counter": {},
                 "invreq_recurrence_start": {},
+                "invreq_recurrence_cancel": {},
                 "warning_invalid_offer_description": {
                   "type": "string",
                   "description": [
@@ -8908,6 +9205,18 @@
                   "added": "v25.02",
                   "description": [
                     "`invreq_bip_353_name` domain field contains unusual characters."
+                  ]
+                },
+                "warning_invreq_recurrence_cancel_without_counter": {
+                  "type": "string",
+                  "description": [
+                    "`invreq_recurrence_cancel` is present, but `invreq_recurrence_counter` isn't."
+                  ]
+                },
+                "warning_invreq_recurrence_cancel_with_zero_counter": {
+                  "type": "string",
+                  "description": [
+                    "`invreq_recurrence_cancel` is present, but `invreq_recurrence_counter` is 0."
                   ]
                 },
                 "warning_missing_invoice_request_signature": {
@@ -9184,6 +9493,13 @@
                       "type": "u32",
                       "description": [
                         "Maximum period number for recurrence."
+                      ]
+                    },
+                    "compulsory_field": {
+                      "added": "v26.06",
+                      "type": "boolean",
+                      "description": [
+                        "True if this is the `offer_recurrence_compulsory` field (which means readers which don't understand recurrence cannot use it), false if this is the `offer_recurrence_optional` field."
                       ]
                     },
                     "paywindow": {
@@ -10058,6 +10374,652 @@
               "additionalProperties": true,
               "properties": {
                 "type": {
+                  "enum": [
+                    "bolt12 payer_proof"
+                  ],
+                  "type": "string"
+                },
+                "valid": {
+                  "enum": [
+                    true
+                  ],
+                  "type": "boolean"
+                }
+              }
+            },
+            "then": {
+              "additionalProperties": false,
+              "required": [
+                "invreq_payer_id",
+                "invoice_payment_hash",
+                "invoice_node_id",
+                "signature",
+                "proof_preimage",
+                "proof_signature",
+                "proof_omitted_tlvs",
+                "proof_missing_hashes",
+                "proof_leaf_hashes"
+              ],
+              "properties": {
+                "type": {
+                  "type": "string"
+                },
+                "valid": {
+                  "type": "boolean"
+                },
+                "offer_chains": {
+                  "type": "array",
+                  "description": [
+                    "Which blockchains this offer is for (missing implies bitcoin mainnet only)."
+                  ],
+                  "items": {
+                    "type": "hash",
+                    "description": [
+                      "The genesis blockhash."
+                    ]
+                  }
+                },
+                "offer_metadata": {
+                  "type": "hex",
+                  "description": [
+                    "Any metadata the creator of the offer includes."
+                  ]
+                },
+                "offer_currency": {
+                  "type": "string",
+                  "description": [
+                    "ISO 4217 code of the currency (missing implies Bitcoin)."
+                  ],
+                  "maxLength": 3,
+                  "minLength": 3
+                },
+                "currency_minor_unit": {
+                  "type": "u32",
+                  "description": [
+                    "The number of decimal places to apply to amount (if currency known)."
+                  ]
+                },
+                "offer_amount": {
+                  "type": "u64",
+                  "description": [
+                    "The amount in the `offer_currency` adjusted by `currency_minor_unit`, if any."
+                  ]
+                },
+                "offer_amount_msat": {
+                  "type": "msat",
+                  "description": [
+                    "The amount in bitcoin (if specified, and no `offer_currency`)."
+                  ]
+                },
+                "offer_description": {
+                  "type": "string",
+                  "description": [
+                    "The description of the purpose of the offer."
+                  ]
+                },
+                "offer_issuer": {
+                  "type": "string",
+                  "description": [
+                    "The description of the creator of the offer."
+                  ]
+                },
+                "offer_features": {
+                  "type": "hex",
+                  "description": [
+                    "The feature bits of the offer."
+                  ]
+                },
+                "offer_absolute_expiry": {
+                  "type": "u64",
+                  "description": [
+                    "UNIX timestamp of when this offer expires."
+                  ]
+                },
+                "offer_quantity_max": {
+                  "type": "u64",
+                  "description": [
+                    "The maximum quantity (or, if 0, means any quantity)."
+                  ]
+                },
+                "offer_paths": {
+                  "type": "array",
+                  "description": [
+                    "Paths to the destination."
+                  ],
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "first_path_key",
+                      "path"
+                    ],
+                    "additionalProperties": false,
+                    "properties": {
+                      "first_node_id": {
+                        "type": "pubkey",
+                        "description": [
+                          "The (presumably well-known) public key of the start of the path."
+                        ]
+                      },
+                      "first_scid": {
+                        "added": "v23.05",
+                        "type": "short_channel_id",
+                        "description": [
+                          "the short channel id of the start of the path (alternative to first_node_id)"
+                        ]
+                      },
+                      "first_scid_dir": {
+                        "added": "v23.05",
+                        "type": "u32",
+                        "description": [
+                          "which end of the first_scid is the start of the path"
+                        ]
+                      },
+                      "blinding": {
+                        "deprecated": [
+                          "v24.11",
+                          "v25.05"
+                        ],
+                        "type": "pubkey",
+                        "description": [
+                          "Blinding factor for this path."
+                        ]
+                      },
+                      "first_path_key": {
+                        "added": "v24.11",
+                        "type": "pubkey",
+                        "description": [
+                          "Path key to deliver to first hop on this path."
+                        ]
+                      },
+                      "path": {
+                        "type": "array",
+                        "description": [
+                          "An individual path."
+                        ],
+                        "items": {
+                          "type": "object",
+                          "required": [
+                            "blinded_node_id",
+                            "encrypted_recipient_data"
+                          ],
+                          "additionalProperties": false,
+                          "properties": {
+                            "blinded_node_id": {
+                              "type": "pubkey",
+                              "description": [
+                                "Node_id of the hop."
+                              ]
+                            },
+                            "encrypted_recipient_data": {
+                              "type": "hex",
+                              "description": [
+                                "Encrypted TLV entry for this hop."
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                "offer_issuer_id": {
+                  "type": "pubkey",
+                  "added": "v24.08",
+                  "description": [
+                    "The pubkey associated with the offer (can be a node id)."
+                  ]
+                },
+                "invreq_chain": {
+                  "type": "hex",
+                  "description": [
+                    "Which blockchain this offer is for (missing implies bitcoin mainnet only)."
+                  ],
+                  "maxLength": 64,
+                  "minLength": 64
+                },
+                "invreq_amount_msat": {
+                  "type": "msat",
+                  "description": [
+                    "The amount the invoice should be for."
+                  ]
+                },
+                "invreq_features": {
+                  "type": "hex",
+                  "description": [
+                    "The feature bits of the invoice_request."
+                  ]
+                },
+                "invreq_quantity": {
+                  "type": "u64",
+                  "description": [
+                    "The number of items to invoice for."
+                  ]
+                },
+                "invreq_payer_id": {
+                  "type": "pubkey",
+                  "description": [
+                    "The payer's key."
+                  ]
+                },
+                "invreq_payer_note": {
+                  "type": "string",
+                  "description": [
+                    "A note attached by the payer."
+                  ]
+                },
+                "invreq_paths": {
+                  "type": "array",
+                  "added": "v24.08",
+                  "description": [
+                    "Paths to the destination."
+                  ],
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "first_path_key",
+                      "path"
+                    ],
+                    "additionalProperties": false,
+                    "properties": {
+                      "first_node_id": {
+                        "added": "v24.08",
+                        "type": "pubkey",
+                        "description": [
+                          "The (presumably well-known) public key of the start of the path."
+                        ]
+                      },
+                      "first_scid": {
+                        "added": "v24.08",
+                        "type": "short_channel_id",
+                        "description": [
+                          "the short channel id of the start of the path (alternative to first_node_id)"
+                        ]
+                      },
+                      "first_scid_dir": {
+                        "added": "v24.08",
+                        "type": "u32",
+                        "description": [
+                          "which end of the first_scid is the start of the path"
+                        ]
+                      },
+                      "blinding": {
+                        "added": "v24.08",
+                        "deprecated": [
+                          "v24.11",
+                          "v25.05"
+                        ],
+                        "type": "pubkey",
+                        "description": [
+                          "Blinding factor for this path."
+                        ]
+                      },
+                      "first_path_key": {
+                        "added": "v24.11",
+                        "type": "pubkey",
+                        "description": [
+                          "Path key to deliver to first hop on this path."
+                        ]
+                      },
+                      "path": {
+                        "type": "array",
+                        "added": "v24.08",
+                        "description": [
+                          "An individual path."
+                        ],
+                        "items": {
+                          "type": "object",
+                          "required": [
+                            "blinded_node_id",
+                            "encrypted_recipient_data"
+                          ],
+                          "additionalProperties": false,
+                          "properties": {
+                            "blinded_node_id": {
+                              "added": "v24.08",
+                              "type": "pubkey",
+                              "description": [
+                                "Node_id of the hop."
+                              ]
+                            },
+                            "encrypted_recipient_data": {
+                              "added": "v24.08",
+                              "type": "hex",
+                              "description": [
+                                "Encrypted TLV entry for this hop."
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                "invreq_bip_353_name": {
+                  "type": "object",
+                  "added": "v25.02",
+                  "description": [
+                    "BIP 353 name which this invoice request is for."
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "added": "v25.02",
+                      "description": [
+                        "The name (part before the @)."
+                      ]
+                    },
+                    "domain": {
+                      "type": "string",
+                      "added": "v25.02",
+                      "description": [
+                        "The domain (part after the @)."
+                      ]
+                    }
+                  }
+                },
+                "invoice_paths": {
+                  "type": "array",
+                  "description": [
+                    "Paths to pay the destination."
+                  ],
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "first_path_key",
+                      "payinfo",
+                      "path"
+                    ],
+                    "additionalProperties": false,
+                    "properties": {
+                      "first_node_id": {
+                        "type": "pubkey",
+                        "description": [
+                          "The (presumably well-known) public key of the start of the path."
+                        ]
+                      },
+                      "first_scid": {
+                        "added": "v23.05",
+                        "type": "short_channel_id",
+                        "description": [
+                          "the short channel id of the start of the path (alternative to first_node_id)"
+                        ]
+                      },
+                      "first_scid_dir": {
+                        "added": "v23.05",
+                        "type": "u32",
+                        "description": [
+                          "which end of the first_scid is the start of the path"
+                        ]
+                      },
+                      "blinding": {
+                        "type": "pubkey",
+                        "deprecated": [
+                          "v24.11",
+                          "v25.05"
+                        ],
+                        "description": [
+                          "Blinding factor for this path."
+                        ]
+                      },
+                      "first_path_key": {
+                        "added": "v24.11",
+                        "type": "pubkey",
+                        "description": [
+                          "Path key to deliver to first hop on this path."
+                        ]
+                      },
+                      "payinfo": {
+                        "type": "object",
+                        "required": [
+                          "fee_base_msat",
+                          "fee_proportional_millionths",
+                          "cltv_expiry_delta",
+                          "htlc_minimum_msat",
+                          "htlc_maximum_msat",
+                          "features"
+                        ],
+                        "additionalProperties": false,
+                        "properties": {
+                          "fee_base_msat": {
+                            "type": "msat",
+                            "description": [
+                              "Basefee for path."
+                            ]
+                          },
+                          "fee_proportional_millionths": {
+                            "type": "u32",
+                            "description": [
+                              "Proportional fee for path."
+                            ]
+                          },
+                          "cltv_expiry_delta": {
+                            "type": "u32",
+                            "description": [
+                              "CLTV delta for path."
+                            ]
+                          },
+                          "htlc_minimum_msat": {
+                            "type": "msat",
+                            "added": "v26.04",
+                            "description": [
+                              "Minimum amount which can be sent via path."
+                            ]
+                          },
+                          "htlc_maximum_msat": {
+                            "type": "msat",
+                            "added": "v26.04",
+                            "description": [
+                              "Maximum amount which can be sent via path."
+                            ]
+                          },
+                          "features": {
+                            "type": "hex",
+                            "description": [
+                              "Features allowed for path."
+                            ]
+                          }
+                        }
+                      },
+                      "path": {
+                        "type": "array",
+                        "description": [
+                          "An individual path."
+                        ],
+                        "items": {
+                          "type": "object",
+                          "required": [
+                            "blinded_node_id",
+                            "encrypted_recipient_data"
+                          ],
+                          "additionalProperties": false,
+                          "properties": {
+                            "blinded_node_id": {
+                              "type": "pubkey",
+                              "description": [
+                                "Node_id of the hop."
+                              ]
+                            },
+                            "encrypted_recipient_data": {
+                              "type": "hex",
+                              "description": [
+                                "Encrypted TLV entry for this hop."
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                "invoice_created_at": {
+                  "type": "u64",
+                  "description": [
+                    "The UNIX timestamp of invoice creation."
+                  ]
+                },
+                "invoice_relative_expiry": {
+                  "type": "u32",
+                  "description": [
+                    "The number of seconds after *invoice_created_at* when this expires."
+                  ]
+                },
+                "invoice_payment_hash": {
+                  "type": "hex",
+                  "description": [
+                    "The hash of the *proof_preimage*."
+                  ],
+                  "maxLength": 64,
+                  "minLength": 64
+                },
+                "invoice_amount_msat": {
+                  "type": "msat",
+                  "description": [
+                    "The amount required to fulfill invoice."
+                  ]
+                },
+                "invoice_fallbacks": {
+                  "type": "array",
+                  "description": [
+                    "Onchain addresses."
+                  ],
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "version",
+                      "hex"
+                    ],
+                    "additionalProperties": false,
+                    "properties": {
+                      "version": {
+                        "type": "u8",
+                        "description": [
+                          "Segwit address version."
+                        ]
+                      },
+                      "hex": {
+                        "type": "hex",
+                        "description": [
+                          "Raw encoded segwit address."
+                        ]
+                      },
+                      "address": {
+                        "type": "string",
+                        "description": [
+                          "Bech32 segwit address."
+                        ]
+                      }
+                    }
+                  }
+                },
+                "invoice_features": {
+                  "type": "hex",
+                  "description": [
+                    "The feature bits of the invoice."
+                  ]
+                },
+                "invoice_node_id": {
+                  "type": "pubkey",
+                  "description": [
+                    "The id to pay (usually the same as offer_issuer_id)."
+                  ]
+                },
+                "signature": {
+                  "type": "bip340sig",
+                  "description": [
+                    "BIP-340 signature of `invoice_node_id` over the disclosed invoice fields."
+                  ]
+                },
+                "proof_preimage": {
+                  "type": "hex",
+                  "minLength": 64,
+                  "maxLength": 64,
+                  "description": [
+                    "The payment preimage proving payment."
+                  ]
+                },
+                "proof_omitted_tlvs": {
+                  "type": "array",
+                  "description": [
+                    "TLV type markers for fields omitted from the proof."
+                  ],
+                  "items": {
+                    "type": "u64"
+                  }
+                },
+                "proof_missing_hashes": {
+                  "type": "array",
+                  "description": [
+                    "Merkle hashes needed to reconstruct omitted subtrees."
+                  ],
+                  "items": {
+                    "type": "hash"
+                  }
+                },
+                "proof_leaf_hashes": {
+                  "type": "array",
+                  "description": [
+                    "Nonce hashes for each disclosed non-signature TLV field."
+                  ],
+                  "items": {
+                    "type": "hash"
+                  }
+                },
+                "proof_note": {
+                  "type": "string",
+                  "description": [
+                    "Optional note attached to the proof by the payer."
+                  ]
+                },
+                "proof_signature": {
+                  "type": "bip340sig",
+                  "description": [
+                    "BIP-340 signature of `invreq_payer_id` over the proof."
+                  ]
+                },
+                "unknown_payer_proof_tlvs": {
+                  "type": "array",
+                  "description": [
+                    "Any extra fields we didn't know how to parse."
+                  ],
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "type",
+                      "length",
+                      "value"
+                    ],
+                    "additionalProperties": false,
+                    "properties": {
+                      "type": {
+                        "type": "u64",
+                        "description": [
+                          "The type."
+                        ]
+                      },
+                      "length": {
+                        "type": "u64",
+                        "description": [
+                          "The length."
+                        ]
+                      },
+                      "value": {
+                        "type": "hex",
+                        "description": [
+                          "The value."
+                        ]
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "additionalProperties": true,
+              "properties": {
+                "type": {
                   "type": "string",
                   "enum": [
                     "rune"
@@ -10229,7 +11191,7 @@
         "Rusty Russell [rusty@rustcorp.com.au](mailto:rusty@rustcorp.com.au) is mainly responsible."
       ],
       "see_also": [
-        "lightning-pay(7)",
+        "lightning-xpay(7)",
         "lightning-offer(7)",
         "lightning-fetchinvoice(7)",
         "lightning-sendinvoice(7)",
@@ -11111,7 +12073,7 @@
       "see_also": [
         "lightning-listpays(7)",
         "lightning-listsendpays(7)",
-        "lightning-paystatus(7)"
+        "lightning-xpay(7)"
       ],
       "resources": [
         "Main web site: [https://github.com/ElementsProject/lightning](https://github.com/ElementsProject/lightning)"
@@ -13265,7 +14227,7 @@
       ],
       "see_also": [
         "lightning-sendinvoice(7)",
-        "lightning-pay(7)"
+        "lightning-xpay(7)"
       ],
       "resources": [
         "Main web site: [https://github.com/ElementsProject/lightning](https://github.com/ElementsProject/lightning)"
@@ -15442,6 +16404,8 @@
       "rpc": "getroute",
       "title": "Command for routing a payment (low-level)",
       "description": [
+        "NOTE: As of v26.06, getroute is deprecated in favor of **getroutes**.  The usual equivalent is to use getroutes with `layers` including `auto.localchans`, `auto.sourcefree` and `maxparts` set to 1.",
+        "",
         "The **getroute** RPC command attempts to find the best route for the payment of *amount_msat* to lightning node *id*, such that the payment will arrive at *id* with *cltv*.",
         "",
         "There are two considerations for how good a route is: how low the fees are, and how long your payment will get stuck in a delayed output if a node goes down during the process. ."
@@ -15722,7 +16686,7 @@
         "",
         "Layers are generally maintained by plugins, either to contain persistent information about capacities which have been discovered, or to contain transient information for this particular payment (such as blinded paths or routehints).",
         "",
-        "There are four automatic layers: *auto.localchans* contains information on local channels from this node (including non-public ones), and their exact current spendable capacities. *auto.sourcefree* overrides all channels (including those from previous layers) leading out of the *source* to be zero fee and zero delay.  These are both useful in the case where the source is the current node.  *auto.no_mpp_support* forces getroutes to return a single path solution which is useful for payments for which MPP is not supported. And *auto.include_fees* that fixes the send amount and deducts fee from there, ie. the receiver pays for fees instead of the sender."
+        "There are some automatic layers: *auto.localchans* contains information on local channels from this node (including non-public ones), and their exact current spendable capacities. *auto.sourcefree* overrides all channels (including those from previous layers) leading out of the *source* to be zero fee and zero delay.  These are both useful in the case where the source is the current node.  *auto.include_fees* that fixes the send amount and deducts fee from there, ie. the receiver pays for fees instead of the sender.  *auto.no_mpp_support* is deprecated in v26.06: use `maxparts=1` instead."
       ],
       "categories": [
         "readonly"
@@ -15848,9 +16812,12 @@
                     "additionalProperties": false,
                     "required": [
                       "short_channel_id_dir",
-                      "next_node_id",
-                      "amount_msat",
-                      "delay"
+                      "node_id_in",
+                      "node_id_out",
+                      "amount_in_msat",
+                      "amount_out_msat",
+                      "cltv_in",
+                      "cltv_out"
                     ],
                     "properties": {
                       "short_channel_id_dir": {
@@ -15859,22 +16826,76 @@
                           "The channel and direction joining these nodes."
                         ]
                       },
+                      "amount_in_msat": {
+                        "added": "v26.06",
+                        "type": "msat",
+                        "description": [
+                          "The amount to send into this hop."
+                        ]
+                      },
+                      "amount_out_msat": {
+                        "added": "v26.06",
+                        "type": "msat",
+                        "description": [
+                          "The amount which arrives at the far end of this hop."
+                        ]
+                      },
+                      "node_id_in": {
+                        "added": "v26.06",
+                        "type": "pubkey",
+                        "description": [
+                          "The peer id at the start of this hop."
+                        ]
+                      },
+                      "node_id_out": {
+                        "added": "v26.06",
+                        "type": "pubkey",
+                        "description": [
+                          "The peer id at the end of this hop."
+                        ]
+                      },
+                      "cltv_in": {
+                        "added": "v26.06",
+                        "type": "u32",
+                        "description": [
+                          "The total CLTV expected by the node at the start of this hop."
+                        ]
+                      },
+                      "cltv_out": {
+                        "added": "v26.06",
+                        "type": "u32",
+                        "description": [
+                          "The total CLTV expected by the node at the end of this hop."
+                        ]
+                      },
                       "amount_msat": {
                         "type": "msat",
                         "description": [
                           "The amount to send into this hop."
+                        ],
+                        "deprecated": [
+                          "v26.06",
+                          "v27.06"
                         ]
                       },
                       "next_node_id": {
                         "type": "pubkey",
                         "description": [
                           "The peer id at the end of this hop."
+                        ],
+                        "deprecated": [
+                          "v26.06",
+                          "v27.06"
                         ]
                       },
                       "delay": {
                         "type": "u32",
                         "description": [
                           "The total CLTV expected by the node at the start of this hop."
+                        ],
+                        "deprecated": [
+                          "v26.06",
+                          "v27.06"
                         ]
                       }
                     }
@@ -15885,6 +16906,13 @@
           }
         }
       },
+      "errors": [
+        "The following error codes may occur:",
+        "",
+        "- -1: Catchall nonspecific error.",
+        "- 205: Unable to find a route.",
+        "- 206: Route too expensive. Either the max_delay or maxfee_msat was exceeded."
+      ],
       "author": [
         "[lagrang3@protonmail.com](mailto:lagrang3@protonmail.com) wrote the minimum-cost-flow solver, Rusty Russell [rusty@rustcorp.com.au](mailto:rusty@rustcorp.com.au) wrote the API and this documentation."
       ],
@@ -15938,6 +16966,72 @@
               }
             ]
           }
+        }
+      ]
+    },
+    "graceful.json": {
+      "$schema": "../rpc-schema-draft.json",
+      "type": "object",
+      "rpc": "graceful",
+      "added": "v26.06",
+      "title": "Command to prepare Core Lightning node for stopping.",
+      "description": [
+        "**graceful** is a RPC command to prevent further htlcs, and disconnect all idle peers.  It returns when all HTLCs are complete, and all peers disconnected: then you can shutdown.  It also sends notifications about HTLC expiry, so you can judge how long it is safe to be offline.",
+        "With a timeout, it always returns after that many seconds: if any peer connections or HTLCs are still pending, those are returned.  An empty response means nothing is pending"
+      ],
+      "request": {
+        "required": [],
+        "additionalProperties": false,
+        "properties": {
+          "timeout": {
+            "type": "u32",
+            "description": [
+              "If set, the graceful command will return after this time even if not all HTLCs have terminated.  Useful for scripting, where you may want to follow with `stop`."
+            ]
+          }
+        }
+      },
+      "response": {
+        "required": [],
+        "additionalProperties": false,
+        "properties": {
+          "pending_htlc_expiries": {
+            "type": "array",
+            "items": {
+              "type": "u32"
+            },
+            "description": [
+              "The (sorted) expiry blockheights of all HTLCs which are not resolved"
+            ]
+          },
+          "pending_peers": {
+            "type": "array",
+            "items": {
+              "type": "pubkey"
+            },
+            "description": [
+              "Any peers still connected (presumably because they have outstanding HTLCs)"
+            ]
+          }
+        }
+      },
+      "author": [
+        "Rusty Russell [rusty@rustcorp.com.au](mailto:rusty@rustcorp.com.au) is mainly responsible."
+      ],
+      "see_also": [
+        "lightning-stop(7)"
+      ],
+      "resources": [
+        "Main web site: [https://github.com/ElementsProject/lightning](https://github.com/ElementsProject/lightning)"
+      ],
+      "examples": [
+        {
+          "request": {
+            "id": "example:graceful#1",
+            "method": "graceful",
+            "params": {}
+          },
+          "response": {}
         }
       ]
     },
@@ -16185,6 +17279,13 @@
             "added": "v24.11.1",
             "description": [
               "Amount that is actually delivered to the destination (i.e. `amount_msat` minus fees), for showing in listsendpays (confusingly, as `amount_msat`)."
+            ]
+          },
+          "destination": {
+            "type": "pubkey",
+            "added": "v26.06",
+            "description": [
+              "Destination id (for *waitsendpay* and *listsendpays*).  If not set, will be extracted if possible from *invstring*."
             ]
           }
         }
@@ -16469,7 +17570,7 @@
       "see_also": [
         "lightning-listinvoices(7)",
         "lightning-delinvoice(7)",
-        "lightning-pay(7)"
+        "lightning-xpay(7)"
       ],
       "resources": [
         "Main web site: [https://github.com/ElementsProject/lightning](https://github.com/ElementsProject/lightning)"
@@ -16681,6 +17782,8 @@
       "rpc": "keysend",
       "title": "Send funds to a node without an invoice",
       "description": [
+        "WARNING: deprecated: use *xkeysend* which uses askrene for better route calculation (and learns from previous payments).",
+        "",
         "The **keysend** RPC command attempts to find a route to the given destination, and send the specified amount to it. Unlike the `pay` RPC command the `keysend` command does not require an invoice, instead it uses the `destination` node ID, and `amount` to find a route to the specified node.",
         "",
         "In order for the destination to be able to claim the payment, the `payment_key` is randomly generated by the sender and included in the encrypted payload for the destination. As a consequence there is not proof-of-payment, like there is with an invoice where the `payment_key` is generated on the destination, and the only way sender could have it is by sending a payment. Please ensure that this matches your use-case when using `keysend`.",
@@ -16898,6 +18001,7 @@
         "Christian Decker [decker@blockstream.com](mailto:decker@blockstream.com) is mainly responsible."
       ],
       "see_also": [
+        "lightning-xkeysend(7)",
         "lightning-listpays(7)",
         "lightning-decode(7)",
         "lightning-listinvoices(7)",
@@ -23971,7 +25075,7 @@
         "Rusty Russell [rusty@rustcorp.com.au](mailto:rusty@rustcorp.com.au) is mainly responsible."
       ],
       "see_also": [
-        "lightning-pay(7)",
+        "lightning-xpay(7)",
         "lightning-paystatus(7)",
         "lightning-listsendpays(7)"
       ],
@@ -29504,9 +30608,11 @@
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
       "rpc": "pay",
-      "title": "Command for sending a payment to a BOLT11 invoice",
+      "title": "Command for sending a payment to a BOLT11/BOLT12 invoice",
       "description": [
-        "The **pay** RPC command attempts to find a route to the given destination, and send the funds it asks for. .",
+        "NOTE: As of v26.06, xpay transparantly handles most **pay** invocations, and **pay** is deprecated.",
+        "",
+        "The **pay** RPC command attempts to find a route to the given destination, and send the funds it asks for.",
         "",
         "The response will occur when the payment fails or succeeds. Once a payment has succeeded, calls to **pay** with the same *bolt11* will succeed immediately.",
         "",
@@ -29521,6 +30627,8 @@
           "bolt11": {
             "type": "string",
             "description": [
+              "NOTE: `invstring` is an alternate name for this parameter, since v26.06, for xpay compatibility.",
+              "",
               "Bolt11 or bolt12 invoice (such as one received from lightningd-fetchinvoice(7)). For a bolt11 invoice, if it does not contain an amount, *amount_msat* is required, otherwise if it is specified it must be *null*."
             ]
           },
@@ -29730,6 +30838,7 @@
         "Rusty Russell [rusty@rustcorp.com.au](mailto:rusty@rustcorp.com.au) is mainly responsible."
       ],
       "see_also": [
+        "lightning-xpay(7)",
         "lightning-listpays(7)",
         "lightning-decode(7)",
         "lightning-listinvoices(7)",
@@ -30379,7 +31488,7 @@
         "Ken Sedgwick [ken@bonsai.com](mailto:ken@bonsai.com) is mainly responsible."
       ],
       "see_also": [
-        "lightning-pay(7)"
+        "lightning-xpay(7)"
       ],
       "resources": [
         "Main web site: [https://github.com/ElementsProject/lightning](https://github.com/ElementsProject/lightning)"
@@ -30857,6 +31966,8 @@
       "title": "Command for sending a payment to a BOLT11 invoice",
       "added": "v23.08",
       "description": [
+        "WARNING: Deprecated, scheduled for removal in v27.03",
+        "",
         "**renepay** is a new payment plugin based on Pickhardt-Richter optimization method for Multi-Path-Payments. This implementation has not been thoroughly tested and it should be used with caution.",
         "",
         "The response will occur when the payment fails or succeeds. Once a payment has succeeded, calls to **renepay** with the same *invstring* will not lead to a new payment attempt, but instead it will succeed immediately.",
@@ -31119,6 +32230,8 @@
       "title": "Command for quering the status of previous renepay attempts",
       "added": "v23.08",
       "description": [
+        "WARNING: Deprecated, scheduled for removal in v27.03",
+        "",
         "The **renepaystatus** RPC command queries the payment plugin **renepay** for the status of previous payment attempts.",
         "",
         "This command always succeeds."
@@ -31429,6 +32542,143 @@
           }
         }
       ]
+    },
+    "sendamount.json": {
+      "$schema": "../rpc-schema-draft.json",
+      "type": "object",
+      "added": "v26.06",
+      "additionalProperties": false,
+      "rpc": "sendamount",
+      "title": "Command to send a fixed amount",
+      "description": [
+        "The **sendamount** RPC command attempts to send a fixed amount to the given destination.  This means fees are deducted from that amount, hence the received value at the destination may vary depending on the chosen route."
+      ],
+      "request": {
+        "required": [
+          "invstring",
+          "amount_msat"
+        ],
+        "properties": {
+          "invstring": {
+            "type": "string",
+            "description": [
+              "A bolt12 (non-recursive) offer with no specific amount or a BIP353 name.  It can also pay to a Bolt11 invoice as long as the amount is un-specified."
+            ]
+          },
+          "amount_msat": {
+            "type": "msat",
+            "description": [
+              "The desired amount to be spent with this payment, ie. we will send this value while the destination will receive this minus fees.  *amount_msat* is in millisatoshi precision; it can be a whole number, or a whole number with suffix *msat* or *sat*, or a three decimal point number with suffix *sat*, or an 1 to 11 decimal point number suffixed by *btc*."
+            ]
+          },
+          "maxfee": {
+            "type": "msat",
+            "description": [
+              "*maxfee* creates an absolute limit on what fee will be paid."
+            ],
+            "default": "For *amount_msat* smaller than 10sat it is 50%, for *amount_msat* between 10sat and 500sat *maxfee* is 5sat, while for *amount_msat* greater than 500sat it is 1%."
+          },
+          "layers": {
+            "type": "array",
+            "description": [
+              "These are askrene layers to apply in addition to 'xpay' layer: these can alter the topology or provide additional information on the lightning network.  See askrene-create-layer."
+            ],
+            "items": {
+              "type": "string",
+              "description": [
+                "name of an existing layer"
+              ]
+            }
+          },
+          "retry_for": {
+            "type": "u32",
+            "description": [
+              "Until *retry_for* seconds passes, the command will keep finding routes and retrying the payment."
+            ],
+            "default": "60 seconds"
+          },
+          "maxdelay": {
+            "type": "u32",
+            "description": [
+              "A payment may be delayed for up to `maxdelay` blocks by another node; clients should be prepared for this worst case."
+            ],
+            "default": "2016"
+          },
+          "payer_note": {
+            "type": "string",
+            "description": [
+              "A message that a payer is willing to send to a payee within an invoice request."
+            ]
+          },
+          "label": {
+            "type": "string",
+            "description": [
+              "Attach a label to payments for which is returned in `listpays` and `listsendpays`.  This is for your own use: it is not visible to the recipient."
+            ]
+          }
+        }
+      },
+      "response": {
+        "required": [
+          "payment_preimage",
+          "failed_parts",
+          "successful_parts",
+          "amount_msat",
+          "amount_sent_msat"
+        ],
+        "properties": {
+          "payment_preimage": {
+            "type": "secret",
+            "description": [
+              "The proof of payment: SHA256 of this **payment_hash**."
+            ]
+          },
+          "failed_parts": {
+            "type": "u64",
+            "description": [
+              "How many separate payment parts failed."
+            ]
+          },
+          "successful_parts": {
+            "type": "u64",
+            "description": [
+              "How many separate payment parts succeeded (or are anticipated to succeed).  This will be at least one."
+            ]
+          },
+          "amount_msat": {
+            "type": "msat",
+            "description": [
+              "Amount the recipient received."
+            ]
+          },
+          "amount_sent_msat": {
+            "type": "msat",
+            "description": [
+              "Total amount we sent (including fees)."
+            ]
+          }
+        }
+      },
+      "errors": [
+        "The following error codes may occur:",
+        "",
+        "- -1: Catchall nonspecific error.",
+        "- 203: Permanent failure from destination (e.g. it said it didn't recognize invoice)",
+        "- 205: Couldn't find, or find a way to, the destination.",
+        "- 207: Invoice has expired.",
+        "- 219: Invoice has already been paid.",
+        "- 209: Other payment error."
+      ],
+      "author": [
+        "Lagrang3 [lagrang3@protonmail.com](mailto:lagrang3@protonmail.com) is mainly responsible."
+      ],
+      "see_also": [
+        "lightning-xpay(7)"
+      ],
+      "resources": [
+        "Main web site: [https://github.com/ElementsProject/lightning](https://github.com/ElementsProject/lightning)"
+      ],
+      "examples": []
     },
     "sendcustommsg.json": {
       "$schema": "../rpc-schema-draft.json",
@@ -32123,7 +33373,7 @@
       "description": [
         "The **sendpay** RPC command attempts to send funds associated with the given *payment_hash*, along a route to the final destination in the route.",
         "",
-        "Generally, a client would call lightning-getroute(7) to resolve a route, then use **sendpay** to send it. If it fails, it would call lightning-getroute(7) again to retry. If the route is empty, a payment-to-self is attempted.",
+        "Generally, a client would call lightning-getroute(7) or lightning-getroutes(7) to resolve a route, then use **sendpay** to send it.  This is why *sendpay*'s route ignores unknown members: it uses the fields from either of those commands and ignored others. If it fails, it would call lightning-getroutes(7) again to retry. If the route is empty, a payment-to-self is attempted.",
         "",
         "The response will occur when the payment is on its way to the destination. The **sendpay** RPC command does not wait for definite success or definite failure of the payment (except for already-succeeded payments, or to-self payments). Instead, use the **waitsendpay** RPC command to poll or wait for definite success or definite failure.",
         "",
@@ -32140,36 +33390,58 @@
             "type": "array",
             "items": {
               "type": "object",
-              "required": [
-                "amount_msat",
-                "id",
-                "delay",
-                "channel"
-              ],
               "additionalProperties": true,
               "properties": {
-                "id": {
-                  "type": "pubkey",
-                  "description": [
-                    "The node at the end of this hop."
-                  ]
-                },
-                "channel": {
-                  "type": "short_channel_id",
+                "short_channel_id_dir": {
+                  "type": "short_channel_id_dir",
+                  "added": "v26.06",
                   "description": [
                     "The channel joining these nodes."
                   ]
                 },
-                "delay": {
+                "node_id_out": {
+                  "type": "pubkey",
+                  "added": "v26.06",
+                  "description": [
+                    "The node at the end of this hop."
+                  ]
+                },
+                "amount_out_msat": {
+                  "added": "v26.06",
+                  "type": "msat",
+                  "description": [
+                    "The amount expected at the far end of this hop."
+                  ]
+                },
+                "cltv_out": {
+                  "added": "v26.06",
                   "type": "u32",
                   "description": [
                     "The total CLTV expected by the node at the end of this hop."
                   ]
                 },
+                "id": {
+                  "type": "pubkey",
+                  "description": [
+                    "The node at the end of this hop (older name for `node_id_out`)."
+                  ]
+                },
+                "channel": {
+                  "type": "short_channel_id",
+                  "description": [
+                    "The channel joining these nodes (older name for `short_channel_id_dir`)"
+                  ]
+                },
+                "delay": {
+                  "type": "u32",
+                  "description": [
+                    "The total CLTV expected by the node at the end of this hop (older name for `cltv_out`)."
+                  ]
+                },
                 "amount_msat": {
                   "type": "msat",
                   "description": [
-                    "The amount expected by the node at the end of this hop."
+                    "The amount expected by the node at the end of this hop (older name for `amount_out_msat`)."
                   ]
                 }
               }
@@ -32470,7 +33742,7 @@
         "lightning-delinvoice(7)",
         "lightning-getroute(7)",
         "lightning-invoice(7)",
-        "lightning-pay(7)",
+        "lightning-xpay(7)",
         "lightning-waitsendpay(7)"
       ],
       "resources": [
@@ -32862,10 +34134,19 @@
               },
               {
                 "type": "boolean"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": [
+                  "For multi options, an array of string values."
+                ]
               }
             ],
             "description": [
-              "Value of the config variable to be set or updated."
+              "Value of the config variable to be set or updated. For multi options, this must be an array of strings."
             ]
           },
           "transient": {
@@ -32892,7 +34173,6 @@
             "additionalProperties": false,
             "required": [
               "config",
-              "source",
               "dynamic"
             ],
             "properties": {
@@ -32905,7 +34185,17 @@
               "source": {
                 "type": "string",
                 "description": [
-                  "Source of configuration setting (`file`:`linenum`)."
+                  "Source of configuration setting (`file`:`linenum`) for non-multi options."
+                ]
+              },
+              "sources": {
+                "type": "array",
+                "added": "v26.06",
+                "items": {
+                  "type": "string"
+                },
+                "description": [
+                  "Sources of configuration settings (`file`:`linenum`) for multi options."
                 ]
               },
               "plugin": {
@@ -32951,6 +34241,16 @@
                 "type": "boolean",
                 "description": [
                   "For boolean options."
+                ]
+              },
+              "values_str": {
+                "type": "array",
+                "added": "v26.06",
+                "items": {
+                  "type": "string"
+                },
+                "description": [
+                  "For multi-string options."
                 ]
               }
             }
@@ -33006,6 +34306,37 @@
               "config": "min-capacity-sat",
               "value_int": 500000,
               "source": "/tmp/.lightning/regtest/config.setconfig:3",
+              "dynamic": true
+            }
+          }
+        },
+        {
+          "description": [
+            "This shows setting a multi-value dynamic plugin option (requires a plugin that defines such an option)."
+          ],
+          "request": {
+            "id": "example:setconfig#3",
+            "method": "setconfig",
+            "params": {
+              "config": "my-multi-option",
+              "val": [
+                "value1",
+                "value2"
+              ]
+            }
+          },
+          "response": {
+            "config": {
+              "config": "my-multi-option",
+              "values_str": [
+                "value1",
+                "value2"
+              ],
+              "sources": [
+                "/tmp/.lightning/regtest/config.setconfig:4",
+                "/tmp/.lightning/regtest/config.setconfig:5"
+              ],
+              "plugin": "/root/lightning/plugins/myplugin",
               "dynamic": true
             }
           }
@@ -34980,6 +36311,9 @@
       "author": [
         "Vincenzo Palazzo [vincenzo.palazzo@protonmail.com](mailto:vincenzo.palazzo@protonmail.com) wrote the initial version of this man page,",
         "but many others did the hard work of actually implementing this rpc command."
+      ],
+      "see_also": [
+        "lightning-graceful(7)"
       ],
       "resources": [
         "Main web site: [https://github.com/ElementsProject/lightning](https://github.com/ElementsProject/lightning)"
@@ -37560,7 +38894,7 @@
       ],
       "see_also": [
         "lightning-sendpay(7)",
-        "lightning-pay(7)"
+        "lightning-xpay(7)"
       ],
       "resources": [
         "Main web site: [https://github.com/ElementsProject/lightning](https://github.com/ElementsProject/lightning)"
@@ -37730,17 +39064,153 @@
         }
       ]
     },
+    "xkeysend.json": {
+      "$schema": "../rpc-schema-draft.json",
+      "type": "object",
+      "rpc": "xkeysend",
+      "title": "Send funds to a node without an invoice",
+      "added": "v26.06",
+      "description": [
+        "The **xkeysend** RPC command attempts to find a route to the given destination, and send the specified amount to it. Unlike the `xpay` RPC command the `xkeysend` command does not require an invoice, instead it uses the `destination` node ID, and `amount` to find a route to the specified node.",
+        "",
+        "In order for the destination to be able to claim the payment, the `payment_key` is randomly generated by the sender and included in the encrypted payload for the destination. As a consequence there is not proof-of-payment, like there is with an invoice where the `payment_key` is generated on the destination, and the only way sender could have it is by sending a payment. Please ensure that this matches your use-case when using `xkeysend`.",
+        "",
+        "This replaces the older `keysend` command."
+      ],
+      "request": {
+        "required": [
+          "destination",
+          "amount_msat"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "destination": {
+            "type": "pubkey",
+            "description": [
+              "The 33 byte, hex-encoded, node ID of the node that the payment should go to."
+            ]
+          },
+          "amount_msat": {
+            "type": "msat",
+            "description": [
+              "A whole number, or a whole number with suffix `msat` or `sat`, or a three decimal point number with suffix `sat`, or an 1 to 11 decimal point number suffixed by `btc`."
+            ]
+          },
+          "label": {
+            "type": "string",
+            "description": [
+              "Attach a label to the payment for which is returned in `listpays` and `listsendpays`.  This is for your own use: it is not visible to the recipient."
+            ]
+          },
+          "maxfee": {
+            "type": "msat",
+            "description": [
+              "*maxfee* creates an absolute limit on what fee we will pay."
+            ]
+          },
+          "layers": {
+            "type": "array",
+            "description": [
+              "These are askrene layers to apply: these can alter the topology or provide additional information on the lightning network.  See askrene-create-layer."
+            ],
+            "items": {
+              "type": "string",
+              "description": [
+                "name of an existing layer"
+              ]
+            }
+          },
+          "retry_for": {
+            "type": "u32",
+            "description": [
+              "Until *retry_for* seconds passes, the command will keep finding routes and retrying the payment. However, a payment may be delayed for up to `maxdelay` blocks by another node; clients should be prepared for this worst case."
+            ],
+            "default": "60 seconds"
+          },
+          "maxdelay": {
+            "type": "u32",
+            "description": [
+              "Number of blocks the payment may be delayed."
+            ]
+          },
+          "extratlvs": {
+            "type": "object",
+            "additionalProperties": true,
+            "required": [],
+            "description": [
+              "Dictionary of additional fields to insert into the final tlv. The format is 'fieldnumber': 'hexstring'."
+            ]
+          }
+        }
+      },
+      "response": {
+        "required": [
+          "payment_preimage",
+          "failed_parts",
+          "successful_parts",
+          "amount_msat",
+          "amount_sent_msat"
+        ],
+        "properties": {
+          "payment_preimage": {
+            "type": "secret",
+            "description": [
+              "The proof of payment: SHA256 of this **payment_hash**."
+            ]
+          },
+          "failed_parts": {
+            "type": "u64",
+            "description": [
+              "How many separate payment parts failed."
+            ]
+          },
+          "successful_parts": {
+            "type": "u64",
+            "description": [
+              "How many separate payment parts succeeded (or are anticipated to succeed).  This will be at least one."
+            ]
+          },
+          "amount_msat": {
+            "type": "msat",
+            "description": [
+              "Amount the recipient received."
+            ]
+          },
+          "amount_sent_msat": {
+            "type": "msat",
+            "description": [
+              "Total amount we sent (including fees)."
+            ]
+          }
+        },
+        "post_return_value_notes": [
+          "Note that the return is the same as it is for `xpay`."
+        ]
+      },
+      "author": [
+        "Rusty Russell [rusty@rustcorp.com.au](mailto:rusty@rustcorp.com.au) is mainly responsible."
+      ],
+      "see_also": [
+        "lightning-listpays(7)",
+        "lightning-askrene-create-layer(7)",
+        "lightning-askrene-create-channel(7)",
+        "lightning-askrene-update-channel(7)"
+      ],
+      "resources": [
+        "Main web site: [https://github.com/ElementsProject/lightning](https://github.com/ElementsProject/lightning)"
+      ]
+    },
     "xpay.json": {
       "$schema": "../rpc-schema-draft.json",
       "type": "object",
       "added": "v24.11",
       "additionalProperties": false,
       "rpc": "xpay",
-      "title": "Command for sending a payment for an invoice",
+      "title": "Command for sending a payment",
       "description": [
-        "The **xpay** RPC command attempts to find routes to the given destination, and send the funds it asks for.",
+        "The **xpay** RPC command attempts to make the specified payment: it can look up BIP353 names (such as \u20bfrusty@blockstream.com), it can resolve simple offers (lno1...), and pay bolt11 (lnbc...) and bolt12 invoices (lni1...).",
         "",
-        "This plugin is simpler and more sophisticated than the older 'pay' plugin, but does not have all the same features."
+        "This plugin is both simpler and more sophisticated than the older 'pay' plugin."
       ],
       "request": {
         "required": [
@@ -37769,7 +39239,7 @@
           "layers": {
             "type": "array",
             "description": [
-              "These are askrene layers to apply in addition to xpay's own: these can alter the topology or provide additional information on the lightning network.  See askrene-create-layer."
+              "These are askrene layers to apply in addition to xpay's own: these can alter the topology or provide additional information on the lightning network.  This lets you exclude particular nodes or channels, or bias against them: see askrene-create-layer."
             ],
             "items": {
               "type": "string",
@@ -37805,6 +39275,23 @@
             "description": [
               "A message that a payer is willing to send to a payee within an invoice request."
             ]
+          },
+          "label": {
+            "type": "string",
+            "description": [
+              "Attach a label to payments for which is returned in `listpays` and `listsendpays`.  This is for your own use: it is not visible to the recipient."
+            ]
+          },
+          "localinvreqid": {
+            "type": "hex",
+            "description": [
+              "`localinvreqid` is used by offers to link a payment attempt to a local `invoice_request` offer created by lightningd-invoicerequest(7). This  ensures that we only make a single payment for an offer, and that the offer is marked `used` once paid."
+            ]
+          },
+          "dev_use_shadow": {
+            "hidden": true,
+            "type": "boolean",
+            "added": "v26.06"
           }
         }
       },
@@ -37863,7 +39350,7 @@
         "Rusty Russell [rusty@rustcorp.com.au](mailto:rusty@rustcorp.com.au) is mainly responsible."
       ],
       "see_also": [
-        "lightning-pay(7)",
+        "lightning-listpays(7)",
         "lightning-decode(7)"
       ],
       "resources": [

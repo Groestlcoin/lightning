@@ -664,6 +664,11 @@ class NodeStub(object):
                 request_serializer=node__pb2.AskreneremovelayerRequest.SerializeToString,
                 response_deserializer=node__pb2.AskreneremovelayerResponse.FromString,
                 _registered_method=True)
+        self.AskReneRemoveChannelUpdate = channel.unary_unary(
+                '/cln.Node/AskReneRemoveChannelUpdate',
+                request_serializer=node__pb2.AskreneremovechannelupdateRequest.SerializeToString,
+                response_deserializer=node__pb2.AskreneremovechannelupdateResponse.FromString,
+                _registered_method=True)
         self.AskReneReserve = channel.unary_unary(
                 '/cln.Node/AskReneReserve',
                 request_serializer=node__pb2.AskrenereserveRequest.SerializeToString,
@@ -773,6 +778,11 @@ class NodeStub(object):
                 '/cln.Node/CurrencyRate',
                 request_serializer=node__pb2.CurrencyrateRequest.SerializeToString,
                 response_deserializer=node__pb2.CurrencyrateResponse.FromString,
+                _registered_method=True)
+        self.SendAmount = channel.unary_unary(
+                '/cln.Node/SendAmount',
+                request_serializer=node__pb2.SendamountRequest.SerializeToString,
+                response_deserializer=node__pb2.SendamountResponse.FromString,
                 _registered_method=True)
         self.SubscribeBalanceSnapshot = channel.unary_stream(
                 '/cln.Node/SubscribeBalanceSnapshot',
@@ -1655,6 +1665,12 @@ class NodeServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def AskReneRemoveChannelUpdate(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
     def AskReneReserve(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
@@ -1782,6 +1798,12 @@ class NodeServicer(object):
         raise NotImplementedError('Method not implemented!')
 
     def CurrencyRate(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def SendAmount(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -2564,6 +2586,11 @@ def add_NodeServicer_to_server(servicer, server):
                     request_deserializer=node__pb2.AskreneremovelayerRequest.FromString,
                     response_serializer=node__pb2.AskreneremovelayerResponse.SerializeToString,
             ),
+            'AskReneRemoveChannelUpdate': grpc.unary_unary_rpc_method_handler(
+                    servicer.AskReneRemoveChannelUpdate,
+                    request_deserializer=node__pb2.AskreneremovechannelupdateRequest.FromString,
+                    response_serializer=node__pb2.AskreneremovechannelupdateResponse.SerializeToString,
+            ),
             'AskReneReserve': grpc.unary_unary_rpc_method_handler(
                     servicer.AskReneReserve,
                     request_deserializer=node__pb2.AskrenereserveRequest.FromString,
@@ -2673,6 +2700,11 @@ def add_NodeServicer_to_server(servicer, server):
                     servicer.CurrencyRate,
                     request_deserializer=node__pb2.CurrencyrateRequest.FromString,
                     response_serializer=node__pb2.CurrencyrateResponse.SerializeToString,
+            ),
+            'SendAmount': grpc.unary_unary_rpc_method_handler(
+                    servicer.SendAmount,
+                    request_deserializer=node__pb2.SendamountRequest.FromString,
+                    response_serializer=node__pb2.SendamountResponse.SerializeToString,
             ),
             'SubscribeBalanceSnapshot': grpc.unary_stream_rpc_method_handler(
                     servicer.SubscribeBalanceSnapshot,
@@ -6208,6 +6240,33 @@ class Node(object):
             _registered_method=True)
 
     @staticmethod
+    def AskReneRemoveChannelUpdate(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/cln.Node/AskReneRemoveChannelUpdate',
+            node__pb2.AskreneremovechannelupdateRequest.SerializeToString,
+            node__pb2.AskreneremovechannelupdateResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
     def AskReneReserve(request,
             target,
             options=(),
@@ -6791,6 +6850,33 @@ class Node(object):
             '/cln.Node/CurrencyRate',
             node__pb2.CurrencyrateRequest.SerializeToString,
             node__pb2.CurrencyrateResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def SendAmount(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/cln.Node/SendAmount',
+            node__pb2.SendamountRequest.SerializeToString,
+            node__pb2.SendamountResponse.FromString,
             options,
             channel_credentials,
             insecure,

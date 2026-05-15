@@ -42,6 +42,7 @@ MARKDOWNPAGES := doc/addgossip.7 \
 	doc/connect.7 \
 	doc/createinvoice.7 \
 	doc/createonion.7 \
+	doc/createproof.7 \
 	doc/createrune.7 \
 	doc/currencyconvert.7 \
 	doc/currencyrate.7 \
@@ -76,6 +77,7 @@ MARKDOWNPAGES := doc/addgossip.7 \
 	doc/getlog.7 \
 	doc/getroute.7 \
 	doc/getroutes.7 \
+	doc/graceful.7 \
 	doc/help.7 \
 	doc/injectonionmessage.7 \
 	doc/injectpaymentonion.7 \
@@ -126,6 +128,7 @@ MARKDOWNPAGES := doc/addgossip.7 \
 	doc/renepay.7 \
 	doc/renepaystatus.7 \
 	doc/reserveinputs.7 \
+	doc/sendamount.7 \
 	doc/sendcustommsg.7 \
 	doc/sendinvoice.7 \
 	doc/sendonion.7 \
@@ -158,6 +161,7 @@ MARKDOWNPAGES := doc/addgossip.7 \
 	doc/wait.7 \
 	doc/waitsendpay.7 \
 	doc/withdraw.7 \
+	doc/xkeysend.7 \
 	doc/xpay.7
 
 NOTIFICATION_SCHEMAS := $(wildcard doc/schemas/notification/*.json)

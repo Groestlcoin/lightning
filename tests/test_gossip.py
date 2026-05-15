@@ -398,7 +398,7 @@ def test_gossip_jsonrpc(node_factory):
                              'peer_in WIRE_ANNOUNCEMENT_SIGNATURES'])
 
     # Make sure we can route through the channel, will raise on failure
-    l1.rpc.getroute(l2.info['id'], 100, 1)
+    l1.single_route(l2.info['id'], 100)
 
     # Channels not should be activated locally
     assert l1.rpc.listchannels() == {'channels': []}
@@ -979,7 +979,7 @@ def test_report_routing_failure(node_factory, bitcoind):
 
     # Test
     inv = l4.rpc.invoice(1234567, 'inv', 'for testing')['bolt11']
-    l1.rpc.pay(inv)
+    l1.rpc.xpay(inv)
 
 
 def test_query_short_channel_id(node_factory, bitcoind, chainparams):
@@ -1474,7 +1474,8 @@ def test_getroute_exclude_duplicate(node_factory):
     in the exclude list will not have permanent effects.
     """
 
-    l1, l2 = node_factory.line_graph(2, wait_for_announce=True)
+    l1, l2 = node_factory.line_graph(2, wait_for_announce=True,
+                                     opts={'allow-deprecated-apis': True})
 
     # Starting route
     route = l1.rpc.getroute(l2.info['id'], 1, 1)['route']
@@ -1506,7 +1507,8 @@ def test_getroute_exclude_duplicate(node_factory):
 
 def test_getroute_exclude(node_factory, bitcoind):
     """Test getroute's exclude argument"""
-    l1, l2, l3, l4, l5 = node_factory.get_nodes(5)
+    l1, l2, l3, l4, l5 = node_factory.get_nodes(5,
+                                                opts={'allow-deprecated-apis': True})
     node_factory.join_nodes([l1, l2, l3, l4], wait_for_announce=True)
 
     # This should work

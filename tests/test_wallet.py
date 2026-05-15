@@ -211,6 +211,33 @@ def test_withdraw(node_factory, bitcoind):
     l1.rpc.withdraw(l1.rpc.newaddr("p2tr")["p2tr"], 10**5, feerate="1000perkb")
 
 
+def test_withdraw_unreserves_inputs_on_send_failure(node_factory, bitcoind):
+    amount = 10**7
+    addrtype = good_addrtype()
+    l1 = node_factory.get_node(random_hsm=True)
+    addr = l1.rpc.newaddr(addrtype)[addrtype]
+
+    bitcoind.rpc.sendtoaddress(addr, amount / 10**8)
+    bitcoind.generate_block(1)
+    wait_for(lambda: len(l1.rpc.listfunds()['outputs']) == 1)
+
+    def mock_sendrawtransaction(r):
+        return {'id': r['id'],
+                'error': {'code': 100,
+                          'message': 'feerate below mempool minimum: 251 < 253'}}
+
+    l1.daemon.rpcproxy.mock_rpc('sendrawtransaction', mock_sendrawtransaction)
+
+    with pytest.raises(RpcError, match=r'251 < 253'):
+        l1.rpc.withdraw(bitcoind.getnewaddress(), 'all', feerate='slow')
+
+    assert not any(o['reserved'] for o in l1.rpc.listfunds()['outputs'])
+
+    l1.daemon.rpcproxy.mock_rpc('sendrawtransaction', None)
+    sent = l1.rpc.withdraw(bitcoind.getnewaddress(), 'all', feerate='slow')
+    bitcoind.rpc.getmempoolentry(sent['txid'])
+
+
 def test_minconf_withdraw(node_factory, bitcoind):
     """Issue 2518: ensure that ridiculous confirmation levels don't overflow
 
@@ -2072,6 +2099,79 @@ def test_fundchannel_listtransaction(node_factory, bitcoind):
     assert tx['blockheight'] == 0
 
 
+@unittest.skipIf(TEST_NETWORK != 'regtest', "Uss p2tr")
+def test_withdraw_returns_signed_tx(node_factory, bitcoind):
+    """
+    Test that withdraw returns a fully signed transaction in the 'tx' field.
+
+    Regression test for https://github.com/ElementsProject/lightning/issues/8701
+    where withdraw returned an unsigned transaction (empty witnesses) because
+    psbt_txid() used WALLY_PSBT_EXTRACT_NON_FINAL to extract the tx.
+    """
+    l1 = node_factory.get_node(random_hsm=True)
+
+    # Fund the wallet with a few UTXOs
+    addr = l1.rpc.newaddr('p2tr')['p2tr']
+    for i in range(3):
+        l1.bitcoin.rpc.sendtoaddress(addr, 0.01)
+    bitcoind.generate_block(1)
+    wait_for(lambda: len(l1.rpc.listfunds()['outputs']) == 3)
+
+    waddr = l1.bitcoin.rpc.getnewaddress()
+    out = l1.rpc.withdraw(waddr, 'all')
+
+    # The tx field must be a fully signed transaction
+    decoded = bitcoind.rpc.decoderawtransaction(out['tx'])
+
+    # Every segwit input must have witness data (txinwitness)
+    for i, vin in enumerate(decoded['vin']):
+        assert 'txinwitness' in vin, \
+            f"Input {i} has no witness data - tx is unsigned! (issue #8701)"
+        assert len(vin['txinwitness']) > 0, \
+            f"Input {i} has empty witness stack"
+
+    # The returned tx must be directly broadcastable (already sent by withdraw,
+    # but verify it could be re-sent by checking it was accepted)
+    assert decoded['txid'] == out['txid']
+
+
+@unittest.skipIf(TEST_NETWORK != 'regtest', "Uss p2tr")
+def test_withdraw_close_output_signed(node_factory, bitcoind):
+    """
+    Test that withdraw correctly signs close outputs (anchor/P2WSH).
+
+    Regression test for https://github.com/ElementsProject/lightning/issues/8701
+    The original issue involved spending channel close outputs (with
+    option_anchors CSV=1) alongside regular wallet UTXOs.
+    """
+    l1, l2 = node_factory.line_graph(2, fundchannel=True, wait_for_announce=True)
+
+    # Close the channel so l1 gets a close output
+    l1.rpc.close(l2.info['id'])
+    bitcoind.generate_block(1, wait_for_mempool=1)
+
+    # Wait for CSV lock (1 block for anchors) and the close output to mature
+    bitcoind.generate_block(100)
+    sync_blockheight(bitcoind, [l1])
+
+    wait_for(lambda: all(o['status'] == 'confirmed' for o in l1.rpc.listfunds()['outputs']))
+
+    # Withdraw all funds - this spends both regular and close outputs
+    waddr = l1.bitcoin.rpc.getnewaddress()
+    out = l1.rpc.withdraw(waddr, 'all')
+
+    decoded = bitcoind.rpc.decoderawtransaction(out['tx'])
+
+    # Every input must have witness data
+    for i, vin in enumerate(decoded['vin']):
+        assert 'txinwitness' in vin, \
+            f"Input {i} has no witness data - tx is unsigned! (issue #8701)"
+        assert len(vin['txinwitness']) > 0, \
+            f"Input {i} has empty witness stack"
+
+    assert decoded['txid'] == out['txid']
+
+
 def test_withdraw_nlocktime(node_factory):
     """
     Test that we don't set the nLockTime to 0 for withdrawal and
@@ -2788,11 +2888,8 @@ def test_rescan_missing_utxo(node_factory, bitcoind):
 
 
 @unittest.skipIf(TEST_NETWORK != 'regtest', "Uses regtest-specific address types")
-def test_withdraw_stuck_reserved_on_broadcast_failure(node_factory, bitcoind):
-    """Test funds don't get stuck as reserved after withdraw fails due to
-    broadcast rejection (e.g. feerate below mempoolminfee).
-
-    """
+def test_withdraw_unreserves_on_broadcast_failure(node_factory, bitcoind):
+    """Test withdraw releases reservations after broadcast rejection."""
     l1 = node_factory.get_node(random_hsm=True)
     addr = l1.rpc.newaddr('p2tr')['p2tr']
 
@@ -2825,22 +2922,6 @@ def test_withdraw_stuck_reserved_on_broadcast_failure(node_factory, bitcoind):
 
     with pytest.raises(RpcError, match=r'Error broadcasting transaction'):
         l1.rpc.withdraw(waddr, 'all')
-
-    # BUG: UTXOs remain reserved despite the failed broadcast.
-    # sendpsbt_done correctly unreserves the reservation it added (72 blocks),
-    # but fundpsbt's prior reservation (72 blocks) is NOT cleaned up.
-    outputs = l1.rpc.listfunds()['outputs']
-    reserved = [o for o in outputs if o.get('reserved', False)]
-    assert len(reserved) > 0, \
-        "Expected UTXOs to be reserved after failed broadcast (known bug)"
-
-    with pytest.raises(RpcError, match=r'Could not afford'):
-        l1.rpc.withdraw(waddr, 'all')
-
-    # Workaround: build a PSBT from the stuck UTXOs and call unreserveinputs.
-    stuck_utxos = [{'txid': o['txid'], 'vout': o['output']} for o in reserved]
-    psbt = bitcoind.rpc.createpsbt(stuck_utxos, [])
-    l1.rpc.unreserveinputs(psbt)
 
     outputs = l1.rpc.listfunds()['outputs']
     assert not any(o.get('reserved', False) for o in outputs)

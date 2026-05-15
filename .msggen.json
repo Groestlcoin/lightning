@@ -101,6 +101,7 @@
             "bolt12 invoice": 1,
             "bolt12 invoice_request": 2,
             "bolt12 offer": 0,
+            "bolt12 payer_proof": 6,
             "emergency recover": 5,
             "rune": 4
         },
@@ -893,6 +894,10 @@
         "Askrene-listreservationsResponse": {
             "AskRene-ListReservations.reservations[]": 1
         },
+        "Askrene-remove-channel-updateRequest": {
+            "AskRene-Remove-Channel-Update.layer": 1,
+            "AskRene-Remove-Channel-Update.short_channel_id_dir": 2
+        },
         "Askrene-remove-layerRequest": {
             "AskRene-Remove-Layer.layer": 1
         },
@@ -1435,7 +1440,8 @@
             "CurrencyConvert.msat": 1
         },
         "CurrencyrateRequest": {
-            "CurrencyRate.currency": 1
+            "CurrencyRate.currency": 1,
+            "CurrencyRate.source": 2
         },
         "CurrencyrateResponse": {
             "CurrencyRate.rate": 1
@@ -1551,6 +1557,7 @@
             "Decode.invreq_payer_id": 26,
             "Decode.invreq_payer_note": 31,
             "Decode.invreq_quantity": 30,
+            "Decode.invreq_recurrence_cancel": 90,
             "Decode.invreq_recurrence_counter": 32,
             "Decode.invreq_recurrence_start": 33,
             "Decode.min_final_cltv_expiry": 65,
@@ -1573,6 +1580,12 @@
             "Decode.payment_hash": 63,
             "Decode.payment_metadata": 67,
             "Decode.payment_secret": 66,
+            "Decode.proof_leaf_hashes[]": 96,
+            "Decode.proof_missing_hashes[]": 95,
+            "Decode.proof_note": 97,
+            "Decode.proof_omitted_tlvs[]": 94,
+            "Decode.proof_preimage": 93,
+            "Decode.proof_signature": 98,
             "Decode.restrictions[]": 73,
             "Decode.routes": 82,
             "Decode.routes[][]": 68,
@@ -1583,6 +1596,7 @@
             "Decode.unknown_invoice_request_tlvs[]": 34,
             "Decode.unknown_invoice_tlvs[]": 49,
             "Decode.unknown_offer_tlvs[]": 19,
+            "Decode.unknown_payer_proof_tlvs[]": 99,
             "Decode.valid": 2,
             "Decode.version": 71,
             "Decode.warning_empty_blinded_path": 86,
@@ -1594,6 +1608,8 @@
             "Decode.warning_invalid_offer_issuer": 24,
             "Decode.warning_invreq_bip_353_name_domain_invalid": 89,
             "Decode.warning_invreq_bip_353_name_name_invalid": 88,
+            "Decode.warning_invreq_recurrence_cancel_with_zero_counter": 92,
+            "Decode.warning_invreq_recurrence_cancel_without_counter": 91,
             "Decode.warning_missing_invoice_amount": 54,
             "Decode.warning_missing_invoice_blindedpay": 51,
             "Decode.warning_missing_invoice_created_at": 52,
@@ -1614,6 +1630,11 @@
         "DecodeRestrictions": {
             "Decode.restrictions[].alternatives[]": 1,
             "Decode.restrictions[].summary": 2
+        },
+        "DecodeUnknownPayerProofTlvs": {
+            "Decode.unknown_payer_proof_tlvs[].length": 2,
+            "Decode.unknown_payer_proof_tlvs[].type": 1,
+            "Decode.unknown_payer_proof_tlvs[].value": 3
         },
         "DecodepayExtra": {
             "DecodePay.extra[].data": 2,
@@ -2157,10 +2178,16 @@
             "GetRoutes.routes[].probability_ppm": 1
         },
         "GetroutesRoutesPath": {
+            "GetRoutes.routes[].path[].amount_in_msat": 7,
             "GetRoutes.routes[].path[].amount_msat": 3,
+            "GetRoutes.routes[].path[].amount_out_msat": 8,
+            "GetRoutes.routes[].path[].cltv_in": 11,
+            "GetRoutes.routes[].path[].cltv_out": 12,
             "GetRoutes.routes[].path[].delay": 5,
             "GetRoutes.routes[].path[].direction": 2,
             "GetRoutes.routes[].path[].next_node_id": 4,
+            "GetRoutes.routes[].path[].node_id_in": 9,
+            "GetRoutes.routes[].path[].node_id_out": 10,
             "GetRoutes.routes[].path[].short_channel_id": 1,
             "GetRoutes.routes[].path[].short_channel_id_dir": 6
         },
@@ -2184,6 +2211,7 @@
         "InjectpaymentonionRequest": {
             "InjectPaymentOnion.amount_msat": 3,
             "InjectPaymentOnion.cltv_expiry": 4,
+            "InjectPaymentOnion.destination": 11,
             "InjectPaymentOnion.destination_msat": 10,
             "InjectPaymentOnion.groupid": 6,
             "InjectPaymentOnion.invstring": 8,
@@ -3849,6 +3877,23 @@
             "sendpay_success.status": 12,
             "sendpay_success.updated_index": 5
         },
+        "SendamountRequest": {
+            "SendAmount.amount_msat": 2,
+            "SendAmount.invstring": 1,
+            "SendAmount.label": 8,
+            "SendAmount.layers[]": 4,
+            "SendAmount.maxdelay": 6,
+            "SendAmount.maxfee": 3,
+            "SendAmount.payer_note": 7,
+            "SendAmount.retry_for": 5
+        },
+        "SendamountResponse": {
+            "SendAmount.amount_msat": 4,
+            "SendAmount.amount_sent_msat": 5,
+            "SendAmount.failed_parts": 2,
+            "SendAmount.payment_preimage": 1,
+            "SendAmount.successful_parts": 3
+        },
         "SendcustommsgRequest": {
             "SendCustomMsg.msg": 2,
             "SendCustomMsg.node_id": 1
@@ -3990,10 +4035,14 @@
         },
         "SendpayRoute": {
             "SendPay.route[].amount_msat": 5,
+            "SendPay.route[].amount_out_msat": 8,
             "SendPay.route[].channel": 4,
+            "SendPay.route[].cltv_out": 9,
             "SendPay.route[].delay": 3,
             "SendPay.route[].id": 2,
-            "SendPay.route[].msatoshi": 1
+            "SendPay.route[].msatoshi": 1,
+            "SendPay.route[].node_id_out": 7,
+            "SendPay.route[].short_channel_id_dir": 6
         },
         "SendpsbtRequest": {
             "SendPsbt.psbt": 1,
@@ -4033,10 +4082,12 @@
             "SetConfig.config.plugin": 3,
             "SetConfig.config.set": 5,
             "SetConfig.config.source": 2,
+            "SetConfig.config.sources[]": 10,
             "SetConfig.config.value_bool": 9,
             "SetConfig.config.value_int": 8,
             "SetConfig.config.value_msat": 7,
-            "SetConfig.config.value_str": 6
+            "SetConfig.config.value_str": 6,
+            "SetConfig.config.values_str[]": 11
         },
         "SetconfigRequest": {
             "SetConfig.config": 1,
@@ -4422,8 +4473,11 @@
         },
         "XpayRequest": {
             "Xpay.amount_msat": 2,
+            "Xpay.dev_use_shadow": 11,
             "Xpay.invstring": 1,
+            "Xpay.label": 9,
             "Xpay.layers[]": 4,
+            "Xpay.localinvreqid": 10,
             "Xpay.maxdelay": 7,
             "Xpay.maxfee": 3,
             "Xpay.partial_msat": 6,
@@ -5017,6 +5071,18 @@
         },
         "AskRene-ListReservations.reservations[].short_channel_id_dir": {
             "added": "v24.11",
+            "deprecated": null
+        },
+        "AskRene-Remove-Channel-Update": {
+            "added": "v26.06",
+            "deprecated": null
+        },
+        "AskRene-Remove-Channel-Update.layer": {
+            "added": "v26.06",
+            "deprecated": null
+        },
+        "AskRene-Remove-Channel-Update.short_channel_id_dir": {
+            "added": "v26.06",
             "deprecated": null
         },
         "AskRene-Remove-Layer": {
@@ -6399,6 +6465,10 @@
             "added": "v26.04",
             "deprecated": null
         },
+        "CurrencyRate.source": {
+            "added": "v26.06",
+            "deprecated": null
+        },
         "Datastore": {
             "added": "pre-v0.10.1",
             "deprecated": null
@@ -6703,6 +6773,10 @@
             "added": "v23.05",
             "deprecated": null
         },
+        "Decode.invreq_recurrence_cancel": {
+            "added": "v23.05",
+            "deprecated": null
+        },
         "Decode.invreq_recurrence_counter": {
             "added": "v23.05",
             "deprecated": null
@@ -6811,6 +6885,10 @@
             "added": "v23.05",
             "deprecated": null
         },
+        "Decode.offer_recurrence.compulsory_field": {
+            "added": "v26.06",
+            "deprecated": null
+        },
         "Decode.offer_recurrence.limit": {
             "added": "v23.05",
             "deprecated": null
@@ -6860,6 +6938,30 @@
             "deprecated": null
         },
         "Decode.payment_secret": {
+            "added": "v23.05",
+            "deprecated": null
+        },
+        "Decode.proof_leaf_hashes[]": {
+            "added": "v23.05",
+            "deprecated": null
+        },
+        "Decode.proof_missing_hashes[]": {
+            "added": "v23.05",
+            "deprecated": null
+        },
+        "Decode.proof_note": {
+            "added": "v23.05",
+            "deprecated": null
+        },
+        "Decode.proof_omitted_tlvs[]": {
+            "added": "v23.05",
+            "deprecated": null
+        },
+        "Decode.proof_preimage": {
+            "added": "v23.05",
+            "deprecated": null
+        },
+        "Decode.proof_signature": {
             "added": "v23.05",
             "deprecated": null
         },
@@ -6967,6 +7069,22 @@
             "added": "v23.05",
             "deprecated": null
         },
+        "Decode.unknown_payer_proof_tlvs[]": {
+            "added": "v23.05",
+            "deprecated": null
+        },
+        "Decode.unknown_payer_proof_tlvs[].length": {
+            "added": "v23.05",
+            "deprecated": null
+        },
+        "Decode.unknown_payer_proof_tlvs[].type": {
+            "added": "v23.05",
+            "deprecated": null
+        },
+        "Decode.unknown_payer_proof_tlvs[].value": {
+            "added": "v23.05",
+            "deprecated": null
+        },
         "Decode.valid": {
             "added": "v23.05",
             "deprecated": null
@@ -7009,6 +7127,14 @@
         },
         "Decode.warning_invreq_bip_353_name_name_invalid": {
             "added": "v25.02",
+            "deprecated": null
+        },
+        "Decode.warning_invreq_recurrence_cancel_with_zero_counter": {
+            "added": "v23.05",
+            "deprecated": null
+        },
+        "Decode.warning_invreq_recurrence_cancel_without_counter": {
+            "added": "v23.05",
             "deprecated": null
         },
         "Decode.warning_missing_invoice_amount": {
@@ -8455,13 +8581,29 @@
             "added": "v24.08",
             "deprecated": null
         },
+        "GetRoutes.routes[].path[].amount_in_msat": {
+            "added": "v26.06",
+            "deprecated": null
+        },
         "GetRoutes.routes[].path[].amount_msat": {
             "added": "v24.08",
+            "deprecated": "v26.06"
+        },
+        "GetRoutes.routes[].path[].amount_out_msat": {
+            "added": "v26.06",
+            "deprecated": null
+        },
+        "GetRoutes.routes[].path[].cltv_in": {
+            "added": "v26.06",
+            "deprecated": null
+        },
+        "GetRoutes.routes[].path[].cltv_out": {
+            "added": "v26.06",
             "deprecated": null
         },
         "GetRoutes.routes[].path[].delay": {
             "added": "v24.08",
-            "deprecated": null
+            "deprecated": "v26.06"
         },
         "GetRoutes.routes[].path[].direction": {
             "added": "v24.08",
@@ -8469,6 +8611,14 @@
         },
         "GetRoutes.routes[].path[].next_node_id": {
             "added": "v24.08",
+            "deprecated": "v26.06"
+        },
+        "GetRoutes.routes[].path[].node_id_in": {
+            "added": "v26.06",
+            "deprecated": null
+        },
+        "GetRoutes.routes[].path[].node_id_out": {
+            "added": "v26.06",
             "deprecated": null
         },
         "GetRoutes.routes[].path[].short_channel_id": {
@@ -8673,6 +8823,10 @@
         },
         "InjectPaymentOnion.created_index": {
             "added": "v24.11",
+            "deprecated": null
+        },
+        "InjectPaymentOnion.destination": {
+            "added": "v26.06",
             "deprecated": null
         },
         "InjectPaymentOnion.destination_msat": {
@@ -13183,6 +13337,58 @@
             "added": "pre-v0.10.1",
             "deprecated": null
         },
+        "SendAmount": {
+            "added": "v26.06",
+            "deprecated": null
+        },
+        "SendAmount.amount_msat": {
+            "added": "v26.06",
+            "deprecated": null
+        },
+        "SendAmount.amount_sent_msat": {
+            "added": "v26.06",
+            "deprecated": null
+        },
+        "SendAmount.failed_parts": {
+            "added": "v26.06",
+            "deprecated": null
+        },
+        "SendAmount.invstring": {
+            "added": "v26.06",
+            "deprecated": null
+        },
+        "SendAmount.label": {
+            "added": "v26.06",
+            "deprecated": null
+        },
+        "SendAmount.layers[]": {
+            "added": "v26.06",
+            "deprecated": null
+        },
+        "SendAmount.maxdelay": {
+            "added": "v26.06",
+            "deprecated": null
+        },
+        "SendAmount.maxfee": {
+            "added": "v26.06",
+            "deprecated": null
+        },
+        "SendAmount.payer_note": {
+            "added": "v26.06",
+            "deprecated": null
+        },
+        "SendAmount.payment_preimage": {
+            "added": "v26.06",
+            "deprecated": null
+        },
+        "SendAmount.retry_for": {
+            "added": "v26.06",
+            "deprecated": null
+        },
+        "SendAmount.successful_parts": {
+            "added": "v26.06",
+            "deprecated": null
+        },
         "SendCustomMsg": {
             "added": "v0.10.1",
             "deprecated": null
@@ -13483,8 +13689,16 @@
             "added": "pre-v0.10.1",
             "deprecated": null
         },
+        "SendPay.route[].amount_out_msat": {
+            "added": "v26.06",
+            "deprecated": null
+        },
         "SendPay.route[].channel": {
             "added": "pre-v0.10.1",
+            "deprecated": null
+        },
+        "SendPay.route[].cltv_out": {
+            "added": "v26.06",
             "deprecated": null
         },
         "SendPay.route[].delay": {
@@ -13493,6 +13707,14 @@
         },
         "SendPay.route[].id": {
             "added": "pre-v0.10.1",
+            "deprecated": null
+        },
+        "SendPay.route[].node_id_out": {
+            "added": "v26.06",
+            "deprecated": null
+        },
+        "SendPay.route[].short_channel_id_dir": {
+            "added": "v26.06",
             "deprecated": null
         },
         "SendPay.status": {
@@ -13627,6 +13849,10 @@
             "added": "v23.08",
             "deprecated": null
         },
+        "SetConfig.config.sources[]": {
+            "added": "v26.06",
+            "deprecated": null
+        },
         "SetConfig.config.value_bool": {
             "added": "v23.08",
             "deprecated": null
@@ -13641,6 +13867,10 @@
         },
         "SetConfig.config.value_str": {
             "added": "v23.08",
+            "deprecated": null
+        },
+        "SetConfig.config.values_str[]": {
+            "added": "v26.06",
             "deprecated": null
         },
         "SetConfig.transient": {
@@ -14675,6 +14905,10 @@
             "added": "v24.11",
             "deprecated": null
         },
+        "Xpay.dev_use_shadow": {
+            "added": "v26.06",
+            "deprecated": null
+        },
         "Xpay.failed_parts": {
             "added": "v24.11",
             "deprecated": null
@@ -14683,7 +14917,15 @@
             "added": "v24.11",
             "deprecated": null
         },
+        "Xpay.label": {
+            "added": "v24.11",
+            "deprecated": null
+        },
         "Xpay.layers[]": {
+            "added": "v24.11",
+            "deprecated": null
+        },
+        "Xpay.localinvreqid": {
             "added": "v24.11",
             "deprecated": null
         },

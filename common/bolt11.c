@@ -111,11 +111,11 @@ static void *pull_all(const tal_t *ctx,
 }
 
 /* Frees bolt11, returns NULL. */
-static struct bolt11 *decode_fail(struct bolt11 *b11, char **fail,
+static struct bolt11 *decode_fail(struct bolt11 *b11, const char **fail,
 				  const char *fmt, ...)
 	PRINTF_FMT(3,4);
 
-static struct bolt11 *decode_fail(struct bolt11 *b11, char **fail,
+static struct bolt11 *decode_fail(struct bolt11 *b11, const char **fail,
 				  const char *fmt, ...)
 {
 	va_list ap;
@@ -752,7 +752,7 @@ struct bolt11 *bolt11_decode_nosig(const tal_t *ctx, const char *str,
 				   struct sha256 *hash,
 				   const u5 **sig,
 				   bool *have_n,
-				   char **fail)
+				   const char **fail)
 {
 	const char *hrp, *prefix;
 	char *amountstr;
@@ -981,7 +981,7 @@ struct bolt11 *bolt11_decode(const tal_t *ctx, const char *str,
 			     const struct feature_set *our_features,
 			     const char *description,
 			     const struct chainparams *must_be_chain,
-			     char **fail)
+			     const char **fail)
 {
 	const u5 *sigdata;
 	size_t data_len;
@@ -1251,8 +1251,6 @@ static void maybe_encode_9(u5 **data, const u8 *features,
 
 static bool encode_extra(u5 **data, const struct bolt11_field *extra)
 {
-	size_t len;
-
 	/* Can't encode an invalid tag. */
 	if (bech32_charset_rev[(unsigned char)extra->tag] == -1)
 		return false;
@@ -1261,9 +1259,7 @@ static bool encode_extra(u5 **data, const struct bolt11_field *extra)
 	push_varlen_uint(data, tal_count(extra->data), 10);
 
 	/* extra->data is already u5s, so do this raw. */
-	len = tal_count(*data);
-	tal_resize(data, len + tal_count(extra->data));
-	memcpy(*data + len, extra->data, tal_count(extra->data));
+	tal_arr_append(data, extra->data);
 	return true;
 }
 

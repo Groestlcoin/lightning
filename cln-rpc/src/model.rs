@@ -170,6 +170,8 @@ pub enum Request {
 	AskReneCreateLayer(requests::AskrenecreatelayerRequest),
 	#[serde(rename = "askrene-remove-layer")]
 	AskReneRemoveLayer(requests::AskreneremovelayerRequest),
+	#[serde(rename = "askrene-remove-channel-update")]
+	AskReneRemoveChannelUpdate(requests::AskreneremovechannelupdateRequest),
 	#[serde(rename = "askrene-reserve")]
 	AskReneReserve(requests::AskrenereserveRequest),
 	#[serde(rename = "askrene-age")]
@@ -202,6 +204,7 @@ pub enum Request {
 	ListCurrencyRates(requests::ListcurrencyratesRequest),
 	CurrencyConvert(requests::CurrencyconvertRequest),
 	CurrencyRate(requests::CurrencyrateRequest),
+	SendAmount(requests::SendamountRequest),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -362,6 +365,8 @@ pub enum Response {
 	AskReneCreateLayer(responses::AskrenecreatelayerResponse),
 	#[serde(rename = "askrene-remove-layer")]
 	AskReneRemoveLayer(responses::AskreneremovelayerResponse),
+	#[serde(rename = "askrene-remove-channel-update")]
+	AskReneRemoveChannelUpdate(responses::AskreneremovechannelupdateResponse),
 	#[serde(rename = "askrene-reserve")]
 	AskReneReserve(responses::AskrenereserveResponse),
 	#[serde(rename = "askrene-age")]
@@ -394,6 +399,7 @@ pub enum Response {
 	ListCurrencyRates(responses::ListcurrencyratesResponse),
 	CurrencyConvert(responses::CurrencyconvertResponse),
 	CurrencyRate(responses::CurrencyrateResponse),
+	SendAmount(responses::SendamountResponse),
 }
 
 
@@ -531,10 +537,22 @@ pub mod requests {
 	}
 	#[derive(Clone, Debug, Deserialize, Serialize)]
 	pub struct SendpayRoute {
-	    pub amount_msat: Amount,
-	    pub channel: ShortChannelId,
-	    pub delay: u32,
-	    pub id: PublicKey,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub amount_msat: Option<Amount>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub amount_out_msat: Option<Amount>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub channel: Option<ShortChannelId>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub cltv_out: Option<u32>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub delay: Option<u32>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub id: Option<PublicKey>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub node_id_out: Option<PublicKey>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub short_channel_id_dir: Option<ShortChannelIdDir>,
 	}
 
 	#[derive(Clone, Debug, Deserialize, Serialize)]
@@ -4539,6 +4557,29 @@ pub mod requests {
 	    }
 	}
 	#[derive(Clone, Debug, Deserialize, Serialize)]
+	pub struct AskreneremovechannelupdateRequest {
+	    pub layer: String,
+	    pub short_channel_id_dir: ShortChannelIdDir,
+	}
+
+	impl From<AskreneremovechannelupdateRequest> for Request {
+	    fn from(r: AskreneremovechannelupdateRequest) -> Self {
+	        Request::AskReneRemoveChannelUpdate(r)
+	    }
+	}
+
+	impl IntoRequest for AskreneremovechannelupdateRequest {
+	    type Response = super::responses::AskreneremovechannelupdateResponse;
+	}
+
+	impl TypedRequest for AskreneremovechannelupdateRequest {
+	    type Response = super::responses::AskreneremovechannelupdateResponse;
+
+	    fn method(&self) -> &str {
+	        "askrene-remove-channel-update"
+	    }
+	}
+	#[derive(Clone, Debug, Deserialize, Serialize)]
 	pub struct AskrenereservePath {
 	    #[serde(skip_serializing_if = "Option::is_none")]
 	    pub layer: Option<String>,
@@ -4847,6 +4888,8 @@ pub mod requests {
 	#[derive(Clone, Debug, Deserialize, Serialize)]
 	pub struct InjectpaymentonionRequest {
 	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub destination: Option<PublicKey>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
 	    pub destination_msat: Option<Amount>,
 	    #[serde(skip_serializing_if = "Option::is_none")]
 	    pub invstring: Option<String>,
@@ -4906,6 +4949,12 @@ pub mod requests {
 	pub struct XpayRequest {
 	    #[serde(skip_serializing_if = "Option::is_none")]
 	    pub amount_msat: Option<Amount>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub dev_use_shadow: Option<bool>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub label: Option<String>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub localinvreqid: Option<String>,
 	    #[serde(skip_serializing_if = "Option::is_none")]
 	    pub maxdelay: Option<u32>,
 	    #[serde(skip_serializing_if = "Option::is_none")]
@@ -5230,6 +5279,8 @@ pub mod requests {
 	}
 	#[derive(Clone, Debug, Deserialize, Serialize)]
 	pub struct CurrencyrateRequest {
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub source: Option<String>,
 	    pub currency: String,
 	}
 
@@ -5248,6 +5299,41 @@ pub mod requests {
 
 	    fn method(&self) -> &str {
 	        "currencyrate"
+	    }
+	}
+	#[derive(Clone, Debug, Deserialize, Serialize)]
+	pub struct SendamountRequest {
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub label: Option<String>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub maxdelay: Option<u32>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub maxfee: Option<Amount>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub payer_note: Option<String>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub retry_for: Option<u32>,
+	    #[serde(skip_serializing_if = "crate::is_none_or_empty")]
+	    pub layers: Option<Vec<String>>,
+	    pub amount_msat: Amount,
+	    pub invstring: String,
+	}
+
+	impl From<SendamountRequest> for Request {
+	    fn from(r: SendamountRequest) -> Self {
+	        Request::SendAmount(r)
+	    }
+	}
+
+	impl IntoRequest for SendamountRequest {
+	    type Response = super::responses::SendamountResponse;
+	}
+
+	impl TypedRequest for SendamountRequest {
+	    type Response = super::responses::SendamountResponse;
+
+	    fn method(&self) -> &str {
+	        "sendamount"
 	    }
 	}
 }
@@ -8000,6 +8086,14 @@ pub mod responses {
 	    pub summary: String,
 	}
 
+	#[derive(Clone, Debug, Deserialize, Serialize)]
+	pub struct DecodeUnknownPayerProofTlvs {
+	    #[serde(rename = "type")]
+	    pub item_type: u64,
+	    pub length: u64,
+	    pub value: String,
+	}
+
 	/// ['What kind of object it decoded to.']
 	#[derive(Copy, Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 	#[allow(non_camel_case_types)]
@@ -8016,6 +8110,8 @@ pub mod responses {
 	    RUNE = 4,
 	    #[serde(rename = "emergency recover")]
 	    EMERGENCY_RECOVER = 5,
+	    #[serde(rename = "bolt12 payer_proof")]
+	    BOLT12_PAYER_PROOF = 6,
 	}
 
 	impl TryFrom<i32> for DecodeType {
@@ -8028,6 +8124,7 @@ pub mod responses {
 	    3 => Ok(DecodeType::BOLT11_INVOICE),
 	    4 => Ok(DecodeType::RUNE),
 	    5 => Ok(DecodeType::EMERGENCY_RECOVER),
+	    6 => Ok(DecodeType::BOLT12_PAYER_PROOF),
 	            o => Err(anyhow::anyhow!("Unknown variant {} for enum DecodeType", o)),
 	        }
 	    }
@@ -8042,6 +8139,7 @@ pub mod responses {
 	            DecodeType::BOLT11_INVOICE => "BOLT11_INVOICE",
 	            DecodeType::RUNE => "RUNE",
 	            DecodeType::EMERGENCY_RECOVER => "EMERGENCY_RECOVER",
+	            DecodeType::BOLT12_PAYER_PROOF => "BOLT12_PAYER_PROOF",
 	        }.to_string()
 	    }
 	}
@@ -8105,6 +8203,8 @@ pub mod responses {
 	    #[serde(skip_serializing_if = "Option::is_none")]
 	    pub invreq_quantity: Option<u64>,
 	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub invreq_recurrence_cancel: Option<bool>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
 	    pub invreq_recurrence_counter: Option<u32>,
 	    #[serde(skip_serializing_if = "Option::is_none")]
 	    pub invreq_recurrence_start: Option<u32>,
@@ -8141,6 +8241,12 @@ pub mod responses {
 	    #[serde(skip_serializing_if = "Option::is_none")]
 	    pub payment_secret: Option<Secret>,
 	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub proof_note: Option<String>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub proof_preimage: Option<String>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub proof_signature: Option<String>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
 	    pub routes: Option<DecodeRoutehintList>,
 	    #[serde(skip_serializing_if = "Option::is_none")]
 	    pub signature: Option<String>,
@@ -8168,6 +8274,10 @@ pub mod responses {
 	    pub warning_invreq_bip_353_name_domain_invalid: Option<String>,
 	    #[serde(skip_serializing_if = "Option::is_none")]
 	    pub warning_invreq_bip_353_name_name_invalid: Option<String>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub warning_invreq_recurrence_cancel_with_zero_counter: Option<String>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub warning_invreq_recurrence_cancel_without_counter: Option<String>,
 	    #[serde(skip_serializing_if = "Option::is_none")]
 	    pub warning_missing_invoice_amount: Option<String>,
 	    #[serde(skip_serializing_if = "Option::is_none")]
@@ -8211,7 +8321,15 @@ pub mod responses {
 	    #[serde(skip_serializing_if = "crate::is_none_or_empty")]
 	    pub offer_paths: Option<Vec<DecodeOfferPaths>>,
 	    #[serde(skip_serializing_if = "crate::is_none_or_empty")]
+	    pub proof_leaf_hashes: Option<Vec<Sha256>>,
+	    #[serde(skip_serializing_if = "crate::is_none_or_empty")]
+	    pub proof_missing_hashes: Option<Vec<Sha256>>,
+	    #[serde(skip_serializing_if = "crate::is_none_or_empty")]
+	    pub proof_omitted_tlvs: Option<Vec<u64>>,
+	    #[serde(skip_serializing_if = "crate::is_none_or_empty")]
 	    pub restrictions: Option<Vec<DecodeRestrictions>>,
+	    #[serde(skip_serializing_if = "crate::is_none_or_empty")]
+	    pub unknown_payer_proof_tlvs: Option<Vec<DecodeUnknownPayerProofTlvs>>,
 	    // Path `Decode.type`
 	    #[serde(rename = "type")]
 	    pub item_type: DecodeType,
@@ -9793,6 +9911,8 @@ pub mod responses {
 	    #[serde(skip_serializing_if = "Option::is_none")]
 	    pub set: Option<bool>,
 	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub source: Option<String>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
 	    pub value_bool: Option<bool>,
 	    #[serde(skip_serializing_if = "Option::is_none")]
 	    pub value_int: Option<i64>,
@@ -9800,9 +9920,12 @@ pub mod responses {
 	    pub value_msat: Option<Amount>,
 	    #[serde(skip_serializing_if = "Option::is_none")]
 	    pub value_str: Option<String>,
+	    #[serde(skip_serializing_if = "crate::is_none_or_empty")]
+	    pub sources: Option<Vec<String>>,
+	    #[serde(skip_serializing_if = "crate::is_none_or_empty")]
+	    pub values_str: Option<Vec<String>>,
 	    pub config: String,
 	    pub dynamic: bool,
-	    pub source: String,
 	}
 
 	#[derive(Clone, Debug, Deserialize, Serialize)]
@@ -12133,6 +12256,21 @@ pub mod responses {
 	}
 
 	#[derive(Clone, Debug, Deserialize, Serialize)]
+	pub struct AskreneremovechannelupdateResponse {
+	}
+
+	impl TryFrom<Response> for AskreneremovechannelupdateResponse {
+	    type Error = super::TryFromResponseError;
+
+	    fn try_from(response: Response) -> Result<Self, Self::Error> {
+	        match response {
+	            Response::AskReneRemoveChannelUpdate(response) => Ok(response),
+	            _ => Err(TryFromResponseError)
+	        }
+	    }
+	}
+
+	#[derive(Clone, Debug, Deserialize, Serialize)]
 	pub struct AskrenereserveResponse {
 	}
 
@@ -12166,9 +12304,27 @@ pub mod responses {
 
 	#[derive(Clone, Debug, Deserialize, Serialize)]
 	pub struct GetroutesRoutesPath {
-	    pub amount_msat: Amount,
-	    pub delay: u32,
-	    pub next_node_id: PublicKey,
+	    #[deprecated]
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub amount_msat: Option<Amount>,
+	    #[deprecated]
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub delay: Option<u32>,
+	    #[deprecated]
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub next_node_id: Option<PublicKey>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub amount_in_msat: Option<Amount>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub amount_out_msat: Option<Amount>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub cltv_in: Option<u32>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub cltv_out: Option<u32>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub node_id_in: Option<PublicKey>,
+	    #[serde(skip_serializing_if = "Option::is_none")]
+	    pub node_id_out: Option<PublicKey>,
 	    pub short_channel_id_dir: ShortChannelIdDir,
 	}
 
@@ -12741,6 +12897,26 @@ pub mod responses {
 	    fn try_from(response: Response) -> Result<Self, Self::Error> {
 	        match response {
 	            Response::CurrencyRate(response) => Ok(response),
+	            _ => Err(TryFromResponseError)
+	        }
+	    }
+	}
+
+	#[derive(Clone, Debug, Deserialize, Serialize)]
+	pub struct SendamountResponse {
+	    pub amount_msat: Amount,
+	    pub amount_sent_msat: Amount,
+	    pub failed_parts: u64,
+	    pub payment_preimage: Secret,
+	    pub successful_parts: u64,
+	}
+
+	impl TryFrom<Response> for SendamountResponse {
+	    type Error = super::TryFromResponseError;
+
+	    fn try_from(response: Response) -> Result<Self, Self::Error> {
+	        match response {
+	            Response::SendAmount(response) => Ok(response),
 	            _ => Err(TryFromResponseError)
 	        }
 	    }

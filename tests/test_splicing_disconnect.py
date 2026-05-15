@@ -26,7 +26,7 @@ def test_splice_disconnect_sig(node_factory, bitcoind):
     chan_id = l1.get_channel_id(l2)
 
     # add extra sats to pay fee
-    funds_result = l1.rpc.fundpsbt("105790sat", 0, 0, excess_as_change=True)
+    funds_result = l1.rpc.fundpsbt("107527sat", 0, 0, excess_as_change=True)
 
     result = l1.rpc.splice_init(chan_id, 100000, funds_result['psbt'])
     result = l1.rpc.splice_update(chan_id, result['psbt'])
@@ -59,7 +59,7 @@ def test_splice_disconnect_sig(node_factory, bitcoind):
     l2.daemon.wait_for_log(r'CHANNELD_AWAITING_SPLICE to CHANNELD_NORMAL')
 
     inv = l2.rpc.invoice(10**2, '3', 'no_3')
-    l1.rpc.pay(inv['bolt11'])
+    l1.rpc.xpay(inv['bolt11'])
 
     # Check that the splice doesn't generate a unilateral close transaction
     time.sleep(5)
@@ -85,7 +85,7 @@ def test_splice_disconnect_commit(node_factory, bitcoind, executor):
     chan_id = l1.get_channel_id(l2)
 
     # add extra sats to pay fee
-    funds_result = l1.rpc.fundpsbt("105790sat", 0, 0, excess_as_change=True)
+    funds_result = l1.rpc.fundpsbt("107527sat", 0, 0, excess_as_change=True)
 
     result = l1.rpc.splice_init(chan_id, 100000, funds_result['psbt'])
     result = l1.rpc.splice_update(chan_id, result['psbt'])
