@@ -4,7 +4,9 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [26.06rc1] - 2026-05-11: "CODENAME"
+## [26.06rc2] - 2026-05-21: "Quantum-Resistant Lightning Channel"
+
+This release was named by @enaples.
 
 ### Added
 
@@ -48,6 +50,8 @@ Note: You should always set `allow-deprecated-apis=false` to test for changes.
 ### Removed
 
  - JSON-RPC: `exclude` parameter to `pay` (when `xpay-handle-pay` is True): craft a layer with desired modifications and pass it to `xpay` `layers`. ([#9110])
+ - Plugins: `channel_state_changed` notification `message` field being `null`: it will be omitted instead (deprecated v25.12, disabled v26.04) ([#9136])
+ - JSON-RPC: `listpeerchannels` value `max_total_htlc_in_msat`: use `our_max_htlc_value_in_flight_msat` instead to follow spec naming convention (deprecated v25.02). ([#9136])
 
 
 ### Fixed
@@ -95,7 +99,8 @@ Note: You should always set `allow-deprecated-apis=false` to test for changes.
 [#9116]: https://github.com/ElementsProject/lightning/pull/9116
 [#8942]: https://github.com/ElementsProject/lightning/pull/8942
 [#8922]: https://github.com/ElementsProject/lightning/pull/8922
-[26.06rc1]: https://github.com/ElementsProject/lightning/releases/tag/v26.06rc1
+[#9136]: https://github.com/ElementsProject/lightning/pull/9136
+[26.06rc2]: https://github.com/ElementsProject/lightning/releases/tag/v26.06rc2
 
 ## [26.04.1] - 2026-04-25: "Negative Routing Fees II"
 
