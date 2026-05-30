@@ -1,6 +1,6 @@
 #!/bin/sh
-# This script creates base images for jammy, and noble. Then it builds the
-# cl-repro-jammy, and cl-repro-noble builder images. The base images are created using
+# This script creates base images for jammy, noble, and resolute. Then it builds the
+# cl-repro-jammy, cl-repro-noble, and cl-repro-resolute builder images. The base images are created using
 # debootstrap, and the cl-repro images are created using the Dockerfiles in
 # contrib/reprobuild. These builder images will finally be used to build the
 # reproducible binaries.
@@ -14,12 +14,8 @@ LIGHTNING_DIR=$PWD
 LIGHTNING_DIR=$(echo "$LIGHTNING_DIR" | sed 's|/contrib$||')
 echo "Lightning Directory: $LIGHTNING_DIR"
 
-for v in jammy noble; do
-  echo "Building base image for $v"
-  sudo docker run -v "$LIGHTNING_DIR":/build ubuntu:$v \
-	bash -c "apt-get update && apt-get install -y debootstrap && debootstrap $v /build/$v"
+for v in jammy noble resolute; do
   sudo tar -C $v -c . | sudo docker import - $v
-  echo "$v release:"
   sudo docker run ubuntu:$v cat /etc/lsb-release
   echo "Building CL repro $v:"
   # shellcheck disable=SC2024
