@@ -11,6 +11,8 @@ jobs:
         run: sudo docker build -t cl-repro-jammy - < contrib/reprobuild/Dockerfile.jammy
       - name: Builder noble image setup
         run: sudo docker build -t cl-repro-noble - < contrib/reprobuild/Dockerfile.noble
+      - name: Builder resolute image setup
+        run: sudo docker build -t cl-repro-resolute - < contrib/reprobuild/Dockerfile.resolute
       - name: Building using the builder image
         run: ./tools/build-release.sh bin-Fedora bin-Ubuntu
       - name: Upload Artifact
