@@ -36,7 +36,7 @@ jobs:
           set -euo pipefail
 
           mapfile -t files < <(
-            find scripts -type f -name "*.sh" -print | sort -u
+            find tools -type f -name "*.sh" -print | sort -u
           )
 
           changed=0
@@ -67,7 +67,7 @@ jobs:
           commit-message: "ci: ensure shell scripts are executable (+x)"
           title: "ci: ensure shell scripts are executable (+x)"
           body: |
-            This PR ensures all shell scripts under scripts/ are marked as executable (chmod +x):
+            This PR ensures all shell scripts under tools/ are marked as executable (chmod +x):
 
             - tools/*.sh
 
