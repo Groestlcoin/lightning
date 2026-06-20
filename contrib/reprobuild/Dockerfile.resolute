@@ -1,4 +1,4 @@
-FROM resolute
+FROM ubuntu:26.04
 
 ENV TZ=UTC
 RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
