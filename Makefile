@@ -7,10 +7,10 @@ VERSION ?= $(shell git describe --tags --always --dirty=-modded --abbrev=7 2>/de
 $(info Building version $(VERSION))
 
 # Next release.
-CLN_NEXT_VERSION := v26.06
+CLN_NEXT_VERSION := v26.09
 
 # Previous release (for downgrade testing)
-CLN_PREV_VERSION := v26.04
+CLN_PREV_VERSION := v26.06
 
 # --quiet / -s means quiet, dammit!
 ifeq ($(findstring s,$(word 1, $(MAKEFLAGS))),s)
@@ -33,7 +33,7 @@ CCANDIR := ccan
 
 # Where we keep the BOLT RFCs
 BOLTDIR := ../bolts/
-DEFAULT_BOLTVERSION := 311119388a46dfa859da3d2eda0ca836cfc5f078
+DEFAULT_BOLTVERSION := 4b539711d4726f274482051150bc6612e370b4e2
 # Can be overridden on cmdline.
 BOLTVERSION := $(DEFAULT_BOLTVERSION)
 

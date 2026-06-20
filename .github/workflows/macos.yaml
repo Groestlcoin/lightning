@@ -36,7 +36,7 @@ jobs:
         run: |
           export PATH="/usr/local/opt:/Users/runner/.local/bin:/Users/runner/Library/Python/3.10/bin:$PATH"
 
-          brew install wget autoconf automake libtool python@3.10 gnu-sed gettext libsodium protobuf openssl lowdown
+          brew install wget autoconf automake libtool python@3.10 gnu-sed gettext libsodium protobuf openssl lowdown make
 
           python3.10 -m pip install -U --user poetry==1.8.3 wheel pip
           python3.10 -m poetry install
@@ -57,7 +57,7 @@ jobs:
           export CXXFLAGS="-Wno-error -Wno-nullability-completeness -Wno-expansion-to-defined -Wno-builtin-requires-header"
 
           uv run ./configure --disable-valgrind --disable-compat
-          uv run make
+          uv run gmake
 
           #sudo python3.10 -m poetry run make install
 

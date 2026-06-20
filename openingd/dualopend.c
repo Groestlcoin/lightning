@@ -1304,7 +1304,7 @@ static void handle_tx_sigs(struct state *state, const u8 *msg)
 	const struct witness **witnesses;
 	struct tx_state *tx_state = state->tx_state;
 
-	struct tlv_txsigs_tlvs *txsig_tlvs = tlv_txsigs_tlvs_new(tmpctx);
+	struct tlv_tx_signatures_tlvs *txsig_tlvs = tlv_tx_signatures_tlvs_new(tmpctx);
 	if (!fromwire_tx_signatures(tmpctx, msg, &cid, &txid,
 				    cast_const3(
 					    struct witness ***,
@@ -1700,7 +1700,7 @@ static u8 *opening_negotiate_msg(const tal_t *ctx, struct state *state)
 		case WIRE_PEER_STORAGE:
 		case WIRE_PEER_STORAGE_RETRIEVAL:
 		case WIRE_STFU:
-		case WIRE_SPLICE:
+		case WIRE_SPLICE_INIT:
 		case WIRE_SPLICE_ACK:
 		case WIRE_SPLICE_LOCKED:
 			break;
@@ -2082,7 +2082,7 @@ static bool run_tx_interactive(struct state *state,
 		case WIRE_PEER_STORAGE:
 		case WIRE_PEER_STORAGE_RETRIEVAL:
 		case WIRE_STFU:
-		case WIRE_SPLICE:
+		case WIRE_SPLICE_INIT:
 		case WIRE_SPLICE_ACK:
 		case WIRE_SPLICE_LOCKED:
 			open_abort(state, "Unexpected wire message %s",
@@ -3976,7 +3976,9 @@ static void do_reconnect_dance(struct state *state)
 	 *   - MUST set `next_funding_txid` to the txid of that interactive transaction.
 	 */
 	tlvs = tlv_channel_reestablish_tlvs_new(tmpctx);
-	if (!tx_state->remote_funding_sigs_rcvd) {
+	/* Track whether we set next_funding before tlvs is overwritten by received msg */
+	bool we_set_next_funding = !tx_state->remote_funding_sigs_rcvd;
+	if (we_set_next_funding) {
 		tlvs->next_funding = talz(tlvs, struct tlv_channel_reestablish_tlvs_next_funding);
 		tlvs->next_funding->next_funding_txid = tx_state->funding.txid;
 		tlvs->next_funding->retransmit_flags = 1; /* COMMITMENT_SIGNED */
@@ -4048,9 +4050,12 @@ static void do_reconnect_dance(struct state *state)
 	 *            - MUST send its `tx_signatures` for that funding transaction.
 	 *        - if it has already received `tx_signatures` for that funding transaction:
 	 *          - MUST send its `tx_signatures` for that funding transaction.
-	 *       - otherwise:
-	 *       - MUST send `tx_abort` to let the sending node know that they can forget
-	 *         this funding transaction.
+	 *      - if it also sets `next_funding` in its own `channel_reestablish`, but the
+	 *        values don't match:
+	 *        - MUST send an `error` and fail the channel.
+	 *      - otherwise:
+	 *        - MUST send `tx_abort` to let the sending node know that they can forget
+	 *        this funding transaction.
 	 */
 	if (tlvs->next_funding) {
 		/* Does this match ours? */
@@ -4079,15 +4084,21 @@ static void do_reconnect_dance(struct state *state)
 				status_debug("Unable to send our sigs, our psbt isn't signed");
 			} else
 				status_debug("No commitment, not sending our sigs (reconnected)");
+		} else if (we_set_next_funding) {
+			/* BOLT #2: if it also sets `next_funding` in its own
+			 * `channel_reestablish`, but the values don't match:
+			 * - MUST send an `error` and fail the channel. */
+			open_err_fatal(state, "next_funding_txid %s doesn't match ours %s",
+				       fmt_bitcoin_txid(tmpctx,
+							&tlvs->next_funding->next_funding_txid),
+				       fmt_bitcoin_txid(tmpctx,
+							&tx_state->funding.txid));
 		} else {
-			peer_billboard(true, "Non-matching next_funding on reconnect. Aborting.");
 			open_abort(state, "Sent next_funding_txid %s doesn't match ours %s",
-
 				   fmt_bitcoin_txid(tmpctx,
 						    &tlvs->next_funding->next_funding_txid),
 				   fmt_bitcoin_txid(tmpctx,
 						    &tx_state->funding.txid));
-			return;
 		}
 	}
 
@@ -4279,7 +4290,7 @@ static u8 *handle_peer_in(struct state *state)
 	case WIRE_PEER_STORAGE:
 	case WIRE_PEER_STORAGE_RETRIEVAL:
 	case WIRE_STFU:
-	case WIRE_SPLICE:
+	case WIRE_SPLICE_INIT:
 	case WIRE_SPLICE_ACK:
 	case WIRE_SPLICE_LOCKED:
 	case WIRE_PROTOCOL_BATCH_ELEMENT:

@@ -210,7 +210,7 @@ for target in $TARGETS; do
     esac
 done
 
-if [ -z "${TARGETS##* docker *}" ]; then
+if [ -z "${TARGETS##* docker *}" ] || [ -z "${TARGETS##* docker}" ]; then
     echo "Building Docker Images"
     DOCKER_USER="groestlcoin"
     echo "Creating multi-platform images tagged as $VERSION and latest"
@@ -231,7 +231,7 @@ if [ -z "${TARGETS##* docker *}" ]; then
     echo "Pushed multi-platform images tagged as $VERSION and latest"
 fi
 
-if [ -z "${TARGETS##* sign *}" ]; then
+if [ -z "${TARGETS##* sign *}" ] || [ -z "${TARGETS##* sign}" ]; then
     echo "Signing Release"
     cd release/ || exit
     sha256sum clightning-"$VERSION"-*.tar.* clightning-"$VERSION".zip > SHA256SUMS-"$VERSION"
