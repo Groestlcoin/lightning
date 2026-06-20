@@ -47,3 +47,25 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: clightning-${{ github.sha }}-Ubuntu-24.04
+
+  resolute:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Builder image setup
+        run: sudo docker build -t cl-repro-resolute - < contrib/reprobuild/Dockerfile.resolute
+      - name: create release folder
+        run: mkdir release
+      - name: Building using the builder image
+        run: sudo docker run --rm -v $(pwd):/repo -t cl-repro-resolute
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: clightning-${{ github.sha }}-Ubuntu-26.04
+          path: release/*.tar.xz
+          if-no-files-found: error
+          retention-days: 7
+      - name: Download artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: clightning-${{ github.sha }}-Ubuntu-26.04
