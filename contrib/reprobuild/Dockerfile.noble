@@ -12,27 +12,27 @@ ENV PROTOC_VERSION=29.4
 #    sed -i 's/^deb \(.*\) noble main$/deb \1 noble main universe/' /etc/apt/sources.list
 
 RUN apt-get update \
-	&& apt-get install -y --no-install-recommends \
-	autoconf \
-	automake \
-	build-essential \
-	ca-certificates \
-	file \
-	gettext \
-	git \
-	curl \
-	libsqlite3-dev \
-	libpq-dev \
-	libsodium23 \
-	libsodium-dev \
-	libtool \
-	lowdown \
-	m4 \
-	sudo \
-	unzip \
-	wget \
-	jq \
-	zip
+    && apt-get install -y --no-install-recommends \
+    autoconf \
+    automake \
+    build-essential \
+    ca-certificates \
+    file \
+    gettext \
+    git \
+    curl \
+    libsqlite3-dev \
+    libpq-dev \
+    libsodium23 \
+    libsodium-dev \
+    lowdown \
+    libtool \
+    m4 \
+    sudo \
+    unzip \
+    wget \
+    jq \
+    zip
 
 # Install Python3.10 (more reproducible than relying on python3-setuptools)
 RUN git clone https://github.com/pyenv/pyenv.git /root/.pyenv && \
