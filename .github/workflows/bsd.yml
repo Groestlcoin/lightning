@@ -25,10 +25,7 @@ jobs:
           pkg install -y \
             bash \
             wget \
-            py311-pip \
             py311-sqlite3 \
-            py311-mako \
-            py311-grpcio-tools \
             gmake \
             git \
             python \
@@ -47,7 +44,11 @@ jobs:
             uv \
             libffi
 
-            # pip install --user -U wheel pip mako==1.1.6 mistune==0.8.4 jinja2==3.1.6 MarkupSafe==3.0.3 grpcio-tools
+          python3 -m pip install --user -U \
+            pip \
+            wheel \
+            mako \
+            grpcio-tools
 
         run: |
           PATH=/root/.local/bin:$PATH:/root/.cargo/bin; export PATH
