@@ -21,6 +21,7 @@ jobs:
       with:
         usesh: true
         mem: 4096
+        release: 14.2
         prepare: |
           pkg install -y \
             bash \
