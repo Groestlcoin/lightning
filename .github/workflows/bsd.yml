@@ -25,10 +25,10 @@ jobs:
           pkg install -y \
             bash \
             wget \
-            py312-pip \
-            py312-sqlite3 \
-            py312-mako \
-            py312-grpcio-tools \
+            py311-pip \
+            py311-sqlite3 \
+            py311-mako \
+            py311-grpcio-tools \
             gmake \
             git \
             python \
