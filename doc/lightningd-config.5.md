@@ -339,7 +339,7 @@ connections. Default is 9736.
 * **recover**=*mnemonic*
 
   Restore the node from a mnemonic.  For pre-25.12 nodes (which didn't have a mnemonic), use a 32-byte secret encoded as either a codex32 secret string or a 64-character hex string.
-  
+
   This will fail if the `hsm_secret` file exists.  Your node will start the node in offline mode, for manual recovery.  The secret can be extracted from the `hsm_secret` using lightning-hsmtool(8)'s `getsecret`.
 
 * **alias**=*NAME*
@@ -871,6 +871,12 @@ about whether to add funds or not to a proposed channel is handled
 automatically by a plugin that implements the appropriate logic for
 your needs. The default behavior is to not contribute funds.
 
+* **experimental-simple-close**
+
+  Specifying this enables support for the simplified mutual close protocol
+([bolt][bolt] #2), where each peer independently builds and broadcasts its
+own closing transaction rather than iteratively negotiating a single agreed fee.
+
 * **experimental-splicing**
 
   Specifying this enables support for the splicing protocol ([bolt][bolt] #863),
@@ -883,20 +889,20 @@ of the prior channel balance and the new one.
 
   (deprecated in v26.04)
 
-* **experimental-lsps-client**
+* **experimental-lsps-client** [plugin `cln-lsps-client`]
 
   Specifying this enables client side support for the lsps protocol
 ([blip][blip] #50). Core-Lightning only supports the lsps2 ([blip][blip] #52)
 subprotocol describing the creation of just-in-time-channel (JIT-channels)
 between a LSP and this client.
 
-* **experimental-lsps2-service**
+* **experimental-lsps2-service** [plugin `cln-lsps-service`]
 
   Specifying this enables a LSP JIT-Channel service according to the lsps
 protocol ([blip][blip] #52). It requires a LSP-Policy plugin to be available and
 a *experimental-lsps2-promise-secret* to be set.
 
-* **experimental-lsps2-promise-secret**=*promisesecret*
+* **experimental-lsps2-promise-secret**=*promisesecret* [plugin `cln-lsps-service`]
 
   Sets a `promisesecret` for the LSP JIT-Channel service. Is a 64-character hex
  string that acts as the secret for promises according to ([blip][blip] #52).

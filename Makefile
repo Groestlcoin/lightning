@@ -439,6 +439,7 @@ GRPC_GEN = \
 	$(GRPC_PATH)/node_pb2_grpc.py \
 	$(GRPC_PATH)/primitives_pb2.py
 
+CLN_GRPC_GENALL += $(GRPC_GEN)
 ALL_TEST_GEN += $(GRPC_GEN)
 
 $(GRPC_GEN) &: cln-grpc/proto/node.proto cln-grpc/proto/primitives.proto
@@ -662,10 +663,10 @@ update-doc-examples:
 	TEST_DEBUG=1 VALGRIND=0 GENERATE_EXAMPLES=1 $(PYTEST) $(PYTEST_OPTS) --timeout=1200 tests/autogenerate-rpc-examples.py && $(MAKE) $(MSGGEN_GEN_ALL)
 
 check-doc-examples: update-doc-examples
-	git diff --exit-code HEAD
+	git diff --exit-code HEAD -- doc
 
 check-wire-format: extract-bolt-csv
-	git diff --exit-code HEAD
+	git diff --exit-code HEAD -- wire
 
 # SECURITY.md and doc/contribute-to-core-lightning/security-policy.md must be
 # synced. So far we do this manually.
