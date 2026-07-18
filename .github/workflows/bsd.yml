@@ -25,10 +25,7 @@ jobs:
           pkg install -y \
             bash \
             wget \
-            py311-pip \
             py311-sqlite3 \
-            py311-mako \
-            py311-grpcio-tools \
             gmake \
             git \
             python \
@@ -47,11 +44,9 @@ jobs:
             uv \
             libffi
 
-            # pip install --user -U wheel pip mako==1.1.6 mistune==0.8.4 jinja2==3.1.6 MarkupSafe==3.0.3 grpcio-tools
-
         run: |
           PATH=/root/.local/bin:$PATH:/root/.cargo/bin; export PATH
-          # uv sync --all-extras --all-groups
+          uv sync --all-extras --all-groups
 
           # git clone https://github.com/lightning/bolts.git ../bolts
           # fatal: unsafe repository ('/Users/runner/work/lightning/lightning' is owned by someone else)
@@ -59,11 +54,9 @@ jobs:
           # for d in libwally-core gheap jsmn libbacktrace; do git config --global --add safe.directory `pwd`/external/$d; done
           # git submodule update --init --recursive
 
-          ./configure --disable-valgrind
-          # uv run gmake
-          # uv run gmake install
-          gmake -j2
-          gmake install
+          uv run ./configure --disable-valgrind
+          uv run gmake -j2
+          uv run gmake install
     - name: Upload artifacts
       uses: actions/upload-artifact@v7
       with:
