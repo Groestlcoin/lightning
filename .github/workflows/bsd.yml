@@ -25,7 +25,8 @@ jobs:
           pkg install -y \
             bash \
             wget \
-            py311-sqlite3 \
+            py312-sqlite3 \
+            rust \
             gmake \
             git \
             python \
