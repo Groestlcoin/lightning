@@ -55,7 +55,7 @@ jobs:
           # for d in libwally-core gheap jsmn libbacktrace; do git config --global --add safe.directory `pwd`/external/$d; done
           # git submodule update --init --recursive
 
-          uv run ./configure --disable-valgrind
+          uv run ./configure --disable-valgrind --disable-rust
           uv run gmake -j2
           uv run gmake install
     - name: Upload artifacts
