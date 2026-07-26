@@ -68,23 +68,22 @@ You will also need a version of groestlcoind with segregated witness and `estima
 
 ## To Build on Ubuntu
 
-OS version: Ubuntu 15.10 or above
+OS version: Ubuntu 22.04 or above
 
 Get dependencies:
 ```shell
-sudo apt-get update
-sudo apt-get install -y \
-  jq autoconf automake build-essential git libtool libsqlite3-dev libffi-dev \
-  python3 python3-pip net-tools zlib1g-dev libsodium-dev gettext lowdown
-pip3 install --upgrade pip
+sudo apt update
+sudo apt install -y \
+  curl autoconf jq libsecp256k1-dev libsodium-dev automake build-essential git libtool libsqlite3-dev libffi-dev python3 python3-pip net-tools zlib1g-dev gettext libssl-dev lowdown python3-mako
 curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
+If installation halts on tzdata configuration, finish the setup of your OS and try again.
 
-After installing uv, restart your shell or run the command shown by the install output (usually `source $HOME/.local/bin/env`) to ensure `uv` is in your PATH.
+After installing uv, restart your shell or run `source ~/.local/bin/env` to ensure `uv` is in your PATH.
 
 If you don't have Groestlcoin installed locally you'll need to install that as well. It's now available via [snapd](https://snapcraft.io/groestlcoin-core).
 ```shell
-sudo apt-get install snapd
+sudo apt install snapd
 sudo snap install groestlcoin-core
 # Snap does some weird things with binary names; you'll
 # want to add a link to them so everything works as expected
@@ -97,25 +96,28 @@ git clone https://github.com/Groestlcoin/lightning.git
 cd lightning
 ```
 
-Checkout a release tag:
+Checkout a release tag (optional):
 ```shell
-git checkout v25.02
+git checkout v26.06
 ```
+> 📘
+>
+> Note that docs are valid for the commit they are checked out with. If you checkout a release tag that had a different version of this document, please refer to that instead.
 
 For development or running tests, get additional dependencies:
 ```shell
-sudo apt-get install -y valgrind libpq-dev shellcheck cppcheck \
-  libsecp256k1-dev lowdown
+sudo apt install -y valgrind libpq-dev shellcheck cppcheck
 ```
 
-If you want to build the Rust plugins (cln-grpc, clnrest, cln-bip353 and wss-proxy):
+If you want to build the Rust plugins (cln-grpc, clnrest, cln-bip353 and wss-proxy) make sure that you have Rust 1.85+ installed (included on Ubuntu 25.10 or higher):
 ```shell
-sudo apt-get install -y cargo rustfmt
+sudo apt install -y cargo rustfmt
 ```
 
 > 📘
 >
-> If your build fails because of your Rust version, you might want to check out [rustup](https://rustup.rs/) to install a newer version
+> For Ubuntu <25.10, all details about installing Rust can be found at https://rustup.rs/.
+
 
 There are two ways to build core lightning, and this depends on how you want use it.
 
@@ -155,7 +157,7 @@ OS version: Fedora 39 or above
 Get dependencies:
 ```shell
 sudo dnf update -y && \
-        sudo dnf groupinstall -y \
+        sudo dnf group install -y \
                 'c-development' \
                 'development-tools' && \
         sudo dnf install -y \
@@ -176,7 +178,9 @@ sudo dnf update -y && \
                 which \
                 sed \
                 postgresql-devel \
-                python3-mako && \
+                python3-mako \
+                openssl \
+                openssl-devel && \
         sudo dnf clean all
 ```
 
@@ -184,6 +188,12 @@ Install Rust via rustup (required for Cargo lockfile v4 support):
 ```shell
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 source $HOME/.cargo/env
+```
+
+Install uv (Python package manager, used by the build):
+```shell
+curl -LsSf https://astral.sh/uv/install.sh | sh
+export PATH="$HOME/.local/bin:$PATH"
 ```
 
 Install lowdown (for documentation generation):
@@ -202,22 +212,26 @@ rm -rf /tmp/VERSION_1_0_2.tar.gz /tmp/lowdown-VERSION_1_0_2
 
 Make sure you have [groestlcoind](https://github.com/groestlcoin/groestlcoin) available to run.
 
-Clone lightning:
+Clone lightning (including submodules):
 ```shell
 git clone https://github.com/Groestlcoin/lightning.git
 cd lightning
 ```
 
-Checkout a release tag:
+Checkout a release tag (optional):
 ```shell
-git checkout v24.05
+git checkout v26.06
 ```
+> 📘
+>
+> Note that docs are valid for the commit they are checked out with. If you checkout a release tag that had a different version of this document, please refer to that instead.
 
 Build and install lightning:
 ```shell
+uv sync --all-extras --all-groups --frozen
 ./configure
-make
-sudo make install
+RUST_PROFILE=release uv run make -j$(nproc)
+sudo RUST_PROFILE=release make install
 ```
 
 Running lightning (mainnet):
@@ -306,13 +320,40 @@ Finally, build `c-lightning`:
 
 ## To Build on NixOS
 
-Use nix-shell launch a shell with a full Core Lightning dev environment:
+Core Lightning ships a [Nix flake](https://nixos.wiki/wiki/Flakes), so on NixOS
+you don't need to install any build dependencies by hand. Make sure the
+`nix-command` and `flakes` features are enabled.
+
+Build and run directly from the repository; the git submodules are fetched
+automatically and the binaries are placed under `./result/bin`:
 ```shell
-nix-shell -Q -p gdb sqlite autoconf git clang libtool sqlite autoconf \
-autogen automake gmp zlib gettext libsodium poetry 'python3.withPackages (p: [p.bitcoinlib])' \
-valgrind --run "./configure && poetry shell"
-poetry install
-make
+nix build github:ElementsProject/lightning
+
+# Or run them straight away:
+nix run github:ElementsProject/lightning#lightningd -- --version
+nix run github:ElementsProject/lightning#lightning-cli -- --version
+```
+
+Build a specific release by appending the tag, or install into your profile:
+```shell
+nix build github:ElementsProject/lightning/v26.06.1
+nix profile install github:ElementsProject/lightning
+```
+
+From a local checkout, append `?submodules=1` so the build sees the submodules:
+```shell
+git clone https://github.com/ElementsProject/lightning.git
+cd lightning
+git checkout v26.06.1
+nix build ".?submodules=1"
+./result/bin/lightningd --version
+```
+
+To build with PostgreSQL support use the `cln-postgres` package, and for a
+development shell with the full toolchain use `nix develop`:
+```shell
+nix build ".?submodules=1#cln-postgres"
+nix develop
 ```
 
 ## To Build on macOS Apple Silicon
@@ -382,10 +423,13 @@ git clone https://github.com/ElementsProject/lightning.git
 cd lightning
 ```
 
-Checkout a release tag:
+Checkout a release tag (optional):
 ```shell
-git checkout v24.05
+git checkout v26.06
 ```
+> 📘
+>
+> Note that docs are valid for the commit they are checked out with. If you checkout a release tag that had a different version of this document, please refer to that instead.
 
 Build lightning:
 ```shell
@@ -459,10 +503,13 @@ git clone https://github.com/Groestlcoin/lightning.git
 cd lightning
 ```
 
-Checkout a release tag:
+Checkout a release tag (optional):
 ```shell
-git checkout v24.05
+git checkout v26.06
 ```
+> 📘
+>
+> Note that docs are valid for the commit they are checked out with. If you checkout a release tag that had a different version of this document, please refer to that instead.
 
 Build lightning:
 ```shell
