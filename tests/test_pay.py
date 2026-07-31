@@ -691,6 +691,33 @@ def test_wait_sendpay(node_factory, executor):
     l1.rpc.waitsendpay(inv['payment_hash'])['payment_preimage']
 
 
+def test_sendpay_onion_overflow(node_factory):
+    """A route whose per-hop payloads exceed the 1300-byte onion must
+    fail cleanly: create_onionpacket returns NULL and send_payment
+    used it unchecked, crashing lightningd (SIGSEGV in
+    serialize_onionpacket)."""
+    l1, l2 = node_factory.line_graph(2, fundamount=10**6)
+
+    amt = 1000
+    inv = l2.rpc.invoice(amt, 'onionoverflow', 'desc')
+
+    # Each TLV hop costs ~50 onion bytes at these amounts; 30 hops
+    # cannot fit in the 1300-byte onion no matter how small the
+    # encodings.  Only the first hop must be a live channel: the
+    # onion is built before anything is sent.
+    hop = {
+        'amount_msat': amt,
+        'id': l2.info['id'],
+        'delay': 5,
+        'channel': first_scid(l1, l2)
+    }
+    route = [copy.deepcopy(hop) for _ in range(30)]
+
+    with pytest.raises(RpcError, match='Could not create onion packet'):
+        l1.rpc.sendpay(route, inv['payment_hash'],
+                       payment_secret=inv['payment_secret'])
+
+
 @unittest.skipIf(TEST_NETWORK != 'regtest', "The reserve computation is bitcoin specific")
 @pytest.mark.parametrize("anchors", [False, True])
 def test_sendpay_cant_afford(node_factory, anchors):
@@ -5312,6 +5339,17 @@ def test_sendpay_grouping(node_factory, bitcoind):
     # And finally we should have all 3 attempts to pay the invoice
     pays = l1.rpc.listpays()['pays']
     assert(len(pays) == 3)
+
+    # xpay returns the failure to the caller before it finishes cleaning up
+    # the payment, so a failed attempt can still be reported as 'pending'
+    # (attempt_ongoing() -> true) right after the rpc returns. Each xpay payment
+    # owns a private "xpay-<n>" askrene layer which is removed in that same cleanup,
+    # so wait for them all to disappear before checking the exact statuses.
+    # If payment hangs indefinetly, the default timeout will fail the test
+    # (60s/180s if SLOW_MACHINE=1).
+    wait_for(lambda: not any(layer['layer'].startswith('xpay-')
+                             for layer in l1.rpc.askrene_listlayers()['layers']))
+    pays = l1.rpc.listpays()['pays']
     assert([p['status'] for p in pays] == ['failed', 'failed', 'complete'])
 
 

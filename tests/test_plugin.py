@@ -20,6 +20,7 @@ from tests.test_wallet import HsmTool, write_all, WAIT_TIMEOUT
 import ast
 import copy
 import json
+import logging
 import os
 import pytest
 import random
@@ -33,7 +34,10 @@ import time
 import unittest
 
 # bwatch is opt-in (--experimental-bwatch); also speed up polling for tests.
-BWATCH_OPTS = {'experimental-bwatch': None, 'bwatch-poll-interval': 500}
+# rescan=0 because a startup rescan re-arms every perennial wallet watch and
+# triggers a rescan loop that drops in-memory reservation state.
+BWATCH_OPTS = {'experimental-bwatch': None, 'bwatch-poll-interval': 500,
+               'rescan': 0}
 
 
 def wait_bwatch_caught_up(node, timeout=TIMEOUT):
@@ -1798,6 +1802,38 @@ def test_sendpay_notifications_nowaiter(node_factory):
     results = l1.rpc.call('listsendpays_plugin')
     assert len(results['sendpay_success']) == 1
     assert len(results['sendpay_failure']) == 1
+
+
+def test_inline_plugin_wait_for_log_no_selfmatch(node_factory):
+    """On inline-plugin nodes the test process's logging is forwarded into
+    the node's log.  wait_for_log()'s own 'Waiting for [pattern]'
+    announcement embeds the pattern, so with test logging at DEBUG it used
+    to land in the scanned log and match itself, reducing the wait to a
+    no-op (#9343).  A pattern that never appears must genuinely time out.
+    """
+    def setup(plugin):
+        @plugin.method('inline_ping')
+        def inline_ping(plugin):
+            logging.info("AUTHOR_LOG_MARKER_9343")
+            return {'pong': True}
+
+    l1 = node_factory.get_node(inline_plugin=setup)
+
+    root = logging.getLogger()
+    old_level = root.level
+    root.setLevel(logging.DEBUG)
+    try:
+        # The plugin author's own logging must still be forwarded...
+        assert l1.rpc.call('inline_ping') == {'pong': True}
+        l1.daemon.wait_for_log('AUTHOR_LOG_MARKER_9343')
+        # ...but pyln's internal announcements must not be, so a pattern
+        # that never appears genuinely times out instead of matching the
+        # forwarded 'Waiting for [pattern]' line.
+        with pytest.raises(TimeoutError):
+            l1.daemon.wait_for_log('SELFMATCH_SENTINEL_NEVER_LOGGED',
+                                   timeout=5)
+    finally:
+        root.setLevel(old_level)
 
 
 def test_rpc_command_hook(node_factory):
@@ -5157,7 +5193,7 @@ def test_bwatch_add_watch_creates_datastore_entry(node_factory, bitcoind):
 
 def test_bwatch_multiple_owners_same_watch(node_factory, bitcoind):
     """Test that multiple owners can watch the same thing"""
-    l1 = node_factory.get_node()
+    l1 = node_factory.get_node(options=BWATCH_OPTS)
 
     test_txid = "1" * 64
     test_outpoint = f"{test_txid}:0"
@@ -5761,13 +5797,89 @@ def test_bwatch_block_history_rollback(node_factory, bitcoind):
         assert reverse_bitcoin_hash(expected_hash) in str(block_entry['hex'])
 
 
+def test_bwatch_spk_watch_reorg_demotes_outputs(node_factory, bitcoind):
+    """A reorg that disconnects a deposit's block must undo the confirmation:
+    the wallet's scriptpubkey watch_revert handler demotes the rows in
+    our_outputs/our_txs to unconfirmed (it must not delete them, or state
+    like reservations would be lost), matching the legacy output demoted
+    via its blocks FK.  The funds show as unconfirmed until the tx
+    confirms again.
+    """
+    l1 = node_factory.get_node(options=BWATCH_OPTS)
+    wait_bwatch_caught_up(l1)
+
+    addr = l1.rpc.newaddr('bech32')['bech32']
+    txid = bitcoind.rpc.sendtoaddress(addr, 1.0)
+    bitcoind.generate_block(1, wait_for_mempool=txid)
+    deposit_height = bitcoind.rpc.getblockcount()
+
+    # The perennial wallet scriptpubkey watch discovers the deposit.
+    wait_for(lambda: len(l1.rpc.listfunds()['outputs']) == 1)
+    output = only_one(l1.rpc.listfunds()['outputs'])
+    assert output['txid'] == txid
+    assert output['status'] == 'confirmed'
+    assert output['blockheight'] == deposit_height
+    assert output['amount_msat'] == 100_000_000_000
+
+    assert l1.db_query('SELECT blockheight, spendheight FROM our_outputs') \
+        == [{'blockheight': deposit_height, 'spendheight': None}]
+    assert (l1.db_query('SELECT blockheight FROM our_txs')
+            == [{'blockheight': deposit_height}])
+    assert l1.db_query('SELECT COUNT(*) AS c FROM outputs')[0]['c'] == 1
+
+    # Reorg the deposit block away.  Deprioritize the returned mempool tx
+    # (same trick as simple_reorg) so the replacement blocks don't just
+    # re-confirm it.
+    bitcoind.rpc.invalidateblock(bitcoind.rpc.getblockhash(deposit_height))
+    memp = bitcoind.rpc.getrawmempool()
+    assert txid in memp
+    for t in memp:
+        bitcoind.rpc.prioritisetransaction(t, None, -1000000)
+    bitcoind.generate_block(2)
+
+    l1.daemon.wait_for_log(r'Reorg detected', timeout=60)
+
+    # watch_revert demotes the discovered output and its tx to unconfirmed
+    # (the 0 sentinel); the rows survive, keeping reservations and close
+    # metadata intact.  The legacy mirror row is demoted the same way by
+    # the blocks FK when chaintopology removes the block.
+    wait_for(lambda: l1.db_query('SELECT blockheight, spendheight FROM our_outputs')
+             == [{'blockheight': 0, 'spendheight': None}])
+    wait_for(lambda: l1.db_query('SELECT blockheight FROM our_txs')
+             == [{'blockheight': 0}])
+    wait_for(lambda: l1.db_query('SELECT confirmation_height AS h FROM outputs')
+             == [{'h': None}])
+    assert only_one(l1.rpc.listfunds()['outputs'])['status'] == 'unconfirmed'
+
+    # Re-confirm the same tx on the new chain: the (still armed) perennial
+    # watch rediscovers it at its new height.
+    for t in memp:
+        bitcoind.rpc.prioritisetransaction(t, None, 1000000)
+    bitcoind.generate_block(1, wait_for_mempool=txid)
+    new_height = bitcoind.rpc.getblockcount()
+    assert new_height != deposit_height
+
+    # The demoted row is still listed (unconfirmed), so wait for the
+    # re-confirmation to promote it rather than for it to appear.
+    wait_for(lambda: only_one(l1.rpc.listfunds()['outputs'])['status'] == 'confirmed')
+    output = only_one(l1.rpc.listfunds()['outputs'])
+    assert output['txid'] == txid
+    assert output['blockheight'] == new_height
+
+    assert l1.db_query('SELECT blockheight, spendheight FROM our_outputs') \
+        == [{'blockheight': new_height, 'spendheight': None}]
+    assert (l1.db_query('SELECT blockheight FROM our_txs')
+            == [{'blockheight': new_height}])
+
+    # Coin movements are append-only across the reorg: the re-confirmed
+    # deposit must be deduplicated, not recorded twice.
+    assert l1.db_query('SELECT COUNT(*) AS c FROM chain_moves')[0]['c'] == 1
+
+
 @pytest.mark.slow_test
 def test_bwatch_listwatch(node_factory, bitcoind):
     """Test that listwatch RPC returns all active watches"""
     l1 = node_factory.get_node(options=BWATCH_OPTS)
-
-    # Record the baseline — the wallet registers scriptpubkey watches on startup.
-    initial_count = len(l1.rpc.listwatch()['watches'])
 
     # Add an outpoint watch — clearly not a real UTXO.
     test_outpoint_a_txid = "a" * 64
@@ -5786,11 +5898,20 @@ def test_bwatch_listwatch(node_factory, bitcoind):
     # Add a second owner to the first outpoint watch
     l1.rpc.addoutpointwatch(owner='wallet/p2tr/0', outpoint=test_outpoint_a, start_block=50)
 
+    # The wallet registers its own scriptpubkey watches at startup, and on a
+    # slow machine that registration can land at any point during the test,
+    # so a total-count baseline races it.  Count only this test's watches,
+    # which no background registration can perturb.
+    def our_watches(watches):
+        return [w for w in watches
+                if w.get('outpoint') in (test_outpoint_a, test_outpoint_c)
+                or w.get('scriptpubkey') == test_scriptpubkey]
+
     result = l1.rpc.listwatch()
     watches = result['watches']
 
-    # 3 new unique watches added on top of the wallet's initial set
-    assert len(watches) == initial_count + 3
+    # 3 unique watches: the two adds for the same outpoint merged into one
+    assert len(our_watches(watches)) == 3
 
     # Find each test watch by its unique identifier
     outpoint_a_watch = next((w for w in watches if w.get('outpoint') == test_outpoint_a), None)
@@ -5820,7 +5941,7 @@ def test_bwatch_listwatch(node_factory, bitcoind):
     l1.rpc.deloutpointwatch(owner='wallet/p2wpkh/0', outpoint=test_outpoint_a)
 
     watches = l1.rpc.listwatch()['watches']
-    assert len(watches) == initial_count + 3
+    assert len(our_watches(watches)) == 3
     outpoint_a_watch = next(w for w in watches if w.get('outpoint') == test_outpoint_a)
     assert len(outpoint_a_watch['owners']) == 1
     assert outpoint_a_watch['owners'][0] == 'wallet/p2tr/0'
@@ -5829,7 +5950,7 @@ def test_bwatch_listwatch(node_factory, bitcoind):
     l1.rpc.deloutpointwatch(owner='wallet/p2tr/0', outpoint=test_outpoint_a)
 
     watches = l1.rpc.listwatch()['watches']
-    assert len(watches) == initial_count + 2
+    assert len(our_watches(watches)) == 2
     assert not any(w.get('outpoint') == test_outpoint_a for w in watches)
 
 

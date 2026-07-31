@@ -12,9 +12,11 @@ from pyln.client import LightningRpc
 from pyln.client import Millisatoshi
 from pyln.client import NodeVersion
 from pyln.client import Plugin
+from pyln.client.plugin import PluginLogHandler
 
 import ephemeral_port_reserve  # type: ignore
 import tempfile
+import errno
 import json
 import logging
 import lzma
@@ -213,6 +215,40 @@ def cleanup_stale_port_locks():
                 pass
     except Exception:
         pass  # best-effort, never crash the test run over cleanup
+
+
+def wait_for_port_released(port, timeout=TIMEOUT):
+    """Wait until 127.0.0.1:port can be bound again.
+
+    A stopped node's connectd holds the listen socket until it exits,
+    which can be several seconds after lightningd itself is gone
+    (subdaemons are separate processes, and die slowly under valgrind).
+    Restarting the node before the port is released makes the new
+    connectd fail with 'Address already in use'.
+    """
+    start_time = time.time()
+    while True:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        # Match connectd's SO_REUSEADDR, so sockets lingering in
+        # TIME_WAIT don't count as "still in use".
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            s.bind(('127.0.0.1', port))
+            break
+        except OSError as e:
+            if e.errno != errno.EADDRINUSE:
+                raise
+            if time.time() - start_time > timeout:
+                raise TimeoutError(
+                    "Port {} was not released within {} seconds"
+                    .format(port, timeout))
+        finally:
+            s.close()
+        time.sleep(0.1)
+
+    waited = time.time() - start_time
+    if waited >= 1:
+        logging.info("Port %d took %.1fs to be released", port, waited)
 
 
 class TailableProc(object):
@@ -848,6 +884,9 @@ class LightningD(TailableProc):
 
     def start(self, stdin=None, wait_for_initialized=True, stderr_redir=False):
         self.opts['groestlcoin-rpcport'] = self.rpcproxy.rpcport
+        # On restart, the previous incarnation's connectd may still be
+        # dying and holding our listen port: don't launch until it's free.
+        wait_for_port_released(self.port)
         TailableProc.start(self, stdin, stdout_redir=False, stderr_redir=stderr_redir)
         if wait_for_initialized:
             self.wait_for_log("Server started with public key")
@@ -2012,6 +2051,26 @@ class NodeFactory(object):
         return not unexpected_fail, err_msgs
 
 
+class _NoPylnInternalsFilter(logging.Filter):
+    """Drop log records generated inside the pyln packages themselves.
+
+    An inline plugin's Plugin() lives in the test process, so its
+    PluginLogHandler on the root logger would forward pyln's own machinery
+    logs into the node's log.  wait_for_logs()'s 'Waiting for [pattern]'
+    announcement embeds the pattern verbatim, lands in the very log being
+    scanned, and matches itself, silently reducing the wait to a no-op.
+    Only records from outside pyln (i.e. the plugin author's own logging)
+    may be forwarded.
+    """
+    PYLN_DIRS = tuple(
+        os.path.dirname(os.path.abspath(f)) + os.sep
+        for f in (__file__,
+                  sys.modules[PluginLogHandler.__module__].__file__))
+
+    def filter(self, record):
+        return not os.path.abspath(record.pathname).startswith(self.PYLN_DIRS)
+
+
 def _inline_plugin(node, setup_fn):
     """Set up an inline plugin serve thread for a not-yet-started node.
 
@@ -2031,10 +2090,33 @@ def _inline_plugin(node, setup_fn):
     """
     sock_path = os.path.join(node.daemon.lightning_dir, TEST_NETWORK, 'inline-plugin.sock')
     srv = socket.socket(socket.AF_UNIX)
-    srv.bind(sock_path)
+    try:
+        srv.bind(sock_path)
+    except OSError as e:
+        # AF_UNIX caps the bind path (108 bytes on Linux, 104 on macOS),
+        # and the node dir embeds the (possibly long) test name.  Bind
+        # through a short symlink alias to the socket's directory -- the
+        # bind-side analogue of UnixSocket.connect's Darwin workaround
+        # (bind can't go through a dangling final-component symlink, so
+        # alias the directory rather than the socket).  The socket file
+        # still lands at sock_path, where the shim's cwd-relative connect
+        # expects it.
+        if e.args[0] != "AF_UNIX path too long":
+            raise
+        alias_dir = tempfile.mkdtemp(prefix='pyln-sock-')
+        alias = os.path.join(alias_dir, 'd')
+        os.symlink(os.path.dirname(sock_path), alias)
+        try:
+            srv.bind(os.path.join(alias, os.path.basename(sock_path)))
+        finally:
+            os.unlink(alias)
+            os.rmdir(alias_dir)
     srv.listen(1)
 
     plugin = Plugin(autopatch=False)
+    for handler in logging.getLogger().handlers:
+        if isinstance(handler, PluginLogHandler) and handler.plugin is plugin:
+            handler.addFilter(_NoPylnInternalsFilter())
     setup_fn(plugin)
 
     def serve():
