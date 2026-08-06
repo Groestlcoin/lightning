@@ -1244,7 +1244,8 @@ def test_cli_commando(node_factory):
                           '--network={}'.format(TEST_NETWORK),
                           '--lightning-dir={}'
                           .format(l1.daemon.lightning_dir),
-                          'help'])
+                          'help'],
+                         timeout=TIMEOUT)
     assert val.returncode == 3
 
     # Valid peer id, but needs rune!
@@ -1253,7 +1254,8 @@ def test_cli_commando(node_factory):
                           '--network={}'.format(TEST_NETWORK),
                           '--lightning-dir={}'
                           .format(l1.daemon.lightning_dir),
-                          'help'])
+                          'help'],
+                         timeout=TIMEOUT)
     assert val.returncode == 1
 
     # This works!
@@ -1262,7 +1264,8 @@ def test_cli_commando(node_factory):
                                    '--network={}'.format(TEST_NETWORK),
                                    '--lightning-dir={}'
                                    .format(l1.daemon.lightning_dir),
-                                   'help']).decode('utf-8')
+                                   'help'],
+                                  timeout=TIMEOUT).decode('utf-8')
     # Test some known output.
     assert 'addgossip message\n\naddoutpointwatch' in out
 
@@ -1279,7 +1282,8 @@ def test_cli_commando(node_factory):
                                    '--lightning-dir={}'
                                    .format(l1.daemon.lightning_dir),
                                    '-J', '-k',
-                                   'help', 'command=help']).decode('utf-8')
+                                   'help', 'command=help'],
+                                  timeout=TIMEOUT).decode('utf-8')
     j, _ = json.JSONDecoder().raw_decode(out)
     assert 'help [command]' in j['help'][0]['command']
 
@@ -1290,7 +1294,8 @@ def test_cli_commando(node_factory):
                                    '--lightning-dir={}'
                                    .format(l1.daemon.lightning_dir),
                                    '-J', '-o',
-                                   'help', 'help']).decode('utf-8')
+                                   'help', 'help'],
+                                  timeout=TIMEOUT).decode('utf-8')
     j, _ = json.JSONDecoder().raw_decode(out)
     assert 'help [command]' in j['help'][0]['command']
 
@@ -1301,7 +1306,8 @@ def test_cli_commando(node_factory):
                                    '--lightning-dir={}'
                                    .format(l1.daemon.lightning_dir),
                                    '-J', '--filter={"help":[{"command":true}]}',
-                                   'help', 'help']).decode('utf-8')
+                                   'help', 'help'],
+                                  timeout=TIMEOUT).decode('utf-8')
     j, _ = json.JSONDecoder().raw_decode(out)
     assert j == {'help': [{'command': 'help [command]'}]}
 
@@ -1315,7 +1321,8 @@ def test_cli_commando(node_factory):
                                        '--lightning-dir={}'
                                        .format(l1.daemon.lightning_dir),
                                        '-J', '-o',
-                                       'sendpay']).decode('utf-8')
+                                       'sendpay'],
+                                      timeout=TIMEOUT).decode('utf-8')
     except Exception:
         pass
 
@@ -1327,7 +1334,8 @@ def test_cli_commando(node_factory):
                           '--lightning-dir={}'
                           .format(l1.daemon.lightning_dir),
                           'x"[]{}'],
-                         stdout=subprocess.PIPE)
+                         stdout=subprocess.PIPE,
+                         timeout=TIMEOUT)
     assert 'Unknown command' in out.stdout.decode('utf-8')
 
     subprocess.check_output(['cli/lightning-cli',
@@ -1335,7 +1343,8 @@ def test_cli_commando(node_factory):
                              '--network={}'.format(TEST_NETWORK),
                              '--lightning-dir={}'
                              .format(l1.daemon.lightning_dir),
-                             'invoice', '123000', 'l"[]{}', 'd"[]{}']).decode('utf-8')
+                             'invoice', '123000', 'l"[]{}', 'd"[]{}'],
+                            timeout=TIMEOUT).decode('utf-8')
     # Check label is correct, and also that cli's keyword parsing works.
     out = subprocess.check_output(['cli/lightning-cli',
                                    '--commando={}:{}'.format(l2.info['id'], rune),
@@ -1343,7 +1352,8 @@ def test_cli_commando(node_factory):
                                    '--lightning-dir={}'
                                    .format(l1.daemon.lightning_dir),
                                    '-k',
-                                   'listinvoices', 'label=l"[]{}']).decode('utf-8')
+                                   'listinvoices', 'label=l"[]{}'],
+                                  timeout=TIMEOUT).decode('utf-8')
     j = json.loads(out)
     assert only_one(j['invoices'])['label'] == 'l"[]{}'
 
@@ -4410,20 +4420,17 @@ def test_graceful_htlc(node_factory, executor):
 
     fut = executor.submit(run_graceful)
 
-    inotif = 0
+    # If graceful catches the commitment dance mid-flight, it notifies
+    # about each transient state (e.g. RCVD_ADD_REVOCATION) on the way,
+    # so match expected notifications as an ordered subsequence.
+    seen = [0]
 
-    # Wait until graceful has sent at least one HTLC expiry notification
-    wait_for(lambda: len(notifications) >= inotif + 1)
+    def wait_notif(expected):
+        wait_for(lambda: expected in notifications[seen[0]:])
+        seen[0] = notifications.index(expected, seen[0]) + 1
 
-    # Depending on on timing between the sendpay and `l2.rpc.graceful`, we may get
-    # RCVD_ADD_REVOCATION or we may be too late to get that.
-    if notifications[inotif] == f'Next HTLC RCVD_ADD_REVOCATION expires at block #118 (10 blocks from now) going to peer {l3.info["id"]} (connected)':
-        # If we get RCVD_ADD_REVOCATION, ignore it and move onto the next notification
-        inotif += 1
-        wait_for(lambda: len(notifications) >= inotif + 1)
-
-    wait_for(lambda: notifications[inotif] == f'Next HTLC SENT_ADD_ACK_REVOCATION expires at block #118 (10 blocks from now) going to peer {l3.info["id"]} (connected)')
-    inotif += 1
+    # Once the HTLC is fully committed, we get told.
+    wait_notif(f'Next HTLC SENT_ADD_ACK_REVOCATION expires at block #118 (10 blocks from now) going to peer {l3.info["id"]} (connected)')
 
     # This will tell us about htlcs and the peers (peers unordered)
     ret = l2.rpc.graceful(1)
@@ -4434,16 +4441,12 @@ def test_graceful_htlc(node_factory, executor):
 
     # Close incoming connection, so incoming HTLC gets stuck.
     l1.rpc.disconnect(l2.info['id'], force=True)
-    wait_for(lambda: len(notifications) >= inotif + 1)
-    wait_for(lambda: notifications[inotif] == f'Next HTLC SENT_ADD_ACK_REVOCATION expires at block #118 (10 blocks from now) going to peer {l3.info["id"]} (connected)')
-    inotif += 1
 
-    # Release the hold so the *outgoing* HTLC resolves
+    # Release the hold so the *outgoing* HTLC resolves: the incoming HTLC
+    # can't (peer is disconnected), and becomes the next expiry to report.
     open(os.path.join(l3.daemon.lightning_dir, TEST_NETWORK, "unhold"), "w").close()
 
-    wait_for(lambda: len(notifications) >= inotif + 1)
-    wait_for(lambda: notifications[inotif] == f'Next HTLC SENT_REMOVE_HTLC expires at block #124 (16 blocks from now) coming from peer {l1.info["id"]} (disconnected)')
-    inotif += 1
+    wait_notif(f'Next HTLC SENT_REMOVE_HTLC expires at block #124 (16 blocks from now) coming from peer {l1.info["id"]} (disconnected)')
 
     ret = l2.rpc.graceful(1)
     assert ret == {'pending_htlc_expiries': [124]}
@@ -4998,8 +5001,16 @@ def test_set_feerate_offset(node_factory, bitcoind):
 def test_low_fd_limit(node_factory, bitcoind):
     limits = resource.getrlimit(resource.RLIMIT_NOFILE)
 
-    # We assume this, otherwise l2 cannot increase limits!
-    if limits[0] == limits[1]:
+    # dev-fd-limit-multiplier is a u32, so values > UINT32_MAX fail option
+    # parsing. macOS also reports RLIM_INFINITY as the hard limit, making
+    # "ask for more than the hard limit" meaningless.  Cap to a bounded
+    # ceiling so the test works on any platform.
+    TEST_CEILING = 65536
+    if limits[1] == resource.RLIM_INFINITY or limits[1] > TEST_CEILING:
+        limits = (TEST_CEILING // 2, TEST_CEILING)
+        resource.setrlimit(resource.RLIMIT_NOFILE, limits)
+    elif limits[0] == limits[1]:
+        # We assume this, otherwise l2 cannot increase limits!
         limits = (limits[1] // 2, limits[1])
         resource.setrlimit(resource.RLIMIT_NOFILE, limits)
 
@@ -5404,3 +5415,18 @@ def test_tracing_socket(node_factory):
         for key in ("id", "name", "timestamp", "duration", "traceId"):
             assert key in span, f"Missing key {key} in span {span}"
         assert span["localEndpoint"] == {"serviceName": "lightningd"}
+
+
+def test_long_logs(node_factory):
+    """A plugin that creates a very long log entry. Lightningd should truncate
+    the output and not crash."""
+
+    def setup(plugin):
+        @plugin.method("produce-log")
+        def prod_log(plugin):
+            """Produce a silly and very long log message."""
+            plugin.log("X" * 300000)
+            return {}
+
+    l1 = node_factory.get_node(inline_plugin=setup)
+    l1.rpc.call("produce-log")

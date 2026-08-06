@@ -1,4 +1,5 @@
 #include "config.h"
+#include <bitcoin/tx.h>
 #include <ccan/array_size/array_size.h>
 #include <ccan/crypto/siphash24/siphash24.h>
 #include <ccan/htable/htable_type.h>
@@ -21,6 +22,7 @@
 #include <common/pseudorand.h>
 #include <common/randbytes.h>
 #include <common/route.h>
+#include <common/trace.h>
 #include <common/wireaddr.h>
 #include <errno.h>
 #include <inttypes.h>
@@ -1223,6 +1225,10 @@ static struct command_result *injectpaymentonion_failed(struct command *aux_cmd,
 {
 	struct payment *payment = attempt->payment;
 	struct amount_msat amount = attempt->amount;
+	trace_span_resume(attempt->payment);
+	trace_span_resume(attempt);
+	trace_span_end(attempt);
+	trace_span_suspend(attempt->payment);
 
 	payment->num_failures++;
 
@@ -1306,12 +1312,35 @@ static struct command_result *injectpaymentonion_succeeded(struct command *aux_c
 {
 	struct preimage preimage;
 	struct payment *payment = attempt->payment;
+	trace_span_resume(attempt->payment);
+	trace_span_resume(attempt);
+	trace_span_end(attempt);
+	trace_span_suspend(attempt->payment);
 
 	if (!json_to_preimage(buf,
 			      json_get_member(buf, result, "payment_preimage"),
 			      &preimage))
 		plugin_err(aux_cmd->plugin, "Invalid injectpaymentonion result '%.*s'",
 			   json_tok_full_len(result), json_tok_full(buf, result));
+
+	/* We don't tell it about payment success for the local channel, since
+	 * auto.localchans is exact: adding an offset would make it worse! */
+	for (size_t i = 1; i < tal_count(attempt->hops); i++) {
+		struct out_req *req;
+		req = payment_ignored_req(aux_cmd, attempt, "askrene-inform-channel");
+		/* Put what we learned in xpay, unless it's a fake channel */
+		json_add_string(req->js, "layer",
+				attempt->hops[i].fake_channel
+				? attempt->payment->private_layer
+				: "xpay");
+		json_add_short_channel_id_dir(req->js,
+					      "short_channel_id_dir",
+					      attempt->hops[i].scidd);
+		json_add_amount_msat(req->js, "amount_msat",
+				     attempt->hops[i].amount_out);
+		json_add_string(req->js, "inform", "succeeded");
+		send_payment_req(aux_cmd, attempt->payment, req);
+	}
 
 	outgoing_notify_success(attempt);
 
@@ -1471,6 +1500,12 @@ static struct command_result *do_inject(struct command *aux_cmd,
 
 	outgoing_notify_start(attempt);
 	attempt->start_time = time_mono();
+	trace_span_resume(attempt->payment); // payment is the parent span
+	trace_span_start("xpay/injectpaymentonion", attempt);
+	trace_span_tag(attempt, "partid",
+		       tal_fmt(attempt, "%d", (int)(attempt->partid)));
+	trace_span_suspend(attempt);
+	trace_span_suspend(attempt->payment);
 
 	req = jsonrpc_request_start(aux_cmd,
 				    "injectpaymentonion",
@@ -1604,16 +1639,28 @@ static void add_cltv_shadow(struct payment *payment,
 	}
 }
 
+/* Just a wrapper around payment so that we can trace the execution time of a
+ * getroutes request. */
+struct getroutes_request {
+	struct payment *payment;
+};
+
 static struct command_result *getroutes_done(struct command *aux_cmd,
 					     const char *method,
 					     const char *buf,
 					     const jsmntok_t *result,
-					     struct payment *payment)
+					     struct getroutes_request *getroutes_request)
 {
 	const jsmntok_t *t, *routes;
 	size_t i;
 	struct amount_msat needs_routing, was_routing;
+	struct payment *payment = getroutes_request->payment;
 	struct gossmap *gossmap = get_gossmap(xpay_of(payment->plugin));
+	trace_span_resume(payment);
+	trace_span_resume(getroutes_request);
+	trace_span_end(getroutes_request);
+	trace_span_suspend(payment);
+	tal_free(getroutes_request);
 
 	payment_log(payment, LOG_DBG, "getroutes_done: %s",
 		    payment->cmd ? "continuing" : "ignoring");
@@ -1724,8 +1771,14 @@ static struct command_result *getroutes_done_err(struct command *aux_cmd,
 						 const char *method,
 						 const char *buf,
 						 const jsmntok_t *error,
-						 struct payment *payment)
+						 struct getroutes_request *getroutes_request)
 {
+	struct payment *payment = getroutes_request->payment;
+	trace_span_resume(payment);
+	trace_span_resume(getroutes_request);
+	trace_span_end(getroutes_request);
+	trace_span_suspend(payment);
+	tal_free(getroutes_request);
 	int code;
 	const char *msg, *complaint;
 
@@ -1854,10 +1907,17 @@ static struct command_result *getroutes_for(struct command *aux_cmd,
 		maxfee = AMOUNT_MSAT(0);
 	}
 
+	struct getroutes_request *getroutes_request =
+	    tal(payment, struct getroutes_request);
+	getroutes_request->payment = payment;
+	trace_span_resume(payment); // payment is the parent span
+	trace_span_start("xpay/getroutes", getroutes_request);
+	trace_span_suspend(getroutes_request);
+	trace_span_suspend(payment);
 	req = jsonrpc_request_start(aux_cmd, "getroutes",
 				    getroutes_done,
 				    getroutes_done_err,
-				    payment);
+				    getroutes_request);
 
 	json_add_pubkey(req->js, "source", &xpay->local_id);
 	json_add_pubkey(req->js, "destination", dst);
@@ -2438,6 +2498,11 @@ static struct payment *new_payment(const tal_t *ctx,
 {
 	struct xpay *xpay = xpay_of(cmd->plugin);
 	struct payment *payment = tal(ctx, struct payment);
+	/* Start tracing the payment until it is destroyed. */
+	trace_span_start("xpay/payment", payment);
+	trace_span_tag(payment, "payment_hash",
+		       fmt_sha256(payment, payment_hash));
+	trace_span_suspend_may_free(payment);
 
 	payment->plugin = cmd->plugin;
 	payment->deadline = timemono_add(time_mono(), time_from_sec(retryfor));
