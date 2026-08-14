@@ -2700,7 +2700,7 @@ def test_important_plugin(node_factory):
     l1 = node_factory.get_node(options={"important-plugin": os.path.join(pluginsdir, "nonexistent")},
                                may_fail=True, expect_fail=True,
                                # Other plugins can complain as lightningd stops suddenly:
-                               broken_log='Plugin marked as important, shutting down lightningd|Reading sync lightningd: Connection reset by peer|Lost connection to the RPC socket|Plugin terminated before replying to RPC call|plugin-cln-xpay: askrene-create-layer failed with.*Unknown command',
+                               broken_log='Plugin marked as important, shutting down lightningd|Reading sync lightningd: Connection reset by peer|Reading sync lightningd: Bad file descriptor|Lost connection to the RPC socket|Plugin terminated before replying to RPC call|plugin-cln-xpay: askrene-create-layer failed with.*Unknown command',
                                start=False)
 
     l1.daemon.start(wait_for_initialized=False, stderr_redir=True)
@@ -3058,6 +3058,108 @@ def test_dynamic_args(node_factory):
 
     l1.rpc.plugin_stop(plugin_path)
     assert 'greeting' not in l1.rpc.listconfigs()['configs']
+
+
+def test_dynamic_args_options_array(node_factory):
+    """plugin start accepts options as an explicit array, matching the schema."""
+    plugin_path = os.path.join(os.getcwd(), "tests/plugins/dynamic_option.py")
+
+    l1 = node_factory.get_node()
+
+    # Positionally, an options array is a valid 3rd argument, covering every
+    # option type: string, int, bool and flag (which has no '=').
+    l1.rpc.call(
+        "plugin",
+        [
+            "start",
+            plugin_path,
+            [
+                "test-dynamic-config=Test options array",
+                "test-dynamic-int=42",
+                "test-dynamic-bool=false",
+                "test-dynamic-flag",
+            ],
+        ],
+    )
+    assert l1.rpc.dynamic_option_report() == {
+        "test-dynamic-config": "Test options array",
+        "test-dynamic-int": 42,
+        "test-dynamic-bool": False,
+        "test-dynamic-flag": True,
+    }
+    l1.rpc.plugin_stop(plugin_path)
+
+    l1.rpc.call(
+        "plugin",
+        {
+            "subcommand": "start",
+            "plugin": plugin_path,
+            "options": [
+                "test-dynamic-config=Test options array",
+                "test-dynamic-int=42",
+                "test-dynamic-bool=false",
+                "test-dynamic-flag",
+            ],
+        },
+    )
+    assert l1.rpc.dynamic_option_report() == {
+        "test-dynamic-config": "Test options array",
+        "test-dynamic-int": 42,
+        "test-dynamic-bool": False,
+        "test-dynamic-flag": True,
+    }
+    l1.rpc.plugin_stop(plugin_path)
+
+    l1.rpc.call(
+        "plugin",
+        {
+            "subcommand": "start",
+            "plugin": plugin_path,
+            "test-dynamic-config": "Test options array",
+            "test-dynamic-int": 42,
+            "test-dynamic-bool": False,
+            "test-dynamic-flag": None,
+        },
+    )
+    assert l1.rpc.dynamic_option_report() == {
+        "test-dynamic-config": "Test options array",
+        "test-dynamic-int": 42,
+        "test-dynamic-bool": False,
+        "test-dynamic-flag": None,
+    }
+    l1.rpc.plugin_stop(plugin_path)
+
+    # Entries must be strings, not e.g. numbers.
+    with pytest.raises(RpcError, match="options array entries must be strings"):
+        l1.rpc.call("plugin", ["start", plugin_path, [42]])
+
+    # ...but any trailing positional args are ambiguous, so must be rejected.
+    with pytest.raises(RpcError, match="Extra parameters must be in object"):
+        l1.rpc.call(
+            "plugin",
+            [
+                "start",
+                plugin_path,
+                ["test-dynamic-config=Test options array"],
+                "test-dynamic-config=yikes",
+            ],
+        )
+
+    # The same applies if there is no options array at all.
+    with pytest.raises(RpcError, match="Extra parameters must be in object"):
+        l1.rpc.call("plugin", ["start", plugin_path, None, "test-dynamic-config=yikes"])
+
+    # ...and flattened keyword options cannot be mixed with an options array.
+    with pytest.raises(RpcError, match="Cannot mix"):
+        l1.rpc.call(
+            "plugin",
+            {
+                "subcommand": "start",
+                "plugin": plugin_path,
+                "options": ["test-dynamic-config=Test options array"],
+                "test-dynamic-config": "yikes",
+            },
+        )
 
 
 def test_pyln_request_notify(node_factory):
@@ -4654,10 +4756,10 @@ def test_dynamic_option_python_plugin(node_factory):
 
     assert result["configs"]["test-dynamic-config"]["value_str"] == "initial"
 
-    assert l1.rpc.dynamic_option_report() == {'test-dynamic-config': 'initial'}
+    assert l1.rpc.dynamic_option_report()['test-dynamic-config'] == 'initial'
     result = l1.rpc.setconfig("test-dynamic-config", "changed")
     assert result["config"]["value_str"] == "changed"
-    assert l1.rpc.dynamic_option_report() == {'test-dynamic-config': 'changed'}
+    assert l1.rpc.dynamic_option_report()['test-dynamic-config'] == 'changed'
 
     l1.daemon.wait_for_log(
         'dynamic_option.py:.*Setting config test-dynamic-config to changed'
@@ -4667,7 +4769,7 @@ def test_dynamic_option_python_plugin(node_factory):
         l1.rpc.setconfig("test-dynamic-config", "bad value")
 
     # Does not alter value!
-    assert l1.rpc.dynamic_option_report() == {'test-dynamic-config': 'changed'}
+    assert l1.rpc.dynamic_option_report()['test-dynamic-config'] == 'changed'
 
 
 def test_renepay_not_important(node_factory):
@@ -5826,6 +5928,11 @@ def test_bwatch_spk_watch_reorg_demotes_outputs(node_factory, bitcoind):
     assert (l1.db_query('SELECT blockheight FROM our_txs')
             == [{'blockheight': deposit_height}])
     assert l1.db_query('SELECT COUNT(*) AS c FROM outputs')[0]['c'] == 1
+
+    # bwatch must have observed the deposit block before we reorg it away:
+    # if it's height-based fetch grabs the replacement block instead, it never
+    # sees a reorg.
+    l1.daemon.wait_for_log(rf'Added block {deposit_height} to history', timeout=60)
 
     # Reorg the deposit block away.  Deprioritize the returned mempool tx
     # (same trick as simple_reorg) so the replacement blocks don't just
