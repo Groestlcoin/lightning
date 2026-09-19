@@ -5400,10 +5400,7 @@ def test_sendpay_grouping(node_factory, bitcoind):
 
     We always use slightly decreasing values for the payment, in order
     to avoid having to adjust the channel_hints that are being
-    remembered across attempts. In case of a failure the
-    `channel_hint` will be `attempted amount - 1msat` so use that as
-    the next payment's amount.
-
+    remembered across attempts.
     """
     l1, l2, l3 = node_factory.line_graph(
         3,
@@ -5428,8 +5425,9 @@ def test_sendpay_grouping(node_factory, bitcoind):
     # After this one invocation we have one entry in `listpays`
     assert(len(l1.rpc.listpays()['pays']) == 1)
 
+    # try again with a smaller amount
     with pytest.raises(RpcError, match=r'Failed after 1 attempts'):
-        l1.rpc.xpay(inv, amount_msat='100001msat')
+        l1.rpc.xpay(inv, amount_msat='90000msat')
 
     # Surprise: we should have 2 entries after 2 invocations
     assert(len(l1.rpc.listpays()['pays']) == 2)
@@ -5738,7 +5736,15 @@ def test_self_sendpay(node_factory):
 
     # Bad payment_secret
     with pytest.raises(RpcError, match="Attempt to pay .* with wrong payment_secret"):
-        l1.rpc.sendpay([], inv['payment_hash'], label='selfpay-badimage', bolt11=inv['bolt11'], payment_secret='00' * 32, amount_msat='100000sat')
+        l1.rpc.sendpay([], inv['payment_hash'], label='selfpay-badimage',
+                       bolt11=inv['bolt11'], payment_secret='00' * 32,
+                       amount_msat='100000sat', groupid=1111)
+
+    # retry with the same partid and groupid
+    with pytest.raises(RpcError, match=f"There already is a payment with payment_hash={inv['payment_hash']}, groupid=1111, partid=0."):
+        l1.rpc.sendpay([], inv['payment_hash'], label='selfpay-badimage',
+                       bolt11=inv['bolt11'], payment_secret='00' * 32,
+                       amount_msat='100000sat', groupid=1111)
 
     # Expired
     time.sleep(2)
@@ -5746,15 +5752,39 @@ def test_self_sendpay(node_factory):
         l1.rpc.sendpay([], inv_expires['payment_hash'], label='selfpay-badimage', bolt11=inv_expires['bolt11'], payment_secret=inv['payment_secret'], amount_msat='1btc')
 
     # This one works!
-    l1.rpc.sendpay([], inv['payment_hash'], label='selfpay', bolt11=inv['bolt11'], payment_secret=inv['payment_secret'], amount_msat='100000sat')
+    self_groupid = 0
+    l1.rpc.sendpay([], inv['payment_hash'], label='selfpay',
+                   bolt11=inv['bolt11'], payment_secret=inv['payment_secret'],
+                   amount_msat='100000sat', groupid=self_groupid)
+
+    # from sendpay documentation:
+    #   Calls to sendpay with the same payment_hash, amount_msat,
+    #   and destination as a previous successful payment
+    #   (even if a different route or partid) will return immediately with success.
+    l1.rpc.sendpay([], inv['payment_hash'], label='selfpay',
+                   bolt11=inv['bolt11'],
+                   payment_secret=inv['payment_secret'],
+                   amount_msat='100000sat')
+
+    # same groupid and same partid
+    l1.rpc.sendpay([], inv['payment_hash'], label='selfpay',
+                   bolt11=inv['bolt11'],
+                   payment_secret=inv['payment_secret'],
+                   amount_msat='100000sat',
+                   groupid=self_groupid)
+
+    # a different amount
+    with pytest.raises(RpcError, match="Already succeeded with amount 100000000msat"):
+        l1.rpc.sendpay([], inv['payment_hash'], label='selfpay',
+                       bolt11=inv['bolt11'],
+                       payment_secret=inv['payment_secret'],
+                       amount_msat='200000sat')
 
     assert only_one(l1.rpc.listinvoices(payment_hash=inv['payment_hash'])['invoices'])['status'] == 'paid'
-    # Only one is complete.
-    assert [p['status'] for p in l1.rpc.listsendpays()['payments'] if p['status'] != 'failed'] == ['complete']
 
-    # Can't pay paid one already paid!
-    with pytest.raises(RpcError, match="Already paid or expired invoice"):
-        l1.rpc.sendpay([], inv['payment_hash'], label='selfpay', bolt11=inv['bolt11'], payment_secret=inv['payment_secret'], amount_msat='100000sat')
+    # We have succeeded several calls to sendpay for the same invoice but only
+    # one payment was executed and recorded.
+    assert [p['status'] for p in l1.rpc.listsendpays()['payments'] if p['status'] != 'failed'] == ['complete']
 
 
 def test_strip_lightning_suffix_from_inv(node_factory):
@@ -6041,6 +6071,7 @@ def test_blindedpath_noaddr(node_factory, bitcoind):
 
     # If l2 is disconnected, l3 will *not* add a blinded path.
     l2.rpc.disconnect(l3.info['id'], force=True)
+    wait_for(lambda: only_one(l3.rpc.listpeers(l2.info['id'])['peers'])['connected'] is False)
     offer = l3.rpc.offer(1000, 'test_pay_blindedpath_nodeaddr2')
     assert 'offer_paths' not in l1.rpc.decode(offer['bolt12'])
 
@@ -7517,7 +7548,7 @@ def test_createproof_include(node_factory, bitcoind):
         l1.rpc.call('createproof', {'invstring': inv, 'include': ['no_such_field']})
 
 
-def test_blinded_forward_policy(node_factory):
+def test_blinded_forward_policy(node_factory, bitcoind):
     """Test that an intermediate nodes in a blinded path verify that the
     encrypted_recipient_data it receives matches its own relay policy."""
     FEE_PPM = 1000
@@ -7595,6 +7626,10 @@ def test_blinded_forward_policy(node_factory):
         inline_plugin=bad_topology,
     )
     node_factory.join_nodes([l2, l3], announce_channels=False)
+    # l1 is not part of that channel, so it may lag the funding block; the
+    # final CLTV we build only just meets l3's cltv-final, so being a block
+    # behind makes l3 reject it.  Get everyone onto the same block.
+    sync_blockheight(bitcoind, [l1, l2, l3])
     # Make sure l3 knows about l1-l2, so will add route hint.
     wait_for(lambda: l3.rpc.listnodes(l1.info["id"]) != {"nodes": []})
 

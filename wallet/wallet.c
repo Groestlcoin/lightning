@@ -631,6 +631,11 @@ struct utxo **wallet_utxo_boost(const tal_t *ctx,
 		if (utxo_is_csv_locked(utxo, blockheight))
 			continue;
 
+		/* Don't add immature coinbase outputs: spending them is
+		 * consensus-invalid. */
+		if (utxo_is_immature(utxo, blockheight))
+			continue;
+
 		/* UTXOs must be sane amounts */
 		if (!amount_sat_add(&new_excess_sats,
 				    excess_sats, utxo->amount))
@@ -1250,6 +1255,9 @@ static bool wallet_shachain_load(struct wallet *wallet, u64 id,
 
 	while (db_step(stmt)) {
 		int pos = db_col_int(stmt, "pos");
+		if (pos < 0 || pos >= ARRAY_SIZE(chain->chain.known))
+			db_fatal(wallet->db,
+				 "shachain_known pos %i out of range", pos);
 		chain->chain.known[pos].index = db_col_u64(stmt, "idx");
 		db_col_sha256(stmt, "hash", &chain->chain.known[pos].hash);
 	}
@@ -1583,6 +1591,7 @@ void wallet_inflight_save(struct wallet *w,
 				 ", last_tx=?"
 				 ", last_sig=?"
 				 ", locked_scid=?"
+				 ", i_sent_sigs=?"
 				 " WHERE"
 				 "  channel_id=?"
 				 " AND funding_tx_id=?"
@@ -1600,6 +1609,7 @@ void wallet_inflight_save(struct wallet *w,
 		db_bind_short_channel_id(stmt, *inflight->locked_scid);
 	else
 		db_bind_null(stmt);
+	db_bind_int(stmt, inflight->i_sent_sigs);
 	db_bind_u64(stmt, inflight->channel->dbid);
 	db_bind_txid(stmt, &inflight->funding->outpoint.txid);
 	db_bind_int(stmt, inflight->funding->outpoint.n);
@@ -7817,6 +7827,8 @@ void migrate_setup_coinmoves(struct lightningd *ld, struct db *db)
 					       *utxos[i]->blockheight,
 					       utxos[i]->amount,
 					       mk_mvt_tags(MVT_DEPOSIT));
+		/* Fixed timestamp, after channel_open but before journal. */
+		mvt->timestamp = base_timestamp + 1;
 		insert_chain_mvt(ld, db, mvt);
 	}
 

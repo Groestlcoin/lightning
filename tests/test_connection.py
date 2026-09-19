@@ -3,7 +3,9 @@ from fixtures import TEST_NETWORK
 from decimal import Decimal
 from pathlib import Path
 from pyln.client import RpcError, Millisatoshi
+from pyln.proto.onion import TlvPayload
 import pyln.proto.wire as wire
+from hashlib import sha256
 from utils import (
     only_one, wait_for, sync_blockheight, TIMEOUT,
     expected_peer_features, expected_node_features,
@@ -15,6 +17,8 @@ from utils import (
 )
 from pyln.testing.utils import VALGRIND, EXPERIMENTAL_DUAL_FUND, FUNDAMOUNT, RUST, SLOW_MACHINE
 
+import coincurve
+import hmac
 import os
 import pytest
 import random
@@ -25,8 +29,10 @@ import time
 import unittest
 import websocket
 import signal
+import socket
 import ssl
 import sys
+import threading
 
 
 def test_connect_basic(node_factory):
@@ -3179,8 +3185,20 @@ def test_dataloss_protection(node_factory, bitcoind):
     assert not l2.daemon.is_in_log('sendrawtx exit 0',
                                    start=l2.daemon.logsearch_start)
 
-    # l1 should receive error and drop to chain
-    l1.daemon.wait_for_log("They sent ERROR.*Awaiting unilateral close")
+    # l1 should receive error and drop to chain.  Usually it arrives when l1
+    # has no channeld (so lightningd logs "They sent ERROR"), but if l1's
+    # channeld has not exited yet the error is routed to it and gets lost
+    # when it dies.  Reconnect to make l2 resend it: channel->error is sent
+    # again when the peer reconnects.
+    try:
+        l1.daemon.wait_for_log("They sent ERROR.*Awaiting unilateral close", timeout=10)
+    except TimeoutError:
+        # The peer may already have gone; connect() below is what matters.
+        try:
+            l1.rpc.disconnect(l2.info['id'], force=True)
+        except RpcError as err:
+            assert "Peer not connected" in err.error['message']
+        l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
     l1.wait_for_channel_onchain(l2.info['id'])
 
     closetxid = only_one(bitcoind.rpc.getrawmempool(False))
@@ -4578,6 +4596,49 @@ def test_injectonionmessage(node_factory):
     l1.daemon.wait_for_log('lightningd: Got onionmsg with pathsecret')
 
 
+def test_onionmessage_reply_path_no_hops(node_factory):
+    """A reply_path with num_hops=0 must not take the node down.
+
+    The blinded reply_path's num_hops is a single attacker-supplied byte
+    with no lower bound; a zero-hop path serialises an empty "hops" array
+    to the offers plugin, which used to reject it via plugin_err and (as
+    an important builtin) stop lightningd.
+    """
+    l1, l2 = node_factory.line_graph(2)
+
+    def ecdh(privkey_bytes, pubkey_bytes):
+        priv = coincurve.PrivateKey(privkey_bytes)
+        return priv.ecdh(coincurve.PublicKey(pubkey_bytes).public_key)
+
+    # Build an onion message to l2 with a reply_path carrying no hops.
+    l2_pub = bytes.fromhex(l2.info['id'])
+    blinding = coincurve.PrivateKey()
+    path_key = blinding.public_key.format(True)
+
+    # Route-blinding tweak so the onion decrypts as l2's real key.
+    ss = ecdh(blinding.secret, l2_pub)
+    tweak = hmac.new(b'blinded_node_id', ss, sha256).digest()
+    blinded_pub = coincurve.PublicKey(l2_pub).multiply(tweak).format(True)
+
+    # blinded_path: first_node_id (point), first_path_key (point), num_hops=0
+    reply_path = l2_pub + path_key + b'\x00'
+    tlv = TlvPayload()
+    tlv.add_field(2, reply_path)
+
+    onion = l1.rpc.createonion(hops=[{'pubkey': blinded_pub.hex(),
+                                      'payload': tlv.to_bytes().hex()}],
+                               assocdata="")
+
+    l2.rpc.injectonionmessage(message=onion['onion'], path_key=path_key.hex())
+
+    # With the fix, lightningd drops the hopless reply path when it decodes
+    # the message (logged synchronously, before the offers hook runs), so the
+    # node stays up. Without the fix this log never appears: the offers plugin
+    # calls plugin_err and lightningd_exit takes the node down instead.
+    l2.daemon.wait_for_log('Ignoring reply path with no hops', timeout=30)
+    assert l2.rpc.getinfo()['id'] == l2.info['id']
+
+
 def test_connect_ratelimit(node_factory, bitcoind):
     """l1 has 5 peers, restarts, make sure we limit"""
     # Sending nodes SIGSTOP at the wrong time makes connectd complain about
@@ -5137,3 +5198,84 @@ def test_open_channel_funding_above_max_supply(node_factory, bitcoind):
                 funding_sat, push_msat)
 
     assert l1.rpc.getinfo()['id'] == l1.info['id']
+
+
+def test_connect_proxy_maxlen_hostname(node_factory):
+    """A maximum-length hostname must produce a well-formed SOCKS5 request.
+
+    The request is assembled in a fixed buffer, and the hostname was copied
+    into it without checking that it fit, which overran the buffer and
+    corrupted the adjacent length field.  That length was then used for the
+    write, so the proxy got a wildly oversized read of connectd's memory
+    instead of the request (and connectd died on the way).
+
+    A gossiped DNS address reaches the same builder, so this covers that
+    path too.
+    """
+    # A minimal SOCKS5 server: accept the "no authentication" greeting,
+    # then collect whatever request connectd sends us.
+    received = []
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    listener.bind(('127.0.0.1', 0))
+    listener.listen(1)
+    proxyport = listener.getsockname()[1]
+
+    def serve():
+        data = b''
+        conn, _ = listener.accept()
+        with conn:
+            try:
+                conn.settimeout(TIMEOUT)
+                conn.recv(len(b'\x05\x01\x00'))
+                conn.sendall(b'\x05\x00')
+                # Deliberately ask for far more than the largest legal
+                # request (262 bytes), so an oversized write is visible
+                # here rather than silently truncated by us.  We stop on the
+                # timeout, once connectd has finished writing and is waiting
+                # for a reply we're never going to send.
+                conn.settimeout(2)
+                while len(data) < 65536:
+                    more = conn.recv(65536)
+                    if not more:
+                        break
+                    data += more
+            except OSError:
+                pass
+        received.append(data)
+
+    server = threading.Thread(target=serve, daemon=True)
+    server.start()
+
+    l1 = node_factory.get_node(options={'proxy': '127.0.0.1:{}'.format(proxyport),
+                                        'always-use-proxy': 'true'},
+                               # Without the fix connectd dies here, and we
+                               # want that to be a test failure rather than
+                               # a teardown error.
+                               may_fail=True, broken_log='.*')
+
+    # unresolved.name[256] is what limits us: 255 is the longest we can ask for.
+    hostname = 'a' * (255 - len('.example.com')) + '.example.com'
+    assert len(hostname) == 255
+
+    # There's nothing on the far side of the proxy, so this fails: it just
+    # must not take connectd down with it.
+    # Any valid pubkey will do: we never get far enough to talk to it.
+    nodeid = '0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798'
+    with pytest.raises(RpcError, match="All addresses failed"):
+        l1.rpc.connect(nodeid, hostname, 1234)
+
+    server.join(TIMEOUT)
+    listener.close()
+
+    # connectd is still there, and so is the node.
+    assert not l1.daemon.is_in_log('FATAL SIGNAL')
+    l1.rpc.getinfo()
+
+    # And the proxy got exactly the request it should have: version, CONNECT,
+    # reserved, "domain name", length, the name itself, then the port.
+    request = only_one(received)
+    assert request == (b'\x05\x01\x00\x03'
+                       + bytes([len(hostname)])
+                       + hostname.encode('ascii')
+                       + (1234).to_bytes(2, 'big'))
