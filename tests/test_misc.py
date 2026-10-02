@@ -2928,7 +2928,9 @@ def test_unix_socket_path_length(node_factory, bitcoind, directory, executor, db
     db = db_provider.get_db(lightning_dir, "test_unix_socket_path_length", 1)
     db.provider = db_provider
 
-    l1 = LightningNode(1, lightning_dir, bitcoind, executor, VALGRIND, db=db, port=node_factory.get_unused_port())
+    l1 = LightningNode(1, lightning_dir, bitcoind, executor, VALGRIND, db=db,
+                       port=node_factory.get_unused_port(),
+                       grpc_port=node_factory.get_unused_port())
 
     # `LightningNode.start()` internally calls `LightningRpc.getinfo()` which
     # exercises the socket logic, and raises an issue if it fails.
@@ -3126,6 +3128,42 @@ def test_recoverchannel(node_factory):
 
     assert len(stubs) == 1
     assert stubs[0] == "c3a7b9d74a174497122bc52d74d6d69836acadc77e0429c6d8b68b48d5c9139a"
+
+
+@unittest.skipIf(os.getenv('TEST_DB_PROVIDER', 'sqlite3') != 'sqlite3', "deletes database, which is assumed sqlite3")
+def test_recoverchannel_closed_sibling(node_factory, bitcoind):
+    """Recovering an SCB with a channel that has since closed must still
+    let the peer close the channels that are still live."""
+    l1, l2 = node_factory.get_nodes(2, opts=[{'may_reconnect': True},
+                                             {'may_reconnect': True}])
+    l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
+
+    # Open two channels, then close the first and settle it onchain.
+    c_dead, _ = l1.fundchannel(l2, 10**5)
+    c_live, _ = l1.fundchannel(l2, 10**5)
+    l1.rpc.close(c_dead)
+    bitcoind.generate_block(1, wait_for_mempool=1)
+    sync_blockheight(bitcoind, [l1, l2])
+    wait_for(lambda: 'ONCHAIN' in [c['state'] for c in l1.rpc.listpeerchannels()['channels'] if c.get('short_channel_id') == c_dead])
+    wait_for(lambda: 'ONCHAIN' in [c['state'] for c in l2.rpc.listpeerchannels()['channels'] if c.get('short_channel_id') == c_dead])
+
+    scb = l2.rpc.staticbackup()['scb']
+
+    # Recover l2 from the backup.  It is fully synced, so it will not notice
+    # that the first channel is already spent (no new block is mined), and so
+    # reestablishes both it and the live channel.  l1 must reject the dead one
+    # without hanging up on the live one.
+    l2.stop()
+    os.unlink(os.path.join(l2.daemon.lightning_dir, TEST_NETWORK, 'lightningd.sqlite3'))
+    l2.start()
+    sync_blockheight(bitcoind, [l2])
+    l2.rpc.recoverchannel(scb)
+    # Connect from l1 (already autoreconnecting): dialing from l2 races that
+    # attempt and can hit a simultaneous-connect teardown.
+    l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
+
+    wait_for(lambda: [c['state'] for c in l1.rpc.listpeerchannels()['channels']
+                      if c.get('short_channel_id') == c_live] == ['AWAITING_UNILATERAL'])
 
 
 def test_getemergencyrecoverdata(node_factory):
@@ -5325,6 +5363,7 @@ def test_tracing(node_factory):
 
     traces = set()
     suspended = set()
+    emitted = {}
     for fname in glob.glob(f"{trace_fnamebase}.*"):
         with open(fname, "rt") as f:
             for linenum, l in enumerate(f.readlines(), 1):
@@ -5349,6 +5388,7 @@ def test_tracing(node_factory):
                         assert res['parentId'] in traces
                         expected_keys.append('parentId')
                     assert set(res.keys()) == set(expected_keys)
+                    emitted[res['id']] = res
                     traces.remove(spanid)
                 elif cmd == 'span_end':
                     assert spanid in traces
@@ -5370,6 +5410,14 @@ def test_tracing(node_factory):
         # We can actually have a calls suspended when we shut down!
         assert len(suspended) <= 1
         assert suspended == traces
+
+    extend_tips = {s['id'] for s in emitted.values() if s['name'] == 'extend_tip'}
+    assert extend_tips, "No extend_tip span emitted"
+    assert any(s['name'] == 'plugin/bitcoind'
+               and s['tags'].get('method') == 'getrawblockbyheight'
+               and s.get('parentId') in extend_tips
+               for s in emitted.values()), \
+        "getrawblockbyheight call is not nested under extend_tip"
 
     # Test parent trace
     trace_fnamebase = os.path.join(l1.daemon.lightning_dir, TEST_NETWORK, "l1.parent.trace")

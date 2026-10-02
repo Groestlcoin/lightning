@@ -23,7 +23,7 @@ sudo rm -R /usr/local/libexec/c-lightning/plugins # If you are upgrading run thi
 sudo tar -xvf <release>.tar.xz -C /usr/local --strip-components=2
 ```
 
-If you're on a different distribution or OS, you can compile the source by following the instructions from [Installing from Source](doc:installing-from-source).
+If you're on a different distribution or OS, you can compile the source by following the instructions from [Installing from Source](doc:installation#installing-from-source).
 
 # Docker
 
@@ -32,7 +32,7 @@ To install the Docker image for the latest stable release:
 docker pull Groestlcoin/lightningd:latest
 ```
 
-To install for a specific version, for example, 24.05:
+To install for a specific version, for example, v26.06.6:
 ```shell
 docker pull Groestlcoin/lightningd:v24.05
 ```
@@ -64,7 +64,7 @@ For actually doing development and running the tests, you will also need:
 - pip3: to install python-bitcoinlib
 - valgrind: for extra debugging checks
 
-You will also need a version of groestlcoind with segregated witness and `estimatesmartfee` with `ECONOMICAL` mode support. Version 2.16 or above should work.
+You will also need a version of groestlcoind with segregated witness and `estimatesmartfee` with `ECONOMICAL` mode support. Version 25.0 or above should work.
 
 ## To Build on Ubuntu
 
@@ -320,7 +320,7 @@ Finally, build `c-lightning`:
 
 ## To Build on NixOS
 
-Core Lightning ships a [Nix flake](https://nixos.wiki/wiki/Flakes), so on NixOS
+Core Lightning ships a [Nix flake](https://wiki.nixos.org/wiki/Flakes), so on NixOS
 you don't need to install any build dependencies by hand. Make sure the
 `nix-command` and `flakes` features are enabled.
 

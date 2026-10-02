@@ -30346,7 +30346,9 @@
       "rpc": "makesecret",
       "title": "Command for deriving pseudorandom key from HSM",
       "description": [
-        "The **makesecret** RPC command derives a secret key from the HSM_secret."
+        "The **makesecret** RPC command derives a secret key from the HSM_secret.",
+        "",
+        "The value `commando` (as `string`, or the same bytes as `hex`) is reserved: it derives the secret behind the node's runes, so it is refused."
       ],
       "request": {
         "required": [],
@@ -30383,7 +30385,8 @@
       "errors": [
         "The following error codes may occur:",
         "",
-        "- -1: Catchall nonspecific error."
+        "- -1: Catchall nonspecific error.",
+        "- -32602: The requested value is reserved for internal use."
       ],
       "author": [
         "Aditya [aditya.sharma20111@gmail.com](mailto:aditya.sharma20111@gmail.com) is mainly responsible."
@@ -33653,7 +33656,7 @@
       "rpc": "reckless",
       "title": "Issue a command to the reckless plugin manager utility",
       "description": [
-        "The **reckless** RPC starts a reckless process with the *command* and *target* provided.  Node configuration, network, and lightning direrctory are automatically passed to the reckless utility."
+        "The **reckless** RPC starts a reckless process with the *command* and *target* provided.  Node configuration, network, and lightning directory are automatically passed to the reckless utility."
       ],
       "request": {
         "required": [

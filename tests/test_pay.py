@@ -457,16 +457,17 @@ def test_payment_duplicate_uncommitted(node_factory, executor):
     assert len(payments) == 1
     assert payments[0]['status'] == 'pending' and payments[0]['payment_hash'] == inv1['payment_hash']
 
-    # Second one will be stopped.
+    # Second one will be stopped: xpay only checks for a payment in
+    # progress when it calls injectpaymentonion, so wait for that to
+    # happen *before* the first payment can complete, otherwise it may
+    # see the first payment as complete and fail with "Already paid".
     fut2 = executor.submit(l1.rpc.xpay, inv1['bolt11'])
-
-    # Now, let it commit.
-    l1.rpc.dev_reenable_commit(l2.info['id'])
-
-    # First should succeed, second should be denied.
-    fut.result(TIMEOUT)
     with pytest.raises(RpcError, match="Payment with groupid=[0-9]* still in progress, cannot retry before that completes"):
         fut2.result(TIMEOUT)
+
+    # Now, let it commit: first should succeed.
+    l1.rpc.dev_reenable_commit(l2.info['id'])
+    fut.result(TIMEOUT)
 
 
 def test_pay_maxfee_shadow(node_factory):
@@ -2653,6 +2654,38 @@ def test_channel_spendable(node_factory, bitcoind, anchors):
     assert l2.rpc.listpeerchannels()['channels'][0]['spendable_msat'] == Millisatoshi(0)
     open(os.path.join(l1.daemon.lightning_dir, TEST_NETWORK, "unhold"), "w").close()
     l2.rpc.waitsendpay(payment_hash, TIMEOUT)
+
+
+def test_htlc_set_part_during_invoice_hook(node_factory):
+    """An extra part arriving while the invoice_payment hook is pending
+    must not re-dispatch the (already complete) HTLC set."""
+    l1, l2, l3 = node_factory.get_nodes(3, opts=[{},
+                                                 {'plugin': os.path.join(os.getcwd(), 'tests/plugins/hold_invoice.py')},
+                                                 {}])
+    node_factory.join_nodes([l1, l2])
+    node_factory.join_nodes([l3, l2])
+
+    inv = l2.rpc.invoice(1000, 'inv', 'for testing')
+    payment_hash = inv['payment_hash']
+
+    # First part completes the set, and the hook holds it.
+    l1.rpc.sendpay(l1.single_route(l2.info['id'], 1000), payment_hash,
+                   payment_secret=inv['payment_secret'])
+    l2.daemon.wait_for_log('HTLC set contains 1 HTLCs, for a total of 1000msat out of 1000msat')
+
+    # Another part for the same set, while hook is still pending.
+    l3.rpc.sendpay(l3.single_route(l2.info['id'], 1000), payment_hash,
+                   payment_secret=inv['payment_secret'])
+    l2.daemon.wait_for_log('HTLC set contains 2 HTLCs, for a total of 2000msat out of 1000msat')
+
+    open(os.path.join(l2.daemon.lightning_dir, TEST_NETWORK, "unhold"), "w").close()
+    l1.rpc.waitsendpay(payment_hash, TIMEOUT)
+    l3.rpc.waitsendpay(payment_hash, TIMEOUT)
+
+    inv = only_one(l2.rpc.listinvoices('inv')['invoices'])
+    assert inv['status'] == 'paid'
+    assert inv['amount_received_msat'] == Millisatoshi(1000)
+    assert l2.daemon.is_in_log('Resolved invoice .* in 2 htlcs')
 
 
 def test_channel_receivable(node_factory, bitcoind):
