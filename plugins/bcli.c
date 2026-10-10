@@ -896,7 +896,7 @@ int main(int argc, char *argv[])
 				  "groestlcoind RPC username",
 				  charp_option, NULL, &bitcoind->rpcuser),
 		    plugin_option("groestlcoin-rpcpassword",
-				  "string",
+				  "string-conceal",
 				  "groestlcoind RPC password",
 				  charp_option, NULL, &bitcoind->rpcpass),
 		    plugin_option("groestlcoin-rpcconnect",
