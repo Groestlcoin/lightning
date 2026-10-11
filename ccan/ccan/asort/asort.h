@@ -3,13 +3,12 @@
 #define CCAN_ASORT_H
 #include "config.h"
 #include <ccan/order/order.h>
+#include <stdlib.h>
 
 /* FreeBSD compatibility: undef qsort_r macro that conflicts with our declaration */
 #ifdef __FreeBSD__
 #undef qsort_r
 #endif
-
-#include <stdlib.h>
 
 /**
  * asort - sort an array of elements
