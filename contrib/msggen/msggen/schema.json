@@ -3420,7 +3420,7 @@
       ],
       "see_also": [
         "lightning-bkpr-listincome(7)",
-        "lightning-bkpr-listfunds(7)",
+        "lightning-bkpr-listbalances(7)",
         "lightning-bkpr-listaccountevents(7)",
         "lightning-bkpr-dumpincomecsv(7)",
         "lightning-listpeers(7)"
@@ -3608,7 +3608,7 @@
       ],
       "see_also": [
         "lightning-bkpr-listincome(7)",
-        "lightning-bkpr-listfunds(7)",
+        "lightning-bkpr-listbalances(7)",
         "lightning-bkpr-listaccountevents(7)",
         "lightning-bkpr-channelsapy(7)",
         "lightning-listpeers(7)"
@@ -4449,7 +4449,7 @@
         "Lisa Neigut [niftynei@gmail.com](mailto:niftynei@gmail.com) is mainly responsible."
       ],
       "see_also": [
-        "lightning-listbalances(7)",
+        "lightning-bkpr-listbalances(7)",
         "lightning-listfunds(7)",
         "lightning-listpeers(7)"
       ],
@@ -8399,7 +8399,7 @@
         "daywalker90 is mainly responsible."
       ],
       "see_also": [
-        "lightning-currencyrates(7)"
+        "lightning-currencyrate(7)"
       ],
       "resources": [
         "Main web site: [https://github.com/ElementsProject/lightning](https://github.com/ElementsProject/lightning)"
@@ -12649,7 +12649,7 @@
       },
       "errors": [
         "On failure, an error is returned. If the lightning process fails before responding, the",
-        "caller should use lightning-listsentpays(7) or lightning-listpays(7) to query whether this payment was deleted or not.",
+        "caller should use lightning-listsendpays(7) or lightning-listpays(7) to query whether this payment was deleted or not.",
         "",
         "The following error codes may occur:",
         "",
@@ -17860,7 +17860,7 @@
           "localinvreqid": {
             "type": "hash",
             "description": [
-              "`localinvreqid` is used by offers to link a payment attempt to a local `invoice_request` offer created by lightningd-invoicerequest(7)."
+              "`localinvreqid` is used by offers to link a payment attempt to a local `invoice_request` offer created by lightning-invoicerequest(7)."
             ]
           },
           "destination_msat": {
@@ -18584,10 +18584,12 @@
         "A routing failure object has the fields below:",
         "",
         "*erring_index*: The index of the node along the route that reported the error. 0 for the local node, 1 for the first hop, and so on.",
-        "*erring_node*: The hex string of the pubkey id of the node that reported the error.",
-        "*erring_channel*: The short channel ID of the channel that has the error, or *0:0:0* if the destination node raised the error.",
+        "*erring_node*: The hex string of the pubkey id of the node that reported the error. This is inferred from the route, so it may be absent in rare cases.",
+        "*erring_channel*: The short channel ID of the channel that has the error. Only present if the channel is known.",
+        "*erring_direction*: The direction of traversing the *erring_channel*. Only present with *erring_channel*.",
         "*failcode*: The failure code, as per BOLT #4.",
-        "*channel_update*: The hex string of the *channel_update* message received from the remote node. Only present if error is from the remote node and the *failcode* has the `UPDATE` bit set, as per BOLT #4."
+        "*failcodename*: The human-readable name corresponding to *failcode*, if known.",
+        "*raw_message*: The hex string of the raw failure message from the node that reported the error. Not present for failures that did not come from a node, such as a local routing failure."
       ],
       "author": [
         "Christian Decker [decker@blockstream.com](mailto:decker@blockstream.com) is mainly responsible."
@@ -25001,7 +25003,7 @@
         "Rusty Russell [rusty@rustcorp.com.au](mailto:rusty@rustcorp.com.au) is mainly responsible."
       ],
       "see_also": [
-        "lightning-invoicerequests(7)",
+        "lightning-invoicerequest(7)",
         "lightning-disableinvoicerequest(7)"
       ],
       "resources": [
@@ -32647,7 +32649,7 @@
             "description": [
               "NOTE: `invstring` is an alternate name for this parameter, since v26.06, for xpay compatibility.",
               "",
-              "Bolt11 or bolt12 invoice (such as one received from lightningd-fetchinvoice(7)). For a bolt11 invoice, if it does not contain an amount, *amount_msat* is required, otherwise if it is specified it must be *null*."
+              "Bolt11 or bolt12 invoice (such as one received from lightning-fetchinvoice(7)). For a bolt11 invoice, if it does not contain an amount, *amount_msat* is required, otherwise if it is specified it must be *null*."
             ]
           },
           "amount_msat": {
@@ -32699,7 +32701,7 @@
           "localinvreqid": {
             "type": "hex",
             "description": [
-              "`localinvreqid` is used by offers to link a payment attempt to a local `invoice_request` offer created by lightningd-invoicerequest(7). This  ensures that we only make a single payment for an offer, and that the offer is marked `used` once paid."
+              "`localinvreqid` is used by offers to link a payment attempt to a local `invoice_request` offer created by lightning-invoicerequest(7). This  ensures that we only make a single payment for an offer, and that the offer is marked `used` once paid."
             ]
           },
           "exclude": {
@@ -32846,10 +32848,12 @@
         "A routing failure object has the fields below:",
         "",
         "*erring_index*: The index of the node along the route that reported the error. 0 for the local node, 1 for the first hop, and so on.",
-        "*erring_node*: The hex string of the pubkey id of the node that reported the error.",
-        "*erring_channel*: The short channel ID of the channel that has the error, or *0:0:0* if the destination node raised the error.",
+        "*erring_node*: The hex string of the pubkey id of the node that reported the error. This is inferred from the route, so it may be absent in rare cases.",
+        "*erring_channel*: The short channel ID of the channel that has the error. Only present if the channel is known.",
+        "*erring_direction*: The direction of traversing the *erring_channel*. Only present with *erring_channel*.",
         "*failcode*: The failure code, as per BOLT #4.",
-        "*channel_update*: The hex string of the *channel_update* message received from the remote node. Only present if error is from the remote node and the *failcode* has the UPDATE bit set, as per BOLT #4.",
+        "*failcodename*: The human-readable name corresponding to *failcode*, if known.",
+        "*raw_message*: The hex string of the raw failure message from the node that reported the error. Not present for failures that did not come from a node, such as a local routing failure.",
         "",
         "The *data* field of errors will include statistics *getroute_tries* and *sendpay_tries*. It will also contain a *failures* field with detailed data about routing errors."
       ],
@@ -35165,7 +35169,7 @@
           "localinvreqid": {
             "type": "hash",
             "description": [
-              "`localinvreqid` is used by offers to link a payment attempt to a local `invoice_request` offer created by lightningd-invoicerequest(7)."
+              "`localinvreqid` is used by offers to link a payment attempt to a local `invoice_request` offer created by lightning-invoicerequest(7)."
             ]
           },
           "groupid": {
@@ -35794,9 +35798,11 @@
         "",
         "*erring_index*: The index of the node along the route that reported the error. 0 for the local node, 1 for the first hop, and so on.",
         "*erring_node*: The hex string of the pubkey id of the node that reported the error.",
-        "*erring_channel*: The short channel ID of the channel that has the error, or *0:0:0* if the destination node raised the error. In addition *erring_direction* will indicate which direction of the channel caused the failure.",
+        "*erring_channel*: The short channel ID of the channel that has the error. Only present if the channel is known.",
+        "*erring_direction*: The direction of traversing the *erring_channel*. Only present with *erring_channel*.",
         "*failcode*: The failure code, as per BOLT #4.",
-        "*channel_update*: The hex string of the *channel_update* message received from the remote node. Only present if error is from the remote node and the *failcode* has the UPDATE bit set, as per BOLT #4."
+        "*failcodename*: The human-readable name corresponding to *failcode*, if known.",
+        "*raw_message*: The hex string of the raw failure message from the node that reported the error. Not present for failures that did not come from a node, such as a local routing failure."
       ],
       "author": [
         "Rusty Russell [rusty@rustcorp.com.au](mailto:rusty@rustcorp.com.au) is mainly responsible."
@@ -40975,11 +40981,12 @@
         "A routing failure object has the fields below:",
         "",
         "*erring_index*: The index of the node along the route that reported the error. 0 for the local node, 1 for the first hop, and so on.",
-        "*erring_node*: The hex string of the pubkey id of the node that reported the error.",
-        "*erring_channel*: The short channel ID of the channel that has the error (or the final channel if the destination raised the error).",
-        "*erring_direction*: The direction of traversing the *erring_channel*:",
+        "*erring_node*: The hex string of the pubkey id of the node that reported the error. Only present if the node is known: a payment sent with **sendonion** does not record it.",
+        "*erring_channel*: The short channel ID of the channel that has the error. Only present if the channel is known.",
+        "*erring_direction*: The direction of traversing the *erring_channel*. Only present with *erring_channel*.",
         "*failcode*: The failure code, as per BOLT #4.",
-        "*failcodename*: The human-readable name corresponding to *failcode*, if known."
+        "*failcodename*: The human-readable name corresponding to *failcode*, if known.",
+        "*raw_message*: The hex string of the raw failure message from the node that reported the error. Not present for failures that did not come from a node, such as a local routing failure."
       ],
       "author": [
         "ZmnSCPxj [ZmnSCPxj@protonmail.com](mailto:ZmnSCPxj@protonmail.com) is mainly responsible."
@@ -41380,7 +41387,7 @@
             "type": "hex",
             "added": "v26.06",
             "description": [
-              "`localinvreqid` is used by offers to link a payment attempt to a local `invoice_request` offer created by lightningd-invoicerequest(7). This  ensures that we only make a single payment for an offer, and that the offer is marked `used` once paid."
+              "`localinvreqid` is used by offers to link a payment attempt to a local `invoice_request` offer created by lightning-invoicerequest(7). This  ensures that we only make a single payment for an offer, and that the offer is marked `used` once paid."
             ]
           },
           "dev_use_shadow": {
@@ -42905,7 +42912,7 @@
               "erring_direction": {
                 "type": "u32",
                 "description": [
-                  "The direction within the erring channel."
+                  "The direction within the erring channel. Only present with *erring_channel*."
                 ]
               },
               "raw_message": {
