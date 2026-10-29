@@ -293,7 +293,7 @@ def test_splice_rbf_htlc_sigs(node_factory, bitcoind, executor):
     """Once a splice-RBF candidate confirms, only its HTLC signatures become
     the active set, even when the other candidates place the funding output
     at the same index."""
-    l1, l2 = node_factory.line_graph(2, fundamount=1000000)
+    l1, l2 = node_factory.line_graph(2, fundamount=1000000, wait_for_announce=True)
     chan_id = l1.get_channel_id(l2)
 
     def htlc_sig_rows(node):
@@ -344,11 +344,12 @@ def test_splice_rbf_htlc_sigs(node_factory, bitcoind, executor):
     l1.daemon.wait_for_log(r'CHANNELD_AWAITING_SPLICE to CHANNELD_NORMAL')
     l2.daemon.wait_for_log(r'CHANNELD_AWAITING_SPLICE to CHANNELD_NORMAL')
 
-    # Only the confirmed candidate's signature survives, now active.
+    # Only the confirmed candidate's signature survives, now active.  The
+    # state change is logged before the lock-in's database transaction
+    # commits, so wait for the rows instead of reading them at once.
     for node in (l1, l2):
-        rows = htlc_sig_rows(node)
-        assert len(rows) == 1, rows
-        assert rows[0]['inflight_tx_id'] is None
+        wait_for(lambda: len(htlc_sig_rows(node)) == 1)
+        assert htlc_sig_rows(node)[0]['inflight_tx_id'] is None
 
 
 @pytest.mark.openchannel('v1')

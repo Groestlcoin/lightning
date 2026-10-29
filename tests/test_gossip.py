@@ -2,6 +2,7 @@ from collections import Counter
 from fixtures import *  # noqa: F401,F403
 from fixtures import TEST_NETWORK
 from pyln.client import RpcError, Millisatoshi
+from pyln.testing.utils import reserve_unused_port, drop_unused_port
 from utils import (
     wait_for, TIMEOUT, only_one, sync_blockheight,
     expected_node_features,
@@ -14,6 +15,7 @@ import logging
 import math
 import os
 import pytest
+import select
 import struct
 import subprocess
 import sys
@@ -25,6 +27,48 @@ import socket
 
 with open('config.vars') as configfile:
     config = dict([(line.rstrip().split('=', 1)) for line in configfile])
+
+
+def read_gossip_until(process, types, timeout):
+    """Read --hex lines from a gossipwith process until `types` are all seen.
+
+    gossipwith never exits on its own with the flags we use, so we have to
+    decide when we're done and terminate it.  It flushes each message, so we
+    can read incrementally.  Returns all lines read.
+    """
+    lines = []
+    seen = set()
+    buf = b''
+    fd = process.stdout.fileno()
+    deadline = time.time() + timeout
+    while set(types) - seen:
+        remaining = deadline - time.time()
+        if remaining <= 0 or not select.select([fd], [], [], remaining)[0]:
+            break
+        chunk = os.read(fd, 4096)
+        if not chunk:
+            break
+        buf += chunk
+        while b'\n' in buf:
+            raw, buf = buf.split(b'\n', 1)
+            line = raw.decode('utf-8').strip()
+            if line:
+                lines.append(line)
+                seen.add(line[0:4])
+
+    process.terminate()
+    process.wait()
+    # Drain whatever was already buffered before the process died.
+    while True:
+        chunk = os.read(fd, 4096)
+        if not chunk:
+            break
+        buf += chunk
+    for raw in buf.split(b'\n'):
+        line = raw.decode('utf-8').strip()
+        if line:
+            lines.append(line)
+    return lines
 
 
 def test_gossip_pruning(node_factory, bitcoind):
@@ -205,9 +249,12 @@ def test_announce_and_connect_via_dns(node_factory, bitcoind):
         - --disable-dns is needed so the first node does not announce 127.0.0.1 itself.
         - 'dev-allow-localhost' must not be set, so it does not resolve localhost anyway.
     """
+    # Reserve the port from the pool the other nodes draw from: a fixed
+    # port can be handed to a node of a test running alongside this one.
+    port = reserve_unused_port()
     opts1 = {'disable-dns': None,
-             'announce-addr': ['dns:localhost.localdomain:12345'],  # announce dns
-             'bind-addr': ['127.0.0.1:12345', '[::1]:12345']}   # and bind local IPs
+             'announce-addr': [f'dns:localhost.localdomain:{port}'],  # announce dns
+             'bind-addr': [f'127.0.0.1:{port}', f'[::1]:{port}']}   # and bind local IPs
     opts3 = {'may_reconnect': True}
     opts4 = {'disable-dns': None}
     l1, l2, l3, l4 = node_factory.get_nodes(4, opts=[opts1, {}, opts3, opts4])
@@ -232,13 +279,13 @@ def test_announce_and_connect_via_dns(node_factory, bitcoind):
     assert(len(addresses) == 1)  # no other addresses must be announced for this
     assert(addresses[0]['type'] == 'dns')
     assert(addresses[0]['address'] == 'localhost.localdomain')
-    assert(addresses[0]['port'] == 12345)
+    assert(addresses[0]['port'] == port)
 
     # now l3 must be able to use DNS to resolve and connect to l1
     result = l3.rpc.connect(l1.info['id'])
     assert result['id'] == l1.info['id']
     assert result['direction'] == 'out'
-    assert result['address']['port'] == 12345
+    assert result['address']['port'] == port
     if result['address']['type'] == 'ipv4':
         assert result['address']['address'] == '127.0.0.1'
     elif result['address']['type'] == 'ipv6':
@@ -250,6 +297,8 @@ def test_announce_and_connect_via_dns(node_factory, bitcoind):
     # This raises RpcError code 401, currently with an empty error message.
     with pytest.raises(RpcError, match=r"401.*dns disabled"):
         l4.rpc.connect(l1.info['id'])
+
+    drop_unused_port(port)
 
 
 def test_only_announce_one_dns(node_factory, bitcoind):
@@ -2203,7 +2252,13 @@ def test_gossip_throttle(node_factory, bitcoind, chainparams):
                           check=True,
                           timeout=TIMEOUT, stdout=subprocess.PIPE).stdout.split()
     time_slow = time.time() - start_slow
-    assert time_slow > 3
+    # The throttle checks a one-second window's usage before each send
+    # and waits at least a second once the window is over its 1000
+    # bytes.  These messages are well over that, so at least one wait
+    # is certain; how many depends on how they pack into the windows,
+    # so the bound is one second, not a count of waits.
+    assert time_slow > 1
+    l4.daemon.wait_for_log(r'Throttling outgoing peer')
 
     # Contents should be identical (once uniquified, since each
     # doubles-up on its own gossip)
@@ -2255,7 +2310,8 @@ def test_gossip_throttle(node_factory, bitcoind, chainparams):
                           check=True,
                           timeout=TIMEOUT, stdout=subprocess.PIPE).stdout.split()
     time_slow = time.time() - start_slow
-    assert time_slow > 3
+    assert time_slow > 1
+    l4.daemon.wait_for_log(r'Throttling outgoing peer')
     assert set(out2) == set(out4)
 
 
@@ -2473,18 +2529,26 @@ def test_gossip_force_broadcast_channel_msgs(node_factory, bitcoind):
                                 '--no-gossip',
                                 '--hex',
                                 '--network={}'.format(TEST_NETWORK),
-                                '--max-messages={}'.format(7),
                                 '--handle-pings',
-                                '--timeout-after=30',
                                 '{}@localhost:{}'.format(l1.info['id'], l1.port)],
                                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    # Wait for the gossipwith peer to connect before mining the final block:
+    # the channel announcement is only force-broadcast to peers which are
+    # connected when it happens, so if we mine first it can be missed.
+    wait_for(lambda: len(l1.rpc.listpeers()['peers']) == 2
+             and all(p['connected'] for p in l1.rpc.listpeers()['peers']))
+    start = len(l1.daemon.logs)
     # Now do the final announcement
     bitcoind.generate_block(1)
 
-    stdout, stderr = process.communicate(timeout=30 + TIMEOUT)
-    assert process.returncode == 0, f"Exit failed: output = {stderr}"
-
-    lines = stdout.decode('utf-8').splitlines()
+    # Wait until it has been force-broadcast to us, then read until we have
+    # our gossip plus the timestamp_filter (the extra query/ping noise is
+    # unpredictable, so we don't wait for a fixed message count).
+    wait_for(lambda: l1.daemon.is_in_log('Channel fully announced',
+                                         start=start),
+             timeout=30 + TIMEOUT)
+    lines = read_gossip_until(process, ('0100', '0102', '0101', '0109'),
+                              30 + TIMEOUT)
     types = {'0100': 'channel_announce',
              '0102': 'channel_update',
              '0101': 'node_announce',
@@ -2505,8 +2569,13 @@ def test_gossip_force_broadcast_channel_msgs(node_factory, bitcoind):
     del tally['query_channel_range']
     del tally['ping']
     del tally['gossip_filter']
-    assert tally == {'channel_announce': 1,
-                     'channel_update': 1,
+    # We can get the channel_announcement twice: once when lightningd
+    # force-broadcasts our new gossip to connected peers, and once from
+    # connectd's stream (which sends our own channel_announcement regardless
+    # of the peer's timestamp filter).  Both are valid, so accept either.
+    assert tally['channel_announce'] in (1, 2)
+    del tally['channel_announce']
+    assert tally == {'channel_update': 1,
                      'node_announce': 1}
 
     # Make sure l1 sees l2's channel update
@@ -2518,16 +2587,25 @@ def test_gossip_force_broadcast_channel_msgs(node_factory, bitcoind):
     l1.start()
 
     # If we reconnect, we will get the four immediate messages, then
-    # a cupdate refresh (due to fast gossip).
-    lines = subprocess.run(['devtools/gossipwith',
-                            '--no-gossip',
-                            '--hex',
-                            '--network={}'.format(TEST_NETWORK),
-                            '--max-messages={}'.format(10),
-                            '--handle-pings',
-                            '{}@localhost:{}'.format(l1.info['id'], l1.port)],
-                           check=True,
-                           timeout=120 + TIMEOUT, stdout=subprocess.PIPE).stdout.decode('utf-8').split()
+    # a cupdate refresh (due to fast gossip).  We can't predict the exact
+    # number of messages we'll receive, so read until the refresh has been
+    # broadcast and then stop reading.
+    start = len(l1.daemon.logs)
+    process = subprocess.Popen(['devtools/gossipwith',
+                                '--no-gossip',
+                                '--hex',
+                                '--network={}'.format(TEST_NETWORK),
+                                '--handle-pings',
+                                '{}@localhost:{}'.format(l1.info['id'], l1.port)],
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    wait_for(lambda: l1.daemon.is_in_log('Sending keepalive channel_update',
+                                         start=start),
+             timeout=120 + TIMEOUT)
+    # Give connectd a moment to write the update to the peer.
+    time.sleep(2)
+    process.terminate()
+    stdout, stderr = process.communicate(timeout=TIMEOUT)
+    lines = stdout.decode('utf-8').split()
 
     tally = {key: 0 for key in types.values()}
     for l in lines:

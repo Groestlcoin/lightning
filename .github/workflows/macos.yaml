@@ -12,7 +12,7 @@ jobs:
         groestlcoind-version: ["27.0"]
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Download Groestlcoin ${{ matrix.groestlcoind-version }} & install binaries
         run: |
@@ -25,12 +25,12 @@ jobs:
           rm -rf groestlcoin-${GROESTLCOIND_VERSION}-${TARGET_ARCH}.tar.gz groestlcoin-${GROESTLCOIND_VERSION}
 
       - name: Set up Python 3.10
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: "3.10"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v8.1.0
+        uses: astral-sh/setup-uv@v10.3.2
 
       - name: Install dependencies
         run: |

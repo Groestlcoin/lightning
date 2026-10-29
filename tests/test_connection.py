@@ -15,7 +15,7 @@ from utils import (
     mine_funding_to_announce, first_scid,
     CHANNEL_SIZE
 )
-from pyln.testing.utils import VALGRIND, EXPERIMENTAL_DUAL_FUND, FUNDAMOUNT, RUST, SLOW_MACHINE
+from pyln.testing.utils import VALGRIND, ASAN, EXPERIMENTAL_DUAL_FUND, FUNDAMOUNT, RUST, SLOW_MACHINE
 
 import coincurve
 import hashlib
@@ -763,12 +763,15 @@ def test_reconnect_no_update(node_factory, executor, bitcoind):
     # LightningNode.fundchannel will fund the channel and generate a
     # block. The block triggers the channel_ready message, which
     # causes a disconnect. The retransmission is then caused by the
-    # automatic retry.
+    # automatic retry.  Wait for it on l2: l2 disconnects as it sends
+    # channel_ready, so it has sent it by the time it reconnects, while
+    # l1 may not have reached the funding depth yet and would then send
+    # its channel_ready for the first time instead of retransmitting.
+    # With dual funding the retransmission comes from l2's dualopend, or
+    # from channeld when l1's channel_ready arrived before l2 reached
+    # the depth and the channel had already moved on, so match either.
     fundchannel_exec = executor.submit(l1.fundchannel, l2, 10**6, False)
-    if l1.config('experimental-dual-fund'):
-        l1.daemon.wait_for_log(r"dualopend.* Retransmitting channel_ready for channel")
-    else:
-        l1.daemon.wait_for_log(r"channeld.* Retransmitting channel_ready for channel")
+    l2.daemon.wait_for_log(r"Retransmitting channel_ready for channel")
     sync_blockheight(bitcoind, [l1, l2])
     fundchannel_exec.result()
     l1.stop()
@@ -776,9 +779,16 @@ def test_reconnect_no_update(node_factory, executor, bitcoind):
     # For closingd reconnection
     l1.daemon.start()
     # Close will trigger the -WIRE_SHUTDOWN and we then wait for the
-    # automatic reconnection to trigger the retransmission.
+    # automatic reconnection to complete the close.  channel_ready is
+    # not retransmitted on this reconnect: it is only retransmitted
+    # while both commitment numbers are still 1, and the fee update
+    # after lock-in has already advanced them.  The earlier wait for
+    # it on l2 was satisfied by the first reconnect's retransmission.
+    # l2 is in CHANNELD_SHUTTING_DOWN or already in CLOSINGD_SIGEXCHANGE
+    # at the reconnect, depending on whether its channeld reported both
+    # shutdowns before the disconnect took it down.
     l1.rpc.close(l2.info['id'], 0)
-    l2.daemon.wait_for_log(r"channeld.* Retransmitting channel_ready for channel")
+    l2.daemon.wait_for_log(r"Peer has reconnected, state (CHANNELD_SHUTTING_DOWN|CLOSINGD_SIGEXCHANGE)")
     l1.daemon.wait_for_log(r"CLOSINGD_COMPLETE")
 
 
@@ -1479,6 +1489,7 @@ def test_funding_v2_corners(node_factory, bitcoind):
 
 @pytest.mark.slow_test
 @pytest.mark.openchannel('v1')
+@pytest.mark.xdist_group("heavy")
 def test_funding_cancel_race(node_factory, bitcoind, executor):
     l1 = node_factory.get_node()
 
@@ -1490,6 +1501,8 @@ def test_funding_cancel_race(node_factory, bitcoind, executor):
 
     if VALGRIND:
         num = 5
+    elif ASAN:
+        num = 10
     elif SLOW_MACHINE:
         num = 20
     else:
@@ -3647,6 +3660,7 @@ def test_feerate_stress(node_factory, executor):
 
 
 @pytest.mark.slow_test
+@pytest.mark.xdist_group("heavy")
 def test_pay_disconnect_stress(node_factory, executor):
     """Expose race in htlc restoration in channeld: 50% chance of failure"""
     if VALGRIND:
@@ -5522,11 +5536,15 @@ def test_peer_reuses_htlc_id(node_factory):
 
 
 @pytest.mark.slow_test
+@pytest.mark.xdist_group("heavy")
 def test_parallel_opens(node_factory, bitcoind, executor):
     """On macOS a socket closed by its sender while in flight over SCM_RIGHTS
     could arrive unable to read, losing a subdaemon its hsmd or peer
     connection under load (#5808)."""
-    pairs, opens = 6, 50
+    if ASAN:
+        pairs, opens = 2, 10
+    else:
+        pairs, opens = 6, 50
     nodes = node_factory.get_nodes(2 * pairs)
     openers, peers = nodes[:pairs], nodes[pairs:]
 

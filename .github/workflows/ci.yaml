@@ -9,17 +9,17 @@ jobs:
         os: ['Ubuntu-22.04']
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Set up Python 3.10
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: "3.10"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v8.1.0
+        uses: astral-sh/setup-uv@v10.3.2
 
-      - uses: actions/cache@v5
+      - uses: actions/cache@v6
         with:
           path: ~/ci-cache
           key: apt-${{ runner.os }}
@@ -27,6 +27,11 @@ jobs:
       - name: Install dependencies
         run: |
           bash -x .github/scripts/setup.sh
+
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.11
+      - run: sccache --zero-stats
+
       - name: Build
         run: |
           set -e

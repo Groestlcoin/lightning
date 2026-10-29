@@ -946,13 +946,19 @@ def test_channel_lease_unilat_closes(node_factory, bitcoind):
     l1.rpc.connect(l2.info['id'], 'localhost', l2.port)
     rates = l1.rpc.dev_queryrates(l2.info['id'], amount, amount)
     # l1 leases a channel from l2
-    l1.rpc.fundchannel(l2.info['id'], amount, request_amt=amount,
-                       feerate='{}perkw'.format(feerate),
-                       compact_lease=rates['compact_lease'])
+    fc = l1.rpc.fundchannel(
+        l2.info["id"],
+        amount,
+        request_amt=amount,
+        feerate="{}perkw".format(feerate),
+        compact_lease=rates["compact_lease"],
+    )
 
     # l2 leases a channel from l3
     l2.rpc.connect(l3.info['id'], 'localhost', l3.port)
     rates = l2.rpc.dev_queryrates(l3.info['id'], amount, amount)
+    # minconf=0 below needs l2 to see its change from the l1 funding tx
+    l2.daemon.wait_for_log(rf'Owning output.* txid {fc["txid"]}')
     l2.rpc.fundchannel(l3.info['id'], amount, request_amt=amount,
                        feerate='{}perkw'.format(feerate), minconf=0,
                        compact_lease=rates['compact_lease'])
@@ -983,6 +989,7 @@ def test_channel_lease_unilat_closes(node_factory, bitcoind):
     # make sure we're at the right place for the csv lock
     height = bitcoind.rpc.getblockchaininfo()['blocks']
     l2.daemon.wait_for_log(f'Blockheight: SENT_ADD_ACK_COMMIT->RCVD_ADD_ACK_REVOCATION LOCAL now {height}')
+    l3.daemon.wait_for_log(f'got commitsig .*: feerate .*, blockheight: {height},')
     l2.stop()
 
     # unilateral close channels l1<->l2 & l3<->l2
@@ -2526,10 +2533,11 @@ def test_onchain_middleman_fulfill_after_fail(node_factory, bitcoind):
     l3.daemon.wait_for_log(' to ONCHAIN')
 
     # Now l3 learns the preimage, and spends what it's owed.
+    # Both HTLCs get a success tx; they share a wallet UTXO for fee boost
+    # so only one can enter the mempool at a time. Mine whichever gets in.
     l3.rpc.releasehtlc(preimage)
-    _, txid, _ = l3.wait_for_onchaind_tx('OUR_HTLC_SUCCESS_TX',
-                                         'OUR_UNILATERAL/THEIR_HTLC')
-    bitcoind.generate_block(1, wait_for_mempool=[txid])
+    l3.daemon.wait_for_logs(['Telling lightningd about OUR_HTLC_SUCCESS_TX to resolve OUR_UNILATERAL/THEIR_HTLC'] * 2)
+    bitcoind.generate_block(1, wait_for_mempool=1)
     l2.daemon.wait_for_log('THEIR_UNILATERAL/OUR_HTLC gave us preimage')
 
     # Both payments must succeed, including the one l3 said it failed.
@@ -3730,6 +3738,7 @@ def test_invalid_upfront_shutdown_script(node_factory, bitcoind, executor):
 
 
 @pytest.mark.slow_test
+@pytest.mark.xdist_group("heavy")
 def test_segwit_shutdown_script(node_factory, bitcoind, executor):
     """
 Try a range of future segwit versions as shutdown scripts.  We create many nodes, so this is quite slow under valgrind
