@@ -164,8 +164,6 @@ class Request(dict):
             "error": {
                 "code": code,
                 "message": message,
-                # 'data' field "may be omitted."
-                "traceback": traceback.format_exc(),
             },
         })
         self.state = RequestState.FAILED
@@ -265,6 +263,13 @@ hook_fallbacks = {
     'openchannel': {'result': 'reject'},
     'rpc_command': {'result': 'continue'},
     'custommsg': {'result': 'continue'},
+    'openchannel2': {'result': 'reject'},
+    'openchannel2_changed': {'result': 'reject'},
+    'openchannel2_sign': {'result': 'reject'},
+    'rbf_channel': {'result': 'reject'},
+    'onion_message_recv': {'result': 'continue'},
+    'onion_message_recv_secret': {'result': 'continue'},
+    'recover': {'result': 'continue'},
 }
 
 
@@ -718,7 +723,7 @@ class Plugin(object):
                 # return a result or raise an exception.
                 request.set_result(result)
         except Exception as e:
-            if name in hook_fallbacks:
+            if method.mtype == MethodType.HOOK and name in hook_fallbacks:
                 response = hook_fallbacks[name]
                 self.log((
                     "Hook handler for {name} failed with an exception. "
@@ -749,10 +754,6 @@ class Plugin(object):
         # Old style?
         if 'payload' in request.params and request.method not in request.params:
             request.params[request.method] = request.params['payload']
-        # New style?
-        elif 'payload' not in request.params and request.method in request.params and self.deprecated_apis:
-            # Create payload for older plugins, on modern systems.
-            request.params['payload'] = request.params[request.method]
 
         # Always hoist origin into params:
         if request.origin and 'origin' not in request.params:

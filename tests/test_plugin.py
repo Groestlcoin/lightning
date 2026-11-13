@@ -451,7 +451,7 @@ def test_failing_plugins(directory):
 
 
 def test_pay_plugin(node_factory):
-    l1, l2 = node_factory.line_graph(2)
+    l1, l2 = node_factory.line_graph(2, opts={"allow-deprecated-apis": True})
     inv = l2.rpc.invoice(123000, 'label', 'description', 3700)
 
     res = l1.rpc.pay(bolt11=inv['bolt11'])
@@ -461,7 +461,7 @@ def test_pay_plugin(node_factory):
         l1.rpc.call('pay')
 
     # Make sure usage messages are present.
-    msg = 'pay invstring [amount_msat] [label] [riskfactor] [maxfeepercent] '\
+    msg = 'pay (DEPRECATED!) invstring [amount_msat] [label] [riskfactor] [maxfeepercent] '\
           '[retry_for] [maxdelay] [exemptfee] [localinvreqid] [exclude] '\
           '[maxfee] [description] [partial_msat]'
     # We run with --developer:
@@ -1510,7 +1510,7 @@ def test_htlc_accepted_hook_forward_restart(node_factory, executor):
     ], wait_for_announce=True)
 
     i1 = l3.rpc.invoice(amount_msat=1000, label="direct", description="desc")['bolt11']
-    f1 = executor.submit(l1.dev_pay, i1, dev_use_shadow=False)
+    f1 = executor.submit(l1.rpc.xpay, i1)
 
     l2.daemon.wait_for_log(r'Holding onto an incoming htlc for 10 seconds')
 
@@ -1610,7 +1610,7 @@ def test_invoice_payment_notification(node_factory):
     preimage = '1' * 64
     label = "a_descriptive_label"
     inv1 = l2.rpc.invoice(msats, label, 'description', preimage=preimage)
-    l1.dev_pay(inv1['bolt11'], dev_use_shadow=False)
+    l1.rpc.xpay(inv1['bolt11'])
 
     l2.daemon.wait_for_log(r"Received invoice_payment event for label {},"
                            " preimage {}, and amount of {}"
@@ -1772,6 +1772,7 @@ def test_forward_event_notification(node_factory, bitcoind, executor):
     expect = stats[2].copy()
     del expect['failcode']
     del expect['failreason']
+    del expect['failure_reason']
     del expect['out_htlc_id']
     del expect['updated_index']
     expect['status'] = 'offered'
@@ -1885,6 +1886,65 @@ def test_sendpay_notifications_nowaiter(node_factory):
     results = l1.rpc.call('listsendpays_plugin')
     assert len(results['sendpay_success']) == 1
     assert len(results['sendpay_failure']) == 1
+
+
+def test_sendpay_failure_status(node_factory, executor):
+    """sendpay_failure and an already-waiting waitsendpay must report the
+    final failed state, same as a waitsendpay issued afterwards (#7561)."""
+
+    def setup(plugin):
+        @plugin.init()
+        def init(configuration, options, plugin):
+            plugin.failure_list = []
+
+        @plugin.subscribe("sendpay_failure")
+        def notify_sendpay_failure(plugin, sendpay_failure, **kwargs):
+            plugin.failure_list.append(sendpay_failure)
+
+        @plugin.method("listsendpays_plugin")
+        def record_lookup(plugin):
+            return {"sendpay_failure": plugin.failure_list}
+
+    def hold_setup(plugin):
+        @plugin.init()
+        def init(configuration, options, plugin):
+            plugin.held = None
+
+        @plugin.async_hook("htlc_accepted")
+        def on_htlc_accepted(htlc, request, plugin, **kwargs):
+            plugin.held = request
+
+        @plugin.method("failhtlc")
+        def failhtlc(plugin):
+            plugin.held.set_result({"result": "fail", "failure_message": "2002"})
+            return {}
+
+    l1 = node_factory.get_node(inline_plugin=setup)
+    l2 = node_factory.get_node(inline_plugin=hold_setup)
+    node_factory.join_nodes([l1, l2])
+
+    inv = l2.rpc.invoice(10000, "test_sendpay_failure_status", "desc")
+    route = l1.single_route(l2.info["id"], 10000)
+    l1.rpc.sendpay(route, inv["payment_hash"], payment_secret=inv["payment_secret"])
+    l2.daemon.wait_for_log("Calling htlc_accepted hook")
+
+    # Make sure the waiter is registered before the HTLC fails.
+    fut = executor.submit(l1.rpc.waitsendpay, inv["payment_hash"])
+    l1.daemon.wait_for_log(r"Payment part 0/0/\d+ status 0")
+    l2.rpc.failhtlc()
+
+    with pytest.raises(RpcError, match="WIRE_TEMPORARY_NODE_FAILURE") as waiting:
+        fut.result(TIMEOUT)
+    with pytest.raises(RpcError, match="WIRE_TEMPORARY_NODE_FAILURE") as after:
+        l1.rpc.waitsendpay(inv["payment_hash"])
+
+    notification = only_one(l1.rpc.call("listsendpays_plugin")["sendpay_failure"])
+    for err in (notification, waiting.value.error, after.value.error):
+        assert err["data"]["status"] == "failed"
+        assert "completed_at" in err["data"]
+        assert "updated_index" in err["data"]
+    assert notification["data"] == after.value.error["data"]
+    assert waiting.value.error["data"] == after.value.error["data"]
 
 
 def test_inline_plugin_wait_for_log_no_selfmatch(node_factory):
@@ -4007,6 +4067,8 @@ def test_sql(node_factory, bitcoind):
                         {'name': 'failcode',
                          'type': 'u32'},
                         {'name': 'failreason',
+                         'type': 'string'},
+                        {'name': 'failure_reason',
                          'type': 'string'}]},
         'htlcs': {
             'indices': [['short_channel_id', 'id']],
@@ -5313,8 +5375,6 @@ def test_pay_plugin_notifications(node_factory, bitcoind, chainparams):
                                 'enabled': True}
     channel_hint_update = {'origin': 'pay',
                            'channel_hint_update': channel_hint_update_core}
-    # pyln-client's plugin.py duplicated payload into same name as update.
-    channel_hint_update['payload'] = {'channel_hint': channel_hint_update_core}
 
     assert data == channel_hint_update
 
@@ -5326,8 +5386,6 @@ def test_pay_plugin_notifications(node_factory, bitcoind, chainparams):
                     'bolt11': inv1['bolt11']}
     success = {'origin': 'pay',
                'pay_success': success_core}
-    # pyln-client's plugin.py duplicated payload into same name as update.
-    success['payload'] = success_core
     assert data == success
 
     inv2 = l3.rpc.invoice(10000, "second", "desc")
@@ -5341,8 +5399,6 @@ def test_pay_plugin_notifications(node_factory, bitcoind, chainparams):
     failure_core = {'payment_hash': inv2['payment_hash'], 'bolt11': inv2['bolt11'], 'error': {'message': 'failed: WIRE_INCORRECT_OR_UNKNOWN_PAYMENT_DETAILS (reply from remote)'}}
     failure = {'origin': 'pay',
                'pay_failure': failure_core}
-    # pyln-client's plugin.py duplicated payload into same name as update.
-    failure['payload'] = failure_core
     assert data == failure
 
 

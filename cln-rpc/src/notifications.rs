@@ -398,22 +398,8 @@ impl ToString for CoinMovementType {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct CoinMovementNotification {
-    #[deprecated]
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub txid: Option<String>,
-    #[deprecated]
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub utxo_txid: Option<String>,
-    #[deprecated]
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub vout: Option<u32>,
-    #[deprecated]
-    #[serde(skip_serializing_if = "crate::is_none_or_empty")]
-    pub tags: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub blockheight: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub created_index: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fees_msat: Option<Amount>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -431,20 +417,20 @@ pub struct CoinMovementNotification {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub peer_id: Option<PublicKey>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub primary_tag: Option<CoinMovementPrimaryTag>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub spending_txid: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub utxo: Option<Outpoint>,
-    #[serde(skip_serializing_if = "crate::is_none_or_empty")]
-    pub extra_tags: Option<Vec<String>>,
+    // Path `coin_movement.primary_tag`
+    pub primary_tag: CoinMovementPrimaryTag,
     // Path `coin_movement.type`
     #[serde(rename = "type")]
     pub item_type: CoinMovementType,
     pub account_id: String,
     pub coin_type: String,
+    pub created_index: u64,
     pub credit_msat: Amount,
     pub debit_msat: Amount,
+    pub extra_tags: Vec<String>,
     pub node_id: PublicKey,
     pub timestamp: u64,
     pub version: u32,
@@ -464,6 +450,92 @@ pub struct DeprecatedOneshotNotification {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct DisconnectNotification {
     pub id: PublicKey,
+}
+
+/// ['The root cause of the failure, more specific than *failcode*/*failreason*. Only set for *local_failed* forwards, and not always known.', '*insufficient_outgoing_liquidity* means our own spendable balance on the outgoing channel was too low; *peer_cannot_afford_fee* means the peer opened the outgoing channel and cannot pay the commitment fee for another HTLC.']
+#[derive(Copy, Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[allow(non_camel_case_types)]
+pub enum ForwardEventFailureReason {
+    #[serde(rename = "insufficient_outgoing_liquidity")]
+    INSUFFICIENT_OUTGOING_LIQUIDITY = 0,
+    #[serde(rename = "too_many_htlcs")]
+    TOO_MANY_HTLCS = 1,
+    #[serde(rename = "dust_limit")]
+    DUST_LIMIT = 2,
+    #[serde(rename = "htlc_below_minimum")]
+    HTLC_BELOW_MINIMUM = 3,
+    #[serde(rename = "htlc_above_maximum")]
+    HTLC_ABOVE_MAXIMUM = 4,
+    #[serde(rename = "fee_insufficient")]
+    FEE_INSUFFICIENT = 5,
+    #[serde(rename = "cltv_incorrect")]
+    CLTV_INCORRECT = 6,
+    #[serde(rename = "cltv_expiry_too_soon")]
+    CLTV_EXPIRY_TOO_SOON = 7,
+    #[serde(rename = "cltv_expiry_too_far")]
+    CLTV_EXPIRY_TOO_FAR = 8,
+    #[serde(rename = "unknown_next_peer")]
+    UNKNOWN_NEXT_PEER = 9,
+    #[serde(rename = "outgoing_peer_offline")]
+    OUTGOING_PEER_OFFLINE = 10,
+    #[serde(rename = "channel_failed_permanent")]
+    CHANNEL_FAILED_PERMANENT = 11,
+    #[serde(rename = "invalid_onion")]
+    INVALID_ONION = 12,
+    #[serde(rename = "channel_shutting_down")]
+    CHANNEL_SHUTTING_DOWN = 13,
+    #[serde(rename = "max_htlc_value_in_flight")]
+    MAX_HTLC_VALUE_IN_FLIGHT = 14,
+    #[serde(rename = "peer_cannot_afford_fee")]
+    PEER_CANNOT_AFFORD_FEE = 15,
+}
+
+impl TryFrom<i32> for ForwardEventFailureReason {
+    type Error = anyhow::Error;
+    fn try_from(c: i32) -> Result<ForwardEventFailureReason, anyhow::Error> {
+        match c {
+    0 => Ok(ForwardEventFailureReason::INSUFFICIENT_OUTGOING_LIQUIDITY),
+    1 => Ok(ForwardEventFailureReason::TOO_MANY_HTLCS),
+    2 => Ok(ForwardEventFailureReason::DUST_LIMIT),
+    3 => Ok(ForwardEventFailureReason::HTLC_BELOW_MINIMUM),
+    4 => Ok(ForwardEventFailureReason::HTLC_ABOVE_MAXIMUM),
+    5 => Ok(ForwardEventFailureReason::FEE_INSUFFICIENT),
+    6 => Ok(ForwardEventFailureReason::CLTV_INCORRECT),
+    7 => Ok(ForwardEventFailureReason::CLTV_EXPIRY_TOO_SOON),
+    8 => Ok(ForwardEventFailureReason::CLTV_EXPIRY_TOO_FAR),
+    9 => Ok(ForwardEventFailureReason::UNKNOWN_NEXT_PEER),
+    10 => Ok(ForwardEventFailureReason::OUTGOING_PEER_OFFLINE),
+    11 => Ok(ForwardEventFailureReason::CHANNEL_FAILED_PERMANENT),
+    12 => Ok(ForwardEventFailureReason::INVALID_ONION),
+    13 => Ok(ForwardEventFailureReason::CHANNEL_SHUTTING_DOWN),
+    14 => Ok(ForwardEventFailureReason::MAX_HTLC_VALUE_IN_FLIGHT),
+    15 => Ok(ForwardEventFailureReason::PEER_CANNOT_AFFORD_FEE),
+            o => Err(anyhow::anyhow!("Unknown variant {} for enum ForwardEventFailureReason", o)),
+        }
+    }
+}
+
+impl ToString for ForwardEventFailureReason {
+    fn to_string(&self) -> String {
+        match self {
+            ForwardEventFailureReason::INSUFFICIENT_OUTGOING_LIQUIDITY => "INSUFFICIENT_OUTGOING_LIQUIDITY",
+            ForwardEventFailureReason::TOO_MANY_HTLCS => "TOO_MANY_HTLCS",
+            ForwardEventFailureReason::DUST_LIMIT => "DUST_LIMIT",
+            ForwardEventFailureReason::HTLC_BELOW_MINIMUM => "HTLC_BELOW_MINIMUM",
+            ForwardEventFailureReason::HTLC_ABOVE_MAXIMUM => "HTLC_ABOVE_MAXIMUM",
+            ForwardEventFailureReason::FEE_INSUFFICIENT => "FEE_INSUFFICIENT",
+            ForwardEventFailureReason::CLTV_INCORRECT => "CLTV_INCORRECT",
+            ForwardEventFailureReason::CLTV_EXPIRY_TOO_SOON => "CLTV_EXPIRY_TOO_SOON",
+            ForwardEventFailureReason::CLTV_EXPIRY_TOO_FAR => "CLTV_EXPIRY_TOO_FAR",
+            ForwardEventFailureReason::UNKNOWN_NEXT_PEER => "UNKNOWN_NEXT_PEER",
+            ForwardEventFailureReason::OUTGOING_PEER_OFFLINE => "OUTGOING_PEER_OFFLINE",
+            ForwardEventFailureReason::CHANNEL_FAILED_PERMANENT => "CHANNEL_FAILED_PERMANENT",
+            ForwardEventFailureReason::INVALID_ONION => "INVALID_ONION",
+            ForwardEventFailureReason::CHANNEL_SHUTTING_DOWN => "CHANNEL_SHUTTING_DOWN",
+            ForwardEventFailureReason::MAX_HTLC_VALUE_IN_FLIGHT => "MAX_HTLC_VALUE_IN_FLIGHT",
+            ForwardEventFailureReason::PEER_CANNOT_AFFORD_FEE => "PEER_CANNOT_AFFORD_FEE",
+        }.to_string()
+    }
 }
 
 /// ['The onion format used for the forward, if known.']
@@ -540,6 +612,8 @@ pub struct ForwardEventNotification {
     pub failcode: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub failreason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failure_reason: Option<ForwardEventFailureReason>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fee_msat: Option<Amount>,
     #[serde(skip_serializing_if = "Option::is_none")]

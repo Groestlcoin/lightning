@@ -397,15 +397,6 @@ static void channel_hint_notify(struct plugin *plugin,
 	struct json_stream *js =
 	    plugin_notification_start_obs(plugin, "channel_hint_update");
 
-	/* Fake up the old "payload" style, *and* the old unwrapped style */
-	if (notification_deprecated_out_ok(plugin, "notification", "payload",
-					   "v25.09", "v26.09")) {
-		json_add_string(js, "origin", "pay");
-		json_object_start(js, "payload");
-		channel_hint_notify_core(plugin, js, "channel_hint", hint);
-		json_object_end(js);
-	}
-
 	channel_hint_notify_core(plugin, js, "channel_hint_update", hint);
 	plugin_notification_end_obs(plugin, js);
 }
@@ -1392,6 +1383,18 @@ nonerror:
 }
 
 
+/* gossipd ignores updates for dying channels: don't retry with stale ones */
+static void disable_if_dying(struct payment *p, const struct route_hop *errchan)
+{
+	const struct gossmap *gossmap = get_raw_gossmap(p);
+	const struct gossmap_chan *c = gossmap_find_chan(gossmap, &errchan->scid);
+
+	if (c && gossmap_chan_is_dying(gossmap, c))
+		channel_hints_update(p, errchan->scid, errchan->direction,
+				     false, false, NULL, errchan->capacity,
+				     NULL);
+}
+
 static struct command_result *
 handle_intermediate_failure(struct command *cmd,
 			    struct payment *p,
@@ -1460,6 +1463,7 @@ handle_intermediate_failure(struct command *cmd,
 
 	case WIRE_INCORRECT_CLTV_EXPIRY:
 		report_tampering(p, errchan - p->route, "cltv");
+		disable_if_dying(p, errchan);
 		goto error;
 
 	case WIRE_INVALID_ONION_VERSION:
@@ -1475,8 +1479,11 @@ handle_intermediate_failure(struct command *cmd,
 
 	case WIRE_AMOUNT_BELOW_MINIMUM:
 	case WIRE_FEE_INSUFFICIENT:
-	case WIRE_EXPIRY_TOO_FAR:
 	case WIRE_EXPIRY_TOO_SOON:
+		disable_if_dying(p, errchan);
+		goto error;
+
+	case WIRE_EXPIRY_TOO_FAR:
 		goto error;
 	}
 
@@ -2116,15 +2123,6 @@ static void payment_notify_failure(struct payment *p, const char *error_message)
 	struct json_stream *n;
 
 	n = plugin_notification_start_obs(p->plugin, "pay_failure");
-	/* Fake up the old "payload" style, *and* the old unwrapped style */
-	if (notification_deprecated_out_ok(p->plugin, "notification", "payload",
-					   "v25.09", "v26.09")) {
-		json_add_string(n, "origin", "pay");
-		json_object_start(n, "payload");
-		payment_failure_notify_core(p, n, error_message);
-		json_object_end(n);
-	}
-
 	json_object_start(n, "pay_failure");
 	payment_failure_notify_core(p, n, error_message);
 	json_object_end(n);
@@ -2164,17 +2162,6 @@ void json_add_payment_success(struct json_stream *js,
 	json_add_string(js, "status", "complete");
 
 	n = plugin_notification_start_obs(p->plugin, "pay_success");
-	/* Fake up the old "payload" style, *and* the old unwrapped style */
-	if (notification_deprecated_out_ok(p->plugin, "notification", "payload",
-					   "v25.09", "v26.09")) {
-		json_add_string(n, "origin", "pay");
-		json_object_start(n, "payload");
-		json_add_sha256(n, "payment_hash", p->payment_hash);
-		if (root->invstring != NULL)
-			json_add_string(n, "bolt11", root->invstring);
-		json_object_end(n);
-	}
-
 	json_object_start(n, "pay_success");
 	json_add_sha256(n, "payment_hash", p->payment_hash);
 	if (root->invstring != NULL)

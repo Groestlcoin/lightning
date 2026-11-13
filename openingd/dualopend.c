@@ -1367,6 +1367,8 @@ static void handle_tx_sigs(struct state *state, const u8 *msg)
 	struct bitcoin_txid txid;
 	const struct witness **witnesses;
 	struct tx_state *tx_state = state->tx_state;
+	size_t peer_input_count = 0;
+	const char *err;
 
 	struct tlv_tx_signatures_tlvs *txsig_tlvs = tlv_tx_signatures_tlvs_new(tmpctx);
 	if (!fromwire_tx_signatures(tmpctx, msg, &cid, &txid,
@@ -1423,8 +1425,18 @@ static void handle_tx_sigs(struct state *state, const u8 *msg)
 			       "tx_signatures sent before commitment sigs %s",
 			       tal_hex(msg, msg));
 
+	/* BOLT #2:
+	 * The receiving node:
+	 *   - MUST fail the negotiation if:
+	 *     - the message contains an empty `witness`
+	 *     - the number of `witnesses` does not equal the number of inputs
+	 *       added by the sending node
+	 *     - the `txid` does not match the txid of the transaction
+	 *     - the `witnesses` are non-standard
+	 *     - a signature uses a flag that is not `SIGHASH_ALL` (0x01)
+	 */
 	/* We put the PSBT + sigs all together */
-	for (size_t i = 0, j = 0; i < tx_state->psbt->num_inputs; i++) {
+	for (size_t i = 0, j; i < tx_state->psbt->num_inputs; i++) {
 		struct wally_psbt_input *in =
 			&tx_state->psbt->inputs[i];
 		u64 in_serial;
@@ -1437,14 +1449,31 @@ static void handle_tx_sigs(struct state *state, const u8 *msg)
 		}
 		if (in_serial % 2 != their_role(state))
 			continue;
+		peer_input_count++;
 
-		if (j == tal_count(witnesses))
+		if (peer_input_count > tal_count(witnesses))
 			open_err_warn(state, "Mismatched witness stack count %s",
 				      tal_hex(msg, msg));
 
+		j = peer_input_count - 1;
+
+		/* do some checks before handing the witness to wally */
+		err = check_tx_signatures_witness(tmpctx, in, witnesses[j]);
+		if (err)
+			open_err_warn(state,
+				      "Bad witness at position %zu: %s. "
+				      "Received tx_signatures: %s",
+				      j, err, tal_hex(msg, msg));
+
 		psbt_finalize_input(tx_state->psbt, in, witnesses[j]);
-		j++;
 	}
+
+	err = check_tx_signatures_witness_count(tmpctx, tx_state->psbt,
+						their_role(state),
+						tal_count(witnesses), -1);
+	if (err)
+		open_err_warn(state, "%s. Received tx_signatures: %s",
+			      err, tal_hex(msg, msg));
 
 	tx_state->remote_funding_sigs_rcvd = true;
 	/* Send to the controller, who will broadcast the funding_tx
@@ -1959,8 +1988,13 @@ static bool run_tx_interactive(struct state *state,
 				asset = amount_sat_to_asset(&amt,
 							    chainparams->fee_asset_tag);
 				/* FIXME: persist nonces */
+				/* The asset belongs to the input we just
+				 * appended, not the prevtx output index:
+				 * outpoint.n is bounded only by the peer's
+				 * prevtx and can be well past our PSBT's
+				 * inputs. */
 				psbt_elements_input_set_asset(psbt,
-							      outpoint.n,
+							      psbt->num_inputs - 1,
 							      &asset);
 			}
 			psbt_input_set_serial_id(psbt, in, serial_id);
@@ -2542,7 +2576,6 @@ static void accepter_start(struct state *state, const u8 *oc2_msg)
 	 * The receiving node MUST fail the channel if:
 	 *...
 	 *   - the `channel_type` is not suitable.
-	 *   - the `channel_type` includes `option_zeroconf` and it does not trust the sender to open an unconfirmed channel.
 	 */
 	if (!open_tlv->channel_type) {
 		negotiation_failed(state,
@@ -2567,6 +2600,18 @@ static void accepter_start(struct state *state, const u8 *oc2_msg)
 							   open_tlv->channel_type));
 			return;
 		}
+	}
+
+	/* BOLT #2:
+	 * The receiving node MUST fail the channel if:
+	 *...
+	 *   - the `channel_type` includes `option_zeroconf` and it does not trust the
+	 *     sender to open an unconfirmed channel.
+	 */
+	if (channel_type_has(state->channel_type, OPT_ZEROCONF) &&
+	    state->minimum_depth > 0) {
+		negotiation_failed(state, "You required zeroconf, but you're not on our allowlist");
+		return;
 	}
 
 	/* The commitment feerate is a different matter: too low and the
@@ -2766,7 +2811,9 @@ static void accepter_start(struct state *state, const u8 *oc2_msg)
 				 &tx_state->remoteconf,
 				 &tx_state->localconf,
 				 channel_type_has(state->channel_type, OPT_ANCHORS_ZERO_FEE_HTLC_TX),
-				 &err_reason)) {
+				 &err_reason)
+	    || !check_dust_limit(tmpctx, &tx_state->remoteconf,
+				 &tx_state->localconf, false, &err_reason)) {
 		negotiation_failed(state, "%s", err_reason);
 		return;
 	}
@@ -3420,7 +3467,9 @@ static void opener_start(struct state *state, u8 *msg)
 				 &tx_state->remoteconf,
 				 &tx_state->localconf,
 				 channel_type_has(state->channel_type, OPT_ANCHORS_ZERO_FEE_HTLC_TX),
-				 &err_reason)) {
+				 &err_reason)
+	    || !check_dust_limit(tmpctx, &tx_state->remoteconf,
+				 &tx_state->localconf, false, &err_reason)) {
 		negotiation_failed(state, "%s", err_reason);
 		return;
 	}
@@ -3729,7 +3778,9 @@ static void rbf_local_start(struct state *state, u8 *msg)
 				 &tx_state->remoteconf,
 				 &tx_state->localconf,
 				 channel_type_has(state->channel_type, OPT_ANCHORS_ZERO_FEE_HTLC_TX),
-				 &err_reason)) {
+				 &err_reason)
+	    || !check_dust_limit(tmpctx, &tx_state->remoteconf,
+				 &tx_state->localconf, false, &err_reason)) {
 		open_abort(state, "%s", err_reason);
 		return;
 	}
@@ -3887,7 +3938,9 @@ static void rbf_remote_start(struct state *state, const u8 *rbf_msg)
 				 &tx_state->remoteconf,
 				 &tx_state->localconf,
 				 channel_type_has(state->channel_type, OPT_ANCHORS_ZERO_FEE_HTLC_TX),
-				 &err_reason)) {
+				 &err_reason)
+	    || !check_dust_limit(tmpctx, &tx_state->remoteconf,
+				 &tx_state->localconf, false, &err_reason)) {
 		negotiation_failed(state, "%s", err_reason);
 		goto free_rbf_ctx;
 	}

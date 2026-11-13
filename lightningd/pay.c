@@ -303,7 +303,6 @@ json_sendpay_in_progress(struct command *cmd,
 }
 
 static void tell_waiters_failed(struct lightningd *ld,
-				const struct sha256 *payment_hash,
 				const struct wallet_payment *payment,
 				enum jsonrpc_errcode pay_errcode,
 				const struct onionreply *onionreply,
@@ -315,9 +314,11 @@ static void tell_waiters_failed(struct lightningd *ld,
 	const char *errmsg =
 	    sendpay_errmsg_fmt(tmpctx, pay_errcode, fail, details);
 
-	/* Careful: ->fail deletes cmd */
+	/* Careful: ->fail deletes cmd, which may own the payment_hash our
+	 * caller was given (injectpaymentonion's selfpay), so match on
+	 * payment's own copy. */
 	list_for_each_safe(&ld->waitsendpay_commands, pc, next, list) {
-		if (!sha256_eq(payment_hash, &pc->payment_hash))
+		if (!sha256_eq(&payment->payment_hash, &pc->payment_hash))
 			continue;
 		if (payment->partid != pc->partid)
 			continue;
@@ -336,15 +337,14 @@ static void tell_waiters_failed(struct lightningd *ld,
 }
 
 static void tell_waiters_success(struct lightningd *ld,
-				 const struct sha256 *payment_hash,
 				 struct wallet_payment *payment)
 {
 	struct waitsendpay_command *pc;
 	struct waitsendpay_command *next;
 
-	/* Careful: sendpay_success deletes cmd */
+	/* Careful: sendpay_success deletes cmd (see tell_waiters_failed) */
 	list_for_each_safe(&ld->waitsendpay_commands, pc, next, list) {
-		if (!sha256_eq(payment_hash, &pc->payment_hash))
+		if (!sha256_eq(&payment->payment_hash, &pc->payment_hash))
 			continue;
 		if (payment->partid != pc->partid)
 			continue;
@@ -374,7 +374,7 @@ void payment_succeeded(struct lightningd *ld,
 	if (payment->local_invreq_id)
 		wallet_invoice_request_mark_used(ld->wallet->db,
 						 payment->local_invreq_id);
-	tell_waiters_success(ld, payment_hash, payment);
+	tell_waiters_success(ld, payment);
 }
 
 /* Return a struct routing_failure for an immediate failure
@@ -655,7 +655,11 @@ void payment_failed(struct lightningd *ld,
 				    fail ? fail->channel_dir : 0,
 				    fail ? fail->msg : NULL);
 
-	tell_waiters_failed(ld, payment_hash, payment, pay_errcode,
+	/* Waiters and the notification need the updated status. */
+	payment = wallet_payment_by_hash(tmpctx, ld->wallet, payment_hash,
+					 partid, groupid);
+	assert(payment);
+	tell_waiters_failed(ld, payment, pay_errcode,
 			    failonion, fail, failstr);
 }
 
@@ -792,7 +796,8 @@ static const u8 *send_onion(const tal_t *ctx, struct lightningd *ld,
 	return send_htlc_out(ctx, channel, first_hop->amount,
 			     base_expiry + first_hop->delay,
 			     final_amount, payment_hash,
-			     path_key, NULL, partid, groupid, onion, NULL, hout);
+			     path_key, NULL, partid, groupid, onion, NULL, hout,
+			     NULL);
 	}
 
 static struct command_result *check_invoice_request_usage(struct command *cmd,
@@ -1550,9 +1555,12 @@ static struct command_result *self_payment(struct lightningd *ld,
 					    NULL, NULL,
 					    err,
 					    0, NULL);
+		payment = wallet_payment_by_hash(tmpctx, ld->wallet, rhash,
+						 partid, groupid);
+		assert(payment);
 		/* We do this even though there really can't be any waiters,
 		 * since we didn't block. */
-		tell_waiters_failed(ld, rhash, payment, PAY_DESTINATION_PERM_FAIL,
+		tell_waiters_failed(ld, payment, PAY_DESTINATION_PERM_FAIL,
 				    NULL, fail, err);
 		return sendpay_fail(cmd, payment, PAY_DESTINATION_PERM_FAIL, NULL,
 				    fail, err, NULL);
@@ -2128,7 +2136,7 @@ static struct command_result *json_injectpaymentonion(struct command *cmd,
 				payment_hash,
 				next_path_key, NULL, *partid, *groupid,
 				serialize_onionpacket(tmpctx, rs->next),
-				NULL, &hout);
+				NULL, &hout, NULL);
 	if (failmsg) {
 		return command_fail(cmd, JSONRPC2_INVALID_PARAMS,
 				    "Could not send to first peer: %s",

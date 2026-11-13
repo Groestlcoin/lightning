@@ -210,7 +210,7 @@
       "title": "Command for expiring information in a layer",
       "added": "v24.11",
       "description": [
-        "The **askrene-age** RPC command tells askrene that information added to a layer by *askrene-inform-channel* and *askrene-bias-channel* beyond a certain age is less useful.  It currently completely forgets constraints and biases older than *cutoff*."
+        "The **askrene-age** RPC command tells askrene that information added to a layer by *askrene-inform-channel*, *askrene-bias-channel* and *askrene-bias-node* beyond a certain age is less useful.  It currently completely forgets constraints, impressions and biases older than *cutoff*."
       ],
       "request": {
         "required": [
@@ -228,7 +228,7 @@
           "cutoff": {
             "type": "u64",
             "description": [
-              "The UNIX timestamp: constraints older than this will be forgotten."
+              "The UNIX timestamp: constraints, impressions and biases older than this will be forgotten."
             ]
           }
         }
@@ -249,7 +249,7 @@
           "num_removed": {
             "type": "u64",
             "description": [
-              "The number of constraints and impressions removed from *layer*"
+              "The number of constraints, impressions and biases removed from *layer*"
             ]
           }
         }
@@ -257,6 +257,8 @@
       "see_also": [
         "lightning-getroutes(7)",
         "lightning-askrene-inform-channel(7)",
+        "lightning-askrene-bias-channel(7)",
+        "lightning-askrene-bias-node(7)",
         "lightning-askrene-listlayers(7)"
       ],
       "author": [
@@ -918,7 +920,7 @@
                   }
                 },
                 "impressions": {
-                  "added": "v26.09",
+                  "added": "v26.12",
                   "type": "array",
                   "items": {
                     "type": "object",
@@ -1250,7 +1252,7 @@
             }
           },
           "impressions": {
-            "added": "v26.09",
+            "added": "v26.12",
             "type": "array",
             "items": {
               "type": "object",
@@ -1534,7 +1536,7 @@
                   }
                 },
                 "impressions": {
-                  "added": "v26.09",
+                  "added": "v26.12",
                   "type": "array",
                   "items": {
                     "type": "object",
@@ -3533,7 +3535,7 @@
       "rpc": "bkpr-dumpincomecsv",
       "title": "Command to emit a CSV of income events",
       "description": [
-        "The **bkpr-dumpincomcsv** RPC command writes a CSV file to disk at *csv_file* location. This is a formatted output of the **listincome** RPC command."
+        "The **bkpr-dumpincomcsv** RPC command writes a CSV file named *csv_file* in the node's network directory. This is a formatted output of the **listincome** RPC command."
       ],
       "request": {
         "required": [
@@ -3550,7 +3552,7 @@
           "csv_file": {
             "type": "string",
             "description": [
-              "On-disk destination of the generated CSV file."
+              "Filename of the generated CSV file: a plain name ending in `.csv`, without a directory. It is written in the node's network directory (e.g. *~/.lightning/bitcoin*), replacing an existing file of that name, but never through a symlink."
             ]
           },
           "consolidate_fees": {
@@ -6822,7 +6824,7 @@
               "type": "feerate"
             },
             "description": [
-              "An optional array [ *min*, *max* ], indicating the minimum and maximum feerates to offer: the peer will obey these if it supports the quick-close protocol. *slow* and *unilateral_close* are the defaults. Note that the maximum fee will be capped at the final commitment transaction fee (unless the experimental anchor-outputs option is negotiated)."
+              "An optional array [ *min*, *max* ], indicating the minimum and maximum feerates to offer (*min* must not exceed *max*): the peer will obey these if it supports the quick-close protocol. *slow* and *unilateral_close* are the defaults. Note that the maximum fee will be capped at the final commitment transaction fee (unless the experimental anchor-outputs option is negotiated)."
             ]
           }
         }
@@ -7543,6 +7545,7 @@
         "",
         "- -1: Catchall nonspecific error.",
         "- 900: An invoice with the given *label* already exists.",
+        "- 901: An invoice with the given *preimage* already exists.",
         "- 907: The offer associated with the invoice is not active."
       ],
       "author": [
@@ -7952,7 +7955,7 @@
                   "    * per: how often the rune can be used, with suffix \"sec\" (default), \"min\", \"hour\", \"day\" or \"msec\", \"usec\" or \"nsec\". e.g. `per=5sec`.",
                   "    * rate: the rate limit, per minute, e.g. `rate=60` is equivalent to `per=1sec`.",
                   "    * pnum: the number of parameters. e.g. `pnum<2`.",
-                  "    * pnameX: the parameter named X e.g. `pnamedestination=1RustyRX2oai4EYYDpQGWvEL62BBGqN9T`.  NOTE: until v24.05, X had to remove underscores from the parameter name (e.g. `pnameamount_msat` had to be specified as `pnameamountmsat`) but that is now fixed.",
+                  "    * pnameX: the parameter named X e.g. `pnamedestination=1RustyRX2oai4EYYDpQGWvEL62BBGqN9T`.  NOTE: until v24.05, X had to remove underscores from the parameter name (e.g. `pnameamount_msat` had to be specified as `pnameamountmsat`) but that is now fixed.  If several parameters match X (duplicate names, or names which only differ in punctuation like `amount_msat` and `amountmsat`), any restriction on X (including `pinvX_N`) fails.",
                   "    * parrN: the N'th parameter. e.g. `parr0=1RustyRX2oai4EYYDpQGWvEL62BBGqN9T`.",
                   "    * pinvX_N: parse the parameter X as an invoice (bolt11 or bolt12) and extract field N for comparison.  Fails if parameter X is not present, does not parse, or N is not one of the following field names:",
                   "      * amount",
@@ -14619,13 +14622,15 @@
           "recurrence_counter": {
             "type": "u64",
             "description": [
-              "Required if the offer specifies recurrence, otherwise it is not allowed. recurrence_counter should first be set to 0, and incremented for each successive invoice in a given series."
+              "Required if the offer specifies recurrence, otherwise it is not allowed. recurrence_counter should first be set to 0, and incremented for each successive invoice in a given series.",
+              "It should be a number no greater than 1000000000."
             ]
           },
           "recurrence_start": {
             "type": "number",
             "description": [
-              "Indicates what period number to start at (usually 0)."
+              "Indicates what period number to start at (usually 0).",
+              "It should be a number no greater than 1000000000."
             ]
           },
           "recurrence_label": {
@@ -16652,7 +16657,7 @@
           },
           "response": {
             "id": "033845802d25b4e074ccfd7cd8b339a41dc75bf9978a034800444b51d42b07799a",
-            "alias": "SILENTARTIST-v26.09",
+            "alias": "SILENTARTIST-v26.12",
             "color": "033845",
             "num_peers": 0,
             "num_pending_channels": 0,
@@ -16666,7 +16671,7 @@
                 "port": 30003
               }
             ],
-            "version": "v26.09",
+            "version": "v26.12",
             "blockheight": 114,
             "network": "regtest",
             "fees_collected_msat": 0,
@@ -17713,7 +17718,7 @@
           "response": {
             "help": [
               {
-                "command": "pay invstring [amount_msat] [label] [riskfactor] [maxfeepercent] [retry_for] [maxdelay] [exemptfee] [localinvreqid] [exclude] [maxfee] [description] [partial_msat] [dev_use_shadow]"
+                "command": "pay (DEPRECATED!) invstring [amount_msat] [label] [riskfactor] [maxfeepercent] [retry_for] [maxdelay] [exemptfee] [localinvreqid] [exclude] [maxfee] [description] [partial_msat] [dev_use_shadow]"
               }
             ],
             "format-hint": "simple"
@@ -21175,7 +21180,7 @@
                 }
               },
               "experimental-simple-close": {
-                "added": "v26.09",
+                "added": "v26.12",
                 "type": "object",
                 "additionalProperties": false,
                 "required": [
@@ -21184,14 +21189,14 @@
                 ],
                 "properties": {
                   "set": {
-                    "added": "v26.09",
+                    "added": "v26.12",
                     "type": "boolean",
                     "description": [
                       "`true` if set in config or cmdline."
                     ]
                   },
                   "source": {
-                    "added": "v26.09",
+                    "added": "v26.12",
                     "type": "string",
                     "description": [
                       "Source of configuration setting."
@@ -22755,7 +22760,7 @@
                 "source": "default"
               },
               "alias": {
-                "value_str": "SILENTARTIST-v26.09",
+                "value_str": "SILENTARTIST-v26.12",
                 "source": "default"
               },
               "pid-file": {
@@ -23081,12 +23086,6 @@
                 "set": false,
                 "source": "default",
                 "plugin": "/usr/local/libexec/plugins/cln-xpay"
-              },
-              "xpay-handle-pay": {
-                "value_bool": true,
-                "source": "default",
-                "plugin": "/usr/local/libexec/plugins/cln-xpay",
-                "dynamic": true
               },
               "xpay-slow-mode": {
                 "value_bool": false,
@@ -23585,6 +23584,7 @@
                       "out_htlc_id": {},
                       "failcode": {},
                       "failreason": {},
+                      "failure_reason": {},
                       "fee_msat": {
                         "type": "msat",
                         "description": [
@@ -23615,6 +23615,7 @@
                       "resolved_time": {},
                       "failcode": {},
                       "failreason": {},
+                      "failure_reason": {},
                       "out_channel": {}
                     }
                   }
@@ -23655,6 +23656,7 @@
                       "out_msat": {},
                       "failcode": {},
                       "failreason": {},
+                      "failure_reason": {},
                       "resolved_time": {
                         "type": "number",
                         "description": [
@@ -23681,6 +23683,7 @@
                       "fee_msat": {},
                       "failcode": {},
                       "failreason": {},
+                      "failure_reason": {},
                       "out_msatoshi": {},
                       "out_msat": {}
                     }
@@ -23729,6 +23732,32 @@
                         "type": "string",
                         "description": [
                           "The name of the onion code returned."
+                        ]
+                      },
+                      "failure_reason": {
+                        "type": "string",
+                        "added": "v26.12",
+                        "enum": [
+                          "insufficient_outgoing_liquidity",
+                          "too_many_htlcs",
+                          "dust_limit",
+                          "htlc_below_minimum",
+                          "htlc_above_maximum",
+                          "fee_insufficient",
+                          "cltv_incorrect",
+                          "cltv_expiry_too_soon",
+                          "cltv_expiry_too_far",
+                          "unknown_next_peer",
+                          "outgoing_peer_offline",
+                          "channel_failed_permanent",
+                          "invalid_onion",
+                          "channel_shutting_down",
+                          "max_htlc_value_in_flight",
+                          "peer_cannot_afford_fee"
+                        ],
+                        "description": [
+                          "The root cause of the failure, more specific than *failcode*/*failreason*. Only set for *local_failed* forwards, and not always known.",
+                          "*insufficient_outgoing_liquidity* means our own spendable balance on the outgoing channel was too low; *peer_cannot_afford_fee* means the peer opened the outgoing channel and cannot pay the commitment fee for another HTLC."
                         ]
                       }
                     }
@@ -23924,6 +23953,7 @@
                 "status": "local_failed",
                 "failcode": 4109,
                 "failreason": "WIRE_INCORRECT_CLTV_EXPIRY",
+                "failure_reason": "cltv_incorrect",
                 "style": "tlv",
                 "received_time": 1738000000.0
               },
@@ -23936,6 +23966,7 @@
                 "status": "local_failed",
                 "failcode": 16394,
                 "failreason": "WIRE_UNKNOWN_NEXT_PEER",
+                "failure_reason": "unknown_next_peer",
                 "style": "tlv",
                 "received_time": 1738000000.0
               },
@@ -23961,6 +23992,7 @@
                 "status": "local_failed",
                 "failcode": 4108,
                 "failreason": "WIRE_FEE_INSUFFICIENT",
+                "failure_reason": "fee_insufficient",
                 "style": "tlv",
                 "received_time": 1738000000.0
               },
@@ -26055,7 +26087,7 @@
             "nodes": [
               {
                 "nodeid": "03cecbfdc68544cc596223b68ce0710c9e5d2c9cb317ee07822d95079acc703d31",
-                "alias": "HOPPINGFIRE-v26.09",
+                "alias": "HOPPINGFIRE-v26.12",
                 "color": "03cecb",
                 "last_timestamp": 1738000000,
                 "features": "808898882a8a59a1",
@@ -26074,7 +26106,7 @@
             "nodes": [
               {
                 "nodeid": "033845802d25b4e074ccfd7cd8b339a41dc75bf9978a034800444b51d42b07799a",
-                "alias": "SILENTARTIST-v26.09",
+                "alias": "SILENTARTIST-v26.12",
                 "color": "033845",
                 "last_timestamp": 1738000000,
                 "features": "808898882a8a59a1",
@@ -26082,7 +26114,7 @@
               },
               {
                 "nodeid": "038194b5f32bdf0aa59812c86c4ef7ad2f294104fa027d1ace9b469bb6f88cf37b",
-                "alias": "JUNIORBEAM-v26.09",
+                "alias": "JUNIORBEAM-v26.12",
                 "color": "038194",
                 "last_timestamp": 1738000000,
                 "features": "808898882a8a59a1",
@@ -26090,7 +26122,7 @@
               },
               {
                 "nodeid": "03cecbfdc68544cc596223b68ce0710c9e5d2c9cb317ee07822d95079acc703d31",
-                "alias": "HOPPINGFIRE-v26.09",
+                "alias": "HOPPINGFIRE-v26.12",
                 "color": "03cecb",
                 "last_timestamp": 1738000000,
                 "features": "808898882a8a59a1",
@@ -26098,7 +26130,7 @@
               },
               {
                 "nodeid": "02287bfac8b99b35477ebe9334eede1e32b189e24644eb701c079614712331cec0",
-                "alias": "JUNIORFELONY-v26.09",
+                "alias": "JUNIORFELONY-v26.12",
                 "color": "02287b",
                 "last_timestamp": 1738000000,
                 "features": "808898882a8a59a1",
@@ -30087,13 +30119,13 @@
                 "blockheight": {
                   "type": "u32",
                   "description": [
-                    "The block height of this tx."
+                    "The block height of this tx, or 0 if it is not in a block (yet, or any more after a reorg)."
                   ]
                 },
                 "txindex": {
                   "type": "u32",
                   "description": [
-                    "The transaction number within the block."
+                    "The transaction number within the block, or 0 if it is not in a block."
                   ]
                 },
                 "locktime": {
@@ -31330,26 +31362,30 @@
           "recurrence": {
             "type": "string",
             "description": [
-              "An invoice is expected at regular intervals. The argument is a positive number followed by one of `seconds`, `minutes`, `hours`, `days`, `weeks`, or `months` (variants without the trailing `s` are also permitted). This is encoded in the offer. The semantics of recurrence is fairly predictable, but fully documented in BOLT 12. e.g. `4weeks`."
+              "An invoice is expected at regular intervals. The argument is a positive number followed by one of `seconds`, `minutes`, `hours`, `days`, `weeks`, or `months` (variants without the trailing `s` are also permitted). This is encoded in the offer. The semantics of recurrence is fairly predictable, but fully documented in BOLT 12. e.g. `4weeks`.",
+              "Periods greater than 10 years are not accepted."
             ]
           },
           "recurrence_base": {
             "type": "integer",
             "description": [
-              "Time in seconds since the first day of 1970 UTC. This indicates when the first period begins; without this, the recurrence periods start from the first invoice."
+              "Time in seconds since the first day of 1970 UTC. This indicates when the first period begins; without this, the recurrence periods start from the first invoice.",
+              "This number must correspond to a time not beyond 9999-12-31 23:59:59 UTC."
             ]
           },
           "recurrence_paywindow": {
             "type": "string",
             "description": [
-              "Argument of form `-time+time`. The first time is the number of seconds before the start of a period in which an invoice and payment is valid, the second time is the number of seconds after the start of the period. For example *-604800+86400* means you can fetch an pay the invoice 4 weeks before the given period starts, and up to 1 day afterwards. The optional *%* indicates that the amount of the invoice will be scaled by the time remaining in the period. This is encoded in the offer."
+              "Argument of form `-time+time`. The first time is the number of seconds before the start of a period in which an invoice and payment is valid, the second time is the number of seconds after the start of the period. For example *-604800+86400* means you can fetch an pay the invoice 4 weeks before the given period starts, and up to 1 day afterwards. The optional *%* indicates that the amount of the invoice will be scaled by the time remaining in the period. This is encoded in the offer.",
+              "Either side of the pay window must not be greater than 1 year."
             ],
             "default": "that payment is allowed during the current and previous periods"
           },
           "recurrence_limit": {
             "type": "u32",
             "description": [
-              "To indicate the maximum period which exists. eg. `12` means there are 13 periods, from 0 to 12 inclusive. This is encoded in the offer."
+              "To indicate the maximum period which exists. eg. `12` means there are 13 periods, from 0 to 12 inclusive. This is encoded in the offer.",
+              "The limit cannot be 0 nor greater than 1000000000."
             ]
           },
           "single_use": {
@@ -39415,8 +39451,7 @@
           "htlcs": {},
           "chainmoves": {},
           "channelmoves": {},
-          "networkevents": {},
-          "details": {}
+          "networkevents": {}
         },
         "allOf": [
           {
@@ -39438,51 +39473,6 @@
                 "created": {},
                 "updated": {},
                 "deleted": {},
-                "details": {
-                  "type": "object",
-                  "additionalProperties": false,
-                  "deprecated": [
-                    "v25.05",
-                    "v26.06"
-                  ],
-                  "properties": {
-                    "status": {
-                      "type": "string",
-                      "enum": [
-                        "unpaid",
-                        "paid",
-                        "expired"
-                      ],
-                      "description": [
-                        "Whether it's paid, unpaid or unpayable."
-                      ]
-                    },
-                    "label": {
-                      "type": "string",
-                      "description": [
-                        "Unique label supplied at invoice creation."
-                      ]
-                    },
-                    "description": {
-                      "type": "string",
-                      "description": [
-                        "Description used in the invoice."
-                      ]
-                    },
-                    "bolt11": {
-                      "type": "string",
-                      "description": [
-                        "The BOLT11 string."
-                      ]
-                    },
-                    "bolt12": {
-                      "type": "string",
-                      "description": [
-                        "The BOLT12 string."
-                      ]
-                    }
-                  }
-                },
                 "invoices": {
                   "type": "object",
                   "added": "v25.05",
@@ -39552,52 +39542,6 @@
                 "created": {},
                 "updated": {},
                 "deleted": {},
-                "details": {
-                  "type": "object",
-                  "additionalProperties": false,
-                  "deprecated": [
-                    "v25.05",
-                    "v26.06"
-                  ],
-                  "properties": {
-                    "status": {
-                      "type": "string",
-                      "enum": [
-                        "offered",
-                        "settled",
-                        "failed",
-                        "local_failed"
-                      ],
-                      "description": [
-                        "Still ongoing, completed, failed locally, or failed after forwarding."
-                      ]
-                    },
-                    "in_channel": {
-                      "type": "short_channel_id",
-                      "description": [
-                        "Unique label supplied at invoice creation."
-                      ]
-                    },
-                    "in_htlc_id": {
-                      "type": "u64",
-                      "description": [
-                        "The unique HTLC id the sender gave this (not present if incoming channel was closed before upgrade to v22.11)."
-                      ]
-                    },
-                    "in_msat": {
-                      "type": "msat",
-                      "description": [
-                        "The value of the incoming HTLC."
-                      ]
-                    },
-                    "out_channel": {
-                      "type": "short_channel_id",
-                      "description": [
-                        "The channel that the HTLC (trying to) forward to."
-                      ]
-                    }
-                  }
-                },
                 "forwards": {
                   "added": "v25.05",
                   "type": "object",
@@ -39668,45 +39612,6 @@
                 "created": {},
                 "updated": {},
                 "deleted": {},
-                "details": {
-                  "type": "object",
-                  "additionalProperties": false,
-                  "deprecated": [
-                    "v25.05",
-                    "v26.06"
-                  ],
-                  "properties": {
-                    "status": {
-                      "type": "string",
-                      "enum": [
-                        "pending",
-                        "failed",
-                        "complete"
-                      ],
-                      "description": [
-                        "Status of the payment."
-                      ]
-                    },
-                    "partid": {
-                      "type": "u64",
-                      "description": [
-                        "Part number (for multiple parts to a single payment)."
-                      ]
-                    },
-                    "groupid": {
-                      "type": "u64",
-                      "description": [
-                        "Grouping key to disambiguate multiple attempts to pay an invoice or the same payment_hash."
-                      ]
-                    },
-                    "payment_hash": {
-                      "type": "hash",
-                      "description": [
-                        "The hash of the *payment_preimage* which will prove payment."
-                      ]
-                    }
-                  }
-                },
                 "sendpays": {
                   "type": "object",
                   "added": "v25.05",
@@ -41722,7 +41627,7 @@
           "short_channel_id": {
             "type": "short_channel_id",
             "description": [
-              "The short channel id of the channel. If the channel is not yet confirmed, this field will be null."
+              "The short channel id of the channel. If the channel is not yet confirmed, this field will be missing."
             ]
           },
           "timestamp": {
@@ -41886,22 +41791,6 @@
               "The UNIX timestamp when the movement was recorded."
             ]
           },
-          "tags": {
-            "type": "array",
-            "description": [
-              "Deprecated legacy combined tag array, emitted only for deprecated output compatibility."
-            ],
-            "deprecated": [
-              "v25.09",
-              "v26.09"
-            ],
-            "items": {
-              "type": "string",
-              "description": [
-                "A legacy movement tag."
-              ]
-            }
-          },
           "primary_tag": {
             "type": "string",
             "enum": [
@@ -41990,42 +41879,12 @@
               "The originating account for an external chain movement, if any."
             ]
           },
-          "txid": {
-            "type": "txid",
-            "description": [
-              "Deprecated legacy field for the spending transaction id."
-            ],
-            "deprecated": [
-              "v25.09",
-              "v26.09"
-            ]
-          },
           "spending_txid": {
             "type": "txid",
             "description": [
               "The spending transaction id for a chain movement, if any."
             ],
             "added": "v25.09"
-          },
-          "utxo_txid": {
-            "type": "txid",
-            "description": [
-              "Deprecated legacy field for the outpoint transaction id."
-            ],
-            "deprecated": [
-              "v25.09",
-              "v26.09"
-            ]
-          },
-          "vout": {
-            "type": "u32",
-            "description": [
-              "Deprecated legacy field for the outpoint output index."
-            ],
-            "deprecated": [
-              "v25.09",
-              "v26.09"
-            ]
           },
           "output_msat": {
             "type": "msat",
@@ -42375,6 +42234,32 @@
             "type": "string",
             "description": [
               "The symbolic failcode name when the forward failed locally."
+            ]
+          },
+          "failure_reason": {
+            "type": "string",
+            "added": "v26.12",
+            "enum": [
+              "insufficient_outgoing_liquidity",
+              "too_many_htlcs",
+              "dust_limit",
+              "htlc_below_minimum",
+              "htlc_above_maximum",
+              "fee_insufficient",
+              "cltv_incorrect",
+              "cltv_expiry_too_soon",
+              "cltv_expiry_too_far",
+              "unknown_next_peer",
+              "outgoing_peer_offline",
+              "channel_failed_permanent",
+              "invalid_onion",
+              "channel_shutting_down",
+              "max_htlc_value_in_flight",
+              "peer_cannot_afford_fee"
+            ],
+            "description": [
+              "The root cause of the failure, more specific than *failcode*/*failreason*. Only set for *local_failed* forwards, and not always known.",
+              "*insufficient_outgoing_liquidity* means our own spendable balance on the outgoing channel was too low; *peer_cannot_afford_fee* means the peer opened the outgoing channel and cannot pay the commitment fee for another HTLC."
             ]
           },
           "style": {
@@ -43369,6 +43254,8 @@
         "",
         "The `commitment_revocation` hook is used to inform the plugin about the state transition being completed, and deliver the penalty transaction.",
         "The penalty transaction could then be sent to a watchtower that automatically reacts in case one party attempts to settle using a revoked commitment.",
+        "",
+        "While a splice is pending, each state has a commitment transaction for the current funding and one for each splice candidate, any of which could be broadcast: the hook is then called once for each of them, with the same `commitnum` and a different `commitment_txid`.",
         "",
         "This is a chained hook: multiple plugins may be registered."
       ],
@@ -44452,7 +44339,7 @@
               "dust_limit_msat": {
                 "type": "msat",
                 "description": [
-                  "Dust limit for outputs."
+                  "Dust limit for outputs on the peer's commitment transaction. Opens where this is below 354 sat or above 5000 sat are rejected before the hook is called."
                 ]
               },
               "max_htlc_value_in_flight_msat": {
@@ -44689,7 +44576,7 @@
               "dust_limit_msat": {
                 "type": "msat",
                 "description": [
-                  "Minimum output value below which outputs are considered dust."
+                  "Minimum output value below which outputs are considered dust on the peer's commitment transaction. Opens where this is below 354 sat or above 5000 sat are rejected before the hook is called."
                 ]
               },
               "max_htlc_value_in_flight_msat": {

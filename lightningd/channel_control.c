@@ -337,7 +337,7 @@ static void handle_splice_abort(struct lightningd *ld,
 	struct bitcoin_outpoint *outpoint;
 	struct channel_inflight *inflight;
 	char *reason;
-	const u8 *error;
+	const u8 *error = NULL;
 	struct peer_fd *pfd;
 	int other_fd;
 
@@ -1816,12 +1816,10 @@ bool peer_start_channeld(struct channel *channel,
 
 	hsmfd = hsm_get_client_fd(ld, &channel->peer->id,
 				  channel->dbid,
-				  HSM_PERM_SIGN_GOSSIP
-				  | HSM_PERM_ECDH
+				  HSM_PERM_ECDH
 				  | HSM_PERM_COMMITMENT_POINT
 				  | HSM_PERM_SIGN_REMOTE_TX
 				  | HSM_PERM_SIGN_ONCHAIN_TX
-				  | HSM_PERM_SIGN_CLOSING_TX
 				  | HSM_PERM_SIGN_SPLICE_TX
 				  | HSM_PERM_LOCK_OUTPOINT);
 	if (hsmfd < 0) {
@@ -2122,6 +2120,12 @@ is_fundee_should_forget(struct lightningd *ld,
 	if (!amount_msat_is_zero(channel->msat_to_us_max))
 		return false;
 
+	/* A channel with committed HTLCs is not safe to forget, even if a
+	 * buggy peer managed to add them before the funding transaction was
+	 * confirmed. */
+	if (channel_has_htlc_out(channel) || channel_has_htlc_in(channel))
+		return false;
+
 	/* Ah forget it! */
 	return true;
 }
@@ -2397,6 +2401,7 @@ static struct command_result *json_splice_init(struct command *cmd,
 	struct wally_psbt *initialpsbt;
 	s64 *relative_amount;
 	u32 *feerate_per_kw;
+	u32 last_feerate, next_feerate_min;
 	bool *force_feerate, *skip_stfu;
 	u8 *msg;
 
@@ -2416,13 +2421,53 @@ static struct command_result *json_splice_init(struct command *cmd,
 				    "Currently waiting on previous splice"
 				    " command to finish.");
 
+	/* With a splice pending, channeld sends this as tx_init_rbf.
+	 *
+	 * BOLT #2:
+	 * The sender:
+	 *   - MUST set `feerate` greater than or equal to 25/24 times the
+	 *     `feerate` of the previously constructed transaction, rounded
+	 *     down.
+	 */
+	last_feerate = channel_last_funding_feerate(channel);
+	if (!last_feerate)
+		next_feerate_min = 0;
+	else if (!next_funding_feerate(last_feerate, &next_feerate_min))
+		return command_fail(cmd, JSONRPC2_INVALID_PARAMS,
+				    "Can't calculate the next feerate: the"
+				    " pending splice's feerate (%u) is out"
+				    " of range",
+				    last_feerate);
+
+	if (feerate_per_kw && *feerate_per_kw < next_feerate_min)
+		return command_fail(cmd, JSONRPC2_INVALID_PARAMS,
+				    "Next feerate must be at least 1/24th"
+				    " greater than the pending splice's. Min"
+				    " req %u, you proposed %u",
+				    next_feerate_min, *feerate_per_kw);
+
 	if (command_check_only(cmd))
 		return command_check_done(cmd);
 
 	if (!feerate_per_kw) {
 		feerate_per_kw = tal(cmd, u32);
 		*feerate_per_kw = splice_feerate(cmd->ld->topology, cmd->ld);
+		if (*feerate_per_kw < next_feerate_min)
+			*feerate_per_kw = next_feerate_min;
 	}
+
+	/* channeld would refuse this too, but only after marking a splice in
+	 * progress, which then blocks the next splice_init. */
+	if (!*force_feerate
+	    && !channel->ignore_fee_limits
+	    && !cmd->ld->config.ignore_fee_limits
+	    && *feerate_per_kw > our_feerate_max(cmd->ld, NULL))
+		return command_fail(cmd, JSONRPC2_INVALID_PARAMS,
+				    "Feerate %u is above the most we'll pay"
+				    " (%u); the pending splice is at %u",
+				    *feerate_per_kw,
+				    our_feerate_max(cmd->ld, NULL),
+				    last_feerate);
 
 	if (!initialpsbt)
 		initialpsbt = create_psbt(cmd, 0, 0, 0);

@@ -342,6 +342,8 @@ connections. Default is 9736.
 
   This will fail if the `hsm_secret` file exists.  Your node will start the node in offline mode, for manual recovery.  The secret can be extracted from the `hsm_secret` using lightning-hsmtool(8)'s `getsecret`.
 
+  Other users can see command line arguments (e.g. with `ps`) until `lightningd` wipes the secret at startup, and your shell may save it in its history.  The lightning-recover(7) command avoids both.
+
 * **alias**=*NAME*
 
   Up to 32 bytes of UTF-8 characters to tag your node. Completely silly, since
@@ -558,9 +560,9 @@ network.
   Add a (taproot) fallback address to invoices produced by the `invoice`
 command, so they invoices can also be paid onchain.
 
-* **xpay-handle-pay**=*BOOL* [plugin `xpay`, *dynamic*]
+* **xpay-handle-pay**=*BOOL* [plugin `xpay`, *dynamic*] \(deprecated in v26.12\)
 
-  Setting this makes `xpay` intercept simply `pay` commands (default `false`).
+  Setting this makes `xpay` intercept simply `pay` commands (default `true`).
 
 * **xpay-slow-mode**=*BOOL* [plugin `xpay`, *dynamic*]
 
@@ -721,7 +723,9 @@ all DNS lookups, to avoid leaking information.
 
 * **disable-dns**
 
-  Disable the DNS bootstrapping mechanism to find a node by its node ID.
+  Disable DNS lookups: the DNS bootstrapping mechanism to find a node by its
+  node ID, resolving DNS addresses announced by peers, and resolving a
+  *host* name passed to `connect`.
 
 * **message-padding**=*BOOL*
 
